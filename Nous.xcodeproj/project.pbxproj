@@ -7,39 +7,97 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		006346F227C965ED6E4EBD63 /* WelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D76EB046049F66DAD321B709 /* WelcomeView.swift */; };
-		186BF7000E023BC861131FDC /* LeftSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AD5D31454983D31558C5CE5 /* LeftSidebar.swift */; };
-		2C4DB69F3572CBE8273479E7 /* NousApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCB9C93B0FD19F3F80A963A6 /* NousApp.swift */; };
-		44B785DF4F9A1752B6FB9468 /* AppColor.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4F8088582E174539D236F88 /* AppColor.swift */; };
+		07FFF1026087C07958572C54 /* WelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B15EC86BFA4A972D811E5ADB /* WelcomeView.swift */; };
+		0E3B68A13149EE403D7EB490 /* SpriteKit in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 267442BFDA3F1AB0480F680F /* SpriteKit */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		11355DE1064845BB27893325 /* Accelerate in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 6E2737F94D6167BA6054F0BE /* Accelerate */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		2FA85CB0FB6256D80D30DE6F /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A13A1040D67FB96CF59C6154 /* ContentView.swift */; };
+		30EB1D0F191710EF17D5D13C /* ChatArea.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D5C933D2CDA967B8AAFCD32 /* ChatArea.swift */; };
+		37AF74D6A8F3E2D7631E3BB8 /* LLM in Frameworks */ = {isa = PBXBuildFile; productRef = B10E98E61CBC8367786E8834 /* LLM */; };
+		3A38D50339D27DC72856B618 /* WindowConfigurator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFA7FC708EEBC903409D5DD9 /* WindowConfigurator.swift */; };
+		3E6FF46E8E6E947CF7B7AADF /* NousApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84AC99FE1331146CEC54C75D /* NousApp.swift */; };
+		43ABC36DBEB2E340CFBC267A /* Accelerate in Frameworks */ = {isa = PBXBuildFile; fileRef = 6E2737F94D6167BA6054F0BE /* Accelerate */; };
+		4506DACA6C0E8F6E378D424F /* Embedders in Frameworks */ = {isa = PBXBuildFile; productRef = 65BC2AFCF4B47423D5179AD1 /* Embedders */; };
 		4ABEE05964FC577A1F2AE5EC /* FredokaOne-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = DBD5F346B63EBE504887EAB0 /* FredokaOne-Regular.ttf */; };
-		7E49EF00F932888C0F1C36E3 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B65341E0D60A512DA5DD8F1F /* ContentView.swift */; };
-		836928D834ABC6A0EDF457F7 /* ChatArea.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39F7B6B1CD6C593EFC2C2674 /* ChatArea.swift */; };
+		58CDED90A7C15858ACDADAC0 /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = A0FC8786751C66E9D130220C /* MLX */; };
+		6F3C62A22E63E128DBCC24FD /* SpriteKit in Frameworks */ = {isa = PBXBuildFile; fileRef = 267442BFDA3F1AB0480F680F /* SpriteKit */; };
+		83964444D1DEE2A22156BF34 /* LeftSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A47BC60463D5E92044AFDB86 /* LeftSidebar.swift */; };
+		B90A2FAEB0973870A4D5DA15 /* AppColor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BBA2D70209E6211449AEADC /* AppColor.swift */; };
 		C3B66790ADAC5624E9ACC319 /* Nunito-Variable.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 4EDBF5703D7FA7CDEA64FCC8 /* Nunito-Variable.ttf */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		BE7EC21D38C8F7485A7701CE /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AFD902375AF288637990AB3D /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = DDA33BA98D654B5A21067CDC;
+			remoteInfo = Nous;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		9B3022E9821A7232B3C6B2E3 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				11355DE1064845BB27893325 /* Accelerate in Embed Frameworks */,
+				0E3B68A13149EE403D7EB490 /* SpriteKit in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
-		39F7B6B1CD6C593EFC2C2674 /* ChatArea.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatArea.swift; sourceTree = "<group>"; };
-		4AD5D31454983D31558C5CE5 /* LeftSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LeftSidebar.swift; sourceTree = "<group>"; };
+		267442BFDA3F1AB0480F680F /* SpriteKit */ = {isa = PBXFileReference; path = SpriteKit; sourceTree = "<group>"; };
+		3D5C933D2CDA967B8AAFCD32 /* ChatArea.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatArea.swift; sourceTree = "<group>"; };
+		4BBA2D70209E6211449AEADC /* AppColor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppColor.swift; sourceTree = "<group>"; };
 		4EDBF5703D7FA7CDEA64FCC8 /* Nunito-Variable.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Nunito-Variable.ttf"; sourceTree = "<group>"; };
-		B65341E0D60A512DA5DD8F1F /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		63558731B5D9A45DD29170B9 /* NousTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NousTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		6E2737F94D6167BA6054F0BE /* Accelerate */ = {isa = PBXFileReference; path = Accelerate; sourceTree = "<group>"; };
+		84AC99FE1331146CEC54C75D /* NousApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NousApp.swift; sourceTree = "<group>"; };
+		A13A1040D67FB96CF59C6154 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		A47BC60463D5E92044AFDB86 /* LeftSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LeftSidebar.swift; sourceTree = "<group>"; };
+		B15EC86BFA4A972D811E5ADB /* WelcomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeView.swift; sourceTree = "<group>"; };
 		C3A72C022B88861F85CCA960 /* Nous.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nous.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		D4F8088582E174539D236F88 /* AppColor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppColor.swift; sourceTree = "<group>"; };
-		D76EB046049F66DAD321B709 /* WelcomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeView.swift; sourceTree = "<group>"; };
 		DBD5F346B63EBE504887EAB0 /* FredokaOne-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "FredokaOne-Regular.ttf"; sourceTree = "<group>"; };
-		FCB9C93B0FD19F3F80A963A6 /* NousApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NousApp.swift; sourceTree = "<group>"; };
+		FFA7FC708EEBC903409D5DD9 /* WindowConfigurator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowConfigurator.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFrameworksBuildPhase section */
+		245BC8FE518FFEB28B74D667 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				58CDED90A7C15858ACDADAC0 /* MLX in Frameworks */,
+				37AF74D6A8F3E2D7631E3BB8 /* LLM in Frameworks */,
+				4506DACA6C0E8F6E378D424F /* Embedders in Frameworks */,
+				43ABC36DBEB2E340CFBC267A /* Accelerate in Frameworks */,
+				6F3C62A22E63E128DBCC24FD /* SpriteKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
 /* Begin PBXGroup section */
+		31C7442F11A6B3AEF5599A8F /* Theme */ = {
+			isa = PBXGroup;
+			children = (
+				4BBA2D70209E6211449AEADC /* AppColor.swift */,
+				FFA7FC708EEBC903409D5DD9 /* WindowConfigurator.swift */,
+			);
+			path = Theme;
+			sourceTree = "<group>";
+		};
 		513FED1091B901EBEADB7BED /* Nous */ = {
 			isa = PBXGroup;
 			children = (
-				D4F8088582E174539D236F88 /* AppColor.swift */,
-				39F7B6B1CD6C593EFC2C2674 /* ChatArea.swift */,
-				B65341E0D60A512DA5DD8F1F /* ContentView.swift */,
-				4AD5D31454983D31558C5CE5 /* LeftSidebar.swift */,
-				FCB9C93B0FD19F3F80A963A6 /* NousApp.swift */,
-				D76EB046049F66DAD321B709 /* WelcomeView.swift */,
+				58E66C627E617AE7B1CF282D /* App */,
 				58A50705FAFD0AAA7AD23BA4 /* Fonts */,
+				31C7442F11A6B3AEF5599A8F /* Theme */,
+				DF3B64C6A416A209A7DEC44B /* Views */,
 			);
 			name = Nous;
 			path = Sources/Nous;
@@ -54,10 +112,20 @@
 			path = Fonts;
 			sourceTree = "<group>";
 		};
+		58E66C627E617AE7B1CF282D /* App */ = {
+			isa = PBXGroup;
+			children = (
+				A13A1040D67FB96CF59C6154 /* ContentView.swift */,
+				84AC99FE1331146CEC54C75D /* NousApp.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
 		6CD0FB7739AB9E8C9890A79D /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				C3A72C022B88861F85CCA960 /* Nous.app */,
+				63558731B5D9A45DD29170B9 /* NousTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -66,19 +134,68 @@
 			isa = PBXGroup;
 			children = (
 				513FED1091B901EBEADB7BED /* Nous */,
+				DED692321AF0E89666946424 /* NousTests */,
+				D1CEABF44300C366B92A19C2 /* Frameworks */,
 				6CD0FB7739AB9E8C9890A79D /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		D1CEABF44300C366B92A19C2 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				6E2737F94D6167BA6054F0BE /* Accelerate */,
+				267442BFDA3F1AB0480F680F /* SpriteKit */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		DED692321AF0E89666946424 /* NousTests */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = NousTests;
+			path = Tests/NousTests;
+			sourceTree = "<group>";
+		};
+		DF3B64C6A416A209A7DEC44B /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				3D5C933D2CDA967B8AAFCD32 /* ChatArea.swift */,
+				A47BC60463D5E92044AFDB86 /* LeftSidebar.swift */,
+				B15EC86BFA4A972D811E5ADB /* WelcomeView.swift */,
+			);
+			path = Views;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		4F8ECE160AE16DBD1737ADB6 /* NousTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DFA6700CCB95E2066A0485A8 /* Build configuration list for PBXNativeTarget "NousTests" */;
+			buildPhases = (
+				FD75C696E15748D5D237D4E2 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				0FAA65F8B5940C5887EE6AE2 /* PBXTargetDependency */,
+			);
+			name = NousTests;
+			packageProductDependencies = (
+			);
+			productName = NousTests;
+			productReference = 63558731B5D9A45DD29170B9 /* NousTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		DDA33BA98D654B5A21067CDC /* Nous */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 33C5B5B5268991AD612DAF0C /* Build configuration list for PBXNativeTarget "Nous" */;
 			buildPhases = (
 				CE947038E48340F152910033 /* Sources */,
 				9A6D59E70DB57DD16C702A3D /* Resources */,
+				245BC8FE518FFEB28B74D667 /* Frameworks */,
+				9B3022E9821A7232B3C6B2E3 /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
@@ -86,6 +203,9 @@
 			);
 			name = Nous;
 			packageProductDependencies = (
+				A0FC8786751C66E9D130220C /* MLX */,
+				B10E98E61CBC8367786E8834 /* LLM */,
+				65BC2AFCF4B47423D5179AD1 /* Embedders */,
 			);
 			productName = Nous;
 			productReference = C3A72C022B88861F85CCA960 /* Nous.app */;
@@ -115,12 +235,17 @@
 			);
 			mainGroup = 8C61EAF9D2ECF270BF2C123A;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				9D0EAD32D1DD03A6D9C0CED9 /* XCRemoteSwiftPackageReference "mlx-swift" */,
+				7C3471E30F61349C24C26F71 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 6CD0FB7739AB9E8C9890A79D /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
 				DDA33BA98D654B5A21067CDC /* Nous */,
+				4F8ECE160AE16DBD1737ADB6 /* NousTests */,
 			);
 		};
 /* End PBXProject section */
@@ -142,18 +267,51 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				44B785DF4F9A1752B6FB9468 /* AppColor.swift in Sources */,
-				836928D834ABC6A0EDF457F7 /* ChatArea.swift in Sources */,
-				7E49EF00F932888C0F1C36E3 /* ContentView.swift in Sources */,
-				186BF7000E023BC861131FDC /* LeftSidebar.swift in Sources */,
-				2C4DB69F3572CBE8273479E7 /* NousApp.swift in Sources */,
-				006346F227C965ED6E4EBD63 /* WelcomeView.swift in Sources */,
+				B90A2FAEB0973870A4D5DA15 /* AppColor.swift in Sources */,
+				30EB1D0F191710EF17D5D13C /* ChatArea.swift in Sources */,
+				2FA85CB0FB6256D80D30DE6F /* ContentView.swift in Sources */,
+				83964444D1DEE2A22156BF34 /* LeftSidebar.swift in Sources */,
+				3E6FF46E8E6E947CF7B7AADF /* NousApp.swift in Sources */,
+				07FFF1026087C07958572C54 /* WelcomeView.swift in Sources */,
+				3A38D50339D27DC72856B618 /* WindowConfigurator.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FD75C696E15748D5D237D4E2 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		0FAA65F8B5940C5887EE6AE2 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = DDA33BA98D654B5A21067CDC /* Nous */;
+			targetProxy = BE7EC21D38C8F7485A7701CE /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		00F16C747CFB815176429BD3 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.nous.app.NousTests;
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Nous.app/Contents/MacOS/Nous";
+			};
+			name = Release;
+		};
 		13ACD6C4071319A3C3E62D9F /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -216,6 +374,10 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = "";
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\".\"",
+				);
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -227,6 +389,23 @@
 			};
 			name = Release;
 		};
+		7628CA002A90A5DEE769840A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.nous.app.NousTests;
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Nous.app/Contents/MacOS/Nous";
+			};
+			name = Debug;
+		};
 		B01509381B86C26204F80E2F /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -234,6 +413,10 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = "";
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\".\"",
+				);
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -328,7 +511,53 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
 		};
+		DFA6700CCB95E2066A0485A8 /* Build configuration list for PBXNativeTarget "NousTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7628CA002A90A5DEE769840A /* Debug */,
+				00F16C747CFB815176429BD3 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		7C3471E30F61349C24C26F71 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ml-explore/mlx-swift-examples";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.19.0;
+			};
+		};
+		9D0EAD32D1DD03A6D9C0CED9 /* XCRemoteSwiftPackageReference "mlx-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ml-explore/mlx-swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.21.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		65BC2AFCF4B47423D5179AD1 /* Embedders */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7C3471E30F61349C24C26F71 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */;
+			productName = Embedders;
+		};
+		A0FC8786751C66E9D130220C /* MLX */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 9D0EAD32D1DD03A6D9C0CED9 /* XCRemoteSwiftPackageReference "mlx-swift" */;
+			productName = MLX;
+		};
+		B10E98E61CBC8367786E8834 /* LLM */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7C3471E30F61349C24C26F71 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */;
+			productName = LLM;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = AFD902375AF288637990AB3D /* Project object */;
 }

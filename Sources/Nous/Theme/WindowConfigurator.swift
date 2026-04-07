@@ -1,17 +1,6 @@
 import SwiftUI
 import AppKit
 
-@main
-struct NousApp: App {
-    var body: some Scene {
-        WindowGroup {
-            ContentView()
-                .background(WindowConfigurator())
-        }
-        .windowStyle(.hiddenTitleBar)
-    }
-}
-
 struct WindowConfigurator: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
@@ -27,17 +16,17 @@ struct WindowConfigurator: NSViewRepresentable {
             window.standardWindowButton(.closeButton)?.isHidden = true
             window.standardWindowButton(.miniaturizeButton)?.isHidden = true
             window.standardWindowButton(.zoomButton)?.isHidden = true
-            
+
             // Remove all window chrome
             window.styleMask.remove(.titled)
             window.styleMask.insert(.fullSizeContentView)
-            
+
             // Nuke every layer background up the hierarchy
             if let contentView = window.contentView {
                 contentView.wantsLayer = true
                 contentView.layer?.backgroundColor = NSColor.clear.cgColor
                 contentView.layer?.masksToBounds = false
-                
+
                 var view: NSView? = contentView
                 while let v = view {
                     v.wantsLayer = true
@@ -48,6 +37,6 @@ struct WindowConfigurator: NSViewRepresentable {
         }
         return view
     }
-    
+
     func updateNSView(_ nsView: NSView, context: Context) {}
 }
