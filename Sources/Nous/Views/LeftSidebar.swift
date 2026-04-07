@@ -144,89 +144,119 @@ struct MacOSTrafficLights: View {
 }
 
 struct LeftSidebar: View {
+    let nodeStore: NodeStore
+    @Binding var selectedTab: MainTab
+    @Binding var selectedProjectId: UUID?
+    var onNodeSelected: ((NousNode) -> Void)?
+
+    @State private var favorites: [NousNode] = []
+    @State private var recents: [NousNode] = []
+    @State private var showProjectList = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            
             MacOSTrafficLights()
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.top, 24)
                 .padding(.bottom, 30)
 
-
-            // Top Nav: 星系网 & 项目 (并排)
             HStack(spacing: 12) {
                 NavIconButton(
                     icon: GalaxyIcon(color: AppColor.colaDarkText.opacity(0.8)),
                     label: "Galaxy",
-                    action: {}
+                    action: { selectedTab = .galaxy }
                 )
-                
                 NavIconButton(
                     icon: ProjectIcon(color: AppColor.colaDarkText.opacity(0.8)),
                     label: "Project",
-                    action: {}
+                    action: { showProjectList.toggle() }
                 )
             }
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.bottom, 24)
-            
-            // 分割线
+
             Rectangle()
                 .fill(AppColor.colaDarkText.opacity(0.1))
-                .frame(width: 80, height: 1) // Smaller centered divider
+                .frame(width: 80, height: 1)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.bottom, 24)
-            
-            // Recents / Favorities List
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 28) {
-                    // Favorites Section
-                    VStack(alignment: .leading, spacing: 14) {
-                        HStack(spacing: 4) {
-                            Text("Favorites")
-                                .font(.system(size: 11, weight: .semibold, design: .rounded))
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 8, weight: .bold))
-                                .opacity(0.5)
+
+            if showProjectList {
+                ProjectListView(nodeStore: nodeStore, selectedProjectId: $selectedProjectId)
+            } else {
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 28) {
+                        if !favorites.isEmpty {
+                            VStack(alignment: .leading, spacing: 14) {
+                                HStack(spacing: 4) {
+                                    Text("Favorites")
+                                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 8, weight: .bold))
+                                        .opacity(0.5)
+                                }
+                                .foregroundColor(AppColor.colaDarkText.opacity(0.6))
+
+                                ForEach(favorites) { node in
+                                    Button(action: { onNodeSelected?(node) }) {
+                                        HStack(spacing: 10) {
+                                            Text(node.type == .conversation ? "💬" : "📝")
+                                                .font(.system(size: 16))
+                                            Text(node.title)
+                                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                                .foregroundColor(AppColor.colaDarkText.opacity(0.7))
+                                                .lineLimit(1)
+                                        }
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
                         }
-                        .foregroundColor(AppColor.colaDarkText.opacity(0.6))
-                        
-                        ChatRecentItem(emoji: "🤠", title: "Austin攻略")
-                        ChatRecentItem(emoji: "📘", title: "ESL10语法")
+
+                        VStack(alignment: .leading, spacing: 14) {
+                            Text("Recents")
+                                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                .foregroundColor(AppColor.colaDarkText.opacity(0.6))
+
+                            ForEach(recents) { node in
+                                Button(action: { onNodeSelected?(node) }) {
+                                    HStack(spacing: 10) {
+                                        Text(node.type == .conversation ? "💬" : "📝")
+                                            .font(.system(size: 16))
+                                        Text(node.title)
+                                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                                            .foregroundColor(AppColor.colaDarkText.opacity(0.7))
+                                            .lineLimit(1)
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
                     }
-                    
-                    // Recents Section
-                    VStack(alignment: .leading, spacing: 14) {
-                        Text("Recents")
-                            .font(.system(size: 11, weight: .semibold, design: .rounded))
-                            .foregroundColor(AppColor.colaDarkText.opacity(0.6))
-                        
-                        ChatRecentItem(emoji: "🥦", title: "品牌理念")
-                        ChatRecentItem(emoji: "🚀", title: "Doing Things")
-                        ChatRecentItem(emoji: "💡", title: "产品定义")
-                    }
+                    .padding(.leading, 20)
+                    .padding(.trailing, 8)
                 }
-                .padding(.leading, 20)
-                .padding(.trailing, 8)
             }
-            
+
             Spacer()
-            
-            // 底部横向头像
+
             HStack(spacing: 12) {
-                Circle()
-                    .fill(AppColor.colaOrange.opacity(0.15))
-                    .frame(width: 30, height: 30)
-                    .overlay(
-                        Text("A")
-                            .font(.system(size: 13, weight: .bold, design: .rounded))
-                            .foregroundColor(AppColor.colaOrange)
-                    )
-                
+                Button(action: { selectedTab = .settings }) {
+                    Circle()
+                        .fill(AppColor.colaOrange.opacity(0.15))
+                        .frame(width: 30, height: 30)
+                        .overlay(
+                            Text("A")
+                                .font(.system(size: 13, weight: .bold, design: .rounded))
+                                .foregroundColor(AppColor.colaOrange)
+                        )
+                }
+                .buttonStyle(.plain)
+
                 Text("ALEX")
                     .font(.system(size: 11, weight: .bold, design: .rounded))
                     .foregroundColor(AppColor.colaDarkText)
-                
+
                 Spacer(minLength: 0)
             }
             .padding(.leading, 20)
@@ -235,6 +265,12 @@ struct LeftSidebar: View {
         .frame(width: 130)
         .background(Color.white.opacity(0.75))
         .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
+        .onAppear { loadData() }
+    }
+
+    private func loadData() {
+        favorites = (try? nodeStore.fetchFavorites()) ?? []
+        recents = (try? nodeStore.fetchRecents(limit: 20)) ?? []
     }
 }
 
