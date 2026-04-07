@@ -15,4 +15,8 @@ struct AppColor {
     
     // System ultra thin material for the premium blur
     // In SwiftUI we use `.ultraThinMaterial` directly where needed.
+
+    // Galaxy dark theme
+    static let galaxyBackground = Color(red: 26/255, green: 26/255, blue: 46/255)
+    static let galaxyNodeGlow = Color(red: 243/255, green: 131/255, blue: 53/255)
 }
