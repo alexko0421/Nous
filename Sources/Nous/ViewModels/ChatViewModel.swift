@@ -155,25 +155,40 @@ final class ChatViewModel {
         }
     }
 
+    // MARK: - Anchor (Core Identity)
+
+    /// Loads the anchor document — Nous's immutable core identity and thinking methods.
+    /// This is who Nous is. It does not change with context.
+    private static let anchor: String = {
+        guard let url = Bundle.main.url(forResource: "anchor", withExtension: "md"),
+              let content = try? String(contentsOf: url) else {
+            return "You are Nous, a personal knowledge assistant for Alex. Be direct and honest."
+        }
+        return content
+    }()
+
     // MARK: - Context Assembly
 
     static func assembleContext(citations: [SearchResult], projectGoal: String?) -> String {
         var parts: [String] = []
 
-        parts.append("You are Nous, a personal knowledge assistant. Be concise and helpful.")
+        // Layer 1: Anchor — who Nous is (immutable)
+        parts.append(anchor)
 
+        // Layer 2: Project context (if active)
         if let goal = projectGoal, !goal.isEmpty {
-            parts.append("Project goal: \(goal)")
+            parts.append("---\n\nCURRENT PROJECT GOAL: \(goal)")
         }
 
+        // Layer 3: Retrieved knowledge (RAG)
         if !citations.isEmpty {
-            parts.append("Relevant knowledge from your notes:")
+            parts.append("---\n\nRELEVANT KNOWLEDGE FROM ALEX'S NOTES AND CONVERSATIONS:")
             for (index, result) in citations.enumerated() {
                 let percent = Int(result.similarity * 100)
                 let snippet = String(result.node.content.prefix(300))
-                parts.append("\(index + 1). \(result.node.title) (\(percent)% relevance): \(snippet)")
+                parts.append("[\(index + 1)] \"\(result.node.title)\" (\(percent)% relevance): \(snippet)")
             }
-            parts.append("Reference the above knowledge when relevant. Cite sources by title.")
+            parts.append("Reference the above when relevant. Cite by title. If knowledge contradicts something Alex said before, surface the tension.")
         }
 
         return parts.joined(separator: "\n\n")

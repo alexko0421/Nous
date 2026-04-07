@@ -47,6 +47,7 @@
 		D67AE98AD27B27D71D9962AE /* GalaxyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26B0833FF90A3381A73858CE /* GalaxyView.swift */; };
 		D707ED9BF3B1B7CD5C6A6CB0 /* VectorStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C94FF3DE937E45E699C4E0A2 /* VectorStoreTests.swift */; };
 		DE8F51349E0FA0FA45C61D09 /* LocalLLMService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92D5AA1CB7980A98700AB726 /* LocalLLMService.swift */; };
+		E2BA1CBDD071A778D65A719A /* anchor.md in Resources */ = {isa = PBXBuildFile; fileRef = 29A9E0EFFECF3C48A6B1D69F /* anchor.md */; };
 		E945B227EBC4479E9F43EF34 /* NousNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC28A679A68D922546206E9D /* NousNode.swift */; };
 /* End PBXBuildFile section */
 
@@ -65,6 +66,7 @@
 		108C7FA818D0FD59A26F5BA9 /* NoteViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteViewModel.swift; sourceTree = "<group>"; };
 		12A1B273D3D94B188C07A933 /* GalaxyViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalaxyViewModel.swift; sourceTree = "<group>"; };
 		26B0833FF90A3381A73858CE /* GalaxyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalaxyView.swift; sourceTree = "<group>"; };
+		29A9E0EFFECF3C48A6B1D69F /* anchor.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = anchor.md; sourceTree = "<group>"; };
 		36CB503D39BB65E14D694E13 /* GraphEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GraphEngine.swift; sourceTree = "<group>"; };
 		3D5C933D2CDA967B8AAFCD32 /* ChatArea.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatArea.swift; sourceTree = "<group>"; };
 		47242B87233D17F872ED3113 /* SettingsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsViewModel.swift; sourceTree = "<group>"; };
@@ -134,6 +136,7 @@
 				58E66C627E617AE7B1CF282D /* App */,
 				58A50705FAFD0AAA7AD23BA4 /* Fonts */,
 				9B019E586E06D77D88B2E06A /* Models */,
+				B877F25953478A50CC44DA4F /* Resources */,
 				C71B7B6DB6614009250AF511 /* Services */,
 				31C7442F11A6B3AEF5599A8F /* Theme */,
 				DD2BFE8A057079B8910724AA /* ViewModels */,
@@ -189,6 +192,14 @@
 				AB46BB1DCA54C416A6215077 /* Project.swift */,
 			);
 			path = Models;
+			sourceTree = "<group>";
+		};
+		B877F25953478A50CC44DA4F /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				29A9E0EFFECF3C48A6B1D69F /* anchor.md */,
+			);
+			path = Resources;
 			sourceTree = "<group>";
 		};
 		C71B7B6DB6614009250AF511 /* Services */ = {
@@ -344,6 +355,7 @@
 			files = (
 				4ABEE05964FC577A1F2AE5EC /* FredokaOne-Regular.ttf in Resources */,
 				C3B66790ADAC5624E9ACC319 /* Nunito-Variable.ttf in Resources */,
+				E2BA1CBDD071A778D65A719A /* anchor.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
