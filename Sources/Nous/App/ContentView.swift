@@ -45,8 +45,15 @@ struct ContentView: View {
     }
 
     var body: some View {
-        // If not set up, show SetupView (Task 13 will create it — for now just show main UI always)
-        mainContent
+        if isSetupComplete {
+            mainContent
+        } else {
+            SetupView(
+                isSetupComplete: $isSetupComplete,
+                embeddingService: embeddingService,
+                settingsVM: settingsVM
+            )
+        }
     }
 
     @ViewBuilder
