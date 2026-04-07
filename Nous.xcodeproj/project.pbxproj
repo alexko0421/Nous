@@ -15,12 +15,12 @@
 		2314061EED27031103F0CE65 /* Project.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB46BB1DCA54C416A6215077 /* Project.swift */; };
 		2FA85CB0FB6256D80D30DE6F /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A13A1040D67FB96CF59C6154 /* ContentView.swift */; };
 		30EB1D0F191710EF17D5D13C /* ChatArea.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D5C933D2CDA967B8AAFCD32 /* ChatArea.swift */; };
-		37AF74D6A8F3E2D7631E3BB8 /* LLM in Frameworks */ = {isa = PBXBuildFile; productRef = B10E98E61CBC8367786E8834 /* LLM */; };
+		37AF74D6A8F3E2D7631E3BB8 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = 289331BB87BCDA02BF10FBFA /* MLXLLM */; };
 		3A38D50339D27DC72856B618 /* WindowConfigurator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFA7FC708EEBC903409D5DD9 /* WindowConfigurator.swift */; };
 		3E6FF46E8E6E947CF7B7AADF /* NousApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84AC99FE1331146CEC54C75D /* NousApp.swift */; };
 		4116C4885DF5E1CB2FE62225 /* NodeStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 840F091AC2ADF85B26F1884A /* NodeStoreTests.swift */; };
 		43ABC36DBEB2E340CFBC267A /* Accelerate in Frameworks */ = {isa = PBXBuildFile; fileRef = 6E2737F94D6167BA6054F0BE /* Accelerate */; };
-		4506DACA6C0E8F6E378D424F /* Embedders in Frameworks */ = {isa = PBXBuildFile; productRef = 65BC2AFCF4B47423D5179AD1 /* Embedders */; };
+		4506DACA6C0E8F6E378D424F /* MLXEmbedders in Frameworks */ = {isa = PBXBuildFile; productRef = EE612DC9E3C6EC7084755439 /* MLXEmbedders */; };
 		4ABEE05964FC577A1F2AE5EC /* FredokaOne-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = DBD5F346B63EBE504887EAB0 /* FredokaOne-Regular.ttf */; };
 		57CA97DF7C66876FEF077B9C /* Message.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55859ED677DFDB237447B2EC /* Message.swift */; };
 		58CDED90A7C15858ACDADAC0 /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = A0FC8786751C66E9D130220C /* MLX */; };
@@ -86,8 +86,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				58CDED90A7C15858ACDADAC0 /* MLX in Frameworks */,
-				37AF74D6A8F3E2D7631E3BB8 /* LLM in Frameworks */,
-				4506DACA6C0E8F6E378D424F /* Embedders in Frameworks */,
+				37AF74D6A8F3E2D7631E3BB8 /* MLXLLM in Frameworks */,
+				4506DACA6C0E8F6E378D424F /* MLXEmbedders in Frameworks */,
 				43ABC36DBEB2E340CFBC267A /* Accelerate in Frameworks */,
 				6F3C62A22E63E128DBCC24FD /* SpriteKit in Frameworks */,
 			);
@@ -241,8 +241,8 @@
 			name = Nous;
 			packageProductDependencies = (
 				A0FC8786751C66E9D130220C /* MLX */,
-				B10E98E61CBC8367786E8834 /* LLM */,
-				65BC2AFCF4B47423D5179AD1 /* Embedders */,
+				289331BB87BCDA02BF10FBFA /* MLXLLM */,
+				EE612DC9E3C6EC7084755439 /* MLXEmbedders */,
 			);
 			productName = Nous;
 			productReference = C3A72C022B88861F85CCA960 /* Nous.app */;
@@ -572,7 +572,7 @@
 			repositoryURL = "https://github.com/ml-explore/mlx-swift-examples";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 1.19.0;
+				minimumVersion = 2.29.1;
 			};
 		};
 		9D0EAD32D1DD03A6D9C0CED9 /* XCRemoteSwiftPackageReference "mlx-swift" */ = {
@@ -580,26 +580,26 @@
 			repositoryURL = "https://github.com/ml-explore/mlx-swift";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 0.21.0;
+				minimumVersion = 0.29.1;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		65BC2AFCF4B47423D5179AD1 /* Embedders */ = {
+		289331BB87BCDA02BF10FBFA /* MLXLLM */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 7C3471E30F61349C24C26F71 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */;
-			productName = Embedders;
+			productName = MLXLLM;
 		};
 		A0FC8786751C66E9D130220C /* MLX */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 9D0EAD32D1DD03A6D9C0CED9 /* XCRemoteSwiftPackageReference "mlx-swift" */;
 			productName = MLX;
 		};
-		B10E98E61CBC8367786E8834 /* LLM */ = {
+		EE612DC9E3C6EC7084755439 /* MLXEmbedders */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 7C3471E30F61349C24C26F71 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */;
-			productName = LLM;
+			productName = MLXEmbedders;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

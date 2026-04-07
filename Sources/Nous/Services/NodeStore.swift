@@ -183,14 +183,17 @@ final class NodeStore {
         return results
     }
 
-    func fetchNodesWithEmbeddings() throws -> [NousNode] {
+    func fetchNodesWithEmbeddings() throws -> [(NousNode, [Float])] {
         let stmt = try db.prepare("""
             SELECT id, type, title, content, embedding, projectId, isFavorite, createdAt, updatedAt
             FROM nodes WHERE embedding IS NOT NULL ORDER BY updatedAt DESC;
         """)
-        var results: [NousNode] = []
+        var results: [(NousNode, [Float])] = []
         while try stmt.step() {
-            results.append(nodeFrom(stmt))
+            let node = nodeFrom(stmt)
+            if let embedding = node.embedding {
+                results.append((node, embedding))
+            }
         }
         return results
     }
