@@ -4,10 +4,10 @@ options:
 packages:
   mlx-swift:
     url: https://github.com/ml-explore/mlx-swift
-    from: "0.21.0"
+    from: "0.29.1"
   mlx-swift-examples:
     url: https://github.com/ml-explore/mlx-swift-examples
-    from: "1.19.0"
+    from: "2.29.1"
 targets:
   Nous:
     type: application
@@ -29,9 +29,9 @@ targets:
       - package: mlx-swift
         product: MLX
       - package: mlx-swift-examples
-        product: LLM
+        product: MLXLLM
       - package: mlx-swift-examples
-        product: Embedders
+        product: MLXEmbedders
       - framework: Accelerate
       - framework: SpriteKit
   NousTests:
