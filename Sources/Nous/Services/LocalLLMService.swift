@@ -61,7 +61,7 @@ final class LocalLLMService: LLMService {
             return (lmInput, ctx)
         }
 
-        let stream = try generate(input: input, parameters: parameters, context: context)
+        let stream = try MLXLMCommon.generate(input: input, parameters: parameters, context: context)
 
         return AsyncThrowingStream { continuation in
             Task {

@@ -32,8 +32,8 @@ targets:
         product: MLXLLM
       - package: mlx-swift-examples
         product: MLXEmbedders
-      - framework: Accelerate
-      - framework: SpriteKit
+      - sdk: Accelerate.framework
+      - sdk: SpriteKit.framework
   NousTests:
     type: bundle.unit-test
     platform: macOS

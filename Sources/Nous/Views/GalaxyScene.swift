@@ -117,9 +117,7 @@ final class GalaxyScene: SKScene {
     }
 
     private func scenePoint(from event: NSEvent) -> CGPoint {
-        guard let view = view else { return .zero }
-        let locationInView = event.location(in: view)
-        return convertPoint(fromView: locationInView)
+        event.location(in: self)
     }
 
     // MARK: - Mouse Events

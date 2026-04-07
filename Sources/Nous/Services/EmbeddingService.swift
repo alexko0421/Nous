@@ -3,6 +3,7 @@ import Hub
 import MLX
 import MLXEmbedders
 import Observation
+import Tokenizers
 
 @Observable
 final class EmbeddingService {
@@ -43,7 +44,7 @@ final class EmbeddingService {
         let tokens = tokenizer.encode(text: text)
         // Model expects shape [batch, sequence] — wrap in a batch of 1
         let inputIds = MLXArray(tokens).reshaped([1, tokens.count])
-        let output = model(inputIds)
+        let output = model(inputIds, positionIds: nil, tokenTypeIds: nil, attentionMask: nil)
         let pooled = pooler(output)
         // pooled shape is [1, dim] — squeeze to [dim]
         let squeezed = pooled.squeezed(axis: 0)
