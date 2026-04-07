@@ -1,0 +1,20 @@
+name: Nous
+options:
+  bundleIdPrefix: com.nous.app
+targets:
+  Nous:
+    type: application
+    platform: macOS
+    deploymentTarget: "26.0"
+    sources: [Sources/Nous]
+    info:
+      path: Info.plist
+      properties:
+        CFBundleIconName: AppIcon
+        LSMinimumSystemVersion: "26.0"
+        NSPrincipalClass: NSApplication
+        ATSApplicationFontsPath: Fonts
+    settings:
+      base:
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: ""
