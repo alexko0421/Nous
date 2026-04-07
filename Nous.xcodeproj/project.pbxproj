@@ -7,22 +7,29 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		02967200F617A33CB9522076 /* NodeEdge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98307413B1A35533835FC1ED /* NodeEdge.swift */; };
 		07FFF1026087C07958572C54 /* WelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B15EC86BFA4A972D811E5ADB /* WelcomeView.swift */; };
 		0E3B68A13149EE403D7EB490 /* SpriteKit in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 267442BFDA3F1AB0480F680F /* SpriteKit */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		11355DE1064845BB27893325 /* Accelerate in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 6E2737F94D6167BA6054F0BE /* Accelerate */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		1643CB90A6F5400A1BD1441E /* Database.swift in Sources */ = {isa = PBXBuildFile; fileRef = 593E59F6467AEF07EEFC96B6 /* Database.swift */; };
+		2314061EED27031103F0CE65 /* Project.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB46BB1DCA54C416A6215077 /* Project.swift */; };
 		2FA85CB0FB6256D80D30DE6F /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A13A1040D67FB96CF59C6154 /* ContentView.swift */; };
 		30EB1D0F191710EF17D5D13C /* ChatArea.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D5C933D2CDA967B8AAFCD32 /* ChatArea.swift */; };
 		37AF74D6A8F3E2D7631E3BB8 /* LLM in Frameworks */ = {isa = PBXBuildFile; productRef = B10E98E61CBC8367786E8834 /* LLM */; };
 		3A38D50339D27DC72856B618 /* WindowConfigurator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFA7FC708EEBC903409D5DD9 /* WindowConfigurator.swift */; };
 		3E6FF46E8E6E947CF7B7AADF /* NousApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84AC99FE1331146CEC54C75D /* NousApp.swift */; };
+		4116C4885DF5E1CB2FE62225 /* NodeStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 840F091AC2ADF85B26F1884A /* NodeStoreTests.swift */; };
 		43ABC36DBEB2E340CFBC267A /* Accelerate in Frameworks */ = {isa = PBXBuildFile; fileRef = 6E2737F94D6167BA6054F0BE /* Accelerate */; };
 		4506DACA6C0E8F6E378D424F /* Embedders in Frameworks */ = {isa = PBXBuildFile; productRef = 65BC2AFCF4B47423D5179AD1 /* Embedders */; };
 		4ABEE05964FC577A1F2AE5EC /* FredokaOne-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = DBD5F346B63EBE504887EAB0 /* FredokaOne-Regular.ttf */; };
+		57CA97DF7C66876FEF077B9C /* Message.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55859ED677DFDB237447B2EC /* Message.swift */; };
 		58CDED90A7C15858ACDADAC0 /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = A0FC8786751C66E9D130220C /* MLX */; };
 		6F3C62A22E63E128DBCC24FD /* SpriteKit in Frameworks */ = {isa = PBXBuildFile; fileRef = 267442BFDA3F1AB0480F680F /* SpriteKit */; };
 		83964444D1DEE2A22156BF34 /* LeftSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A47BC60463D5E92044AFDB86 /* LeftSidebar.swift */; };
+		8C145059D8CF43EDF0BA43A5 /* NodeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 728E7385459EB842724E8BCA /* NodeStore.swift */; };
 		B90A2FAEB0973870A4D5DA15 /* AppColor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BBA2D70209E6211449AEADC /* AppColor.swift */; };
 		C3B66790ADAC5624E9ACC319 /* Nunito-Variable.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 4EDBF5703D7FA7CDEA64FCC8 /* Nunito-Variable.ttf */; };
+		E945B227EBC4479E9F43EF34 /* NousNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC28A679A68D922546206E9D /* NousNode.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -55,13 +62,20 @@
 		3D5C933D2CDA967B8AAFCD32 /* ChatArea.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatArea.swift; sourceTree = "<group>"; };
 		4BBA2D70209E6211449AEADC /* AppColor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppColor.swift; sourceTree = "<group>"; };
 		4EDBF5703D7FA7CDEA64FCC8 /* Nunito-Variable.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Nunito-Variable.ttf"; sourceTree = "<group>"; };
+		55859ED677DFDB237447B2EC /* Message.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Message.swift; sourceTree = "<group>"; };
+		593E59F6467AEF07EEFC96B6 /* Database.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Database.swift; sourceTree = "<group>"; };
 		63558731B5D9A45DD29170B9 /* NousTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NousTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		6E2737F94D6167BA6054F0BE /* Accelerate */ = {isa = PBXFileReference; path = Accelerate; sourceTree = "<group>"; };
+		728E7385459EB842724E8BCA /* NodeStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NodeStore.swift; sourceTree = "<group>"; };
+		840F091AC2ADF85B26F1884A /* NodeStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NodeStoreTests.swift; sourceTree = "<group>"; };
 		84AC99FE1331146CEC54C75D /* NousApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NousApp.swift; sourceTree = "<group>"; };
+		98307413B1A35533835FC1ED /* NodeEdge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NodeEdge.swift; sourceTree = "<group>"; };
 		A13A1040D67FB96CF59C6154 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A47BC60463D5E92044AFDB86 /* LeftSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LeftSidebar.swift; sourceTree = "<group>"; };
+		AB46BB1DCA54C416A6215077 /* Project.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Project.swift; sourceTree = "<group>"; };
 		B15EC86BFA4A972D811E5ADB /* WelcomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeView.swift; sourceTree = "<group>"; };
 		C3A72C022B88861F85CCA960 /* Nous.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nous.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		CC28A679A68D922546206E9D /* NousNode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NousNode.swift; sourceTree = "<group>"; };
 		DBD5F346B63EBE504887EAB0 /* FredokaOne-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "FredokaOne-Regular.ttf"; sourceTree = "<group>"; };
 		FFA7FC708EEBC903409D5DD9 /* WindowConfigurator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowConfigurator.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -96,6 +110,8 @@
 			children = (
 				58E66C627E617AE7B1CF282D /* App */,
 				58A50705FAFD0AAA7AD23BA4 /* Fonts */,
+				9B019E586E06D77D88B2E06A /* Models */,
+				C71B7B6DB6614009250AF511 /* Services */,
 				31C7442F11A6B3AEF5599A8F /* Theme */,
 				DF3B64C6A416A209A7DEC44B /* Views */,
 			);
@@ -140,6 +156,26 @@
 			);
 			sourceTree = "<group>";
 		};
+		9B019E586E06D77D88B2E06A /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				55859ED677DFDB237447B2EC /* Message.swift */,
+				98307413B1A35533835FC1ED /* NodeEdge.swift */,
+				CC28A679A68D922546206E9D /* NousNode.swift */,
+				AB46BB1DCA54C416A6215077 /* Project.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		C71B7B6DB6614009250AF511 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				593E59F6467AEF07EEFC96B6 /* Database.swift */,
+				728E7385459EB842724E8BCA /* NodeStore.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
 		D1CEABF44300C366B92A19C2 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
@@ -152,6 +188,7 @@
 		DED692321AF0E89666946424 /* NousTests */ = {
 			isa = PBXGroup;
 			children = (
+				840F091AC2ADF85B26F1884A /* NodeStoreTests.swift */,
 			);
 			name = NousTests;
 			path = Tests/NousTests;
@@ -270,8 +307,14 @@
 				B90A2FAEB0973870A4D5DA15 /* AppColor.swift in Sources */,
 				30EB1D0F191710EF17D5D13C /* ChatArea.swift in Sources */,
 				2FA85CB0FB6256D80D30DE6F /* ContentView.swift in Sources */,
+				1643CB90A6F5400A1BD1441E /* Database.swift in Sources */,
 				83964444D1DEE2A22156BF34 /* LeftSidebar.swift in Sources */,
+				57CA97DF7C66876FEF077B9C /* Message.swift in Sources */,
+				02967200F617A33CB9522076 /* NodeEdge.swift in Sources */,
+				8C145059D8CF43EDF0BA43A5 /* NodeStore.swift in Sources */,
 				3E6FF46E8E6E947CF7B7AADF /* NousApp.swift in Sources */,
+				E945B227EBC4479E9F43EF34 /* NousNode.swift in Sources */,
+				2314061EED27031103F0CE65 /* Project.swift in Sources */,
 				07FFF1026087C07958572C54 /* WelcomeView.swift in Sources */,
 				3A38D50339D27DC72856B618 /* WindowConfigurator.swift in Sources */,
 			);
@@ -281,6 +324,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				4116C4885DF5E1CB2FE62225 /* NodeStoreTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
