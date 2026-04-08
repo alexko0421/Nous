@@ -9,7 +9,7 @@ struct WindowConfigurator: NSViewRepresentable {
             // Make window fully transparent so each component casts its own shaped shadow
             window.isOpaque = false
             window.backgroundColor = .clear
-            window.hasShadow = false  // Each SwiftUI component has .shadow() following its own clipShape
+            window.hasShadow = false
             window.isMovableByWindowBackground = true
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
@@ -17,8 +17,8 @@ struct WindowConfigurator: NSViewRepresentable {
             window.standardWindowButton(.miniaturizeButton)?.isHidden = true
             window.standardWindowButton(.zoomButton)?.isHidden = true
 
-            // Remove all window chrome
-            window.styleMask.remove(.titled)
+            // Keep .titled so window can become key (required for text input).
+            // fullSizeContentView makes content extend under the invisible titlebar.
             window.styleMask.insert(.fullSizeContentView)
 
             // Nuke every layer background up the hierarchy
@@ -27,13 +27,16 @@ struct WindowConfigurator: NSViewRepresentable {
                 contentView.layer?.backgroundColor = NSColor.clear.cgColor
                 contentView.layer?.masksToBounds = false
 
-                var view: NSView? = contentView
-                while let v = view {
+                var current: NSView? = contentView
+                while let v = current {
                     v.wantsLayer = true
                     v.layer?.backgroundColor = NSColor.clear.cgColor
-                    view = v.superview
+                    current = v.superview
                 }
             }
+
+            // Ensure window is key for text input
+            window.makeKey()
         }
         return view
     }
