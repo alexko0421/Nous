@@ -32,6 +32,12 @@ struct SettingsView: View {
                         switch vm.selectedProvider {
                         case .local:
                             localModelSection
+                        case .gemini:
+                            apiKeySection(
+                                label: "Gemini API Key",
+                                placeholder: "AIza…",
+                                binding: $vm.geminiApiKey
+                            )
                         case .claude:
                             apiKeySection(
                                 label: "Claude API Key",
@@ -122,6 +128,7 @@ struct SettingsView: View {
     private func providerShortName(_ provider: LLMProvider) -> String {
         switch provider {
         case .local:  return "Local"
+        case .gemini: return "Gemini"
         case .claude: return "Claude"
         case .openai: return "OpenAI"
         }

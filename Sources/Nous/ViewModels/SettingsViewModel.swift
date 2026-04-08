@@ -10,6 +10,7 @@ final class SettingsViewModel {
 
     // MARK: - API keys
 
+    var geminiApiKey: String = ""
     var claudeApiKey: String = ""
     var openaiApiKey: String = ""
 
@@ -40,6 +41,7 @@ final class SettingsViewModel {
 
     private enum Keys {
         static let provider     = "nous.llm.provider"
+        static let geminiApiKey = "nous.gemini.apikey"
         static let claudeApiKey = "nous.claude.apikey"
         static let openaiApiKey = "nous.openai.apikey"
         static let localModelId = "nous.local.modelid"
@@ -64,6 +66,7 @@ final class SettingsViewModel {
            let provider = LLMProvider(rawValue: raw) {
             selectedProvider = provider
         }
+        geminiApiKey = defaults.string(forKey: Keys.geminiApiKey) ?? ""
         claudeApiKey = defaults.string(forKey: Keys.claudeApiKey) ?? ""
         openaiApiKey = defaults.string(forKey: Keys.openaiApiKey) ?? ""
         if let id = defaults.string(forKey: Keys.localModelId) {
@@ -77,6 +80,7 @@ final class SettingsViewModel {
     func savePreferences() {
         let defaults = UserDefaults.standard
         defaults.set(selectedProvider.rawValue, forKey: Keys.provider)
+        defaults.set(geminiApiKey, forKey: Keys.geminiApiKey)
         defaults.set(claudeApiKey, forKey: Keys.claudeApiKey)
         defaults.set(openaiApiKey, forKey: Keys.openaiApiKey)
         defaults.set(localModelId, forKey: Keys.localModelId)
@@ -118,6 +122,9 @@ final class SettingsViewModel {
         case .local:
             guard localLLM.isLoaded else { return nil }
             return localLLM
+        case .gemini:
+            guard !geminiApiKey.isEmpty else { return nil }
+            return GeminiLLMService(apiKey: geminiApiKey)
         case .claude:
             guard !claudeApiKey.isEmpty else { return nil }
             return ClaudeLLMService(apiKey: claudeApiKey)

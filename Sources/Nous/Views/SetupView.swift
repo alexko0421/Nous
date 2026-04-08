@@ -186,6 +186,15 @@ private struct LLMStepView: View {
                 }
 
                 ProviderCard(
+                    title: "Gemini 2.5 Flash",
+                    subtitle: "Google's fast, capable model"
+                ) {
+                    settingsVM.selectedProvider = .gemini
+                    settingsVM.savePreferences()
+                    step = .done
+                }
+
+                ProviderCard(
                     title: "Claude API",
                     subtitle: "Anthropic's powerful Claude models"
                 ) {

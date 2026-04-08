@@ -13,10 +13,7 @@ targets:
     type: application
     platform: macOS
     deploymentTarget: "26.0"
-    sources:
-      - Sources/Nous
-    resources:
-      - Sources/Nous/Resources
+    sources: [Sources/Nous]
     info:
       path: Info.plist
       properties:

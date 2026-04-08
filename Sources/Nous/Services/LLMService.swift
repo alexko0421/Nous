@@ -2,6 +2,7 @@ import Foundation
 
 enum LLMProvider: String, Codable, CaseIterable {
     case local = "Local (MLX)"
+    case gemini = "Gemini"
     case claude = "Claude API"
     case openai = "OpenAI API"
 }
@@ -133,6 +134,77 @@ struct OpenAILLMService: LLMService {
                             let first = choices.first,
                             let delta = first["delta"] as? [String: Any],
                             let text = delta["content"] as? String
+                        else { continue }
+
+                        continuation.yield(text)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Gemini API
+
+struct GeminiLLMService: LLMService {
+    let apiKey: String
+    var model: String = "gemini-2.5-flash"
+
+    func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
+        let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):streamGenerateContent?alt=sse&key=\(apiKey)")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        var contents: [[String: Any]] = []
+        for msg in messages {
+            contents.append([
+                "role": msg.role == "assistant" ? "model" : "user",
+                "parts": [["text": msg.content]]
+            ])
+        }
+
+        var body: [String: Any] = ["contents": contents]
+        if let system {
+            body["systemInstruction"] = [
+                "parts": [["text": system]]
+            ]
+        }
+        body["generationConfig"] = [
+            "temperature": 0.7,
+            "maxOutputTokens": 8192
+        ]
+
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        return AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                    guard let httpResponse = response as? HTTPURLResponse else {
+                        continuation.finish(throwing: LLMError.invalidResponse)
+                        return
+                    }
+                    guard httpResponse.statusCode == 200 else {
+                        continuation.finish(throwing: LLMError.httpError(httpResponse.statusCode))
+                        return
+                    }
+
+                    for try await line in bytes.lines {
+                        guard line.hasPrefix("data: ") else { continue }
+                        let data = String(line.dropFirst(6))
+
+                        guard
+                            let jsonData = data.data(using: .utf8),
+                            let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+                            let candidates = json["candidates"] as? [[String: Any]],
+                            let first = candidates.first,
+                            let content = first["content"] as? [String: Any],
+                            let parts = content["parts"] as? [[String: Any]],
+                            let text = parts.first?["text"] as? String
                         else { continue }
 
                         continuation.yield(text)
