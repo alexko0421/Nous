@@ -162,8 +162,10 @@ final class ChatViewModel {
     private static let anchor: String = {
         guard let url = Bundle.main.url(forResource: "anchor", withExtension: "md"),
               let content = try? String(contentsOf: url) else {
-            return "You are Nous, a personal knowledge assistant for Alex. Be direct and honest."
+            print("[Nous] WARNING: anchor.md not found in bundle, using fallback")
+            return "You are Nous, Alex 最信任嘅朋友。用广东话回应，语气好似同好朋友倾偈咁。Be warm, genuine, and direct."
         }
+        print("[Nous] Anchor loaded: \(content.prefix(80))...")
         return content
     }()
 
