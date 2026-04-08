@@ -84,21 +84,8 @@ struct ContentView: View {
                     SettingsView(vm: settingsVM)
                 }
 
-                // Tab bar
-                if selectedTab != .settings {
-                    VStack {
-                        HStack(spacing: 4) {
-                            tabButton("Chat", tab: .chat)
-                            tabButton("Notes", tab: .notes)
-                            tabButton("Galaxy", tab: .galaxy)
-                        }
-                        .padding(4)
-                        .background(.ultraThinMaterial)
-                        .clipShape(Capsule())
-                        Spacer()
-                    }
-                    .padding(.top, 12)
-                }
+                // Tab navigation is handled via sidebar icons (Galaxy, Project)
+                // No floating tab bar needed
             }
         }
         .frame(width: 800, height: 600)

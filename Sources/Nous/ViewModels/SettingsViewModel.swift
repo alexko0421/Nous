@@ -10,7 +10,7 @@ final class SettingsViewModel {
 
     // MARK: - API keys
 
-    var geminiApiKey: String = "AIzaSyAFTdAx8648s98iND72IrQ5AzOG4jzsvNU"
+    var geminiApiKey: String = ""
     var claudeApiKey: String = ""
     var openaiApiKey: String = ""
 
