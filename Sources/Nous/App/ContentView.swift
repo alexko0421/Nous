@@ -64,7 +64,15 @@ struct ContentView: View {
                     nodeStore: nodeStore,
                     selectedTab: $selectedTab,
                     selectedProjectId: $selectedProjectId,
-                    onNodeSelected: { node in navigateToNode(node) }
+                    onNodeSelected: { node in navigateToNode(node) },
+                    onNewChat: {
+                        chatVM.currentNode = nil
+                        chatVM.messages = []
+                        chatVM.citations = []
+                        chatVM.currentResponse = ""
+                        chatVM.inputText = ""
+                        selectedTab = .chat
+                    }
                 )
                 .transition(.move(edge: .leading).combined(with: .opacity))
             }

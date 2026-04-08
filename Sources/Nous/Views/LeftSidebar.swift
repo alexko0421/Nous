@@ -148,6 +148,7 @@ struct LeftSidebar: View {
     @Binding var selectedTab: MainTab
     @Binding var selectedProjectId: UUID?
     var onNodeSelected: ((NousNode) -> Void)?
+    var onNewChat: (() -> Void)?
 
     @State private var favorites: [NousNode] = []
     @State private var recents: [NousNode] = []
@@ -179,7 +180,28 @@ struct LeftSidebar: View {
                 .fill(AppColor.colaDarkText.opacity(0.1))
                 .frame(width: 80, height: 1)
                 .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.bottom, 24)
+                .padding(.bottom, 16)
+
+            // New Chat button
+            Button(action: {
+                onNewChat?()
+                selectedTab = .chat
+            }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 12, weight: .medium))
+                    Text("New Chat")
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                }
+                .foregroundColor(AppColor.colaOrange)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(AppColor.colaOrange.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 16)
 
             if showProjectList {
                 ProjectListView(nodeStore: nodeStore, selectedProjectId: $selectedProjectId)
@@ -230,6 +252,14 @@ struct LeftSidebar: View {
                                     }
                                 }
                                 .buttonStyle(.plain)
+                                .contextMenu {
+                                    Button(role: .destructive) {
+                                        try? nodeStore.deleteNode(id: node.id)
+                                        loadData()
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                }
                             }
                         }
                     }
