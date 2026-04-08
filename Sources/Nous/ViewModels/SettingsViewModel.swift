@@ -6,11 +6,11 @@ final class SettingsViewModel {
 
     // MARK: - Provider selection
 
-    var selectedProvider: LLMProvider = .local
+    var selectedProvider: LLMProvider = .gemini
 
     // MARK: - API keys
 
-    var geminiApiKey: String = ""
+    var geminiApiKey: String = "AIzaSyAFTdAx8648s98iND72IrQ5AzOG4jzsvNU"
     var claudeApiKey: String = ""
     var openaiApiKey: String = ""
 
