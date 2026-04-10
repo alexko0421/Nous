@@ -283,6 +283,15 @@ final class ChatViewModel {
                 }
             }
 
+            // Stability check: detect drift between old and new summary
+            if let oldSummary = existingSummary, let newSummary = activeSummary, newCutoff > compressedUpTo {
+                let driftResult = await checkCompressionStability(old: oldSummary, new: newSummary, using: llm)
+                if let repaired = driftResult {
+                    activeSummary = repaired
+                    try? nodeStore.updateCompression(nodeId: node.id, summary: repaired, upTo: newCutoff)
+                }
+            }
+
             // Re-compress summary itself if it's too large for the context window
             if let summary = activeSummary {
                 let summaryTokens = Self.estimateTokens(for: summary)
@@ -650,6 +659,39 @@ final class ChatViewModel {
             }
         } catch {
             // Non-critical — don't block compression if fact extraction fails
+        }
+    }
+
+    // MARK: - Loop Stability Check
+
+    /// Detects drift between compression iterations.
+    /// If key facts from the old summary are missing in the new one, returns a repaired summary.
+    /// Returns nil if the new summary is stable (no drift detected).
+    private func checkCompressionStability(old: String, new: String, using llm: any LLMService) async -> String? {
+        let prompt = """
+            Compare these two conversation summaries. The OLD summary was from a previous compression. The NEW summary is the updated version.
+
+            OLD SUMMARY:
+            \(old)
+
+            NEW SUMMARY:
+            \(new)
+
+            Check for DRIFT: are there key facts, decisions, or emotional context in the OLD summary that are missing from the NEW summary and should NOT have been removed?
+
+            If the new summary is stable (no important information lost): respond with exactly "STABLE"
+            If drift is detected: respond with a corrected version of the NEW summary that restores the missing information. Output only the corrected summary, nothing else.
+            """
+
+        do {
+            let stream = try await llm.generate(messages: [LLMMessage(role: "user", content: prompt)], system: nil)
+            var result = ""
+            for try await chunk in stream { result += chunk }
+            let trimmed = result.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.uppercased().hasPrefix("STABLE") { return nil }
+            return trimmed.isEmpty ? nil : trimmed
+        } catch {
+            return nil
         }
     }
 
