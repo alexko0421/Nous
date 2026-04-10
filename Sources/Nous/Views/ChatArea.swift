@@ -16,6 +16,22 @@ struct ChatArea: View {
                         .foregroundColor(AppColor.colaDarkText)
                         .lineLimit(1)
                     Spacer()
+                    if !vm.messages.isEmpty {
+                        Button(action: { Task { await vm.exportMarkdown() } }) {
+                            Image(systemName: vm.isExporting ? "ellipsis.circle" : "doc.text")
+                                .font(.system(size: 14))
+                                .foregroundColor(AppColor.colaDarkText.opacity(0.5))
+                                .symbolEffect(.rotate, isActive: vm.isExporting)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(vm.isExporting)
+                        .help("Summarize as Markdown")
+                    }
+                    if vm.usageTracker.sessionCost > 0 {
+                        Text(vm.usageTracker.formattedCost)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(AppColor.colaDarkText.opacity(0.4))
+                    }
                 }
                 .padding(.leading, 64)
                 .padding(.trailing, 36)

@@ -38,7 +38,9 @@ struct ContentView: View {
         _settingsVM = State(initialValue: svm)
         _chatVM = State(initialValue: ChatViewModel(
             nodeStore: ns, vectorStore: vs, embeddingService: es, graphEngine: ge,
-            llmServiceProvider: { svm.makeLLMService() }
+            llmServiceProvider: { svm.makeLLMService() },
+            localLLMProvider: { llm.isLoaded ? llm : nil },
+            fallbackProvider: { svm.makeFallbackServices() }
         ))
         _noteVM = State(initialValue: NoteViewModel(nodeStore: ns, vectorStore: vs, embeddingService: es, graphEngine: ge))
         _galaxyVM = State(initialValue: GalaxyViewModel(nodeStore: ns, graphEngine: ge))
