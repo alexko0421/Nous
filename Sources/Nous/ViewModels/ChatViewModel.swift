@@ -13,6 +13,7 @@ final class ChatViewModel {
     var isGenerating: Bool = false
     var currentResponse: String = ""
     var citations: [SearchResult] = []
+    var currentMode: ConversationMode = .general
 
     // MARK: - Context Compression
 
@@ -67,6 +68,11 @@ final class ChatViewModel {
         messages = []
         citations = []
         currentResponse = ""
+    }
+
+    func startWithMode(_ mode: ConversationMode, projectId: UUID? = nil) {
+        currentMode = mode
+        startNewConversation(title: mode.label, projectId: projectId)
     }
 
     func loadConversation(_ node: NousNode) {
@@ -458,16 +464,73 @@ final class ChatViewModel {
 
     // MARK: - Context Compression
 
-    private static let summaryStructure = """
-        ## Topic
-        [What this conversation is about]
-        ## Key Facts & Decisions
-        [Concrete facts, numbers, names, conclusions reached, and why]
-        ## Emotional Context
-        [Alex's mood, concerns, excitement — anything that affects tone]
-        ## Open Threads
-        [Things still unresolved or promised for later]
-        """
+    private static func summaryStructure(for mode: ConversationMode) -> String {
+        switch mode {
+        case .business:
+            return """
+                ## Topic
+                [What business problem or opportunity is being discussed]
+                ## Numbers & Data
+                [Revenue, costs, metrics, deadlines, projections — preserve ALL numbers]
+                ## Decisions & Action Items
+                [What was decided, who does what, by when]
+                ## Stakeholders
+                [People, companies, roles mentioned]
+                ## Open Items
+                [Unresolved questions, pending decisions, blockers]
+                """
+        case .direction:
+            return """
+                ## Life Direction
+                [What Alex is navigating — career, identity, purpose]
+                ## Values & Priorities
+                [What matters most to Alex right now and why]
+                ## Milestones & Pivots
+                [Key turning points, decisions made, paths chosen or rejected]
+                ## Tensions
+                [Conflicting desires, tradeoffs Alex is weighing]
+                ## Open Questions
+                [What Alex is still figuring out]
+                """
+        case .brainstorm:
+            return """
+                ## Central Question
+                [What sparked this brainstorm]
+                ## Ideas Generated
+                [EVERY idea mentioned — even wild ones. Do NOT filter or judge. List all.]
+                ## Connections Discovered
+                [Links between ideas, unexpected patterns, "what if" threads]
+                ## Favorites
+                [Ideas Alex showed excitement about or returned to]
+                ## Unexplored Threads
+                [Ideas mentioned but not yet developed]
+                """
+        case .mentalHealth:
+            return """
+                ## What Alex Is Feeling
+                [Current emotional state — be specific and gentle]
+                ## Patterns Noticed
+                [Recurring themes, triggers, cycles Alex described]
+                ## Breakthroughs
+                [Moments of clarity, reframes, things that helped]
+                ## Coping Strategies
+                [What Alex has tried, what worked, what didn't]
+                ## Things to Hold Gently
+                [Ongoing struggles — preserve with care, never minimize]
+                """
+        case .general:
+            return """
+                ## Topic
+                [What this conversation is about]
+                ## Key Facts & Decisions
+                [Concrete facts, numbers, names, conclusions reached, and why]
+                ## Emotional Context
+                [Alex's mood, concerns, excitement — anything that affects tone]
+                ## Open Threads
+                [Things still unresolved or promised for later]
+                """
+        }
+    }
 
     /// Summary token budget: 20% of compressed content, floor 500, ceiling 3000
     private static func summaryBudget(compressedTokens: Int) -> Int {
@@ -480,6 +543,7 @@ final class ChatViewModel {
     private func compressMessages(_ newMessages: [Message], existingSummary: String?, using llm: any LLMService) async -> String? {
         let contentTokens = newMessages.reduce(0) { $0 + Self.estimateTokens(for: $1.content) }
         let budget = Self.summaryBudget(compressedTokens: contentTokens)
+        let structure = Self.summaryStructure(for: currentMode)
 
         var prompt: String
 
@@ -503,10 +567,10 @@ final class ChatViewModel {
                 Update the summary using this structure. Follow these rules:
                 - PRESERVE all information that is still relevant.
                 - ADD new facts, decisions, and emotional shifts.
-                - Move resolved items OUT of "Open Threads" into "Key Facts & Decisions".
+                - Move resolved items OUT of open/unresolved sections into completed sections.
                 - Remove information ONLY if it is clearly obsolete or contradicted by newer messages.
 
-                \(Self.summaryStructure)
+                \(structure)
 
                 Target ~\(budget) tokens. Write in the same language the conversation uses.
                 Write only the summary. No preamble.
@@ -516,7 +580,7 @@ final class ChatViewModel {
             prompt = """
                 Summarize this conversation concisely using the structure below. Write in the same language the conversation uses.
 
-                \(Self.summaryStructure)
+                \(structure)
 
                 MESSAGES TO SUMMARIZE:
 

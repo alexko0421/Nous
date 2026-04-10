@@ -7,7 +7,11 @@ struct ChatArea: View {
     var body: some View {
         VStack(spacing: 0) {
             if vm.messages.isEmpty && vm.currentNode == nil {
-                WelcomeView(inputText: $vm.inputText, onSend: { Task { await vm.send() } })
+                WelcomeView(
+                    inputText: $vm.inputText,
+                    onSend: { Task { await vm.send() } },
+                    onModeSelected: { mode in vm.startWithMode(mode) }
+                )
             } else {
                 // Header
                 HStack {

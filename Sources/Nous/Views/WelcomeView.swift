@@ -4,6 +4,7 @@ import SwiftUI
 struct WelcomeView: View {
     @Binding var inputText: String
     let onSend: () -> Void
+    var onModeSelected: ((ConversationMode) -> Void)?
     
     private var greeting: String {
         let hour = Calendar.current.component(.hour, from: Date())
@@ -88,7 +89,16 @@ struct WelcomeView: View {
             // ── Quick Action Chips ──
             HStack(spacing: 10) {
                 ForEach(quickActions, id: \.label) { action in
-                    Button(action: {}) {
+                    Button(action: {
+                        let mode: ConversationMode = switch action.label {
+                        case "Business": .business
+                        case "Direction": .direction
+                        case "Brain Storm": .brainstorm
+                        case "Mental Health": .mentalHealth
+                        default: .general
+                        }
+                        onModeSelected?(mode)
+                    }) {
                         HStack(spacing: 6) {
                             Image(systemName: action.icon)
                                 .font(.system(size: 11))
