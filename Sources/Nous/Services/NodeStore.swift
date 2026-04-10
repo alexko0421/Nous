@@ -63,6 +63,37 @@ final class NodeStore {
         try db.exec("CREATE INDEX IF NOT EXISTS idx_messages_nodeId  ON messages(nodeId);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_edges_sourceId   ON edges(sourceId);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_edges_targetId   ON edges(targetId);")
+
+        // Migration: context compression columns
+        try? db.exec("ALTER TABLE nodes ADD COLUMN compressedHistory TEXT;")
+        try? db.exec("ALTER TABLE nodes ADD COLUMN compressedUpTo INTEGER NOT NULL DEFAULT 0;")
+
+        // FTS5 full-text search across messages
+        try db.exec("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+                messageId UNINDEXED, nodeId UNINDEXED, content
+            );
+        """)
+
+        // Auto-sync triggers: insert + delete
+        try db.exec("""
+            CREATE TRIGGER IF NOT EXISTS messages_fts_insert AFTER INSERT ON messages BEGIN
+                INSERT INTO messages_fts(messageId, nodeId, content)
+                VALUES (NEW.id, NEW.nodeId, NEW.content);
+            END;
+        """)
+        try db.exec("""
+            CREATE TRIGGER IF NOT EXISTS messages_fts_delete AFTER DELETE ON messages BEGIN
+                DELETE FROM messages_fts WHERE messageId = OLD.id;
+            END;
+        """)
+
+        // Backfill: index any existing messages not yet in FTS
+        try db.exec("""
+            INSERT INTO messages_fts(messageId, nodeId, content)
+            SELECT id, nodeId, content FROM messages
+            WHERE id NOT IN (SELECT messageId FROM messages_fts);
+        """)
     }
 
     // MARK: - Binary helpers
@@ -244,6 +275,48 @@ final class NodeStore {
             results.append(Message(id: id, nodeId: nId, role: role, content: content, timestamp: timestamp))
         }
         return results
+    }
+
+    // MARK: - Full-Text Search
+
+    struct FTSResult {
+        let nodeId: UUID
+        let snippet: String
+    }
+
+    func searchMessages(query: String, limit: Int = 10) throws -> [FTSResult] {
+        let stmt = try db.prepare("""
+            SELECT nodeId, snippet(messages_fts, 2, '**', '**', '…', 40)
+            FROM messages_fts WHERE content MATCH ?
+            ORDER BY rank LIMIT ?;
+        """)
+        try stmt.bind(query, at: 1)
+        try stmt.bind(limit, at: 2)
+        var results: [FTSResult] = []
+        while try stmt.step() {
+            guard let nodeIdStr = stmt.text(at: 0),
+                  let nodeId = UUID(uuidString: nodeIdStr),
+                  let snippet = stmt.text(at: 1) else { continue }
+            results.append(FTSResult(nodeId: nodeId, snippet: snippet))
+        }
+        return results
+    }
+
+    // MARK: - Context Compression
+
+    func fetchCompression(nodeId: UUID) throws -> (summary: String?, upTo: Int) {
+        let stmt = try db.prepare("SELECT compressedHistory, compressedUpTo FROM nodes WHERE id=?;")
+        try stmt.bind(nodeId.uuidString, at: 1)
+        guard try stmt.step() else { return (nil, 0) }
+        return (stmt.text(at: 0), stmt.int(at: 1))
+    }
+
+    func updateCompression(nodeId: UUID, summary: String, upTo: Int) throws {
+        let stmt = try db.prepare("UPDATE nodes SET compressedHistory=?, compressedUpTo=? WHERE id=?;")
+        try stmt.bind(summary, at: 1)
+        try stmt.bind(upTo, at: 2)
+        try stmt.bind(nodeId.uuidString, at: 3)
+        try stmt.step()
     }
 
     // MARK: - Projects
