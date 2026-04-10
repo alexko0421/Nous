@@ -134,6 +134,26 @@ final class SettingsViewModel {
         }
     }
 
+    /// Returns fallback providers in priority order (excluding the primary)
+    func makeFallbackServices() -> [any LLMService] {
+        var fallbacks: [any LLMService] = []
+        let skip = selectedProvider
+
+        if skip != .gemini, !geminiApiKey.isEmpty {
+            fallbacks.append(GeminiLLMService(apiKey: geminiApiKey))
+        }
+        if skip != .claude, !claudeApiKey.isEmpty {
+            fallbacks.append(ClaudeLLMService(apiKey: claudeApiKey))
+        }
+        if skip != .openai, !openaiApiKey.isEmpty {
+            fallbacks.append(OpenAILLMService(apiKey: openaiApiKey))
+        }
+        if skip != .local, localLLM.isLoaded {
+            fallbacks.append(localLLM)
+        }
+        return fallbacks
+    }
+
     // MARK: - Private helpers
 
     private func syncModelState() {
