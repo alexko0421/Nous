@@ -11,6 +11,7 @@ final class LocalLLMService: LLMService {
     private(set) var downloadProgress: Double = 0
 
     private var modelContainer: ModelContainer?
+    var contextWindowTokens: Int { 8_192 }
 
     static let defaultModelId = "mlx-community/Llama-3.2-3B-Instruct-4bit"
 

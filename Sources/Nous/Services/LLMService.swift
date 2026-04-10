@@ -8,6 +8,7 @@ enum LLMProvider: String, Codable, CaseIterable {
 }
 
 protocol LLMService {
+    var contextWindowTokens: Int { get }
     func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error>
 }
 
@@ -21,6 +22,7 @@ struct LLMMessage {
 struct ClaudeLLMService: LLMService {
     let apiKey: String
     var model: String = "claude-sonnet-4-6-20250414"
+    var contextWindowTokens: Int { 200_000 }
 
     func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
         let url = URL(string: "https://api.anthropic.com/v1/messages")!
@@ -87,6 +89,7 @@ struct ClaudeLLMService: LLMService {
 struct OpenAILLMService: LLMService {
     let apiKey: String
     var model: String = "gpt-4o"
+    var contextWindowTokens: Int { 128_000 }
 
     func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
         let url = URL(string: "https://api.openai.com/v1/chat/completions")!
@@ -152,6 +155,7 @@ struct OpenAILLMService: LLMService {
 struct GeminiLLMService: LLMService {
     let apiKey: String
     var model: String = "gemini-2.5-flash"
+    var contextWindowTokens: Int { 1_000_000 }
 
     func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
         let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):streamGenerateContent?alt=sse&key=\(apiKey)")!
@@ -231,5 +235,38 @@ enum LLMError: Error, LocalizedError {
         case .httpError(let code): return "HTTP error: \(code)."
         case .modelNotLoaded: return "Local model not loaded. Call loadModel() first."
         }
+    }
+}
+
+// MARK: - Error Classification
+
+enum LLMErrorRecovery {
+    case retry          // transient — retry with backoff
+    case switchProvider // billing/quota exhausted — try another provider
+    case compress       // context too large — compress and retry
+    case fatal          // auth error or unrecoverable — surface to user
+}
+
+struct LLMErrorClassifier {
+    static func classify(_ error: Error) -> LLMErrorRecovery {
+        if let llmError = error as? LLMError {
+            switch llmError {
+            case .httpError(let code):
+                switch code {
+                case 429:       return .retry           // rate limit
+                case 402:       return .switchProvider   // billing exhausted
+                case 413:       return .compress         // payload too large
+                case 401, 403:  return .fatal            // auth
+                case 500...599: return .retry            // server error
+                default:        return .fatal
+                }
+            case .invalidResponse: return .retry
+            case .modelNotLoaded:  return .fatal
+            }
+        }
+        // Network errors are typically transient
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain { return .retry }
+        return .fatal
     }
 }
