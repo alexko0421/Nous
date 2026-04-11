@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 import Observation
 
-@Observable
+@MainActor @Observable
 final class ChatViewModel {
 
     // MARK: - State
@@ -556,23 +556,28 @@ final class ChatViewModel {
         try? nodeStore.insertMessage(assistantMessage)
         messages.append(assistantMessage)
 
-        // Step 11: Async task — update node embedding + regenerate edges + auto title
+        // Step 11: Background embedding + edge regeneration
         let nodeId = node.id
         let messageCount = messages.count
         let firstUserContent = messages.first?.content ?? ""
         let fullContent = messages.map(\.content).joined(separator: "\n")
-        Task.detached(priority: .background) { [weak self] in
-            guard let self else { return }
-            if let embedding = try? embeddingService.embed(fullContent) {
-                try? vectorStore.storeEmbedding(embedding, for: nodeId)
-                if var updatedNode = try? nodeStore.fetchNode(id: nodeId) {
+        let embSvc = embeddingService
+        let vecStore = vectorStore
+        let nStore = nodeStore
+        let gEngine = graphEngine
+        Task.detached(priority: .background) {
+            if let embedding = try? embSvc.embed(fullContent) {
+                try? vecStore.storeEmbedding(embedding, for: nodeId)
+                if var updatedNode = try? nStore.fetchNode(id: nodeId) {
                     updatedNode.embedding = embedding
-                    try? graphEngine.regenerateEdges(for: updatedNode)
+                    try? gEngine.regenerateEdges(for: updatedNode)
                 }
             }
+        }
 
-            // Auto title + emoji: after first full exchange, let AI pick both
-            if messageCount <= 3, let llm = llmServiceProvider() {
+        // Auto title + emoji (inherits @MainActor)
+        if messageCount <= 3, let llm = llmServiceProvider() {
+            Task {
                 if let result = await generateTitleAndEmoji(
                     userMessage: firstUserContent,
                     assistantMessage: assistantContent,
@@ -583,10 +588,8 @@ final class ChatViewModel {
                         node.emoji = result.emoji
                         node.updatedAt = Date()
                         try? nodeStore.updateNode(node)
-                        await MainActor.run {
-                            self.currentNode?.title = result.title
-                            self.currentNode?.emoji = result.emoji
-                        }
+                        currentNode?.title = result.title
+                        currentNode?.emoji = result.emoji
                     }
                 }
             }

@@ -76,13 +76,7 @@ struct WelcomeView: View {
                 .padding(.horizontal, 20)
                 .padding(.vertical, 14)
             }
-            .background(Color.white.opacity(0.7))
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(AppColor.colaDarkText.opacity(0.08), lineWidth: 1)
-            )
-            .shadow(color: .black.opacity(0.04), radius: 8, x: 0, y: 2)
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             .padding(.horizontal, 48)
             .padding(.bottom, 20)
             
@@ -108,12 +102,7 @@ struct WelcomeView: View {
                         .foregroundColor(AppColor.colaDarkText.opacity(0.65))
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
-                        .background(Color.white.opacity(0.55))
-                        .clipShape(Capsule())
-                        .overlay(
-                            Capsule()
-                                .stroke(AppColor.colaDarkText.opacity(0.08), lineWidth: 1)
-                        )
+                        .glassEffect(.regular, in: Capsule())
                     }
                     .buttonStyle(.plain)
                 }

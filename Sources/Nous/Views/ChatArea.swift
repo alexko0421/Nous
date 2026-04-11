@@ -89,6 +89,12 @@ struct ChatArea: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(AppColor.colaBeige)
         .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
+        .overlay(alignment: .top) {
+            // Invisible drag handle at top of window for moving
+            WindowDragHandle()
+                .frame(maxWidth: .infinity)
+                .frame(height: 30)
+        }
         .overlay(alignment: .topLeading) {
             Button(action: {
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
@@ -123,6 +129,20 @@ struct MessageBubble: View {
                 .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
             if !isUser { Spacer() }
         }
+    }
+}
+
+struct WindowDragHandle: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = WindowDragView()
+        return view
+    }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+private class WindowDragView: NSView {
+    override func mouseDown(with event: NSEvent) {
+        window?.performDrag(with: event)
     }
 }
 

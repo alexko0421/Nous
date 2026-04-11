@@ -8,5 +8,6 @@ struct NousApp: App {
                 .background(WindowConfigurator())
         }
         .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 800, height: 600)
     }
 }

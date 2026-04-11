@@ -332,8 +332,7 @@ struct LeftSidebar: View {
             .padding(.bottom, 30)
         }
         .frame(width: 150)
-        .background(Color.white.opacity(0.75))
-        .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 32, style: .continuous))
         .onAppear { loadData() }
         .onChange(of: selectedTab) { loadData() }
         .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in

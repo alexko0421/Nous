@@ -99,7 +99,7 @@ struct ContentView: View {
                 // No floating tab bar needed
             }
         }
-        .frame(width: 800, height: 600)
+        .frame(minWidth: 600, idealWidth: 800, minHeight: 450, idealHeight: 600)
         .background(.clear)
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isSidebarVisible)
         .task { await settingsVM.loadEmbeddingModel() }

@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-@Observable
+@MainActor @Observable
 final class GalaxyViewModel {
     var nodes: [NousNode] = []
     var edges: [NodeEdge] = []

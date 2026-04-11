@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-@Observable
+@MainActor @Observable
 final class SettingsViewModel {
 
     // MARK: - Provider selection
