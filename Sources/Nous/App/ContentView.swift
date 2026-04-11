@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum MainTab {
-    case chat, notes, galaxy, settings
+    case chat, notes, galaxy
 }
 
 struct ContentView: View {
@@ -21,29 +21,24 @@ struct ContentView: View {
     @State private var noteVM: NoteViewModel
     @State private var galaxyVM: GalaxyViewModel
 
-    init() {
-        let dbPath = Self.databasePath()
-        let ns = try! NodeStore(path: dbPath)
-        let vs = VectorStore(nodeStore: ns)
-        let es = EmbeddingService()
-        let llm = LocalLLMService()
-        let ge = GraphEngine(nodeStore: ns, vectorStore: vs)
-        let svm = SettingsViewModel(embeddingService: es, localLLM: llm, nodeStore: ns)
+    init(settingsVM: SettingsViewModel, nodeStore: NodeStore, embeddingService: EmbeddingService, localLLM: LocalLLMService) {
+        let vs = VectorStore(nodeStore: nodeStore)
+        let ge = GraphEngine(nodeStore: nodeStore, vectorStore: vs)
 
-        _nodeStore = State(initialValue: ns)
+        _settingsVM = State(initialValue: settingsVM)
+        _nodeStore = State(initialValue: nodeStore)
+        _embeddingService = State(initialValue: embeddingService)
+        _localLLM = State(initialValue: localLLM)
         _vectorStore = State(initialValue: vs)
-        _embeddingService = State(initialValue: es)
-        _localLLM = State(initialValue: llm)
         _graphEngine = State(initialValue: ge)
-        _settingsVM = State(initialValue: svm)
         _chatVM = State(initialValue: ChatViewModel(
-            nodeStore: ns, vectorStore: vs, embeddingService: es, graphEngine: ge,
-            llmServiceProvider: { svm.makeLLMService() },
-            localLLMProvider: { llm.isLoaded ? llm : nil },
-            fallbackProvider: { svm.makeFallbackServices() }
+            nodeStore: nodeStore, vectorStore: vs, embeddingService: embeddingService, graphEngine: ge,
+            llmServiceProvider: { settingsVM.makeLLMService() },
+            localLLMProvider: { localLLM.isLoaded ? localLLM : nil },
+            fallbackProvider: { settingsVM.makeFallbackServices() }
         ))
-        _noteVM = State(initialValue: NoteViewModel(nodeStore: ns, vectorStore: vs, embeddingService: es, graphEngine: ge))
-        _galaxyVM = State(initialValue: GalaxyViewModel(nodeStore: ns, graphEngine: ge))
+        _noteVM = State(initialValue: NoteViewModel(nodeStore: nodeStore, vectorStore: vs, embeddingService: embeddingService, graphEngine: ge))
+        _galaxyVM = State(initialValue: GalaxyViewModel(nodeStore: nodeStore, graphEngine: ge))
     }
 
     var body: some View {
@@ -64,6 +59,7 @@ struct ContentView: View {
             if isSidebarVisible {
                 LeftSidebar(
                     nodeStore: nodeStore,
+                    settingsVM: settingsVM,
                     selectedTab: $selectedTab,
                     selectedProjectId: $selectedProjectId,
                     selectedNodeId: chatVM.currentNode?.id,
@@ -83,7 +79,7 @@ struct ContentView: View {
             ZStack {
                 switch selectedTab {
                 case .chat:
-                    ChatArea(vm: chatVM, isSidebarVisible: $isSidebarVisible)
+                    ChatArea(vm: chatVM, settingsVM: settingsVM, isSidebarVisible: $isSidebarVisible)
                 case .notes:
                     NoteEditor(vm: noteVM, onNavigateToNode: { node in navigateToNode(node) })
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -91,8 +87,6 @@ struct ContentView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
                 case .galaxy:
                     GalaxyView(vm: galaxyVM, onNodeSelected: { node in navigateToNode(node) })
-                case .settings:
-                    SettingsView(vm: settingsVM)
                 }
 
                 // Tab navigation is handled via sidebar icons (Galaxy, Project)
@@ -132,10 +126,4 @@ struct ContentView: View {
         }
     }
 
-    private static func databasePath() -> String {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let nousDir = appSupport.appendingPathComponent("Nous", isDirectory: true)
-        try? FileManager.default.createDirectory(at: nousDir, withIntermediateDirectories: true)
-        return nousDir.appendingPathComponent("nous.db").path
-    }
 }

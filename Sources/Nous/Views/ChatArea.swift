@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ChatArea: View {
     @Bindable var vm: ChatViewModel
+    @Bindable var settingsVM: SettingsViewModel
     @Binding var isSidebarVisible: Bool
 
     var body: some View {

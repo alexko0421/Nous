@@ -13,7 +13,7 @@ final class SettingsViewModel {
     var geminiApiKey: String = ""
     var claudeApiKey: String = ""
     var openaiApiKey: String = ""
-
+    
     // MARK: - Model identifiers
 
     var localModelId: String = LocalLLMService.defaultModelId
@@ -46,6 +46,7 @@ final class SettingsViewModel {
         static let openaiApiKey = "nous.openai.apikey"
         static let localModelId = "nous.local.modelid"
         static let embedModelId = "nous.embedding.modelid"
+        static let userName     = "nous.user.name"
     }
 
     // MARK: - Init

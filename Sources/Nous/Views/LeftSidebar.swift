@@ -146,11 +146,15 @@ struct MacOSTrafficLights: View {
 
 struct LeftSidebar: View {
     let nodeStore: NodeStore
+    @Bindable var settingsVM: SettingsViewModel
     @Binding var selectedTab: MainTab
     @Binding var selectedProjectId: UUID?
     var selectedNodeId: UUID?
     var onNodeSelected: ((NousNode) -> Void)?
     var onNewChat: (() -> Void)?
+    
+    @Environment(\.openWindow) private var openWindow
+    @AppStorage("nous.user.name") private var userName: String = "ALEX"
 
     @State private var favorites: [NousNode] = []
     @State private var recents: [NousNode] = []
@@ -310,21 +314,28 @@ struct LeftSidebar: View {
             Spacer()
 
             HStack(spacing: 12) {
-                Button(action: { selectedTab = .settings }) {
-                    Circle()
-                        .fill(AppColor.colaOrange.opacity(0.15))
-                        .frame(width: 30, height: 30)
-                        .overlay(
-                            Text("A")
-                                .font(.system(size: 13, weight: .bold, design: .rounded))
-                                .foregroundColor(AppColor.colaOrange)
-                        )
+                Button(action: {
+                    openWindow(id: "settings-view")
+                }) {
+                    HStack(spacing: 12) {
+                        Circle()
+                            .fill(AppColor.colaOrange.opacity(0.15))
+                            .frame(width: 30, height: 30)
+                            .overlay(
+                                Text(String(userName.prefix(1)).uppercased())
+                                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                                    .foregroundColor(AppColor.colaOrange)
+                            )
+
+                        Text(userName)
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .foregroundColor(AppColor.colaDarkText)
+                        
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle()) // Makes the whole area clickable
                 }
                 .buttonStyle(.plain)
-
-                Text("ALEX")
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
-                    .foregroundColor(AppColor.colaDarkText)
 
                 Spacer(minLength: 0)
             }
@@ -366,12 +377,18 @@ struct VisualEffectView: NSViewRepresentable {
         view.material = material
         view.blendingMode = blendingMode
         view.state = .active
+        // Add a very subtle inner border for "Liquid Glass" edge
+        view.wantsLayer = true
+        view.layer?.cornerRadius = 36
+        view.layer?.borderWidth = 0.5
+        view.layer?.borderColor = NSColor.white.withAlphaComponent(0.2).cgColor
         return view
     }
 
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
         nsView.material = material
         nsView.blendingMode = blendingMode
+        nsView.layer?.borderColor = NSColor.white.withAlphaComponent(0.2).cgColor
     }
 }
 

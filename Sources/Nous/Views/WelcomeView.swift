@@ -6,6 +6,8 @@ struct WelcomeView: View {
     let onSend: () -> Void
     var onModeSelected: ((ConversationMode) -> Void)?
     
+    @AppStorage("nous.user.name") private var userName: String = "ALEX"
+    
     private var greeting: String {
         let hour = Calendar.current.component(.hour, from: Date())
         switch hour {
@@ -34,7 +36,7 @@ struct WelcomeView: View {
                     .padding(.bottom, 4)
 
                 // Greeting
-                Text("\(greeting), Alex")
+                Text("\(greeting), \(userName)")
                     .font(.system(size: 26, weight: .medium, design: .rounded))
                     .foregroundColor(AppColor.colaDarkText)
             }
