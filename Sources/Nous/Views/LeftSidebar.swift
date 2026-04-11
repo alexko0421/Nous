@@ -344,7 +344,7 @@ struct LeftSidebar: View {
         }
         .frame(width: 150)
         .background(
-            VisualEffectView(material: .underWindowBackground, blendingMode: .behindWindow)
+            VisualEffectView(material: .sidebar, blendingMode: .behindWindow)
         )
         .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
         .onAppear { loadData() }
@@ -377,18 +377,27 @@ struct VisualEffectView: NSViewRepresentable {
         view.material = material
         view.blendingMode = blendingMode
         view.state = .active
-        // Add a very subtle inner border for "Liquid Glass" edge
         view.wantsLayer = true
         view.layer?.cornerRadius = 36
+        // Subtle glass edge border
         view.layer?.borderWidth = 0.5
-        view.layer?.borderColor = NSColor.white.withAlphaComponent(0.2).cgColor
+        view.layer?.borderColor = NSColor.white.withAlphaComponent(0.15).cgColor
+        // Make light mode more transparent (glass-like instead of frosted)
+        updateAlpha(view)
         return view
     }
 
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
         nsView.material = material
         nsView.blendingMode = blendingMode
-        nsView.layer?.borderColor = NSColor.white.withAlphaComponent(0.2).cgColor
+        updateAlpha(nsView)
+    }
+
+    private func updateAlpha(_ view: NSVisualEffectView) {
+        let isDark = view.effectiveAppearance.bestMatch(from: [.darkAqua, .vibrantDark]) != nil
+        // Dark mode: full glass. Light mode: glass with frosted blur
+        view.alphaValue = isDark ? 1.0 : 0.65
+        view.layer?.borderColor = NSColor.white.withAlphaComponent(isDark ? 0.15 : 0.3).cgColor
     }
 }
 
