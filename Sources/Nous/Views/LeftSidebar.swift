@@ -332,7 +332,10 @@ struct LeftSidebar: View {
             .padding(.bottom, 30)
         }
         .frame(width: 150)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 32, style: .continuous))
+        .background(
+            VisualEffectView(material: .sidebar, blendingMode: .behindWindow)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
         .onAppear { loadData() }
         .onChange(of: selectedTab) { loadData() }
         .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
@@ -350,6 +353,25 @@ struct LeftSidebar: View {
         favorites = (try? nodeStore.fetchFavorites()) ?? []
         recents = (try? nodeStore.fetchRecents(limit: 20)) ?? []
         projects = (try? nodeStore.fetchAllProjects()) ?? []
+    }
+}
+
+// Custom View for shadowless glass effect
+struct VisualEffectView: NSViewRepresentable {
+    var material: NSVisualEffectView.Material
+    var blendingMode: NSVisualEffectView.BlendingMode
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = material
+        view.blendingMode = blendingMode
+        view.state = .active
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
+        nsView.material = material
+        nsView.blendingMode = blendingMode
     }
 }
 
