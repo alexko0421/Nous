@@ -72,7 +72,7 @@ final class ChatViewModel {
 
     func startWithMode(_ mode: ConversationMode, projectId: UUID? = nil) {
         currentMode = mode
-        startNewConversation(title: mode.label, projectId: projectId)
+        startNewConversation(title: "New Conversation", projectId: projectId)
 
         // Nous speaks first with a mode-appropriate greeting
         guard let node = currentNode else { return }
@@ -182,8 +182,12 @@ final class ChatViewModel {
     private var insideThinkingBlock = false
     private var thinkingBuffer = ""
 
+    /// Opening tags to detect thinking blocks
+    private static let thinkingOpenTags = ["[THINK]", "[THOUGHT]", "<think>", "<thought>"]
+    /// Closing tags (matched by index with openTags)
+    private static let thinkingCloseTags = ["[/THINK]", "[/THOUGHT]", "</think>", "</thought>"]
+
     /// Filters out thinking blocks from streamed chunks in real-time.
-    /// Handles [THINK]...[/THINK], <think>...</think>, and similar patterns.
     private func filterThinkingChunk(_ chunk: String) -> String {
         var output = ""
         let combined = thinkingBuffer + chunk
@@ -192,31 +196,35 @@ final class ChatViewModel {
         var i = combined.startIndex
         while i < combined.endIndex {
             if insideThinkingBlock {
-                // Look for closing tag
-                if let closeRange = combined.range(of: "[/THINK]", options: .caseInsensitive, range: i..<combined.endIndex) {
-                    insideThinkingBlock = false
-                    i = closeRange.upperBound
-                } else if let closeRange = combined.range(of: "</think>", options: .caseInsensitive, range: i..<combined.endIndex) {
-                    insideThinkingBlock = false
-                    i = closeRange.upperBound
-                } else {
-                    // Still inside thinking, consume everything
-                    break
+                // Look for any closing tag
+                var found = false
+                for closeTag in Self.thinkingCloseTags {
+                    if let closeRange = combined.range(of: closeTag, options: .caseInsensitive, range: i..<combined.endIndex) {
+                        insideThinkingBlock = false
+                        i = closeRange.upperBound
+                        found = true
+                        break
+                    }
                 }
+                if !found { break } // still inside thinking
             } else {
-                // Look for opening tag
-                if let openRange = combined.range(of: "[THINK]", options: .caseInsensitive, range: i..<combined.endIndex) {
-                    output += String(combined[i..<openRange.lowerBound])
-                    insideThinkingBlock = true
-                    i = openRange.upperBound
-                } else if let openRange = combined.range(of: "<think>", options: .caseInsensitive, range: i..<combined.endIndex) {
+                // Look for any opening tag
+                var earliestRange: Range<String.Index>?
+                for openTag in Self.thinkingOpenTags {
+                    if let range = combined.range(of: openTag, options: .caseInsensitive, range: i..<combined.endIndex) {
+                        if earliestRange == nil || range.lowerBound < earliestRange!.lowerBound {
+                            earliestRange = range
+                        }
+                    }
+                }
+                if let openRange = earliestRange {
                     output += String(combined[i..<openRange.lowerBound])
                     insideThinkingBlock = true
                     i = openRange.upperBound
                 } else {
-                    // Check if we might be at a partial tag at the end
                     let remaining = String(combined[i...])
-                    if remaining.count < 8 && (remaining.hasPrefix("[") || remaining.hasPrefix("<")) {
+                    // Buffer partial tags at the end
+                    if remaining.count < 10 && (remaining.hasPrefix("[") || remaining.hasPrefix("<")) {
                         thinkingBuffer = remaining
                         break
                     }
@@ -474,8 +482,8 @@ final class ChatViewModel {
                 }
             }
 
-            // Auto title: after first exchange, replace prefix-based title with LLM-generated one
-            if messageCount == 2, let llm = llmServiceProvider() {
+            // Auto title: after first full exchange (user + assistant), generate a real title
+            if messageCount <= 3, let llm = llmServiceProvider() {
                 if let title = await generateTitle(
                     userMessage: firstUserContent,
                     assistantMessage: assistantContent,
