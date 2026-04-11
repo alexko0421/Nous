@@ -148,11 +148,13 @@ struct LeftSidebar: View {
     let nodeStore: NodeStore
     @Binding var selectedTab: MainTab
     @Binding var selectedProjectId: UUID?
+    var selectedNodeId: UUID?
     var onNodeSelected: ((NousNode) -> Void)?
     var onNewChat: (() -> Void)?
 
     @State private var favorites: [NousNode] = []
     @State private var recents: [NousNode] = []
+    @State private var projects: [Project] = []
     @State private var showProjectList = false
 
     var body: some View {
@@ -242,18 +244,54 @@ struct LeftSidebar: View {
                                 .foregroundColor(AppColor.colaDarkText.opacity(0.6))
 
                             ForEach(recents) { node in
+                                let isSelected = node.id == selectedNodeId
                                 Button(action: { onNodeSelected?(node) }) {
-                                    HStack(spacing: 10) {
-                                        Text(node.type == .conversation ? "💬" : "📝")
-                                            .font(.system(size: 16))
+                                    HStack(spacing: 6) {
+                                        Text(Self.nodeEmoji(node))
+                                            .font(.system(size: 11))
                                         Text(node.title)
                                             .font(.system(size: 12, weight: .medium, design: .rounded))
-                                            .foregroundColor(AppColor.colaDarkText.opacity(0.7))
+                                            .foregroundColor(isSelected ? AppColor.colaOrange : AppColor.colaDarkText.opacity(0.7))
                                             .lineLimit(1)
                                     }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.vertical, 5)
+                                    .padding(.horizontal, 6)
+                                    .background(isSelected ? AppColor.colaOrange.opacity(0.08) : Color.clear)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 10)
+                                            .stroke(isSelected ? AppColor.colaOrange.opacity(0.3) : Color.clear, lineWidth: 1)
+                                    )
                                 }
                                 .buttonStyle(.plain)
                                 .contextMenu {
+                                    Menu("Add to Project") {
+                                        ForEach(projects) { project in
+                                            Button(action: {
+                                                if var n = try? nodeStore.fetchNode(id: node.id) {
+                                                    n.projectId = project.id
+                                                    n.updatedAt = Date()
+                                                    try? nodeStore.updateNode(n)
+                                                    loadData()
+                                                }
+                                            }) {
+                                                Label("\(project.emoji) \(project.title)", systemImage: node.projectId == project.id ? "checkmark" : "folder")
+                                            }
+                                        }
+                                        if node.projectId != nil {
+                                            Divider()
+                                            Button("Remove from Project") {
+                                                if var n = try? nodeStore.fetchNode(id: node.id) {
+                                                    n.projectId = nil
+                                                    n.updatedAt = Date()
+                                                    try? nodeStore.updateNode(n)
+                                                    loadData()
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Divider()
                                     Button(role: .destructive) {
                                         try? nodeStore.deleteNode(id: node.id)
                                         loadData()
@@ -293,8 +331,9 @@ struct LeftSidebar: View {
             .padding(.leading, 20)
             .padding(.bottom, 30)
         }
-        .frame(width: 130)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 32, style: .continuous))
+        .frame(width: 150)
+        .background(Color.white.opacity(0.75))
+        .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
         .onAppear { loadData() }
         .onChange(of: selectedTab) { loadData() }
         .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
@@ -302,9 +341,16 @@ struct LeftSidebar: View {
         }
     }
 
+    private static func nodeEmoji(_ node: NousNode) -> String {
+        if let emoji = node.emoji { return emoji }
+        if node.type == .note { return "📝" }
+        return "💬"
+    }
+
     private func loadData() {
         favorites = (try? nodeStore.fetchFavorites()) ?? []
         recents = (try? nodeStore.fetchRecents(limit: 20)) ?? []
+        projects = (try? nodeStore.fetchAllProjects()) ?? []
     }
 }
 

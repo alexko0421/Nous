@@ -66,6 +66,7 @@ struct ContentView: View {
                     nodeStore: nodeStore,
                     selectedTab: $selectedTab,
                     selectedProjectId: $selectedProjectId,
+                    selectedNodeId: chatVM.currentNode?.id,
                     onNodeSelected: { node in navigateToNode(node) },
                     onNewChat: {
                         chatVM.currentNode = nil

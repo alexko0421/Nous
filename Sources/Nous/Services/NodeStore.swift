@@ -65,6 +65,8 @@ final class NodeStore {
         try db.exec("CREATE INDEX IF NOT EXISTS idx_edges_targetId   ON edges(targetId);")
 
         // Migration: context compression columns
+        try? db.exec("ALTER TABLE nodes ADD COLUMN mode TEXT;")
+        try? db.exec("ALTER TABLE nodes ADD COLUMN emoji TEXT;")
         try? db.exec("ALTER TABLE nodes ADD COLUMN compressedHistory TEXT;")
         try? db.exec("ALTER TABLE nodes ADD COLUMN compressedUpTo INTEGER NOT NULL DEFAULT 0;")
 
@@ -110,12 +112,50 @@ final class NodeStore {
         }
     }
 
+    // MARK: - Smart Chunking (QMD-inspired)
+
+    /// Splits content at natural markdown boundaries for better search indexing.
+    /// Prioritizes headings > hr > blank lines > list items.
+    static func chunkContent(_ content: String, targetTokens: Int = 200) -> [String] {
+        guard !content.isEmpty else { return [] }
+        let targetChars = targetTokens * 4 // rough estimate
+
+        // If short enough, return as-is
+        if content.count <= targetChars { return [content] }
+
+        var chunks: [String] = []
+        var current = ""
+
+        for line in content.components(separatedBy: "\n") {
+            let isBreakPoint = line.hasPrefix("#") || line.hasPrefix("---") || line.hasPrefix("***") || line.trimmingCharacters(in: .whitespaces).isEmpty
+
+            if isBreakPoint && current.count >= targetChars / 2 {
+                let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { chunks.append(trimmed) }
+                current = line + "\n"
+            } else {
+                current += line + "\n"
+                // Force split if way over target
+                if current.count > targetChars * 2 {
+                    let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty { chunks.append(trimmed) }
+                    current = ""
+                }
+            }
+        }
+
+        let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { chunks.append(trimmed) }
+
+        return chunks
+    }
+
     // MARK: - Nodes
 
     func insertNode(_ node: NousNode) throws {
         let stmt = try db.prepare("""
-            INSERT INTO nodes (id, type, title, content, embedding, projectId, isFavorite, createdAt, updatedAt)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+            INSERT INTO nodes (id, type, title, content, embedding, projectId, isFavorite, mode, emoji, createdAt, updatedAt)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """)
         try stmt.bind(node.id.uuidString, at: 1)
         try stmt.bind(node.type.rawValue, at: 2)
@@ -125,15 +165,17 @@ final class NodeStore {
         try stmt.bind(embeddingData, at: 5)
         try stmt.bind(node.projectId?.uuidString, at: 6)
         try stmt.bind(node.isFavorite ? 1 : 0, at: 7)
-        try stmt.bind(node.createdAt.timeIntervalSince1970, at: 8)
-        try stmt.bind(node.updatedAt.timeIntervalSince1970, at: 9)
+        try stmt.bind(node.mode?.rawValue, at: 8)
+        try stmt.bind(node.emoji, at: 9)
+        try stmt.bind(node.createdAt.timeIntervalSince1970, at: 10)
+        try stmt.bind(node.updatedAt.timeIntervalSince1970, at: 11)
         try stmt.step()
     }
 
     func updateNode(_ node: NousNode) throws {
         let stmt = try db.prepare("""
             UPDATE nodes
-            SET type=?, title=?, content=?, embedding=?, projectId=?, isFavorite=?, updatedAt=?
+            SET type=?, title=?, content=?, embedding=?, projectId=?, isFavorite=?, mode=?, emoji=?, updatedAt=?
             WHERE id=?;
         """)
         try stmt.bind(node.type.rawValue, at: 1)
@@ -143,8 +185,10 @@ final class NodeStore {
         try stmt.bind(embeddingData, at: 4)
         try stmt.bind(node.projectId?.uuidString, at: 5)
         try stmt.bind(node.isFavorite ? 1 : 0, at: 6)
-        try stmt.bind(node.updatedAt.timeIntervalSince1970, at: 7)
-        try stmt.bind(node.id.uuidString, at: 8)
+        try stmt.bind(node.mode?.rawValue, at: 7)
+        try stmt.bind(node.emoji, at: 8)
+        try stmt.bind(node.updatedAt.timeIntervalSince1970, at: 9)
+        try stmt.bind(node.id.uuidString, at: 10)
         try stmt.step()
     }
 
@@ -156,7 +200,7 @@ final class NodeStore {
 
     func fetchNode(id: UUID) throws -> NousNode? {
         let stmt = try db.prepare("""
-            SELECT id, type, title, content, embedding, projectId, isFavorite, createdAt, updatedAt
+            SELECT id, type, title, content, embedding, projectId, isFavorite, mode, emoji, createdAt, updatedAt
             FROM nodes WHERE id=?;
         """)
         try stmt.bind(id.uuidString, at: 1)
@@ -166,7 +210,7 @@ final class NodeStore {
 
     func fetchAllNodes() throws -> [NousNode] {
         let stmt = try db.prepare("""
-            SELECT id, type, title, content, embedding, projectId, isFavorite, createdAt, updatedAt
+            SELECT id, type, title, content, embedding, projectId, isFavorite, mode, emoji, createdAt, updatedAt
             FROM nodes ORDER BY updatedAt DESC;
         """)
         var results: [NousNode] = []
@@ -178,7 +222,7 @@ final class NodeStore {
 
     func fetchNodes(projectId: UUID) throws -> [NousNode] {
         let stmt = try db.prepare("""
-            SELECT id, type, title, content, embedding, projectId, isFavorite, createdAt, updatedAt
+            SELECT id, type, title, content, embedding, projectId, isFavorite, mode, emoji, createdAt, updatedAt
             FROM nodes WHERE projectId=? ORDER BY updatedAt DESC;
         """)
         try stmt.bind(projectId.uuidString, at: 1)
@@ -191,7 +235,7 @@ final class NodeStore {
 
     func fetchFavorites() throws -> [NousNode] {
         let stmt = try db.prepare("""
-            SELECT id, type, title, content, embedding, projectId, isFavorite, createdAt, updatedAt
+            SELECT id, type, title, content, embedding, projectId, isFavorite, mode, emoji, createdAt, updatedAt
             FROM nodes WHERE isFavorite=1 ORDER BY updatedAt DESC;
         """)
         var results: [NousNode] = []
@@ -203,7 +247,7 @@ final class NodeStore {
 
     func fetchRecents(limit: Int) throws -> [NousNode] {
         let stmt = try db.prepare("""
-            SELECT id, type, title, content, embedding, projectId, isFavorite, createdAt, updatedAt
+            SELECT id, type, title, content, embedding, projectId, isFavorite, mode, emoji, createdAt, updatedAt
             FROM nodes ORDER BY updatedAt DESC LIMIT ?;
         """)
         try stmt.bind(limit, at: 1)
@@ -216,7 +260,7 @@ final class NodeStore {
 
     func fetchNodesWithEmbeddings() throws -> [(NousNode, [Float])] {
         let stmt = try db.prepare("""
-            SELECT id, type, title, content, embedding, projectId, isFavorite, createdAt, updatedAt
+            SELECT id, type, title, content, embedding, projectId, isFavorite, mode, emoji, createdAt, updatedAt
             FROM nodes WHERE embedding IS NOT NULL ORDER BY updatedAt DESC;
         """)
         var results: [(NousNode, [Float])] = []
@@ -237,11 +281,14 @@ final class NodeStore {
         let embedding: [Float]? = stmt.blob(at: 4).map { decodeFloats($0) }
         let projectId: UUID? = stmt.text(at: 5).flatMap { UUID(uuidString: $0) }
         let isFavorite = stmt.int(at: 6) != 0
-        let createdAt = Date(timeIntervalSince1970: stmt.double(at: 7))
-        let updatedAt = Date(timeIntervalSince1970: stmt.double(at: 8))
+        let mode: ConversationMode? = stmt.text(at: 7).flatMap { ConversationMode(rawValue: $0) }
+        let emoji = stmt.text(at: 8)
+        let createdAt = Date(timeIntervalSince1970: stmt.double(at: 9))
+        let updatedAt = Date(timeIntervalSince1970: stmt.double(at: 10))
         return NousNode(id: id, type: type, title: title, content: content,
                         embedding: embedding, projectId: projectId,
-                        isFavorite: isFavorite, createdAt: createdAt, updatedAt: updatedAt)
+                        isFavorite: isFavorite, mode: mode, emoji: emoji,
+                        createdAt: createdAt, updatedAt: updatedAt)
     }
 
     // MARK: - Messages

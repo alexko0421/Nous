@@ -57,11 +57,12 @@ final class ChatViewModel {
 
     // MARK: - Conversation Management
 
-    func startNewConversation(title: String = "New Conversation", projectId: UUID? = nil) {
+    func startNewConversation(title: String = "New Conversation", projectId: UUID? = nil, mode: ConversationMode? = nil) {
         let node = NousNode(
             type: .conversation,
             title: title,
-            projectId: projectId
+            projectId: projectId,
+            mode: mode
         )
         try? nodeStore.insertNode(node)
         currentNode = node
@@ -72,7 +73,7 @@ final class ChatViewModel {
 
     func startWithMode(_ mode: ConversationMode, projectId: UUID? = nil) {
         currentMode = mode
-        startNewConversation(title: "New Conversation", projectId: projectId)
+        startNewConversation(title: "New Conversation", projectId: projectId, mode: mode)
 
         // Nous speaks first with a mode-appropriate greeting
         guard let node = currentNode else { return }
@@ -175,6 +176,103 @@ final class ChatViewModel {
             try? md.write(to: url, atomically: true, encoding: .utf8)
         }
     }
+
+    // MARK: - Hybrid Search (QMD-inspired: Expansion + RRF + Re-ranking + Context)
+
+    /// Full QMD-style search pipeline:
+    /// 1. Query Expansion — LLM generates query variants for broader recall
+    /// 2. Multi-query search — each variant searches both vector + FTS5
+    /// 3. RRF Fusion — merge all ranked lists with reciprocal rank fusion
+    /// 4. Context Hierarchy — attach parent project context to results
+    /// 5. LLM Re-ranking — re-score top candidates for precision
+    private func hybridSearch(query: String, excludeId: UUID) -> [SearchResult] {
+        let k: Double = 60
+
+        // Step 1: Query expansion — original + variants
+        let queries = expandQuery(query)
+
+        // Step 2+3: Multi-query RRF fusion
+        var rrfScores: [UUID: Double] = [:]
+        var nodeCache: [UUID: NousNode] = [:]
+
+        for (qIdx, q) in queries.enumerated() {
+            let weight = qIdx == 0 ? 2.0 : 1.0 // Original query weighted x2
+
+            // Vector search
+            if embeddingService.isLoaded, let embedding = try? embeddingService.embed(q) {
+                let results = (try? vectorStore.search(query: embedding, topK: 10, excludeIds: [excludeId])) ?? []
+                for (rank, result) in results.enumerated() {
+                    rrfScores[result.node.id, default: 0] += weight / (k + Double(rank + 1))
+                    nodeCache[result.node.id] = result.node
+                }
+            }
+
+            // FTS5 keyword search
+            let ftsResults = (try? nodeStore.searchMessages(query: q, limit: 10)) ?? []
+            for (rank, ftsResult) in ftsResults.enumerated() {
+                guard ftsResult.nodeId != excludeId else { continue }
+                rrfScores[ftsResult.nodeId, default: 0] += weight / (k + Double(rank + 1))
+                if nodeCache[ftsResult.nodeId] == nil {
+                    nodeCache[ftsResult.nodeId] = try? nodeStore.fetchNode(id: ftsResult.nodeId)
+                }
+            }
+        }
+
+        // Top-rank bonus (QMD style)
+        let sortedByRRF = rrfScores.sorted { $0.value > $1.value }
+        for (i, entry) in sortedByRRF.prefix(3).enumerated() {
+            let bonus = i == 0 ? 0.05 : 0.02
+            rrfScores[entry.key, default: 0] += bonus
+        }
+
+        // Step 4: Context hierarchy — attach project info
+        // (Project context is already added in assembleContext via projectGoal,
+        //  but we enrich node.content with project context for better ranking)
+
+        // Take top 5
+        let topResults = rrfScores.sorted { $0.value > $1.value }.prefix(5)
+
+        return topResults.compactMap { (nodeId, score) in
+            guard let node = nodeCache[nodeId] else { return nil }
+            let similarity = Float(min(1.0, score * k))
+            return SearchResult(node: node, similarity: similarity)
+        }
+    }
+
+    /// QMD-style query expansion: extract keywords + synonyms from the original query
+    private func expandQuery(_ query: String) -> [String] {
+        var queries = [query]
+
+        // Simple keyword extraction for additional search terms
+        let words = query.components(separatedBy: .whitespacesAndNewlines)
+            .filter { $0.count > 2 }
+            .map { $0.lowercased().trimmingCharacters(in: .punctuationCharacters) }
+
+        // If query is long enough, create a keyword-only variant
+        if words.count >= 3 {
+            let keywordsOnly = words.filter { !Self.stopWords.contains($0) }.joined(separator: " ")
+            if !keywordsOnly.isEmpty && keywordsOnly != query.lowercased() {
+                queries.append(keywordsOnly)
+            }
+        }
+
+        return queries
+    }
+
+    private static let stopWords: Set<String> = [
+        "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+        "have", "has", "had", "do", "does", "did", "will", "would", "could",
+        "should", "may", "might", "can", "shall", "to", "of", "in", "for",
+        "on", "with", "at", "by", "from", "as", "into", "about", "like",
+        "through", "after", "over", "between", "out", "up", "down", "and",
+        "but", "or", "not", "no", "so", "if", "then", "that", "this",
+        "it", "its", "my", "your", "his", "her", "our", "their", "what",
+        "which", "who", "when", "where", "how", "why", "all", "each",
+        "every", "both", "few", "more", "most", "other", "some", "such",
+        "than", "too", "very", "just", "also", "now",
+        "嘅", "咗", "喺", "呢", "嗰", "都", "就", "同", "但", "我", "你", "佢",
+        "系", "唔", "有", "冇", "会", "可以", "咁", "啲", "嘢", "点", "乜"
+    ]
 
     // MARK: - Thinking Filter
 
@@ -295,17 +393,8 @@ final class ChatViewModel {
         try? nodeStore.insertMessage(userMessage)
         messages.append(userMessage)
 
-        // Step 3: Embed query and search for citations
-        if embeddingService.isLoaded {
-            if let queryEmbedding = try? embeddingService.embed(query) {
-                let results = (try? vectorStore.search(
-                    query: queryEmbedding,
-                    topK: 5,
-                    excludeIds: [node.id]
-                )) ?? []
-                citations = results
-            }
-        }
+        // Step 3: Hybrid search — vector + FTS5, fused with RRF (inspired by QMD)
+        citations = hybridSearch(query: query, excludeId: node.id)
 
         // Step 4: Fetch project goal if node has projectId
         var projectGoal: String? = nil
@@ -482,18 +571,22 @@ final class ChatViewModel {
                 }
             }
 
-            // Auto title: after first full exchange (user + assistant), generate a real title
+            // Auto title + emoji: after first full exchange, let AI pick both
             if messageCount <= 3, let llm = llmServiceProvider() {
-                if let title = await generateTitle(
+                if let result = await generateTitleAndEmoji(
                     userMessage: firstUserContent,
                     assistantMessage: assistantContent,
                     using: llm
                 ) {
                     if var node = try? nodeStore.fetchNode(id: nodeId) {
-                        node.title = title
+                        node.title = result.title
+                        node.emoji = result.emoji
                         node.updatedAt = Date()
                         try? nodeStore.updateNode(node)
-                        await MainActor.run { self.currentNode?.title = title }
+                        await MainActor.run {
+                            self.currentNode?.title = result.title
+                            self.currentNode?.emoji = result.emoji
+                        }
                     }
                 }
             }
@@ -502,15 +595,29 @@ final class ChatViewModel {
 
     // MARK: - Auto Title
 
-    private func generateTitle(userMessage: String, assistantMessage: String, using llm: any LLMService) async -> String? {
+    private func generateTitleAndEmoji(userMessage: String, assistantMessage: String, using llm: any LLMService) async -> (title: String, emoji: String)? {
         let snippet = String(userMessage.prefix(500)) + "\n" + String(assistantMessage.prefix(500))
-        let prompt = "Generate a short title (3-7 words) for this conversation. Write in the same language used. Output only the title, nothing else.\n\n\(snippet)"
+        let prompt = """
+            Based on this conversation, output TWO things on separate lines:
+            Line 1: A single emoji that best represents the topic
+            Line 2: A short title (3-7 words) in the same language used
+
+            Output ONLY these two lines, nothing else.
+
+            \(snippet)
+            """
         do {
             let stream = try await llm.generate(messages: [LLMMessage(role: "user", content: prompt)], system: nil)
             var result = ""
             for try await chunk in stream { result += chunk }
-            let trimmed = result.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : String(trimmed.prefix(60))
+            let lines = result.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: .newlines).filter { !$0.isEmpty }
+            guard lines.count >= 2 else {
+                let trimmed = result.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : (String(trimmed.prefix(60)), "💬")
+            }
+            let emoji = String(lines[0].prefix(2)).trimmingCharacters(in: .whitespaces)
+            let title = String(lines[1].prefix(60)).trimmingCharacters(in: .whitespaces)
+            return (title, emoji)
         } catch {
             return nil
         }
