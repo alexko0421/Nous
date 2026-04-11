@@ -73,6 +73,28 @@ final class ChatViewModel {
     func startWithMode(_ mode: ConversationMode, projectId: UUID? = nil) {
         currentMode = mode
         startNewConversation(title: mode.label, projectId: projectId)
+
+        // Nous speaks first with a mode-appropriate greeting
+        guard let node = currentNode else { return }
+        let greeting = Self.modeGreeting(for: mode)
+        let greetingMessage = Message(nodeId: node.id, role: .assistant, content: greeting)
+        try? nodeStore.insertMessage(greetingMessage)
+        messages.append(greetingMessage)
+    }
+
+    private static func modeGreeting(for mode: ConversationMode) -> String {
+        switch mode {
+        case .general:
+            return "有咩可以帮到你？"
+        case .business:
+            return "Business mode on 🏢 你想倾咩？产品、增长、融资、定系其他嘢？直接讲个问题，我帮你拆。"
+        case .direction:
+            return "我喺度。你最近喺谂咩？唔使急，慢慢讲。"
+        case .brainstorm:
+            return "Brain storm mode 🧠 嚟啦！随便抛个想法、一个问题、或者一个你觉得有趣嘅嘢 — 我哋一齐发散。"
+        case .mentalHealth:
+            return "我喺度听。你想倾下咩？"
+        }
     }
 
     func loadConversation(_ node: NousNode) {
@@ -152,6 +174,58 @@ final class ChatViewModel {
             guard panel.runModal() == .OK, let url = panel.url else { return }
             try? md.write(to: url, atomically: true, encoding: .utf8)
         }
+    }
+
+    // MARK: - Thinking Filter
+
+    /// Tracks whether we're inside a thinking block during streaming
+    private var insideThinkingBlock = false
+    private var thinkingBuffer = ""
+
+    /// Filters out thinking blocks from streamed chunks in real-time.
+    /// Handles [THINK]...[/THINK], <think>...</think>, and similar patterns.
+    private func filterThinkingChunk(_ chunk: String) -> String {
+        var output = ""
+        let combined = thinkingBuffer + chunk
+        thinkingBuffer = ""
+
+        var i = combined.startIndex
+        while i < combined.endIndex {
+            if insideThinkingBlock {
+                // Look for closing tag
+                if let closeRange = combined.range(of: "[/THINK]", options: .caseInsensitive, range: i..<combined.endIndex) {
+                    insideThinkingBlock = false
+                    i = closeRange.upperBound
+                } else if let closeRange = combined.range(of: "</think>", options: .caseInsensitive, range: i..<combined.endIndex) {
+                    insideThinkingBlock = false
+                    i = closeRange.upperBound
+                } else {
+                    // Still inside thinking, consume everything
+                    break
+                }
+            } else {
+                // Look for opening tag
+                if let openRange = combined.range(of: "[THINK]", options: .caseInsensitive, range: i..<combined.endIndex) {
+                    output += String(combined[i..<openRange.lowerBound])
+                    insideThinkingBlock = true
+                    i = openRange.upperBound
+                } else if let openRange = combined.range(of: "<think>", options: .caseInsensitive, range: i..<combined.endIndex) {
+                    output += String(combined[i..<openRange.lowerBound])
+                    insideThinkingBlock = true
+                    i = openRange.upperBound
+                } else {
+                    // Check if we might be at a partial tag at the end
+                    let remaining = String(combined[i...])
+                    if remaining.count < 8 && (remaining.hasPrefix("[") || remaining.hasPrefix("<")) {
+                        thinkingBuffer = remaining
+                        break
+                    }
+                    output += remaining
+                    break
+                }
+            }
+        }
+        return output
     }
 
     // MARK: - Smart Model Routing
@@ -234,7 +308,7 @@ final class ChatViewModel {
         }
 
         // Step 5: Assemble context
-        let context = ChatViewModel.assembleContext(citations: citations, projectGoal: projectGoal)
+        let context = ChatViewModel.assembleContext(citations: citations, projectGoal: projectGoal, mode: currentMode)
 
         // Step 6: Build LLMMessage array — with context compression
         var llmMessages: [LLMMessage] = []
@@ -327,10 +401,13 @@ final class ChatViewModel {
 
         providerLoop: for provider in providers {
             currentResponse = ""
+            insideThinkingBlock = false
+            thinkingBuffer = ""
             do {
                 let stream = try await provider.generate(messages: llmMessages, system: context)
                 for try await chunk in stream {
-                    currentResponse += chunk
+                    let filtered = filterThinkingChunk(chunk)
+                    if !filtered.isEmpty { currentResponse += filtered }
                 }
                 lastError = nil
                 break providerLoop
@@ -341,11 +418,14 @@ final class ChatViewModel {
                 case .retry:
                     // One retry with the same provider after brief backoff
                     currentResponse = ""
+                    insideThinkingBlock = false
+                    thinkingBuffer = ""
                     do {
                         try await Task.sleep(for: .seconds(1))
                         let stream = try await provider.generate(messages: llmMessages, system: context)
                         for try await chunk in stream {
-                            currentResponse += chunk
+                            let filtered = filterThinkingChunk(chunk)
+                            if !filtered.isEmpty { currentResponse += filtered }
                         }
                         lastError = nil
                         break providerLoop
@@ -720,13 +800,19 @@ final class ChatViewModel {
 
     // MARK: - Context Assembly
 
-    static func assembleContext(citations: [SearchResult], projectGoal: String?) -> String {
+    static func assembleContext(citations: [SearchResult], projectGoal: String?, mode: ConversationMode = .general) -> String {
         var parts: [String] = []
 
         // Layer 1: Anchor — static let, loaded once at process start (preserves prompt cache)
         parts.append(anchor)
 
-        // Layer 2: Memory curation guidance — tells the LLM HOW to use recalled context
+        // Layer 2: Mode-specific instruction — changes Nous's behavior per conversation type
+        let modeInstruction = modeSystemInstruction(for: mode)
+        if !modeInstruction.isEmpty {
+            parts.append("---\n\n\(modeInstruction)")
+        }
+
+        // Layer 3: Memory curation guidance — tells the LLM HOW to use recalled context
         parts.append("""
             ---
 
@@ -758,5 +844,98 @@ final class ChatViewModel {
         }
 
         return parts.joined(separator: "\n\n")
+    }
+
+    // MARK: - Mode Instructions
+
+    private static func modeSystemInstruction(for mode: ConversationMode) -> String {
+        switch mode {
+        case .general:
+            return ""
+
+        case .business:
+            return """
+                MODE: BUSINESS
+                Alex 想倾 business 相关嘅嘢。
+
+                你嘅做法：
+                1. 先问清楚佢想做咩、点解想做。了解够先回应。
+                2. 日常讨论就用 anchor 嘅方式 — 自然倾偈、问问题、帮佢理清。
+                3. 永远记住 Alex 嘅现实：19 岁、一个人、冇 capital、F-1 visa。建议要喺呢啲 constraints 入面 work。问自己：「佢一个人做唔做得到？」
+                4. 帮佢搵最细嘅实验：「你可以用最少嘅嘢去验证咩？」
+
+                当 Alex 面对重大商业决定（融资、pivot、合作、放弃）— 你心入面用呢个框架，但唔好机械式展开：
+                - 咩系已知嘅事实？
+                - 咩系可以 research 填补嘅？
+                - 咩系点 research 都无法确定嘅？呢个位要靠直觉。
+                - 如果有建议：讲清楚喺咩条件下做、风险系咩、去到边个点要止蚀。
+                - "你对呢个嘢嘅 gut feeling 系咩？"
+                - "如果呢个机会冇咗，你第一反应系松一口气定系唔甘心？"
+                """
+
+        case .direction:
+            return """
+                MODE: DIRECTION
+                Alex 想倾人生方向、career、或者一个佢拿唔定主意嘅路。
+
+                你嘅做法：
+                1. 先听。问佢最近喺谂咩、咩触发咗呢个想法。唔好急住分析。
+                2. 帮佢分清楚：呢个系「佢自己想要」定系「佢觉得应该要」？
+                3. 当佢纠结两条路，唔好帮佢拣。两条路都老实讲，帮佢睇清楚。
+                4. 用 anchor 嘅 intervention：「如果冇人睇得到，你仲會咁做嗎？」「呢樣嘢會唔會令你嘅生活更飽滿？」
+
+                当佢面对真正嘅人生十字路口（quit school、转方向、返唔返香港）— 可以用呢啲问题帮佢挖深啲，但一次问一个，唔好连环炮：
+                - "想像你已经做咗呢个决定。你嘅身体感觉系咩？松定紧？"
+                - "你系咪其实心入面已经有答案？"
+                - "五年后回望呢一刻，你会后悔做咗，定系后悔冇做？"
+                - "如果有人话你唔可以咁做，你第一反应系松一口气，定系唔服？"
+                """
+
+        case .brainstorm:
+            return """
+                MODE: BRAINSTORM
+                Alex 想自由探索 ideas。
+
+                你嘅做法：
+                1. 先问佢想 explore 咩方向、咩触发咗呢个想法。
+                2. 了解完之后，全力发散。每个 idea 先讲好处，再 build on it。
+                3. 唔好否定任何 idea。呢个阶段 volume 比 quality 重要。
+                4. 当佢卡住，你主动抛 "what if"。
+                5. 间中帮佢整理："我见到几条线索..."
+                6. 暂时关掉 pain test — brainstorm 唔系做决定嘅时候。
+
+                当 Alex 对某个 idea 有犹豫（"但系会唔会太..."）：
+                - "你一讲呢个嘅时候系咪有一刻好兴奋？嗰个感觉系真嘅。"
+                - "你最怕呢个 idea 失败嘅原因系咩？呢个恐惧系保护你，定系阻住你？"
+                - "最极端嘅版本系咩样？"
+                - 只有当 Alex 主动话「我想认真考虑呢个」，先切换到分析模式。
+                """
+
+        case .mentalHealth:
+            return """
+                MODE: MENTAL HEALTH
+                Alex 想倾情绪或者压力相关嘅嘢。
+
+                你嘅做法：
+                1. 先问咩事。简单直接："咩事？" 或 "最近点？"
+                2. 听佢讲完。唔好中途分析、唔好中途俾建议。
+                3. 回应情绪先（anchor 嘅硬性规则）。用你自己嘅话，唔好罐头共情。
+                4. 跟住先了解多啲。
+                5. 当佢讲完，先帮佢 process。
+                6. 记住佢嘅现实：19 岁、一个人喺美国、冇 safety net。孤独感同压力系真实嘅。
+
+                注意：
+                - 永远唔好讲「至少」「仲有人更惨」「positive thinking」
+                - 跟佢嘅能量：佢低你就静、佢嬲你就畀空间
+                - 有时最好嘅回应系：「我喺度。慢慢嚟。」
+                - 如果佢提到自残或者 crisis，认真对待，引导搵专业帮助。
+
+                当佢面对心理健康嘅决定（要唔要睇 therapist、要唔要设 boundary、要唔要离开一段关系）：
+                - 可以问："你而家身体边度最唔舒服？"
+                - "如果你最好嘅朋友遇到同样嘅情况，你会点同佢讲？"
+                - 唔好替佢做决定。可以讲你嘅感受："从你讲嘅嘢，我感受到..."
+                - "你唔需要而家就决定。"
+                """
+        }
     }
 }

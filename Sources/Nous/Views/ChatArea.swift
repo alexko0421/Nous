@@ -48,6 +48,9 @@ struct ChatArea: View {
                         ForEach(vm.messages) { msg in
                             MessageBubble(text: msg.content, isUser: msg.role == .user)
                         }
+                        if vm.isGenerating && vm.currentResponse.isEmpty {
+                            ThinkingIndicator()
+                        }
                         if vm.isGenerating && !vm.currentResponse.isEmpty {
                             MessageBubble(text: vm.currentResponse, isUser: false)
                         }
@@ -120,5 +123,45 @@ struct MessageBubble: View {
                 .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
             if !isUser { Spacer() }
         }
+    }
+}
+
+struct ThinkingIndicator: View {
+    @State private var phase: CGFloat = 0
+
+    var body: some View {
+        HStack {
+            HStack(spacing: 6) {
+                ForEach(0..<3, id: \.self) { i in
+                    Circle()
+                        .fill(AppColor.colaOrange)
+                        .frame(width: 8, height: 8)
+                        .scaleEffect(dotScale(for: i))
+                        .opacity(dotOpacity(for: i))
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(AppColor.colaOrange.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            Spacer()
+        }
+        .onAppear {
+            withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
+                phase = 1
+            }
+        }
+    }
+
+    private func dotScale(for index: Int) -> CGFloat {
+        let delay = Double(index) * 0.2
+        let progress = max(0, min(1, phase - delay))
+        return 0.6 + 0.4 * progress
+    }
+
+    private func dotOpacity(for index: Int) -> Double {
+        let delay = Double(index) * 0.2
+        let progress = max(0, min(1, phase - delay))
+        return 0.4 + 0.6 * progress
     }
 }
