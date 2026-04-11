@@ -344,7 +344,7 @@ struct LeftSidebar: View {
         }
         .frame(width: 150)
         .background(
-            VisualEffectView(material: .sidebar, blendingMode: .behindWindow)
+            VisualEffectView(material: .underWindowBackground, blendingMode: .behindWindow)
         )
         .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
         .onAppear { loadData() }
