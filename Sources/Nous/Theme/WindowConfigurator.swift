@@ -37,15 +37,30 @@ struct WindowConfigurator: NSViewRepresentable {
                     let className = String(describing: type(of: v))
                     if className.contains("Titlebar") || className.contains("Separator") {
                         v.isHidden = true
-                    }
-                    for sub in v.subviews {
-                        let subClassName = String(describing: type(of: sub))
-                        if subClassName.contains("Titlebar") || subClassName.contains("Separator") {
-                            sub.isHidden = true
-                        }
+                        v.alphaValue = 0
                     }
                     
+                    for sub in v.subviews {
+                        let subClassName = String(describing: type(of: sub))
+                        if subClassName.contains("Titlebar") || subClassName.contains("Separator") || subClassName.contains("VisualEffect") {
+                            sub.isHidden = true
+                            sub.alphaValue = 0
+                        }
+                    }
                     current = v.superview
+                }
+                
+                // Extra kill: Nuclear option — remove the titlebar container from hierarchy
+                if let titlebarContainer = window.standardWindowButton(.closeButton)?.superview?.superview {
+                    titlebarContainer.removeFromSuperview()
+                }
+                
+                // Nuke any remaining separator subviews in the frame
+                window.contentView?.superview?.subviews.forEach { v in
+                    let cn = String(describing: type(of: v))
+                    if cn.contains("Titlebar") || cn.contains("Separator") {
+                        v.removeFromSuperview()
+                    }
                 }
             }
 

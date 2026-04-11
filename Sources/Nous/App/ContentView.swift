@@ -102,6 +102,8 @@ struct ContentView: View {
         .frame(minWidth: 600, idealWidth: 800, minHeight: 450, idealHeight: 600)
         .background(.clear)
         .ignoresSafeArea(.all)
+        .offset(y: -1) // Submerge the 1px ghost line into the window boundary
+        .padding(.bottom, -1) // Correct the overlap at the bottom
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isSidebarVisible)
         .task { await settingsVM.loadEmbeddingModel() }
     }
