@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-@Observable
+@MainActor @Observable
 final class SettingsViewModel {
 
     // MARK: - Provider selection
@@ -13,7 +13,7 @@ final class SettingsViewModel {
     var geminiApiKey: String = ""
     var claudeApiKey: String = ""
     var openaiApiKey: String = ""
-
+    
     // MARK: - Model identifiers
 
     var localModelId: String = LocalLLMService.defaultModelId
@@ -46,6 +46,7 @@ final class SettingsViewModel {
         static let openaiApiKey = "nous.openai.apikey"
         static let localModelId = "nous.local.modelid"
         static let embedModelId = "nous.embedding.modelid"
+        static let userName     = "nous.user.name"
     }
 
     // MARK: - Init
@@ -132,6 +133,26 @@ final class SettingsViewModel {
             guard !openaiApiKey.isEmpty else { return nil }
             return OpenAILLMService(apiKey: openaiApiKey)
         }
+    }
+
+    /// Returns fallback providers in priority order (excluding the primary)
+    func makeFallbackServices() -> [any LLMService] {
+        var fallbacks: [any LLMService] = []
+        let skip = selectedProvider
+
+        if skip != .gemini, !geminiApiKey.isEmpty {
+            fallbacks.append(GeminiLLMService(apiKey: geminiApiKey))
+        }
+        if skip != .claude, !claudeApiKey.isEmpty {
+            fallbacks.append(ClaudeLLMService(apiKey: claudeApiKey))
+        }
+        if skip != .openai, !openaiApiKey.isEmpty {
+            fallbacks.append(OpenAILLMService(apiKey: openaiApiKey))
+        }
+        if skip != .local, localLLM.isLoaded {
+            fallbacks.append(localLLM)
+        }
+        return fallbacks
     }
 
     // MARK: - Private helpers

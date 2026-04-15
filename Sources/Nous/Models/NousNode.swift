@@ -13,6 +13,8 @@ struct NousNode: Identifiable, Codable {
     var embedding: [Float]?
     var projectId: UUID?
     var isFavorite: Bool
+    var mode: ConversationMode?
+    var emoji: String?
     let createdAt: Date
     var updatedAt: Date
 
@@ -24,6 +26,8 @@ struct NousNode: Identifiable, Codable {
         embedding: [Float]? = nil,
         projectId: UUID? = nil,
         isFavorite: Bool = false,
+        mode: ConversationMode? = nil,
+        emoji: String? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -34,6 +38,8 @@ struct NousNode: Identifiable, Codable {
         self.embedding = embedding
         self.projectId = projectId
         self.isFavorite = isFavorite
+        self.mode = mode
+        self.emoji = emoji
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }

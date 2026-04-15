@@ -26,6 +26,25 @@ final class GraphEngine {
     ) throws -> [UUID: GraphPosition] {
         let nodes = try nodeStore.fetchAllNodes()
         let edges = try nodeStore.fetchAllEdges()
+        return computeLayout(
+            nodes: nodes,
+            edges: edges,
+            iterations: iterations,
+            repulsion: repulsion,
+            attraction: attraction,
+            damping: damping
+        )
+    }
+
+    /// Compute force-directed layout for a specific node/edge subset.
+    func computeLayout(
+        nodes: [NousNode],
+        edges: [NodeEdge],
+        iterations: Int = 100,
+        repulsion: Float = 5000,
+        attraction: Float = 0.01,
+        damping: Float = 0.9
+    ) -> [UUID: GraphPosition] {
         guard !nodes.isEmpty else { return [:] }
 
         // Initialize random positions
@@ -110,8 +129,8 @@ final class GraphEngine {
     }
 
     func generateSharedEdges(for node: NousNode) throws {
-        guard let projectId = node.projectId else { return }
         try nodeStore.deleteEdges(nodeId: node.id, type: .shared)
+        guard let projectId = node.projectId else { return }
         let siblings = try nodeStore.fetchNodes(projectId: projectId)
         for sibling in siblings where sibling.id != node.id {
             let edge = NodeEdge(

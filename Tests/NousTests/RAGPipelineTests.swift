@@ -34,6 +34,7 @@ final class RAGPipelineTests: XCTestCase {
 
     // MARK: - Test 2: assembleContext includes expected content
 
+    @MainActor
     func testContextAssembly() {
         let node1 = NousNode(
             type: .note,
@@ -55,8 +56,8 @@ final class RAGPipelineTests: XCTestCase {
 
         let context = ChatViewModel.assembleContext(citations: citations, projectGoal: projectGoal)
 
-        // Verify system prompt is present
-        XCTAssertTrue(context.contains("You are Nous"))
+        // Verify anchor prompt is present
+        XCTAssertTrue(context.contains("你系 Nous"))
 
         // Verify project goal is included
         XCTAssertTrue(context.contains(projectGoal))

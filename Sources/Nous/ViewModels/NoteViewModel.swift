@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-@Observable
+@MainActor @Observable
 final class NoteViewModel {
 
     // MARK: - State
@@ -12,6 +12,12 @@ final class NoteViewModel {
     var content: String = ""
     var relatedNodes: [SearchResult] = []
     var currentProject: Project?
+    var activeProjectId: UUID? {
+        didSet {
+            guard oldValue != activeProjectId, currentNote == nil else { return }
+            loadNotes()
+        }
+    }
 
     // MARK: - Dependencies
 
@@ -41,11 +47,18 @@ final class NoteViewModel {
     // MARK: - Note Management
 
     func loadNotes() {
-        notes = (try? nodeStore.fetchAllNodes())?.filter { $0.type == .note } ?? []
+        let fetchedNodes: [NousNode]
+        if let activeProjectId {
+            fetchedNodes = (try? nodeStore.fetchNodes(projectId: activeProjectId)) ?? []
+        } else {
+            fetchedNodes = (try? nodeStore.fetchAllNodes()) ?? []
+        }
+        notes = fetchedNodes.filter { $0.type == .note }
     }
 
     func createNote(projectId: UUID? = nil) throws {
-        var node = NousNode(type: .note, title: "Untitled", projectId: projectId)
+        let projectId = projectId ?? activeProjectId
+        let node = NousNode(type: .note, title: "Untitled", projectId: projectId)
         try nodeStore.insertNode(node)
         loadNotes()
         openNote(node)

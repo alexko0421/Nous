@@ -4,6 +4,9 @@ import SwiftUI
 struct WelcomeView: View {
     @Binding var inputText: String
     let onSend: () -> Void
+    var onModeSelected: ((ConversationMode) -> Void)?
+    
+    @AppStorage("nous.user.name") private var userName: String = "ALEX"
     
     private var greeting: String {
         let hour = Calendar.current.component(.hour, from: Date())
@@ -33,7 +36,7 @@ struct WelcomeView: View {
                     .padding(.bottom, 4)
 
                 // Greeting
-                Text("\(greeting), Alex")
+                Text("\(greeting), \(userName)")
                     .font(.system(size: 26, weight: .medium, design: .rounded))
                     .foregroundColor(AppColor.colaDarkText)
             }
@@ -75,20 +78,23 @@ struct WelcomeView: View {
                 .padding(.horizontal, 20)
                 .padding(.vertical, 14)
             }
-            .background(Color.white.opacity(0.7))
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(AppColor.colaDarkText.opacity(0.08), lineWidth: 1)
-            )
-            .shadow(color: .black.opacity(0.04), radius: 8, x: 0, y: 2)
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             .padding(.horizontal, 48)
             .padding(.bottom, 20)
             
             // ── Quick Action Chips ──
             HStack(spacing: 10) {
                 ForEach(quickActions, id: \.label) { action in
-                    Button(action: {}) {
+                    Button(action: {
+                        let mode: ConversationMode = switch action.label {
+                        case "Business": .business
+                        case "Direction": .direction
+                        case "Brain Storm": .brainstorm
+                        case "Mental Health": .mentalHealth
+                        default: .general
+                        }
+                        onModeSelected?(mode)
+                    }) {
                         HStack(spacing: 6) {
                             Image(systemName: action.icon)
                                 .font(.system(size: 11))
@@ -98,12 +104,7 @@ struct WelcomeView: View {
                         .foregroundColor(AppColor.colaDarkText.opacity(0.65))
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
-                        .background(Color.white.opacity(0.55))
-                        .clipShape(Capsule())
-                        .overlay(
-                            Capsule()
-                                .stroke(AppColor.colaDarkText.opacity(0.08), lineWidth: 1)
-                        )
+                        .glassEffect(.regular, in: Capsule())
                     }
                     .buttonStyle(.plain)
                 }

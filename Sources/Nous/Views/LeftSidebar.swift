@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 // Helper for window controls
@@ -145,13 +146,19 @@ struct MacOSTrafficLights: View {
 
 struct LeftSidebar: View {
     let nodeStore: NodeStore
+    @Bindable var settingsVM: SettingsViewModel
     @Binding var selectedTab: MainTab
     @Binding var selectedProjectId: UUID?
+    var selectedNodeId: UUID?
     var onNodeSelected: ((NousNode) -> Void)?
     var onNewChat: (() -> Void)?
+    
+    @Environment(\.openWindow) private var openWindow
+    @AppStorage("nous.user.name") private var userName: String = "ALEX"
 
     @State private var favorites: [NousNode] = []
     @State private var recents: [NousNode] = []
+    @State private var projects: [Project] = []
     @State private var showProjectList = false
 
     var body: some View {
@@ -241,18 +248,54 @@ struct LeftSidebar: View {
                                 .foregroundColor(AppColor.colaDarkText.opacity(0.6))
 
                             ForEach(recents) { node in
+                                let isSelected = node.id == selectedNodeId
                                 Button(action: { onNodeSelected?(node) }) {
-                                    HStack(spacing: 10) {
-                                        Text(node.type == .conversation ? "💬" : "📝")
-                                            .font(.system(size: 16))
+                                    HStack(spacing: 6) {
+                                        Text(Self.nodeEmoji(node))
+                                            .font(.system(size: 11))
                                         Text(node.title)
                                             .font(.system(size: 12, weight: .medium, design: .rounded))
-                                            .foregroundColor(AppColor.colaDarkText.opacity(0.7))
+                                            .foregroundColor(isSelected ? AppColor.colaOrange : AppColor.colaDarkText.opacity(0.7))
                                             .lineLimit(1)
                                     }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.vertical, 5)
+                                    .padding(.horizontal, 6)
+                                    .background(isSelected ? AppColor.colaOrange.opacity(0.08) : Color.clear)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 10)
+                                            .stroke(isSelected ? AppColor.colaOrange.opacity(0.3) : Color.clear, lineWidth: 1)
+                                    )
                                 }
                                 .buttonStyle(.plain)
                                 .contextMenu {
+                                    Menu("Add to Project") {
+                                        ForEach(projects) { project in
+                                            Button(action: {
+                                                if var n = try? nodeStore.fetchNode(id: node.id) {
+                                                    n.projectId = project.id
+                                                    n.updatedAt = Date()
+                                                    try? nodeStore.updateNode(n)
+                                                    loadData()
+                                                }
+                                            }) {
+                                                Label("\(project.emoji) \(project.title)", systemImage: node.projectId == project.id ? "checkmark" : "folder")
+                                            }
+                                        }
+                                        if node.projectId != nil {
+                                            Divider()
+                                            Button("Remove from Project") {
+                                                if var n = try? nodeStore.fetchNode(id: node.id) {
+                                                    n.projectId = nil
+                                                    n.updatedAt = Date()
+                                                    try? nodeStore.updateNode(n)
+                                                    loadData()
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Divider()
                                     Button(role: .destructive) {
                                         try? nodeStore.deleteNode(id: node.id)
                                         loadData()
@@ -271,36 +314,90 @@ struct LeftSidebar: View {
             Spacer()
 
             HStack(spacing: 12) {
-                Button(action: { selectedTab = .settings }) {
-                    Circle()
-                        .fill(AppColor.colaOrange.opacity(0.15))
-                        .frame(width: 30, height: 30)
-                        .overlay(
-                            Text("A")
-                                .font(.system(size: 13, weight: .bold, design: .rounded))
-                                .foregroundColor(AppColor.colaOrange)
-                        )
+                Button(action: {
+                    openWindow(id: "settings-view")
+                }) {
+                    HStack(spacing: 12) {
+                        Circle()
+                            .fill(AppColor.colaOrange.opacity(0.15))
+                            .frame(width: 30, height: 30)
+                            .overlay(
+                                Text(String(userName.prefix(1)).uppercased())
+                                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                                    .foregroundColor(AppColor.colaOrange)
+                            )
+
+                        Text(userName)
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .foregroundColor(AppColor.colaDarkText)
+                        
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle()) // Makes the whole area clickable
                 }
                 .buttonStyle(.plain)
-
-                Text("ALEX")
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
-                    .foregroundColor(AppColor.colaDarkText)
 
                 Spacer(minLength: 0)
             }
             .padding(.leading, 20)
             .padding(.bottom, 30)
         }
-        .frame(width: 130)
-        .background(Color.white.opacity(0.75))
-        .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
+        .frame(width: 150)
+        .background(
+            VisualEffectView(material: .sidebar, blendingMode: .behindWindow)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
         .onAppear { loadData() }
+        .onChange(of: selectedTab) { loadData() }
+        .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
+            loadData()
+        }
+    }
+
+    private static func nodeEmoji(_ node: NousNode) -> String {
+        if let emoji = node.emoji { return emoji }
+        if node.type == .note { return "📝" }
+        return "💬"
     }
 
     private func loadData() {
         favorites = (try? nodeStore.fetchFavorites()) ?? []
         recents = (try? nodeStore.fetchRecents(limit: 20)) ?? []
+        projects = (try? nodeStore.fetchAllProjects()) ?? []
+    }
+}
+
+// Custom View for shadowless glass effect
+struct VisualEffectView: NSViewRepresentable {
+    var material: NSVisualEffectView.Material
+    var blendingMode: NSVisualEffectView.BlendingMode
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = material
+        view.blendingMode = blendingMode
+        view.state = .active
+        view.wantsLayer = true
+        view.layer?.cornerRadius = 36
+        // Subtle glass edge border
+        view.layer?.borderWidth = 0.5
+        view.layer?.borderColor = NSColor.white.withAlphaComponent(0.15).cgColor
+        // Make light mode more transparent (glass-like instead of frosted)
+        updateAlpha(view)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
+        nsView.material = material
+        nsView.blendingMode = blendingMode
+        updateAlpha(nsView)
+    }
+
+    private func updateAlpha(_ view: NSVisualEffectView) {
+        let isDark = view.effectiveAppearance.bestMatch(from: [.darkAqua, .vibrantDark]) != nil
+        // Dark mode: full glass. Light mode: glass with frosted blur
+        view.alphaValue = isDark ? 1.0 : 0.65
+        view.layer?.borderColor = NSColor.white.withAlphaComponent(isDark ? 0.15 : 0.3).cgColor
     }
 }
 

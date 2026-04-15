@@ -16,7 +16,7 @@ struct GalaxyView: View {
                     .ignoresSafeArea()
             }
         }
-        .background(AppColor.galaxyBackground)
+        .background(AppColor.colaBeige)
         .clipShape(RoundedRectangle(cornerRadius: 36))
         .onAppear {
             vm.load()

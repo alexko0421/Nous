@@ -1,13 +1,18 @@
 import Foundation
 import Observation
 
-@Observable
+@MainActor @Observable
 final class GalaxyViewModel {
     var nodes: [NousNode] = []
     var edges: [NodeEdge] = []
     var positions: [UUID: GraphPosition] = [:]
     var selectedNodeId: UUID?
-    var filterProjectId: UUID?
+    var filterProjectId: UUID? {
+        didSet {
+            guard oldValue != filterProjectId else { return }
+            load()
+        }
+    }
     var isLoading: Bool = false
 
     private let nodeStore: NodeStore
@@ -38,10 +43,7 @@ final class GalaxyViewModel {
                 }
 
                 // Compute layout
-                let allPositions = try graphEngine.computeLayout()
-
-                // Filter positions to visible nodes
-                let filteredPositions = allPositions.filter { visibleIds.contains($0.key) }
+                let filteredPositions = try graphEngine.computeLayout(nodes: fetchedNodes, edges: filteredEdges)
 
                 await MainActor.run {
                     self.nodes = fetchedNodes

@@ -2,22 +2,97 @@ import SwiftUI
 
 struct SettingsView: View {
     @Bindable var vm: SettingsViewModel
+    @AppStorage("nous.user.name") private var userName: String = "ALEX"
 
     var body: some View {
+        TabView {
+            generalSection
+                .tabItem {
+                    Label("General", systemImage: "person.crop.circle")
+                }
+            
+            aiSection
+                .tabItem {
+                    Label("AI Models", systemImage: "brain")
+                }
+            
+            storageSection
+                .tabItem {
+                    Label("Data", systemImage: "internaldrive")
+                }
+        }
+        .frame(minWidth: 450, minHeight: 400)
+        .background(AppColor.colaBeige.opacity(0.5))
+    }
+
+    private var generalSection: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                Text("General Settings")
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .padding(.bottom, 10)
 
-                // ── Title ──
-                Text("Settings")
-                    .font(.system(size: 28, weight: .semibold, design: .rounded))
-                    .foregroundColor(AppColor.colaDarkText)
-                    .padding(.top, 4)
-
-                // ── LLM Provider ──
                 settingsCard {
                     VStack(alignment: .leading, spacing: 12) {
-                        sectionLabel("LLM Provider")
+                        sectionLabel("User Profile")
+                        
+                        HStack(spacing: 16) {
+                            Circle()
+                                .fill(AppColor.colaOrange.opacity(0.15))
+                                .frame(width: 44, height: 44)
+                                .overlay(
+                                    Text(String(userName.prefix(1)))
+                                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                                        .foregroundColor(AppColor.colaOrange)
+                                )
+                            
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Display Name")
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundColor(AppColor.colaDarkText)
+                                
+                                TextField("Enter your name", text: $userName)
+                                    .textFieldStyle(.plain)
+                                    .font(.system(size: 14))
+                                    .foregroundColor(AppColor.colaDarkText.opacity(0.7))
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(Color.white.opacity(0.5))
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    .onSubmit { vm.savePreferences() }
+                            }
+                        }
+                    }
+                }
+                
+                settingsCard {
+                    VStack(alignment: .leading, spacing: 12) {
+                        sectionLabel("App Identity")
+                        Text("Nous is your personal second brain.")
+                            .font(.system(size: 13))
+                            .foregroundColor(AppColor.colaDarkText.opacity(0.6))
+                        
+                        Text("Version 1.0.0 (Build 2026)")
+                            .font(.system(size: 11))
+                            .foregroundColor(AppColor.colaDarkText.opacity(0.4))
+                    }
+                }
+            }
+            .padding(24)
+        }
+    }
 
+    private var aiSection: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                Text("AI & Intelligence")
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .padding(.bottom, 10)
+
+                settingsCard {
+                    VStack(alignment: .leading, spacing: 12) {
+                        sectionLabel("Inference Provider")
+                        
                         HStack(spacing: 10) {
                             ForEach(LLMProvider.allCases, id: \.self) { provider in
                                 providerButton(provider)
@@ -26,35 +101,21 @@ struct SettingsView: View {
                     }
                 }
 
-                // ── Provider-specific config ──
                 settingsCard {
                     VStack(alignment: .leading, spacing: 12) {
                         switch vm.selectedProvider {
                         case .local:
                             localModelSection
                         case .gemini:
-                            apiKeySection(
-                                label: "Gemini API Key",
-                                placeholder: "AIza…",
-                                binding: $vm.geminiApiKey
-                            )
+                            apiKeySection(label: "Gemini API Key", placeholder: "AIza…", binding: $vm.geminiApiKey)
                         case .claude:
-                            apiKeySection(
-                                label: "Claude API Key",
-                                placeholder: "sk-ant-…",
-                                binding: $vm.claudeApiKey
-                            )
+                            apiKeySection(label: "Claude API Key", placeholder: "sk-ant-…", binding: $vm.claudeApiKey)
                         case .openai:
-                            apiKeySection(
-                                label: "OpenAI API Key",
-                                placeholder: "sk-…",
-                                binding: $vm.openaiApiKey
-                            )
+                            apiKeySection(label: "OpenAI API Key", placeholder: "sk-…", binding: $vm.openaiApiKey)
                         }
                     }
                 }
-
-                // ── Embedding model ──
+                
                 settingsCard {
                     VStack(alignment: .leading, spacing: 12) {
                         sectionLabel("Embedding Model")
@@ -62,21 +123,29 @@ struct SettingsView: View {
                             name: vm.embeddingModelId,
                             isLoaded: vm.isEmbeddingLoaded,
                             progress: vm.embeddingDownloadProgress,
-                            onLoad: {
-                                Task { await vm.loadEmbeddingModel() }
-                            }
+                            onLoad: { Task { await vm.loadEmbeddingModel() } }
                         )
                     }
                 }
+            }
+            .padding(24)
+        }
+    }
 
-                // ── Vector DB stats ──
+    private var storageSection: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                Text("Data & Storage")
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .padding(.bottom, 10)
+
                 settingsCard {
                     VStack(alignment: .leading, spacing: 12) {
-                        sectionLabel("Vector Database")
+                        sectionLabel("Knowledge Graph (Galaxy)")
                         HStack {
                             Image(systemName: "cylinder.split.1x2")
                                 .foregroundColor(AppColor.colaOrange)
-                            Text("\(vm.vectorCount) vectors indexed")
+                            Text("\(vm.vectorCount) semantic vectors")
                                 .font(.system(size: 14, design: .rounded))
                                 .foregroundColor(AppColor.colaDarkText.opacity(0.75))
                             Spacer()
@@ -86,13 +155,17 @@ struct SettingsView: View {
                         }
                     }
                 }
-
-                Spacer(minLength: 20)
+                
+                Button(role: .destructive, action: {}) {
+                    Label("Clear Global Index", systemImage: "trash")
+                        .font(.system(size: 13, weight: .medium))
+                }
+                .buttonStyle(.plain)
+                .padding(.leading, 10)
+                .opacity(0.5)
             }
             .padding(24)
         }
-        .background(AppColor.colaBeige)
-        .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
         .onAppear {
             vm.updateStats()
         }
