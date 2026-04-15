@@ -181,7 +181,7 @@ final class NodeStoreTests: XCTestCase {
         XCTAssertEqual(edgesForA.count, 1)
         XCTAssertEqual(edgesForA.first?.sourceId, nodeA.id)
         XCTAssertEqual(edgesForA.first?.targetId, nodeB.id)
-        XCTAssertEqual(edgesForA.first?.strength, 0.9, accuracy: 0.001)
+        XCTAssertEqual(Double(edgesForA.first?.strength ?? 0), 0.9, accuracy: 0.001)
 
         // fetchEdges also matches targetId
         let edgesForB = try store.fetchEdges(nodeId: nodeB.id)
@@ -201,5 +201,26 @@ final class NodeStoreTests: XCTestCase {
 
         let remaining = try store.fetchEdges(nodeId: nodeA.id)
         XCTAssertTrue(remaining.isEmpty)
+    }
+
+    func testDeleteEdgesOnlyRemovesOutgoingEdgesForNode() throws {
+        let nodeA = makeNode(title: "A")
+        let nodeB = makeNode(title: "B")
+        let nodeC = makeNode(title: "C")
+        try store.insertNode(nodeA)
+        try store.insertNode(nodeB)
+        try store.insertNode(nodeC)
+
+        let outgoing = NodeEdge(sourceId: nodeA.id, targetId: nodeB.id, strength: 0.6, type: .semantic)
+        let incoming = NodeEdge(sourceId: nodeC.id, targetId: nodeA.id, strength: 0.7, type: .semantic)
+        try store.insertEdge(outgoing)
+        try store.insertEdge(incoming)
+
+        try store.deleteEdges(nodeId: nodeA.id, type: .semantic)
+
+        let edgesForA = try store.fetchEdges(nodeId: nodeA.id)
+        XCTAssertEqual(edgesForA.count, 1)
+        XCTAssertEqual(edgesForA.first?.sourceId, nodeC.id)
+        XCTAssertEqual(edgesForA.first?.targetId, nodeA.id)
     }
 }

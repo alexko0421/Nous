@@ -8,7 +8,7 @@ final class GraphEngineTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        nodeStore = NodeStore(path: ":memory:")
+        nodeStore = try! NodeStore(path: ":memory:")
         vectorStore = VectorStore(nodeStore: nodeStore)
         engine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
     }

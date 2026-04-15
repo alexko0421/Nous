@@ -458,11 +458,10 @@ final class NodeStore {
 
     func deleteEdges(nodeId: UUID, type: EdgeType) throws {
         let stmt = try db.prepare("""
-            DELETE FROM edges WHERE (sourceId=? OR targetId=?) AND type=?;
+            DELETE FROM edges WHERE sourceId=? AND type=?;
         """)
         try stmt.bind(nodeId.uuidString, at: 1)
-        try stmt.bind(nodeId.uuidString, at: 2)
-        try stmt.bind(type.rawValue, at: 3)
+        try stmt.bind(type.rawValue, at: 2)
         try stmt.step()
     }
 

@@ -13,7 +13,7 @@ final class ChatViewModel {
     var isGenerating: Bool = false
     var currentResponse: String = ""
     var citations: [SearchResult] = []
-    var currentMode: ConversationMode = .general
+    var activeProjectId: UUID?
 
     // MARK: - Context Compression
 
@@ -34,6 +34,10 @@ final class ChatViewModel {
     private let localLLMProvider: () -> (any LLMService)?
     private let fallbackProvider: () -> [any LLMService]
     let usageTracker = UsageTracker()
+
+    private var conversationMode: ConversationMode {
+        currentNode?.mode ?? .general
+    }
 
     // MARK: - Init
 
@@ -57,7 +61,8 @@ final class ChatViewModel {
 
     // MARK: - Conversation Management
 
-    func startNewConversation(title: String = "New Conversation", projectId: UUID? = nil, mode: ConversationMode? = nil) {
+    func startNewConversation(title: String = "New Conversation", projectId: UUID? = nil, mode: ConversationMode = .general) {
+        let projectId = projectId ?? activeProjectId
         let node = NousNode(
             type: .conversation,
             title: title,
@@ -65,6 +70,7 @@ final class ChatViewModel {
             mode: mode
         )
         try? nodeStore.insertNode(node)
+        activeProjectId = projectId
         currentNode = node
         messages = []
         citations = []
@@ -72,7 +78,6 @@ final class ChatViewModel {
     }
 
     func startWithMode(_ mode: ConversationMode, projectId: UUID? = nil) {
-        currentMode = mode
         startNewConversation(title: "New Conversation", projectId: projectId, mode: mode)
 
         // Nous speaks first with a mode-appropriate greeting
@@ -99,10 +104,22 @@ final class ChatViewModel {
     }
 
     func loadConversation(_ node: NousNode) {
+        activeProjectId = node.projectId
         currentNode = node
         messages = (try? nodeStore.fetchMessages(nodeId: node.id)) ?? []
         citations = []
         currentResponse = ""
+    }
+
+    func resetDraft(projectId: UUID? = nil) {
+        activeProjectId = projectId
+        currentNode = nil
+        messages = []
+        citations = []
+        currentResponse = ""
+        inputText = ""
+        insideThinkingBlock = false
+        thinkingBuffer = ""
     }
 
     // MARK: - Export
@@ -387,6 +404,7 @@ final class ChatViewModel {
         }
 
         guard let node = currentNode else { return }
+        let mode = node.mode ?? .general
 
         // Step 2: Save user message
         let userMessage = Message(nodeId: node.id, role: .user, content: query)
@@ -405,7 +423,7 @@ final class ChatViewModel {
         }
 
         // Step 5: Assemble context
-        let context = ChatViewModel.assembleContext(citations: citations, projectGoal: projectGoal, mode: currentMode)
+        let context = ChatViewModel.assembleContext(citations: citations, projectGoal: projectGoal, mode: mode)
 
         // Step 6: Build LLMMessage array — with context compression
         var llmMessages: [LLMMessage] = []
@@ -493,7 +511,7 @@ final class ChatViewModel {
         }
 
         // Step 9: Stream response with error classification + provider fallback
-        let providers: [any LLMService] = [llm] + fallbackProvider()
+        let providers = [llm] + fallbackProvider().filter { type(of: $0) != type(of: llm) }
         var lastError: Error?
 
         providerLoop: for provider in providers {
@@ -750,7 +768,7 @@ final class ChatViewModel {
     private func compressMessages(_ newMessages: [Message], existingSummary: String?, using llm: any LLMService) async -> String? {
         let contentTokens = newMessages.reduce(0) { $0 + Self.estimateTokens(for: $1.content) }
         let budget = Self.summaryBudget(compressedTokens: contentTokens)
-        let structure = Self.summaryStructure(for: currentMode)
+        let structure = Self.summaryStructure(for: conversationMode)
 
         var prompt: String
 

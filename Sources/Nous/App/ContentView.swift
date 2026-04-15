@@ -65,11 +65,7 @@ struct ContentView: View {
                     selectedNodeId: chatVM.currentNode?.id,
                     onNodeSelected: { node in navigateToNode(node) },
                     onNewChat: {
-                        chatVM.currentNode = nil
-                        chatVM.messages = []
-                        chatVM.citations = []
-                        chatVM.currentResponse = ""
-                        chatVM.inputText = ""
+                        chatVM.resetDraft(projectId: selectedProjectId)
                         selectedTab = .chat
                     }
                 )
@@ -100,6 +96,10 @@ struct ContentView: View {
         .padding(.bottom, -1) // Correct the overlap at the bottom
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isSidebarVisible)
         .task { await settingsVM.loadEmbeddingModel() }
+        .onAppear { syncProjectContext(selectedProjectId) }
+        .onChange(of: selectedProjectId) { _, newValue in
+            syncProjectContext(newValue)
+        }
     }
 
     private func tabButton(_ title: String, tab: MainTab) -> some View {
@@ -116,6 +116,7 @@ struct ContentView: View {
     }
 
     private func navigateToNode(_ node: NousNode) {
+        selectedProjectId = node.projectId
         switch node.type {
         case .conversation:
             chatVM.loadConversation(node)
@@ -124,6 +125,12 @@ struct ContentView: View {
             noteVM.openNote(node)
             selectedTab = .notes
         }
+    }
+
+    private func syncProjectContext(_ projectId: UUID?) {
+        chatVM.activeProjectId = projectId
+        noteVM.activeProjectId = projectId
+        galaxyVM.filterProjectId = projectId
     }
 
 }
