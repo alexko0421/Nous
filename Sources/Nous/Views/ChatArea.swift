@@ -6,6 +6,7 @@ struct ChatArea: View {
     @Binding var isSidebarVisible: Bool
     @State private var isFileImporterPresented = false
     @State private var attachedFiles: [URL] = []
+    @State private var composerFocusRequest: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,7 +30,20 @@ struct ChatArea: View {
                 ScrollView {
                     VStack(spacing: 24) {
                         ForEach(vm.messages) { msg in
-                            MessageBubble(text: msg.content, isUser: msg.role == .user)
+                            if let payload = msg.cardPayload {
+                                CardView(
+                                    payload: payload,
+                                    onTapOption: { option in
+                                        vm.inputText = option
+                                        Task { await handleSend() }
+                                    },
+                                    onTapWriteOwn: {
+                                        composerFocusRequest = true
+                                    }
+                                )
+                            } else {
+                                MessageBubble(text: msg.content, isUser: msg.role == .user)
+                            }
                         }
                         if vm.isGenerating && !vm.currentResponse.isEmpty {
                             MessageBubble(text: vm.currentResponse, isUser: false)
@@ -84,7 +98,8 @@ struct ChatArea: View {
             isGenerating: vm.isGenerating,
             onPickFiles: { isFileImporterPresented = true },
             onRemoveAttachment: removeAttachment,
-            onSend: { Task { await handleSend() } }
+            onSend: { Task { await handleSend() } },
+            focusRequest: $composerFocusRequest
         )
     }
 

@@ -15,6 +15,9 @@ struct ChatComposer: View {
     let onRemoveAttachment: (URL) -> Void
     let onSend: () -> Void
 
+    @FocusState private var isTextFieldFocused: Bool
+    @Binding var focusRequest: Bool
+
     private var canSend: Bool {
         (
             !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
@@ -62,6 +65,13 @@ struct ChatComposer: View {
                     )
                     .shadow(color: .black.opacity(0.04), radius: 6, x: 0, y: 2)
                     .onSubmit(onSend)
+                    .focused($isTextFieldFocused)
+                    .onChange(of: focusRequest) { _, newValue in
+                        if newValue {
+                            isTextFieldFocused = true
+                            focusRequest = false
+                        }
+                    }
 
                 ComposerButton(
                     icon: isGenerating ? "stop.fill" : "arrow.up",
