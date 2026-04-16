@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		02967200F617A33CB9522076 /* NodeEdge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98307413B1A35533835FC1ED /* NodeEdge.swift */; };
+		044DF494ABA396D2B8AE4BAD /* ChatComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 893D2E69AF637995048275C1 /* ChatComposer.swift */; };
 		079AE6E6B7AD8B7C00E9061B /* EmbeddingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAB54FD11A8E0406F1C4D09D /* EmbeddingService.swift */; };
 		07FFF1026087C07958572C54 /* WelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B15EC86BFA4A972D811E5ADB /* WelcomeView.swift */; };
 		0A543A16EE7B4C96E7893DD2 /* GalaxyScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54D7B196613E93EAF2C72EF8 /* GalaxyScene.swift */; };
@@ -31,6 +32,7 @@
 		4AB3ECB2AC025226054B66D4 /* SpriteKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E3AC0F0D30E0A4039BD3E7B6 /* SpriteKit.framework */; };
 		4ABEE05964FC577A1F2AE5EC /* FredokaOne-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = DBD5F346B63EBE504887EAB0 /* FredokaOne-Regular.ttf */; };
 		4D4E88E3F6E50302A15F3D83 /* GraphEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABFA60716BE28FDBDC5D4B01 /* GraphEngineTests.swift */; };
+		A1B2C3D4E5F60718293A4B5C /* MessageCardPayloadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F60718293A4B5C6D /* MessageCardPayloadTests.swift */; };
 		4E112F0AA516567676B1413E /* SettingsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47242B87233D17F872ED3113 /* SettingsViewModel.swift */; };
 		57CA97DF7C66876FEF077B9C /* Message.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55859ED677DFDB237447B2EC /* Message.swift */; };
 		58CDED90A7C15858ACDADAC0 /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = A0FC8786751C66E9D130220C /* MLX */; };
@@ -38,6 +40,7 @@
 		83964444D1DEE2A22156BF34 /* LeftSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A47BC60463D5E92044AFDB86 /* LeftSidebar.swift */; };
 		8C145059D8CF43EDF0BA43A5 /* NodeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 728E7385459EB842724E8BCA /* NodeStore.swift */; };
 		8C7CFB0C2C5581CFEBD55BFE /* RAGPipelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE5485D2A957CBBB28E2D627 /* RAGPipelineTests.swift */; };
+		9A03484B71E35A61F4B79465 /* AttachedFileContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = 404B6377A2EDDF0C97784FD2 /* AttachedFileContext.swift */; };
 		9CA12F6A78C6C54FA3535947 /* VectorStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B93C993AA118825C12F999B /* VectorStore.swift */; };
 		B69E12882C5D1B570369C9DA /* Accelerate.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FEADD90223D5DCBFDE74F5DE /* Accelerate.framework */; };
 		B6E2F015E856252747EE0324 /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E88716E75C10545B684D5FD /* ChatViewModel.swift */; };
@@ -69,6 +72,7 @@
 		29A9E0EFFECF3C48A6B1D69F /* anchor.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = anchor.md; sourceTree = "<group>"; };
 		36CB503D39BB65E14D694E13 /* GraphEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GraphEngine.swift; sourceTree = "<group>"; };
 		3D5C933D2CDA967B8AAFCD32 /* ChatArea.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatArea.swift; sourceTree = "<group>"; };
+		404B6377A2EDDF0C97784FD2 /* AttachedFileContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachedFileContext.swift; sourceTree = "<group>"; };
 		47242B87233D17F872ED3113 /* SettingsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsViewModel.swift; sourceTree = "<group>"; };
 		4BBA2D70209E6211449AEADC /* AppColor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppColor.swift; sourceTree = "<group>"; };
 		4EDBF5703D7FA7CDEA64FCC8 /* Nunito-Variable.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Nunito-Variable.ttf"; sourceTree = "<group>"; };
@@ -83,6 +87,7 @@
 		783585E09595EF502C060F91 /* NoteEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteEditor.swift; sourceTree = "<group>"; };
 		840F091AC2ADF85B26F1884A /* NodeStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NodeStoreTests.swift; sourceTree = "<group>"; };
 		84AC99FE1331146CEC54C75D /* NousApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NousApp.swift; sourceTree = "<group>"; };
+		893D2E69AF637995048275C1 /* ChatComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatComposer.swift; sourceTree = "<group>"; };
 		92D5AA1CB7980A98700AB726 /* LocalLLMService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalLLMService.swift; sourceTree = "<group>"; };
 		98307413B1A35533835FC1ED /* NodeEdge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NodeEdge.swift; sourceTree = "<group>"; };
 		99A974153DB5C96A52796407 /* NoteListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteListView.swift; sourceTree = "<group>"; };
@@ -90,6 +95,7 @@
 		A47BC60463D5E92044AFDB86 /* LeftSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LeftSidebar.swift; sourceTree = "<group>"; };
 		AB46BB1DCA54C416A6215077 /* Project.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Project.swift; sourceTree = "<group>"; };
 		ABFA60716BE28FDBDC5D4B01 /* GraphEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GraphEngineTests.swift; sourceTree = "<group>"; };
+		B2C3D4E5F60718293A4B5C6D /* MessageCardPayloadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageCardPayloadTests.swift; sourceTree = "<group>"; };
 		B15EC86BFA4A972D811E5ADB /* WelcomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeView.swift; sourceTree = "<group>"; };
 		C3A72C022B88861F85CCA960 /* Nous.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nous.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C94FF3DE937E45E699C4E0A2 /* VectorStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VectorStoreTests.swift; sourceTree = "<group>"; };
@@ -186,6 +192,7 @@
 		9B019E586E06D77D88B2E06A /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				404B6377A2EDDF0C97784FD2 /* AttachedFileContext.swift */,
 				55859ED677DFDB237447B2EC /* Message.swift */,
 				98307413B1A35533835FC1ED /* NodeEdge.swift */,
 				CC28A679A68D922546206E9D /* NousNode.swift */,
@@ -240,6 +247,7 @@
 			isa = PBXGroup;
 			children = (
 				ABFA60716BE28FDBDC5D4B01 /* GraphEngineTests.swift */,
+				B2C3D4E5F60718293A4B5C6D /* MessageCardPayloadTests.swift */,
 				840F091AC2ADF85B26F1884A /* NodeStoreTests.swift */,
 				CE5485D2A957CBBB28E2D627 /* RAGPipelineTests.swift */,
 				C94FF3DE937E45E699C4E0A2 /* VectorStoreTests.swift */,
@@ -252,6 +260,7 @@
 			isa = PBXGroup;
 			children = (
 				3D5C933D2CDA967B8AAFCD32 /* ChatArea.swift */,
+				893D2E69AF637995048275C1 /* ChatComposer.swift */,
 				54D7B196613E93EAF2C72EF8 /* GalaxyScene.swift */,
 				26B0833FF90A3381A73858CE /* GalaxyView.swift */,
 				A47BC60463D5E92044AFDB86 /* LeftSidebar.swift */,
@@ -367,7 +376,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				B90A2FAEB0973870A4D5DA15 /* AppColor.swift in Sources */,
+				9A03484B71E35A61F4B79465 /* AttachedFileContext.swift in Sources */,
 				30EB1D0F191710EF17D5D13C /* ChatArea.swift in Sources */,
+				044DF494ABA396D2B8AE4BAD /* ChatComposer.swift in Sources */,
 				B6E2F015E856252747EE0324 /* ChatViewModel.swift in Sources */,
 				2FA85CB0FB6256D80D30DE6F /* ContentView.swift in Sources */,
 				1643CB90A6F5400A1BD1441E /* Database.swift in Sources */,
@@ -404,6 +415,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				4D4E88E3F6E50302A15F3D83 /* GraphEngineTests.swift in Sources */,
+				A1B2C3D4E5F60718293A4B5C /* MessageCardPayloadTests.swift in Sources */,
 				4116C4885DF5E1CB2FE62225 /* NodeStoreTests.swift in Sources */,
 				8C7CFB0C2C5581CFEBD55BFE /* RAGPipelineTests.swift in Sources */,
 				D707ED9BF3B1B7CD5C6A6CB0 /* VectorStoreTests.swift in Sources */,
