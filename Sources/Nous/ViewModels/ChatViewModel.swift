@@ -134,11 +134,33 @@ final class ChatViewModel {
             currentResponse = "Error: \(error.localizedDescription)"
         }
 
-        // Step 9: Save assistant message
-        let assistantContent = currentResponse
-        let assistantMessage = Message(nodeId: node.id, role: .assistant, content: assistantContent)
-        try? nodeStore.insertMessage(assistantMessage)
-        messages.append(assistantMessage)
+        // Step 9: Parse tags and save assistant message
+        let parsed = ResponseTagParser.parse(currentResponse)
+        switch parsed {
+        case .defer_:
+            // Nous chose silence. Do not append a message; keep composer active.
+            currentResponse = ""
+            return
+
+        case .card(let payload):
+            let assistantMessage = Message(
+                nodeId: node.id,
+                role: .assistant,
+                content: payload.framing,
+                cardPayload: payload
+            )
+            try? nodeStore.insertMessage(assistantMessage)
+            messages.append(assistantMessage)
+
+        case .plain(let text):
+            let assistantMessage = Message(
+                nodeId: node.id,
+                role: .assistant,
+                content: text
+            )
+            try? nodeStore.insertMessage(assistantMessage)
+            messages.append(assistantMessage)
+        }
 
         // Step 10: Async task — update node embedding + regenerate edges
         let nodeId = node.id
