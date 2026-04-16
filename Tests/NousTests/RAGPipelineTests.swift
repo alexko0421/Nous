@@ -55,8 +55,8 @@ final class RAGPipelineTests: XCTestCase {
 
         let context = ChatViewModel.assembleContext(citations: citations, projectGoal: projectGoal)
 
-        // Verify system prompt is present
-        XCTAssertTrue(context.contains("You are Nous"))
+        // Verify anchor prompt is present without depending on one exact language variant
+        XCTAssertTrue(context.contains("Nous"))
 
         // Verify project goal is included
         XCTAssertTrue(context.contains(projectGoal))
@@ -72,5 +72,74 @@ final class RAGPipelineTests: XCTestCase {
         // Verify relevance percentages
         XCTAssertTrue(context.contains("92%"))
         XCTAssertTrue(context.contains("78%"))
+    }
+
+    func testInteractiveClarificationInstructionsAppearOnlyWhenEnabled() {
+        let enabled = ChatViewModel.assembleContext(
+            citations: [],
+            projectGoal: nil,
+            activeQuickActionMode: .direction,
+            allowInteractiveClarification: true
+        )
+        let disabled = ChatViewModel.assembleContext(
+            citations: [],
+            projectGoal: nil,
+            activeQuickActionMode: .direction,
+            allowInteractiveClarification: false
+        )
+
+        XCTAssertTrue(enabled.contains("INTERACTIVE CLARIFICATION UI"))
+        XCTAssertTrue(enabled.contains("understanding phase"))
+        XCTAssertTrue(enabled.contains("more than one clarification turn"))
+        XCTAssertFalse(disabled.contains("INTERACTIVE CLARIFICATION UI"))
+        XCTAssertTrue(disabled.contains("ACTIVE QUICK MODE: Direction"))
+    }
+
+    func testQuickActionModeStaysActiveOnlyWhenAssistantStillClarifies() {
+        let clarificationReply = """
+        I need one more distinction before I answer.
+        <clarify>
+        <question>What kind of situation is this?</question>
+        <option>Work</option>
+        <option>School</option>
+        <option>Relationship</option>
+        </clarify>
+        """
+        let normalReply = "Based on what you've shared, the clearest next step is to talk to him directly."
+        let understandingQuestion = """
+        <phase>understanding</phase>
+        Before I jump in, what feels most stuck right now?
+        """
+
+        XCTAssertEqual(
+            ChatViewModel.updatedQuickActionMode(
+                currentMode: .direction,
+                assistantContent: clarificationReply
+            ),
+            .direction
+        )
+        XCTAssertEqual(
+            ChatViewModel.updatedQuickActionMode(
+                currentMode: .direction,
+                assistantContent: understandingQuestion
+            ),
+            .direction
+        )
+        XCTAssertNil(
+            ChatViewModel.updatedQuickActionMode(
+                currentMode: .direction,
+                assistantContent: normalReply
+            )
+        )
+    }
+
+    func testQuickActionOpeningPromptStartsWithAssistantQuestioning() {
+        let prompt = ChatViewModel.quickActionOpeningPrompt(for: .mentalHealth)
+
+        XCTAssertTrue(prompt.contains("Start the conversation yourself"))
+        XCTAssertTrue(prompt.contains("Ask one short, warm opening question"))
+        XCTAssertTrue(prompt.contains("Mental Health"))
+        XCTAssertTrue(prompt.contains("do not use the clarification card yet"))
+        XCTAssertTrue(prompt.contains("<phase>understanding</phase>"))
     }
 }

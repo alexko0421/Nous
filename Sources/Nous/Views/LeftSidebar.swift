@@ -1,4 +1,62 @@
 import SwiftUI
+import AppKit
+
+struct NativeGlassPanel<Content: View>: NSViewRepresentable {
+    let cornerRadius: CGFloat
+    let tintColor: NSColor?
+    let content: Content
+
+    init(
+        cornerRadius: CGFloat,
+        tintColor: NSColor? = nil,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.cornerRadius = cornerRadius
+        self.tintColor = tintColor
+        self.content = content()
+    }
+
+    func makeNSView(context: Context) -> NSGlassEffectView {
+        let glassView = NSGlassEffectView()
+        configure(glassView)
+        glassView.contentView = makeContentContainer()
+        return glassView
+    }
+
+    func updateNSView(_ glassView: NSGlassEffectView, context: Context) {
+        configure(glassView)
+
+        if let hostingView = glassView.contentView?.subviews.first as? NSHostingView<Content> {
+            hostingView.rootView = content
+        } else {
+            glassView.contentView = makeContentContainer()
+        }
+    }
+
+    private func configure(_ glassView: NSGlassEffectView) {
+        glassView.style = .regular
+        glassView.cornerRadius = cornerRadius
+        glassView.tintColor = tintColor
+    }
+
+    private func makeContentContainer() -> NSView {
+        let container = NSView()
+        let hostingView = NSHostingView(rootView: content)
+
+        container.translatesAutoresizingMaskIntoConstraints = false
+        hostingView.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(hostingView)
+
+        NSLayoutConstraint.activate([
+            hostingView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            hostingView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            hostingView.topAnchor.constraint(equalTo: container.topAnchor),
+            hostingView.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+        ])
+
+        return container
+    }
+}
 
 // Helper for window controls
 func getAppWindow() -> NSWindow? {
@@ -33,7 +91,7 @@ struct GalaxyIcon: View {
                 .frame(width: 20, height: 6)
                 .rotationEffect(.degrees(-20))
         }
-        .frame(width: 22, height: 22)
+        .frame(width: 18, height: 18)
     }
 }
 
@@ -62,7 +120,7 @@ struct ProjectIcon: View {
             shelf.addLine(to: CGPoint(x: outerRect.maxX, y: shelfY))
             ctx.stroke(shelf, with: .color(color), lineWidth: lw)
         }
-        .frame(width: 22, height: 22)
+        .frame(width: 18, height: 18)
     }
 }
 
@@ -74,17 +132,40 @@ struct NavIconButton<Icon: View>: View {
     var body: some View {
         Button(action: action) {
             VStack(spacing: 6) {
-                Circle()
-                    .fill(AppColor.colaDarkText.opacity(0.04))
-                    .frame(width: 44, height: 44)
-                    .overlay(icon)
+                NativeGlassPanel(cornerRadius: 18, tintColor: AppColor.glassTint) {
+                    EmptyView()
+                }
+                .frame(width: 36, height: 36)
+                .overlay(
+                    Circle()
+                        .stroke(AppColor.panelStroke, lineWidth: 1)
+                )
+                .overlay(icon)
                 
                 Text(label)
-                    .font(.system(size: 10, weight: .medium, design: .rounded))
-                    .foregroundColor(AppColor.colaDarkText.opacity(0.6))
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundColor(AppColor.secondaryText)
             }
         }
         .buttonStyle(.plain)
+    }
+}
+
+struct SidebarDivider: View {
+    var body: some View {
+        Path { path in
+            path.move(to: CGPoint(x: 0, y: 4))
+            path.addQuadCurve(
+                to: CGPoint(x: 108, y: 4),
+                control: CGPoint(x: 54, y: 0.8)
+            )
+        }
+        .stroke(
+            AppColor.panelStroke.opacity(0.95),
+            style: StrokeStyle(lineWidth: 1, lineCap: .round)
+        )
+        .frame(width: 108, height: 6)
+        .frame(maxWidth: .infinity, alignment: .center)
     }
 }
 
@@ -147,6 +228,7 @@ struct LeftSidebar: View {
     let nodeStore: NodeStore
     @Binding var selectedTab: MainTab
     @Binding var selectedProjectId: UUID?
+    let selectedNodeId: UUID?
     var onNodeSelected: ((NousNode) -> Void)?
     var onNewChat: (() -> Void)?
 
@@ -155,152 +237,173 @@ struct LeftSidebar: View {
     @State private var showProjectList = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            MacOSTrafficLights()
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.top, 24)
-                .padding(.bottom, 30)
+        NativeGlassPanel(
+            cornerRadius: 32,
+            tintColor: AppColor.glassTint
+        ) {
+            VStack(alignment: .leading, spacing: 0) {
+                MacOSTrafficLights()
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.top, 16)
+                    .padding(.bottom, 18)
 
-            HStack(spacing: 12) {
-                NavIconButton(
-                    icon: GalaxyIcon(color: AppColor.colaDarkText.opacity(0.8)),
-                    label: "Galaxy",
-                    action: { selectedTab = .galaxy }
-                )
-                NavIconButton(
-                    icon: ProjectIcon(color: AppColor.colaDarkText.opacity(0.8)),
-                    label: "Project",
-                    action: { showProjectList.toggle() }
-                )
-            }
-            .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.bottom, 24)
-
-            Rectangle()
-                .fill(AppColor.colaDarkText.opacity(0.1))
-                .frame(width: 80, height: 1)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.bottom, 16)
-
-            // New Chat button
-            Button(action: {
-                onNewChat?()
-                selectedTab = .chat
-            }) {
-                HStack(spacing: 6) {
-                    Image(systemName: "square.and.pencil")
-                        .font(.system(size: 12, weight: .medium))
-                    Text("New Chat")
-                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                HStack(spacing: 12) {
+                    NavIconButton(
+                        icon: GalaxyIcon(color: AppColor.colaDarkText.opacity(0.8)),
+                        label: "Galaxy",
+                        action: { selectedTab = .galaxy }
+                    )
+                    NavIconButton(
+                        icon: ProjectIcon(color: AppColor.colaDarkText.opacity(0.8)),
+                        label: "Project",
+                        action: { showProjectList.toggle() }
+                    )
                 }
-                .foregroundColor(AppColor.colaOrange)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-                .background(AppColor.colaOrange.opacity(0.08))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 16)
-            .padding(.bottom, 16)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.bottom, 18)
 
-            if showProjectList {
-                ProjectListView(nodeStore: nodeStore, selectedProjectId: $selectedProjectId)
-            } else {
-                ScrollView(.vertical, showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 28) {
-                        if !favorites.isEmpty {
-                            VStack(alignment: .leading, spacing: 14) {
-                                HStack(spacing: 4) {
-                                    Text("Favorites")
-                                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                                    Image(systemName: "chevron.right")
-                                        .font(.system(size: 8, weight: .bold))
-                                        .opacity(0.5)
-                                }
-                                .foregroundColor(AppColor.colaDarkText.opacity(0.6))
+                SidebarDivider()
+                    .padding(.bottom, 12)
 
-                                ForEach(favorites) { node in
-                                    Button(action: { onNodeSelected?(node) }) {
-                                        HStack(spacing: 10) {
-                                            Text(node.type == .conversation ? "💬" : "📝")
-                                                .font(.system(size: 16))
-                                            Text(node.title)
-                                                .font(.system(size: 12, weight: .medium, design: .rounded))
-                                                .foregroundColor(AppColor.colaDarkText.opacity(0.7))
-                                                .lineLimit(1)
-                                        }
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                        }
-
-                        VStack(alignment: .leading, spacing: 14) {
-                            Text("Recents")
-                                .font(.system(size: 11, weight: .semibold, design: .rounded))
-                                .foregroundColor(AppColor.colaDarkText.opacity(0.6))
-
-                            ForEach(recents) { node in
-                                Button(action: { onNodeSelected?(node) }) {
-                                    HStack(spacing: 10) {
-                                        Text(node.type == .conversation ? "💬" : "📝")
-                                            .font(.system(size: 16))
-                                        Text(node.title)
-                                            .font(.system(size: 12, weight: .medium, design: .rounded))
-                                            .foregroundColor(AppColor.colaDarkText.opacity(0.7))
-                                            .lineLimit(1)
-                                    }
-                                }
-                                .buttonStyle(.plain)
-                                .contextMenu {
-                                    Button(role: .destructive) {
-                                        try? nodeStore.deleteNode(id: node.id)
-                                        loadData()
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
-                                }
-                            }
-                        }
+                // New Chat button
+                Button(action: {
+                    onNewChat?()
+                    selectedTab = .chat
+                }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "square.and.pencil")
+                            .font(.system(size: 11, weight: .medium))
+                        Text("New Chat")
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
                     }
-                    .padding(.leading, 20)
-                    .padding(.trailing, 8)
-                }
-            }
-
-            Spacer()
-
-            HStack(spacing: 12) {
-                Button(action: { selectedTab = .settings }) {
-                    Circle()
-                        .fill(AppColor.colaOrange.opacity(0.15))
-                        .frame(width: 30, height: 30)
-                        .overlay(
-                            Text("A")
-                                .font(.system(size: 13, weight: .bold, design: .rounded))
-                                .foregroundColor(AppColor.colaOrange)
-                        )
+                    .foregroundColor(AppColor.secondaryText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, 6)
+                    .padding(.vertical, 4)
                 }
                 .buttonStyle(.plain)
+                .padding(.leading, 20)
+                .padding(.trailing, 8)
+                .padding(.bottom, 12)
 
-                Text("ALEX")
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
-                    .foregroundColor(AppColor.colaDarkText)
+                SidebarDivider()
+                    .padding(.bottom, 18)
 
-                Spacer(minLength: 0)
+                if showProjectList {
+                    ProjectListView(nodeStore: nodeStore, selectedProjectId: $selectedProjectId)
+                } else {
+                    ScrollView(.vertical, showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: 28) {
+                            if !favorites.isEmpty {
+                                VStack(alignment: .leading, spacing: 14) {
+                                    HStack(spacing: 4) {
+                                        Text("Favorites")
+                                            .font(.system(size: 10, weight: .semibold, design: .rounded))
+                                        Image(systemName: "chevron.right")
+                                            .font(.system(size: 7, weight: .bold))
+                                            .opacity(0.5)
+                                    }
+                                    .foregroundColor(AppColor.colaDarkText.opacity(0.6))
+
+                                    ForEach(favorites) { node in
+                                        Button(action: { onNodeSelected?(node) }) {
+                                            sidebarNodeRow(node)
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                            }
+
+                            VStack(alignment: .leading, spacing: 14) {
+                                Text("Recents")
+                                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                    .foregroundColor(AppColor.colaDarkText.opacity(0.6))
+
+                                ForEach(recents) { node in
+                                    Button(action: { onNodeSelected?(node) }) {
+                                        sidebarNodeRow(node)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .contextMenu {
+                                        Button(role: .destructive) {
+                                            try? nodeStore.deleteNode(id: node.id)
+                                            loadData()
+                                        } label: {
+                                            Label("Delete", systemImage: "trash")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.leading, 20)
+                        .padding(.trailing, 8)
+                    }
+                }
+
+                Spacer()
+
+                SidebarDivider()
+                    .padding(.bottom, 12)
+
+                HStack(spacing: 12) {
+                    Button(action: { selectedTab = .settings }) {
+                        Circle()
+                            .fill(AppColor.colaOrange.opacity(0.15))
+                            .frame(width: 30, height: 30)
+                            .overlay(
+                                Text("A")
+                                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                                    .foregroundColor(AppColor.colaOrange)
+                            )
+                    }
+                    .buttonStyle(.plain)
+
+                    Text("ALEX")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .foregroundColor(AppColor.colaDarkText)
+
+                    Spacer(minLength: 0)
+                }
+                .padding(.leading, 20)
+                .padding(.bottom, 16)
             }
-            .padding(.leading, 20)
-            .padding(.bottom, 30)
         }
-        .frame(width: 130)
-        .background(Color.white.opacity(0.75))
-        .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
+        .frame(width: 154)
         .onAppear { loadData() }
+        .onReceive(NotificationCenter.default.publisher(for: .nousNodesDidChange)) { _ in
+            loadData()
+        }
     }
 
     private func loadData() {
         favorites = (try? nodeStore.fetchFavorites()) ?? []
         recents = (try? nodeStore.fetchRecents(limit: 20)) ?? []
+    }
+
+    @ViewBuilder
+    private func sidebarNodeRow(_ node: NousNode) -> some View {
+        let isSelected = selectedNodeId == node.id
+        let emoji = TopicEmojiResolver.emoji(for: node)
+
+        HStack(spacing: 10) {
+            Text(emoji)
+                .font(.system(size: 15))
+
+            Text(node.title)
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundColor(isSelected ? AppColor.colaOrange : AppColor.secondaryText)
+                .lineLimit(1)
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.leading, 6)
+        .padding(.trailing, 8)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(isSelected ? AppColor.colaOrange.opacity(0.10) : Color.clear)
+        )
     }
 }
 

@@ -64,6 +64,7 @@ struct ContentView: View {
                     nodeStore: nodeStore,
                     selectedTab: $selectedTab,
                     selectedProjectId: $selectedProjectId,
+                    selectedNodeId: currentSidebarNodeId,
                     onNodeSelected: { node in navigateToNode(node) },
                     onNewChat: {
                         chatVM.currentNode = nil
@@ -100,6 +101,17 @@ struct ContentView: View {
         .background(.clear)
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isSidebarVisible)
         .task { await settingsVM.loadEmbeddingModel() }
+    }
+
+    private var currentSidebarNodeId: UUID? {
+        switch selectedTab {
+        case .chat:
+            return chatVM.currentNode?.id
+        case .notes:
+            return noteVM.currentNote?.id
+        case .galaxy, .settings:
+            return nil
+        }
     }
 
     private func tabButton(_ title: String, tab: MainTab) -> some View {

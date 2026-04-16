@@ -10,6 +10,7 @@ struct NousNode: Identifiable, Codable {
     var type: NodeType
     var title: String
     var content: String
+    var emoji: String?
     var embedding: [Float]?
     var projectId: UUID?
     var isFavorite: Bool
@@ -21,6 +22,7 @@ struct NousNode: Identifiable, Codable {
         type: NodeType,
         title: String,
         content: String = "",
+        emoji: String? = nil,
         embedding: [Float]? = nil,
         projectId: UUID? = nil,
         isFavorite: Bool = false,
@@ -31,6 +33,7 @@ struct NousNode: Identifiable, Codable {
         self.type = type
         self.title = title
         self.content = content
+        self.emoji = emoji
         self.embedding = embedding
         self.projectId = projectId
         self.isFavorite = isFavorite

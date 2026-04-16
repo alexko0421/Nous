@@ -75,7 +75,7 @@ final class GalaxyScene: SKScene {
             circle.zPosition = 1
 
             // Emoji label (type indicator)
-            let emoji = node.type == .conversation ? "💬" : "📝"
+            let emoji = TopicEmojiResolver.emoji(for: node)
             let emojiLabel = SKLabelNode(text: emoji)
             emojiLabel.fontSize = CGFloat(radius * 0.85)
             emojiLabel.verticalAlignmentMode = .center

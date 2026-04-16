@@ -1,66 +1,201 @@
+import PhotosUI
 import SwiftUI
 
 struct ChatArea: View {
     @Bindable var vm: ChatViewModel
     @Binding var isSidebarVisible: Bool
 
+    @State private var attachments: [AttachedFileContext] = []
+    @State private var isAttachmentMenuPresented = false
+    @State private var isFileImporterPresented = false
+    @State private var isPhotosPickerPresented = false
+    @State private var selectedPhotoItems: [PhotosPickerItem] = []
+    
+    private var isWelcomeState: Bool {
+        vm.messages.isEmpty && vm.currentNode == nil
+    }
+
+    private var canSend: Bool {
+        (
+            !vm.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            !attachments.isEmpty
+        ) && !vm.isGenerating
+    }
+
+    private var activeClarificationCard: ClarificationCard? {
+        if vm.isGenerating, !vm.currentResponse.isEmpty {
+            return ClarificationCardParser.parse(vm.currentResponse).card
+        }
+
+        guard let lastMessage = vm.messages.last, lastMessage.role == .assistant else {
+            return nil
+        }
+
+        return ClarificationCardParser.parse(lastMessage.content).card
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            if vm.messages.isEmpty && vm.currentNode == nil {
-                WelcomeView(inputText: $vm.inputText, onSend: { Task { await vm.send() } })
+            if isWelcomeState {
+                WelcomeView(
+                    inputText: $vm.inputText,
+                    attachments: attachments,
+                    onPickAttachment: { isAttachmentMenuPresented = true },
+                    onRemoveAttachment: removeAttachment,
+                    onSend: sendCurrentInput,
+                    onQuickActionSelected: { mode in
+                        Task {
+                            await vm.beginQuickActionConversation(mode)
+                        }
+                    }
+                )
             } else {
-                // Header
-                HStack {
-                    Text(vm.currentNode?.title ?? "Nous")
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
-                        .foregroundColor(AppColor.colaDarkText)
-                        .lineLimit(1)
-                    Spacer()
-                }
-                .padding(.leading, 64)
-                .padding(.trailing, 36)
-                .padding(.top, 36)
-                .padding(.bottom, 12)
+                // Full-screen floating layout
+                ZStack {
+                    // Chat log (underneath overlays)
+                    ScrollView {
+                        VStack(spacing: 24) {
+                            ForEach(vm.messages) { msg in
+                                MessageBubble(text: msg.content, isUser: msg.role == .user)
+                            }
+                            if vm.isGenerating && !vm.currentResponse.isEmpty {
+                                MessageBubble(text: vm.currentResponse, isUser: false)
+                            }
+                            if !vm.citations.isEmpty {
+                                RAGCitationView(citations: vm.citations, onTap: { _ in })
+                                    .padding(.horizontal, 36)
+                            }
+                        }
+                        .padding(.horizontal, 36)
+                        .padding(.top, 76) // Space to scroll past floating header
+                        .padding(.bottom, 124) // Space to scroll past floating input
+                    }
 
-                // Chat log
-                ScrollView {
-                    VStack(spacing: 24) {
-                        ForEach(vm.messages) { msg in
-                            MessageBubble(text: msg.content, isUser: msg.role == .user)
+                    // Floating Header
+                    VStack {
+                        HStack {
+                            Text(vm.currentNode?.title ?? "Nous")
+                                .font(.system(size: 20, weight: .bold, design: .rounded))
+                                .foregroundColor(AppColor.colaDarkText)
+                                .lineLimit(1)
+                            Spacer()
                         }
-                        if vm.isGenerating && !vm.currentResponse.isEmpty {
-                            MessageBubble(text: vm.currentResponse, isUser: false)
+                        .padding(.leading, 76)
+                        .padding(.trailing, 36)
+                        .padding(.top, 20)
+                    }
+                    .padding(.bottom, 36)
+                    .background(
+                        LinearGradient(
+                            colors: [
+                                AppColor.colaBeige,
+                                AppColor.colaBeige.opacity(0.85),
+                                AppColor.colaBeige.opacity(0.0)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .allowsHitTesting(false)
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+
+                    // Floating Input
+                    VStack(alignment: .leading, spacing: 10) {
+                        if let clarificationCard = activeClarificationCard {
+                            ClarificationCardView(card: clarificationCard) { option in
+                                sendClarificationOption(option)
+                            }
                         }
-                        if !vm.citations.isEmpty {
-                            RAGCitationView(citations: vm.citations, onTap: { _ in })
-                                .padding(.horizontal, 36)
+
+                        if !attachments.isEmpty {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
+                                    ForEach(attachments) { attachment in
+                                        AttachmentChip(attachment: attachment) {
+                                            removeAttachment(attachment.id)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        HStack(spacing: 12) {
+                            Button(action: { isAttachmentMenuPresented = true }) {
+                                Circle()
+                                    .fill(AppColor.surfaceSecondary)
+                                    .frame(width: 34, height: 34)
+                                    .overlay(
+                                        Image(systemName: "plus")
+                                            .font(.system(size: 12, weight: .semibold))
+                                            .foregroundColor(AppColor.secondaryText)
+                                    )
+                                    .overlay(
+                                        Circle()
+                                            .stroke(AppColor.panelStroke, lineWidth: 1)
+                                    )
+                            }
+                            .buttonStyle(.plain)
+
+                            TextField("...", text: $vm.inputText, axis: .vertical)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .foregroundColor(AppColor.colaDarkText)
+                                .lineLimit(1...4)
+                                .padding(.horizontal, 18)
+                                .padding(.vertical, 12)
+                                .background(
+                                    NativeGlassPanel(
+                                        cornerRadius: 18,
+                                        tintColor: AppColor.glassTint
+                                    ) { EmptyView() }
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                        .stroke(AppColor.panelStroke, lineWidth: 1)
+                                )
+                                .shadow(color: .black.opacity(0.04), radius: 6, x: 0, y: 2)
+                                .onSubmit(sendCurrentInput)
+
+                            Button(action: sendCurrentInput) {
+                                Image(systemName: vm.isGenerating ? "stop.fill" : "arrow.up")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundColor(.white)
+                            }
+                            .buttonStyle(.plain)
+                            .frame(width: 34, height: 34)
+                            .background(
+                                NativeGlassPanel(
+                                    cornerRadius: 17,
+                                    tintColor: canSend 
+                                        ? NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.88)
+                                        : NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.18)
+                                ) { EmptyView() }
+                            )
+                            .overlay(
+                                Circle()
+                                    .stroke(canSend ? Color.white.opacity(0.18) : AppColor.panelStroke, lineWidth: 1)
+                            )
+                            .disabled(!canSend)
                         }
                     }
                     .padding(.horizontal, 36)
-                    .padding(.bottom, 10)
+                    .padding(.bottom, 16)
+                    .padding(.top, 40)
+                    .background(
+                        LinearGradient(
+                            colors: [
+                                AppColor.colaBeige.opacity(0.0),
+                                AppColor.colaBeige.opacity(0.85),
+                                AppColor.colaBeige,
+                                AppColor.colaBeige
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .allowsHitTesting(false)
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                 }
-
-                // Input
-                HStack(spacing: 12) {
-                    TextField("...", text: $vm.inputText)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 13))
-                        .foregroundColor(AppColor.colaDarkText)
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 14)
-                        .glassEffect(.regular, in: .capsule)
-                        .onSubmit { Task { await vm.send() } }
-
-                    Button(action: { Task { await vm.send() } }) {
-                        Image(systemName: vm.isGenerating ? "stop.circle.fill" : "arrow.up.circle.fill")
-                            .font(.system(size: 32))
-                            .foregroundColor(AppColor.colaOrange)
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(.horizontal, 36)
-                .padding(.bottom, 36)
-                .padding(.top, 10)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -72,13 +207,89 @@ struct ChatArea: View {
                     isSidebarVisible.toggle()
                 }
             }) {
-                Image(systemName: "sidebar.left")
-                    .font(.system(size: 16))
-                    .foregroundColor(AppColor.colaDarkText.opacity(0.5))
+                ZStack {
+                    Circle()
+                        .fill(AppColor.subtleFill)
+                        .overlay(
+                            Circle()
+                                .stroke(AppColor.panelStroke, lineWidth: 1)
+                        )
+                        .frame(width: isWelcomeState ? 32 : 28, height: isWelcomeState ? 32 : 28)
+                    Image(systemName: "sidebar.left")
+                        .font(.system(size: isWelcomeState ? 12 : 11, weight: .medium))
+                        .foregroundColor(AppColor.secondaryText)
+                }
             }
             .buttonStyle(.plain)
-            .padding(.top, 24)
+            .padding(.top, isWelcomeState ? 24 : 16)
             .padding(.leading, 24)
+        }
+        .confirmationDialog("Add Attachment", isPresented: $isAttachmentMenuPresented, titleVisibility: .visible) {
+            Button("File") {
+                isFileImporterPresented = true
+            }
+            Button("Photo") {
+                isPhotosPickerPresented = true
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .fileImporter(
+            isPresented: $isFileImporterPresented,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: true,
+            onCompletion: handleFileImport
+        )
+        .photosPicker(
+            isPresented: $isPhotosPickerPresented,
+            selection: $selectedPhotoItems,
+            maxSelectionCount: 6,
+            matching: .images
+        )
+        .onChange(of: selectedPhotoItems) { _, items in
+            guard !items.isEmpty else { return }
+
+            Task {
+                let loadedAttachments = await AttachmentExtractor.photoContexts(from: items)
+                await MainActor.run {
+                    appendAttachments(loadedAttachments)
+                    selectedPhotoItems = []
+                }
+            }
+        }
+        .onChange(of: vm.currentNode?.id) { _, _ in
+            attachments = []
+        }
+    }
+
+    private func sendCurrentInput() {
+        guard canSend else { return }
+        let pendingAttachments = attachments
+        attachments = []
+        Task { await vm.send(attachments: pendingAttachments) }
+    }
+
+    private func sendClarificationOption(_ option: String) {
+        vm.inputText = option
+        sendCurrentInput()
+    }
+
+    private func removeAttachment(_ id: UUID) {
+        attachments.removeAll { $0.id == id }
+    }
+
+    private func handleFileImport(_ result: Result<[URL], Error>) {
+        guard case let .success(urls) = result else { return }
+        appendAttachments(AttachmentExtractor.fileContexts(from: urls))
+    }
+
+    private func appendAttachments(_ newAttachments: [AttachedFileContext]) {
+        for attachment in newAttachments {
+            let alreadyExists = attachments.contains {
+                $0.name == attachment.name && $0.extractedText == attachment.extractedText
+            }
+            if !alreadyExists {
+                attachments.append(attachment)
+            }
         }
     }
 }
@@ -88,17 +299,23 @@ struct MessageBubble: View {
     let isUser: Bool
 
     var body: some View {
-        HStack {
-            if isUser { Spacer() }
-            Text(text)
-                .font(.system(size: 13, weight: .regular))
-                .foregroundColor(AppColor.colaDarkText)
-                .lineSpacing(4)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .background(isUser ? AppColor.colaBubble : AppColor.colaOrange.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-            if !isUser { Spacer() }
+        let parsed = isUser
+            ? ClarificationContent(displayText: text, card: nil, keepsQuickActionMode: false)
+            : ClarificationCardParser.parse(text)
+
+        if !parsed.displayText.isEmpty {
+            HStack {
+                if isUser { Spacer() }
+                Text(parsed.displayText)
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundColor(AppColor.colaDarkText)
+                    .lineSpacing(4)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(isUser ? AppColor.colaBubble : AppColor.colaOrange.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                if !isUser { Spacer() }
+            }
         }
     }
 }

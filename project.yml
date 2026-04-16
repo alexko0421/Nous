@@ -39,5 +39,8 @@ targets:
     platform: macOS
     deploymentTarget: "26.0"
     sources: [Tests/NousTests]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
     dependencies:
       - target: Nous

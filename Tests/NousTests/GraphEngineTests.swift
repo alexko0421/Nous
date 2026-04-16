@@ -6,9 +6,9 @@ final class GraphEngineTests: XCTestCase {
     var vectorStore: VectorStore!
     var engine: GraphEngine!
 
-    override func setUp() {
-        super.setUp()
-        nodeStore = NodeStore(path: ":memory:")
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        nodeStore = try NodeStore(path: ":memory:")
         vectorStore = VectorStore(nodeStore: nodeStore)
         engine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
     }

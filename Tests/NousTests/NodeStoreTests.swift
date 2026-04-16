@@ -30,7 +30,8 @@ final class NodeStoreTests: XCTestCase {
     // MARK: - Node Tests
 
     func testInsertAndFetchNode() throws {
-        let node = makeNode(title: "Hello", content: "World", isFavorite: true)
+        var node = makeNode(title: "Hello", content: "World", isFavorite: true)
+        node.emoji = "💼"
         try store.insertNode(node)
 
         let fetched = try store.fetchNode(id: node.id)
@@ -38,6 +39,7 @@ final class NodeStoreTests: XCTestCase {
         XCTAssertEqual(fetched?.id, node.id)
         XCTAssertEqual(fetched?.title, "Hello")
         XCTAssertEqual(fetched?.content, "World")
+        XCTAssertEqual(fetched?.emoji, "💼")
         XCTAssertEqual(fetched?.isFavorite, true)
         XCTAssertEqual(fetched?.type, .note)
     }
@@ -48,12 +50,14 @@ final class NodeStoreTests: XCTestCase {
 
         node.title = "Updated Title"
         node.content = "After"
+        node.emoji = "💡"
         node.updatedAt = Date()
         try store.updateNode(node)
 
         let fetched = try store.fetchNode(id: node.id)
         XCTAssertEqual(fetched?.title, "Updated Title")
         XCTAssertEqual(fetched?.content, "After")
+        XCTAssertEqual(fetched?.emoji, "💡")
     }
 
     func testDeleteNode() throws {
@@ -181,7 +185,7 @@ final class NodeStoreTests: XCTestCase {
         XCTAssertEqual(edgesForA.count, 1)
         XCTAssertEqual(edgesForA.first?.sourceId, nodeA.id)
         XCTAssertEqual(edgesForA.first?.targetId, nodeB.id)
-        XCTAssertEqual(edgesForA.first?.strength, 0.9, accuracy: 0.001)
+        XCTAssertEqual(Double(edgesForA.first?.strength ?? 0), 0.9, accuracy: 0.001)
 
         // fetchEdges also matches targetId
         let edgesForB = try store.fetchEdges(nodeId: nodeB.id)
