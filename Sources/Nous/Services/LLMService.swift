@@ -151,7 +151,7 @@ struct OpenAILLMService: LLMService {
 
 struct GeminiLLMService: LLMService {
     let apiKey: String
-    var model: String = "gemini-2.5-flash"
+    var model: String = "gemini-2.5-pro"
 
     func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
         let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):streamGenerateContent?alt=sse&key=\(apiKey)")!
