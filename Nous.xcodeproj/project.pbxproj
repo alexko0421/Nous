@@ -33,6 +33,7 @@
 		4ABEE05964FC577A1F2AE5EC /* FredokaOne-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = DBD5F346B63EBE504887EAB0 /* FredokaOne-Regular.ttf */; };
 		4D4E88E3F6E50302A15F3D83 /* GraphEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABFA60716BE28FDBDC5D4B01 /* GraphEngineTests.swift */; };
 		A1B2C3D4E5F60718293A4B5C /* MessageCardPayloadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F60718293A4B5C6D /* MessageCardPayloadTests.swift */; };
+		C4D5E6F7A8B90A1B2C3D4E5F /* NodeStoreCardPayloadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5E6F7A8B90A1B2C3D4E5F6A /* NodeStoreCardPayloadTests.swift */; };
 		D3C4E5F6A7B80920415C6D7E /* ResponseTagParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4B5C6D7E8F90A1B2C3D4E5F /* ResponseTagParserTests.swift */; };
 		F1A2B3C4D5E60718293A4B5C /* ResponseTagParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2B3C4D5E6F70819304A5B6C /* ResponseTagParser.swift */; };
 		4E112F0AA516567676B1413E /* SettingsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47242B87233D17F872ED3113 /* SettingsViewModel.swift */; };
@@ -99,6 +100,7 @@
 		ABFA60716BE28FDBDC5D4B01 /* GraphEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GraphEngineTests.swift; sourceTree = "<group>"; };
 		A4B5C6D7E8F90A1B2C3D4E5F /* ResponseTagParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResponseTagParserTests.swift; sourceTree = "<group>"; };
 		B2C3D4E5F60718293A4B5C6D /* MessageCardPayloadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageCardPayloadTests.swift; sourceTree = "<group>"; };
+		D5E6F7A8B90A1B2C3D4E5F6A /* NodeStoreCardPayloadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NodeStoreCardPayloadTests.swift; sourceTree = "<group>"; };
 		E2B3C4D5E6F70819304A5B6C /* ResponseTagParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResponseTagParser.swift; sourceTree = "<group>"; };
 		B15EC86BFA4A972D811E5ADB /* WelcomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeView.swift; sourceTree = "<group>"; };
 		C3A72C022B88861F85CCA960 /* Nous.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nous.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -254,6 +256,7 @@
 				ABFA60716BE28FDBDC5D4B01 /* GraphEngineTests.swift */,
 				B2C3D4E5F60718293A4B5C6D /* MessageCardPayloadTests.swift */,
 				840F091AC2ADF85B26F1884A /* NodeStoreTests.swift */,
+				D5E6F7A8B90A1B2C3D4E5F6A /* NodeStoreCardPayloadTests.swift */,
 				A4B5C6D7E8F90A1B2C3D4E5F /* ResponseTagParserTests.swift */,
 				CE5485D2A957CBBB28E2D627 /* RAGPipelineTests.swift */,
 				C94FF3DE937E45E699C4E0A2 /* VectorStoreTests.swift */,
@@ -424,6 +427,7 @@
 				4D4E88E3F6E50302A15F3D83 /* GraphEngineTests.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5C /* MessageCardPayloadTests.swift in Sources */,
 				4116C4885DF5E1CB2FE62225 /* NodeStoreTests.swift in Sources */,
+				C4D5E6F7A8B90A1B2C3D4E5F /* NodeStoreCardPayloadTests.swift in Sources */,
 				D3C4E5F6A7B80920415C6D7E /* ResponseTagParserTests.swift in Sources */,
 				8C7CFB0C2C5581CFEBD55BFE /* RAGPipelineTests.swift in Sources */,
 				D707ED9BF3B1B7CD5C6A6CB0 /* VectorStoreTests.swift in Sources */,

@@ -40,13 +40,20 @@ final class NodeStore {
 
         try db.exec("""
             CREATE TABLE IF NOT EXISTS messages (
-                id        TEXT PRIMARY KEY,
-                nodeId    TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-                role      TEXT NOT NULL,
-                content   TEXT NOT NULL,
-                timestamp REAL NOT NULL
+                id           TEXT PRIMARY KEY,
+                nodeId       TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+                role         TEXT NOT NULL,
+                content      TEXT NOT NULL,
+                timestamp    REAL NOT NULL,
+                cardPayload  TEXT
             );
         """)
+
+        // Migration for pre-existing DBs that predate cardPayload.
+        let cardPayloadExists = try columnExists(table: "messages", column: "cardPayload")
+        if !cardPayloadExists {
+            try db.exec("ALTER TABLE messages ADD COLUMN cardPayload TEXT;")
+        }
 
         try db.exec("""
             CREATE TABLE IF NOT EXISTS edges (
@@ -77,6 +84,16 @@ final class NodeStore {
         data.withUnsafeBytes { raw in
             Array(raw.bindMemory(to: Float.self))
         }
+    }
+
+    private func columnExists(table: String, column: String) throws -> Bool {
+        let stmt = try db.prepare("PRAGMA table_info(\(table));")
+        while try stmt.step() {
+            if stmt.text(at: 1) == column {
+                return true
+            }
+        }
+        return false
     }
 
     // MARK: - Nodes
@@ -217,20 +234,29 @@ final class NodeStore {
 
     func insertMessage(_ message: Message) throws {
         let stmt = try db.prepare("""
-            INSERT INTO messages (id, nodeId, role, content, timestamp)
-            VALUES (?, ?, ?, ?, ?);
+            INSERT INTO messages (id, nodeId, role, content, timestamp, cardPayload)
+            VALUES (?, ?, ?, ?, ?, ?);
         """)
         try stmt.bind(message.id.uuidString, at: 1)
         try stmt.bind(message.nodeId.uuidString, at: 2)
         try stmt.bind(message.role.rawValue, at: 3)
         try stmt.bind(message.content, at: 4)
         try stmt.bind(message.timestamp.timeIntervalSince1970, at: 5)
+
+        var cardPayloadJSON: String? = nil
+        if let payload = message.cardPayload,
+           let data = try? JSONEncoder().encode(payload),
+           let json = String(data: data, encoding: .utf8) {
+            cardPayloadJSON = json
+        }
+        try stmt.bind(cardPayloadJSON, at: 6)
+
         try stmt.step()
     }
 
     func fetchMessages(nodeId: UUID) throws -> [Message] {
         let stmt = try db.prepare("""
-            SELECT id, nodeId, role, content, timestamp
+            SELECT id, nodeId, role, content, timestamp, cardPayload
             FROM messages WHERE nodeId=? ORDER BY timestamp ASC;
         """)
         try stmt.bind(nodeId.uuidString, at: 1)
@@ -241,7 +267,21 @@ final class NodeStore {
             let role = MessageRole(rawValue: stmt.text(at: 2) ?? "") ?? .user
             let content = stmt.text(at: 3) ?? ""
             let timestamp = Date(timeIntervalSince1970: stmt.double(at: 4))
-            results.append(Message(id: id, nodeId: nId, role: role, content: content, timestamp: timestamp))
+
+            var cardPayload: CardPayload? = nil
+            if let json = stmt.text(at: 5),
+               let data = json.data(using: .utf8) {
+                cardPayload = try? JSONDecoder().decode(CardPayload.self, from: data)
+            }
+
+            results.append(Message(
+                id: id,
+                nodeId: nId,
+                role: role,
+                content: content,
+                timestamp: timestamp,
+                cardPayload: cardPayload
+            ))
         }
         return results
     }
