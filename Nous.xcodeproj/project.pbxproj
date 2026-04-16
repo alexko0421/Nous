@@ -33,6 +33,8 @@
 		4ABEE05964FC577A1F2AE5EC /* FredokaOne-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = DBD5F346B63EBE504887EAB0 /* FredokaOne-Regular.ttf */; };
 		4D4E88E3F6E50302A15F3D83 /* GraphEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABFA60716BE28FDBDC5D4B01 /* GraphEngineTests.swift */; };
 		A1B2C3D4E5F60718293A4B5C /* MessageCardPayloadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F60718293A4B5C6D /* MessageCardPayloadTests.swift */; };
+		D3C4E5F6A7B80920415C6D7E /* ResponseTagParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4B5C6D7E8F90A1B2C3D4E5F /* ResponseTagParserTests.swift */; };
+		F1A2B3C4D5E60718293A4B5C /* ResponseTagParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2B3C4D5E6F70819304A5B6C /* ResponseTagParser.swift */; };
 		4E112F0AA516567676B1413E /* SettingsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47242B87233D17F872ED3113 /* SettingsViewModel.swift */; };
 		57CA97DF7C66876FEF077B9C /* Message.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55859ED677DFDB237447B2EC /* Message.swift */; };
 		58CDED90A7C15858ACDADAC0 /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = A0FC8786751C66E9D130220C /* MLX */; };
@@ -95,7 +97,9 @@
 		A47BC60463D5E92044AFDB86 /* LeftSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LeftSidebar.swift; sourceTree = "<group>"; };
 		AB46BB1DCA54C416A6215077 /* Project.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Project.swift; sourceTree = "<group>"; };
 		ABFA60716BE28FDBDC5D4B01 /* GraphEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GraphEngineTests.swift; sourceTree = "<group>"; };
+		A4B5C6D7E8F90A1B2C3D4E5F /* ResponseTagParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResponseTagParserTests.swift; sourceTree = "<group>"; };
 		B2C3D4E5F60718293A4B5C6D /* MessageCardPayloadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageCardPayloadTests.swift; sourceTree = "<group>"; };
+		E2B3C4D5E6F70819304A5B6C /* ResponseTagParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResponseTagParser.swift; sourceTree = "<group>"; };
 		B15EC86BFA4A972D811E5ADB /* WelcomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeView.swift; sourceTree = "<group>"; };
 		C3A72C022B88861F85CCA960 /* Nous.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nous.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C94FF3DE937E45E699C4E0A2 /* VectorStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VectorStoreTests.swift; sourceTree = "<group>"; };
@@ -218,6 +222,7 @@
 				F839455BCBC5668612A6A606 /* LLMService.swift */,
 				92D5AA1CB7980A98700AB726 /* LocalLLMService.swift */,
 				728E7385459EB842724E8BCA /* NodeStore.swift */,
+				E2B3C4D5E6F70819304A5B6C /* ResponseTagParser.swift */,
 				5B93C993AA118825C12F999B /* VectorStore.swift */,
 			);
 			path = Services;
@@ -249,6 +254,7 @@
 				ABFA60716BE28FDBDC5D4B01 /* GraphEngineTests.swift */,
 				B2C3D4E5F60718293A4B5C6D /* MessageCardPayloadTests.swift */,
 				840F091AC2ADF85B26F1884A /* NodeStoreTests.swift */,
+				A4B5C6D7E8F90A1B2C3D4E5F /* ResponseTagParserTests.swift */,
 				CE5485D2A957CBBB28E2D627 /* RAGPipelineTests.swift */,
 				C94FF3DE937E45E699C4E0A2 /* VectorStoreTests.swift */,
 			);
@@ -393,6 +399,7 @@
 				57CA97DF7C66876FEF077B9C /* Message.swift in Sources */,
 				02967200F617A33CB9522076 /* NodeEdge.swift in Sources */,
 				8C145059D8CF43EDF0BA43A5 /* NodeStore.swift in Sources */,
+				F1A2B3C4D5E60718293A4B5C /* ResponseTagParser.swift in Sources */,
 				5E272E29C29FC5E62496799A /* NoteEditor.swift in Sources */,
 				42A0F8F2124378987D3FBD11 /* NoteListView.swift in Sources */,
 				44F769FBDE20CA4082FA4D00 /* NoteViewModel.swift in Sources */,
@@ -417,6 +424,7 @@
 				4D4E88E3F6E50302A15F3D83 /* GraphEngineTests.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5C /* MessageCardPayloadTests.swift in Sources */,
 				4116C4885DF5E1CB2FE62225 /* NodeStoreTests.swift in Sources */,
+				D3C4E5F6A7B80920415C6D7E /* ResponseTagParserTests.swift in Sources */,
 				8C7CFB0C2C5581CFEBD55BFE /* RAGPipelineTests.swift in Sources */,
 				D707ED9BF3B1B7CD5C6A6CB0 /* VectorStoreTests.swift in Sources */,
 			);
