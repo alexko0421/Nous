@@ -48,8 +48,10 @@ struct CardView: View {
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .stroke(AppColor.colaDarkText.opacity(0.08), lineWidth: 1)
             )
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(Text(isEscape ? "写下你的想法，打开输入框" : text))
     }
 }
 
