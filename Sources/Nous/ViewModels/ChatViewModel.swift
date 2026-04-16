@@ -61,9 +61,17 @@ final class ChatViewModel {
 
     // MARK: - Send (RAG Pipeline)
 
-    func send() async {
+    func send(attachments: [AttachedFileContext] = []) async {
         let query = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty, !isGenerating else { return }
+        guard (!query.isEmpty || !attachments.isEmpty), !isGenerating else { return }
+
+        let attachmentNames = attachments.map(\.name)
+        let promptQuery = query.isEmpty ? "Please review the attached files." : query
+        let userMessageContent = ChatViewModel.userMessageContent(
+            query: promptQuery,
+            attachmentNames: attachmentNames
+        )
+        let retrievalQuery = ([promptQuery] + attachmentNames).joined(separator: "\n")
 
         inputText = ""
         isGenerating = true
@@ -72,20 +80,20 @@ final class ChatViewModel {
 
         // Step 1: Create conversation node if nil
         if currentNode == nil {
-            let title = String(query.prefix(40))
+            let title = String(promptQuery.prefix(40))
             startNewConversation(title: title)
         }
 
         guard let node = currentNode else { return }
 
         // Step 2: Save user message
-        let userMessage = Message(nodeId: node.id, role: .user, content: query)
+        let userMessage = Message(nodeId: node.id, role: .user, content: userMessageContent)
         try? nodeStore.insertMessage(userMessage)
         messages.append(userMessage)
 
         // Step 3: Embed query and search for citations
         if embeddingService.isLoaded {
-            if let queryEmbedding = try? embeddingService.embed(query) {
+            if let queryEmbedding = try? embeddingService.embed(retrievalQuery) {
                 let results = (try? vectorStore.search(
                     query: queryEmbedding,
                     topK: 5,
@@ -104,10 +112,14 @@ final class ChatViewModel {
         }
 
         // Step 5: Assemble context
-        let context = ChatViewModel.assembleContext(citations: citations, projectGoal: projectGoal)
+        let context = ChatViewModel.assembleContext(
+            citations: citations,
+            projectGoal: projectGoal,
+            attachments: attachments
+        )
 
         // Step 6: Build LLMMessage array from conversation history
-        var llmMessages: [LLMMessage] = messages.map { msg in
+        let llmMessages: [LLMMessage] = messages.map { msg in
             LLMMessage(
                 role: msg.role == .user ? "user" : "assistant",
                 content: msg.content
@@ -183,7 +195,7 @@ final class ChatViewModel {
     /// This is who Nous is. It does not change with context.
     private static let anchor: String = {
         guard let url = Bundle.main.url(forResource: "anchor", withExtension: "md"),
-              let content = try? String(contentsOf: url) else {
+              let content = try? String(contentsOf: url, encoding: .utf8) else {
             print("[Nous] WARNING: anchor.md not found in bundle, using fallback")
             return "You are Nous, Alex 最信任嘅朋友。用广东话回应，语气好似同好朋友倾偈咁。Be warm, genuine, and direct."
         }
@@ -193,7 +205,11 @@ final class ChatViewModel {
 
     // MARK: - Context Assembly
 
-    static func assembleContext(citations: [SearchResult], projectGoal: String?) -> String {
+    static func assembleContext(
+        citations: [SearchResult],
+        projectGoal: String?,
+        attachments: [AttachedFileContext] = []
+    ) -> String {
         var parts: [String] = []
 
         // Layer 1: Anchor — who Nous is (immutable)
@@ -204,7 +220,20 @@ final class ChatViewModel {
             parts.append("---\n\nCURRENT PROJECT GOAL: \(goal)")
         }
 
-        // Layer 3: Retrieved knowledge (RAG)
+        // Layer 3: Attached files (if any)
+        if !attachments.isEmpty {
+            parts.append("---\n\nATTACHED FILES:")
+            for attachment in attachments {
+                if let extractedText = attachment.extractedText, !extractedText.isEmpty {
+                    let snippet = String(extractedText.prefix(4_000))
+                    parts.append("FILE: \(attachment.name)\n\(snippet)")
+                } else {
+                    parts.append("FILE: \(attachment.name)\nContent preview unavailable. Ask Alex for the relevant excerpt if more detail is needed.")
+                }
+            }
+        }
+
+        // Layer 4: Retrieved knowledge (RAG)
         if !citations.isEmpty {
             parts.append("---\n\nRELEVANT KNOWLEDGE FROM ALEX'S NOTES AND CONVERSATIONS:")
             for (index, result) in citations.enumerated() {
@@ -216,5 +245,10 @@ final class ChatViewModel {
         }
 
         return parts.joined(separator: "\n\n")
+    }
+
+    private static func userMessageContent(query: String, attachmentNames: [String]) -> String {
+        guard !attachmentNames.isEmpty else { return query }
+        return "\(query)\n\nFiles: \(attachmentNames.joined(separator: ", "))"
     }
 }
