@@ -181,7 +181,7 @@ final class NodeStoreTests: XCTestCase {
         XCTAssertEqual(edgesForA.count, 1)
         XCTAssertEqual(edgesForA.first?.sourceId, nodeA.id)
         XCTAssertEqual(edgesForA.first?.targetId, nodeB.id)
-        XCTAssertEqual(edgesForA.first?.strength, 0.9, accuracy: 0.001)
+        XCTAssertEqual(edgesForA.first?.strength ?? 0, 0.9, accuracy: 0.001)
 
         // fetchEdges also matches targetId
         let edgesForB = try store.fetchEdges(nodeId: nodeB.id)
