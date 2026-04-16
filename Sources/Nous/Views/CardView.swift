@@ -24,9 +24,11 @@ struct CardView: View {
             }
         }
         .padding(16)
-        .background(AppColor.colaOrange.opacity(0.12))
-        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         .frame(maxWidth: .infinity, alignment: .leading)
+        .glassEffect(
+            .regular.tint(AppColor.colaOrange.opacity(0.18)),
+            in: RoundedRectangle(cornerRadius: 24, style: .continuous)
+        )
     }
 
     private func optionBubble(text: String, isEscape: Bool = false, action: @escaping () -> Void) -> some View {
@@ -42,13 +44,10 @@ struct CardView: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            .background(Color.white.opacity(isEscape ? 0.45 : 0.78))
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(AppColor.colaDarkText.opacity(0.08), lineWidth: 1)
-            )
-            .contentShape(Rectangle())
+            .glassEffect(.regular, in: Capsule())
+            .overlay(Capsule().stroke(AppColor.colaDarkText.opacity(0.08), lineWidth: 1))
+            .opacity(isEscape ? 0.72 : 1.0)
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(Text(isEscape ? "写下你的想法，打开输入框" : text))

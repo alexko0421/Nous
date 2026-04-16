@@ -43,8 +43,8 @@ struct ChatComposer: View {
             HStack(spacing: 12) {
                 ComposerButton(
                     icon: "plus",
-                    tint: AppColor.colaDarkText.opacity(0.78),
-                    background: Color.white.opacity(0.68),
+                    iconColor: AppColor.colaDarkText.opacity(0.78),
+                    glassTint: nil,
                     action: onPickFiles
                 )
 
@@ -55,15 +55,14 @@ struct ChatComposer: View {
                     .lineLimit(1...3)
                     .padding(.horizontal, 18)
                     .padding(.vertical, 12)
-                    .background(
-                        RoundedRectangle(cornerRadius: ChatComposerMetrics.capsuleRadius, style: .continuous)
-                            .fill(Color.white.opacity(0.74))
+                    .glassEffect(
+                        .regular,
+                        in: RoundedRectangle(cornerRadius: ChatComposerMetrics.capsuleRadius, style: .continuous)
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: ChatComposerMetrics.capsuleRadius, style: .continuous)
                             .stroke(AppColor.colaDarkText.opacity(0.08), lineWidth: 1)
                     )
-                    .shadow(color: .black.opacity(0.04), radius: 6, x: 0, y: 2)
                     .onSubmit(onSend)
                     .focused($isTextFieldFocused)
                     .onChange(of: focusRequest) { _, newValue in
@@ -75,8 +74,8 @@ struct ChatComposer: View {
 
                 ComposerButton(
                     icon: isGenerating ? "stop.fill" : "arrow.up",
-                    tint: canSend ? .white : AppColor.colaOrange.opacity(0.55),
-                    background: canSend ? AppColor.colaOrange : AppColor.colaOrange.opacity(0.12),
+                    iconColor: canSend ? .white : AppColor.colaOrange.opacity(0.55),
+                    glassTint: canSend ? AppColor.colaOrange : AppColor.colaOrange.opacity(0.25),
                     isDisabled: !canSend,
                     action: onSend
                 )
@@ -109,8 +108,7 @@ private struct AttachmentChip: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(Color.white.opacity(0.58))
-        .clipShape(Capsule())
+        .glassEffect(.regular, in: Capsule())
         .overlay(
             Capsule()
                 .stroke(AppColor.colaDarkText.opacity(0.08), lineWidth: 1)
@@ -120,26 +118,22 @@ private struct AttachmentChip: View {
 
 private struct ComposerButton: View {
     let icon: String
-    let tint: Color
-    let background: Color
+    let iconColor: Color
+    let glassTint: Color?
     var isDisabled: Bool = false
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            Circle()
-                .fill(background)
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundColor(iconColor)
                 .frame(width: ChatComposerMetrics.controlSize, height: ChatComposerMetrics.controlSize)
-                .overlay(
-                    Image(systemName: icon)
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundColor(tint)
-                )
+                .glassEffect(glassTint.map { Glass.regular.tint($0) } ?? .regular, in: Circle())
                 .overlay(
                     Circle()
                         .stroke(AppColor.colaDarkText.opacity(0.08), lineWidth: 1)
                 )
-                .shadow(color: .black.opacity(0.04), radius: 5, x: 0, y: 2)
         }
         .buttonStyle(.plain)
         .disabled(isDisabled)

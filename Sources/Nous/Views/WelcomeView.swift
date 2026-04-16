@@ -62,8 +62,7 @@ struct WelcomeView<Composer: View>: View {
                             .foregroundColor(AppColor.colaDarkText.opacity(0.65))
                             .padding(.horizontal, 14)
                             .padding(.vertical, 8)
-                            .background(Color.white.opacity(0.55))
-                            .clipShape(Capsule())
+                            .glassEffect(.regular, in: Capsule())
                             .overlay(
                                 Capsule()
                                     .stroke(AppColor.colaDarkText.opacity(0.08), lineWidth: 1)
