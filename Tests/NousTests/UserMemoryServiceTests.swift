@@ -512,6 +512,118 @@ final class UserMemoryServiceTests: XCTestCase {
         XCTAssertEqual(superseded?.supersededBy, secondEntry?.id,
                        "supersededBy must point at the replacement — history chain intact")
     }
+
+    // MARK: - v2.2c read-path cutover
+
+    /// v2.2c: reads must come from the active memory_entries row, not the v2.1
+    /// blob. Seeds DIVERGENT blob vs entry content — if the reader returns the
+    /// blob value, this test catches it. (Production writes keep content
+    /// parity; the divergence here is a test probe only.)
+    func testCurrentGlobalReadsEntryNotBlob() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+
+        try store.saveGlobalMemory(GlobalMemory(content: "OLD BLOB CONTENT", updatedAt: Date()))
+        try store.insertMemoryEntry(
+            MemoryEntry(
+                scope: .global, scopeRefId: nil,
+                kind: .identity, stability: .stable,
+                content: "NEW ENTRY CONTENT",
+                sourceNodeIds: [],
+                createdAt: Date(), updatedAt: Date(), lastConfirmedAt: Date()
+            )
+        )
+
+        let read = service.currentGlobal()
+        XCTAssertEqual(read, "NEW ENTRY CONTENT",
+                       "v2.2c: reads must come from memory_entries, not the blob")
+    }
+
+    func testCurrentProjectReadsEntryNotBlob() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+        let project = Project(title: "P")
+        try store.insertProject(project)
+
+        try store.saveProjectMemory(ProjectMemory(
+            projectId: project.id, content: "OLD PROJECT BLOB", updatedAt: Date()
+        ))
+        try store.insertMemoryEntry(
+            MemoryEntry(
+                scope: .project, scopeRefId: project.id,
+                kind: .thread, stability: .stable,
+                content: "NEW PROJECT ENTRY",
+                sourceNodeIds: [],
+                createdAt: Date(), updatedAt: Date(), lastConfirmedAt: Date()
+            )
+        )
+
+        XCTAssertEqual(service.currentProject(projectId: project.id), "NEW PROJECT ENTRY")
+    }
+
+    func testCurrentConversationReadsEntryNotBlob() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+        let node = NousNode(type: .conversation, title: "C", content: "")
+        try store.insertNode(node)
+
+        try store.saveConversationMemory(ConversationMemory(
+            nodeId: node.id, content: "OLD CONVO BLOB", updatedAt: Date()
+        ))
+        try store.insertMemoryEntry(
+            MemoryEntry(
+                scope: .conversation, scopeRefId: node.id,
+                kind: .thread, stability: .temporary,
+                content: "NEW CONVO ENTRY",
+                sourceNodeIds: [node.id],
+                createdAt: Date(), updatedAt: Date(), lastConfirmedAt: Date()
+            )
+        )
+
+        XCTAssertEqual(service.currentConversation(nodeId: node.id), "NEW CONVO ENTRY")
+    }
+
+    /// Safety net: if the entry row is missing (migrator bug, partial write),
+    /// fall back to the v2.1 blob so the user never sees a silent memory wipe.
+    /// Fallback removal is deferred to v2.2d after soak.
+    func testCurrentGlobalFallsBackToBlobWhenEntryMissing() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+
+        try store.saveGlobalMemory(GlobalMemory(content: "BLOB FALLBACK", updatedAt: Date()))
+        // deliberately do NOT insert an entry
+
+        XCTAssertEqual(service.currentGlobal(), "BLOB FALLBACK",
+                       "missing entry must fall back to blob — no silent memory wipe")
+    }
+
+    /// End-to-end: after `refreshConversation` completes, `currentConversation`
+    /// must surface the freshly-written memory. Guards against the dual-write
+    /// and read-path drifting apart.
+    func testRefreshConversationThenCurrentConversationRoundTrips() async throws {
+        let capture = PromptCapture()
+        let reply = "- Alex shipped v2.2c read cutover"
+        let mock = MockLLMService(capture: capture, reply: reply)
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let node = NousNode(type: .conversation, title: "Round-trip", content: "")
+        try store.insertNode(node)
+
+        let messages: [Message] = [
+            Message(nodeId: node.id, role: .user,
+                    content: "Ship v2.2c so entry reads and blob reads stop diverging",
+                    timestamp: Date(timeIntervalSince1970: 1))
+        ]
+        await service.refreshConversation(nodeId: node.id, projectId: nil, messages: messages)
+
+        let read = service.currentConversation(nodeId: node.id)
+        XCTAssertEqual(read, reply,
+                       "write → read must round-trip — refreshConversation's content surfaces via currentConversation")
+    }
 }
 
 // MARK: - Test doubles
