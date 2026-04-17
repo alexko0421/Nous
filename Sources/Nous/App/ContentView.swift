@@ -115,7 +115,13 @@ struct ContentView: View {
         .frame(width: 800, height: 600)
         .background(.clear)
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isSidebarVisible)
-        .task { await settingsVM.loadEmbeddingModel() }
+        .task {
+            chatVM.defaultProjectId = selectedProjectId
+            await settingsVM.loadEmbeddingModel()
+        }
+        .onChange(of: selectedProjectId) { _, newValue in
+            chatVM.defaultProjectId = newValue
+        }
     }
 
     private var currentSidebarNodeId: UUID? {

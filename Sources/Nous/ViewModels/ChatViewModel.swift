@@ -13,6 +13,7 @@ final class ChatViewModel {
     var currentResponse: String = ""
     var citations: [SearchResult] = []
     var activeQuickActionMode: QuickActionMode?
+    var defaultProjectId: UUID?
 
     // MARK: - Dependencies
 
@@ -76,7 +77,7 @@ final class ChatViewModel {
     func beginQuickActionConversation(_ mode: QuickActionMode) async {
         guard !isGenerating else { return }
 
-        startNewConversation(title: mode.label)
+        startNewConversation(title: mode.label, projectId: defaultProjectId)
         activeQuickActionMode = mode
         inputText = ""
 
@@ -168,7 +169,7 @@ final class ChatViewModel {
         // Step 1: Create conversation node if nil
         if currentNode == nil {
             let title = String(promptQuery.prefix(40))
-            startNewConversation(title: title)
+            startNewConversation(title: title, projectId: defaultProjectId)
         }
 
         guard let node = currentNode else { return }

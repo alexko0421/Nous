@@ -29,6 +29,7 @@
 		ABCDEF1234567890AABBCC06 /* MemoryV2MigratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCDEF1234567890AABBCC05 /* MemoryV2MigratorTests.swift */; };
 		ABCDEF1234567890AABBCC08 /* UserMemoryServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCDEF1234567890AABBCC07 /* UserMemoryServiceTests.swift */; };
 		ABCDEF1234567890AABBCC0A /* MemoryDebugInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCDEF1234567890AABBCC09 /* MemoryDebugInspector.swift */; };
+		ABCDEF1234567890AABBCC0C /* ChatViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCDEF1234567890AABBCC0B /* ChatViewModelTests.swift */; };
 		3B0C4ADB2DE8F304261A454E /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEA896134861BEAADF98E800 /* SettingsView.swift */; };
 		3E6FF46E8E6E947CF7B7AADF /* NousApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84AC99FE1331146CEC54C75D /* NousApp.swift */; };
 		3F9476D3C06B0F30A271AC5F /* GraphEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36CB503D39BB65E14D694E13 /* GraphEngine.swift */; };
@@ -105,6 +106,7 @@
 		ABCDEF1234567890AABBCC05 /* MemoryV2MigratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryV2MigratorTests.swift; sourceTree = "<group>"; };
 		ABCDEF1234567890AABBCC07 /* UserMemoryServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserMemoryServiceTests.swift; sourceTree = "<group>"; };
 		ABCDEF1234567890AABBCC09 /* MemoryDebugInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryDebugInspector.swift; sourceTree = "<group>"; };
+		ABCDEF1234567890AABBCC0B /* ChatViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModelTests.swift; sourceTree = "<group>"; };
 		63558731B5D9A45DD29170B9 /* NousTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NousTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		69184F11E49CB01A84551833 /* ClarificationCardParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClarificationCardParserTests.swift; sourceTree = "<group>"; };
 		6E88716E75C10545B684D5FD /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModel.swift; sourceTree = "<group>"; };
@@ -283,6 +285,7 @@
 		DED692321AF0E89666946424 /* NousTests */ = {
 			isa = PBXGroup;
 			children = (
+				ABCDEF1234567890AABBCC0B /* ChatViewModelTests.swift */,
 				69184F11E49CB01A84551833 /* ClarificationCardParserTests.swift */,
 				ABFA60716BE28FDBDC5D4B01 /* GraphEngineTests.swift */,
 				ABCDEF1234567890AABBCC05 /* MemoryV2MigratorTests.swift */,
@@ -467,6 +470,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				ABCDEF1234567890AABBCC0C /* ChatViewModelTests.swift in Sources */,
 				ACC542F83437ECF80EF63CDD /* ClarificationCardParserTests.swift in Sources */,
 				4D4E88E3F6E50302A15F3D83 /* GraphEngineTests.swift in Sources */,
 				ABCDEF1234567890AABBCC06 /* MemoryV2MigratorTests.swift in Sources */,
