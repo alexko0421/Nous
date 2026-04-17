@@ -217,24 +217,39 @@ struct MemoryDebugInspector: View {
 
     private func reload() {
         do {
-            let fetchedGlobal = try nodeStore.fetchGlobalMemory()
+            // v2.2d: read from active memory_entries, not the frozen v2.1 blobs.
+            // The display models are still GlobalMemory/ProjectMemory/
+            // ConversationMemory shapes (content + updatedAt) so the view code
+            // below doesn't have to change.
+            let globalEntry = try nodeStore.fetchActiveMemoryEntry(scope: .global, scopeRefId: nil)
+            let fetchedGlobal: GlobalMemory? = globalEntry.map {
+                GlobalMemory(content: $0.content, updatedAt: $0.updatedAt)
+            }
 
             let projects = try nodeStore.fetchAllProjects()
-            let projectRows = try projects.map { project in
-                ProjectRow(
-                    id: project.id,
-                    title: project.title,
-                    memory: try nodeStore.fetchProjectMemory(projectId: project.id)
+            let projectRows = try projects.map { project -> ProjectRow in
+                let entry = try nodeStore.fetchActiveMemoryEntry(
+                    scope: .project, scopeRefId: project.id
                 )
+                let memory = entry.map {
+                    ProjectMemory(projectId: project.id, content: $0.content, updatedAt: $0.updatedAt)
+                }
+                return ProjectRow(id: project.id, title: project.title, memory: memory)
             }
 
             let conversationNodes = try nodeStore.fetchAllNodes()
                 .filter { $0.type == .conversation }
-            let conversationRows = try conversationNodes.map { node in
-                ConversationRow(
+            let conversationRows = try conversationNodes.map { node -> ConversationRow in
+                let entry = try nodeStore.fetchActiveMemoryEntry(
+                    scope: .conversation, scopeRefId: node.id
+                )
+                let memory = entry.map {
+                    ConversationMemory(nodeId: node.id, content: $0.content, updatedAt: $0.updatedAt)
+                }
+                return ConversationRow(
                     id: node.id,
                     title: node.title.isEmpty ? "Untitled" : node.title,
-                    memory: try nodeStore.fetchConversationMemory(nodeId: node.id)
+                    memory: memory
                 )
             }
 

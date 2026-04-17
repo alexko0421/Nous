@@ -379,19 +379,19 @@ final class UserMemoryServiceTests: XCTestCase {
         )
     }
 
-    // MARK: - v2.2b dual-write parity
+    // MARK: - v2.2d entry-only write
 
-    /// v2.2b invariant: after `refreshConversation`, the saved blob and the
-    /// active memory_entry must have identical content. That property is what
-    /// makes v2.2c's read-path cutover a non-semantic change — we can flip
-    /// consumers from blob to entry and the user-visible memory does not move.
-    func testRefreshConversationDualWritesBlobAndEntry() async throws {
+    /// v2.2d: `refreshConversation` writes ONLY to memory_entries. The v2.1
+    /// conversation_memory blob is frozen at its migration snapshot and must
+    /// not be updated. If this test ever sees a blob row after a fresh
+    /// refresh, v2.2d's single-write invariant broke.
+    func testRefreshConversationWritesEntryOnly() async throws {
         let capture = PromptCapture()
         let reply = "- Alex is debugging a retain cycle in an async sequence"
         let mock = MockLLMService(capture: capture, reply: reply)
         let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
 
-        let node = NousNode(type: .conversation, title: "Parity chat", content: "")
+        let node = NousNode(type: .conversation, title: "Entry-only chat", content: "")
         try store.insertNode(node)
 
         let messages: [Message] = [
@@ -403,59 +403,54 @@ final class UserMemoryServiceTests: XCTestCase {
         await service.refreshConversation(nodeId: node.id, projectId: nil, messages: messages)
 
         let blob = try store.fetchConversationMemory(nodeId: node.id)
-        XCTAssertNotNil(blob, "conversation blob must be written")
+        XCTAssertNil(blob, "v2.2d: conversation_memory blob must NOT be written — entries only")
 
         let entry = try store.fetchActiveMemoryEntry(scope: .conversation, scopeRefId: node.id)
-        XCTAssertNotNil(entry, "active memory_entry must be written (dual-write)")
-
-        XCTAssertEqual(
-            entry?.content, blob?.content,
-            "blob/entry content parity — v2.2c read-path cutover relies on this"
-        )
+        XCTAssertNotNil(entry, "active memory_entry must be written")
+        XCTAssertEqual(entry?.content, reply)
         XCTAssertEqual(entry?.scope, .conversation)
         XCTAssertEqual(entry?.scopeRefId, node.id)
-        XCTAssertEqual(entry?.stability, .temporary,
-                       "conversation-scope entries are temporary (wipe with chat)")
-        XCTAssertEqual(entry?.sourceNodeIds, [node.id],
-                       "conversation entry must cite its own node as source")
+        XCTAssertEqual(entry?.stability, .temporary)
+        XCTAssertEqual(entry?.sourceNodeIds, [node.id])
     }
 
-    /// v2.2b parity for project scope. `refreshProject` aggregates its child
-    /// chats into a blob; the mirrored entry must carry that same aggregated
-    /// content.
-    func testRefreshProjectDualWritesBlobAndEntry() async throws {
+    /// v2.2d: `refreshProject` aggregates child conversation ENTRIES (not the
+    /// frozen v2.1 blobs) and writes the rollup ONLY to memory_entries. Seed
+    /// a conversation entry so the aggregator has something to roll up.
+    func testRefreshProjectAggregatesChildEntriesAndWritesEntryOnly() async throws {
         let capture = PromptCapture()
         let mock = MockLLMService(capture: capture, reply: "- Project-level rollup line")
         let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
 
-        let project = Project(title: "Parity project")
+        let project = Project(title: "Entry-only project")
         try store.insertProject(project)
         let chat = NousNode(type: .conversation, title: "child", content: "", projectId: project.id)
         try store.insertNode(chat)
 
-        // Seed a conversation blob so refreshProject has something to roll up.
-        try store.saveConversationMemory(
-            ConversationMemory(
-                nodeId: chat.id,
+        // Seed a conversation ENTRY (not a blob) so the v2.2d aggregator
+        // has something to find. If the aggregator still reads blobs, the
+        // refresh becomes a no-op and entry writes won't happen.
+        try store.insertMemoryEntry(
+            MemoryEntry(
+                scope: .conversation, scopeRefId: chat.id,
+                kind: .thread, stability: .temporary,
                 content: "- child-chat insight",
-                updatedAt: Date(timeIntervalSince1970: 10)
+                sourceNodeIds: [chat.id],
+                createdAt: Date(timeIntervalSince1970: 10),
+                updatedAt: Date(timeIntervalSince1970: 10),
+                lastConfirmedAt: Date(timeIntervalSince1970: 10)
             )
         )
 
         await service.refreshProject(projectId: project.id)
 
         let blob = try store.fetchProjectMemory(projectId: project.id)
-        XCTAssertNotNil(blob, "project blob must be written")
+        XCTAssertNil(blob, "v2.2d: project_memory blob must NOT be written")
 
         let entry = try store.fetchActiveMemoryEntry(scope: .project, scopeRefId: project.id)
         XCTAssertNotNil(entry, "active project memory_entry must be written")
-
-        XCTAssertEqual(
-            entry?.content, blob?.content,
-            "project blob/entry content parity"
-        )
-        XCTAssertEqual(entry?.stability, .stable,
-                       "project-scope entries persist across chats")
+        XCTAssertEqual(entry?.content, "- Project-level rollup line")
+        XCTAssertEqual(entry?.stability, .stable)
     }
 
     /// v2.2b supersede invariant: a second refresh marks the first active
@@ -586,19 +581,19 @@ final class UserMemoryServiceTests: XCTestCase {
         XCTAssertEqual(service.currentConversation(nodeId: node.id), "NEW CONVO ENTRY")
     }
 
-    /// Safety net: if the entry row is missing (migrator bug, partial write),
-    /// fall back to the v2.1 blob so the user never sees a silent memory wipe.
-    /// Fallback removal is deferred to v2.2d after soak.
-    func testCurrentGlobalFallsBackToBlobWhenEntryMissing() throws {
+    /// v2.2d: fallback removed. If the entry is missing, reads return nil
+    /// (not a stale blob). This test is the inverse of the v2.2c fallback
+    /// test it replaces — guards against re-introducing the fallback.
+    func testCurrentGlobalReturnsNilWhenEntryMissingEvenIfBlobExists() throws {
         let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
             MockLLMService(capture: PromptCapture(), reply: "")
         })
 
-        try store.saveGlobalMemory(GlobalMemory(content: "BLOB FALLBACK", updatedAt: Date()))
+        try store.saveGlobalMemory(GlobalMemory(content: "STALE BLOB", updatedAt: Date()))
         // deliberately do NOT insert an entry
 
-        XCTAssertEqual(service.currentGlobal(), "BLOB FALLBACK",
-                       "missing entry must fall back to blob — no silent memory wipe")
+        XCTAssertNil(service.currentGlobal(),
+                     "v2.2d: no entry → read returns nil, even if a stale blob exists")
     }
 
     /// End-to-end: after `refreshConversation` completes, `currentConversation`
