@@ -30,23 +30,37 @@ struct ChatArea: View {
                 ScrollView {
                     VStack(spacing: 24) {
                         ForEach(vm.messages) { msg in
-                            if let payload = msg.cardPayload {
-                                CardView(
-                                    payload: payload,
-                                    onTapOption: { option in
-                                        vm.inputText = option
-                                        Task { await handleSend() }
-                                    },
-                                    onTapWriteOwn: {
-                                        composerFocusRequest = true
-                                    }
-                                )
-                            } else {
-                                MessageBubble(text: msg.content, isUser: msg.role == .user)
+                            VStack(alignment: .leading, spacing: 6) {
+                                if msg.role == .assistant, let trace = vm.thinkingByMessageId[msg.id] {
+                                    ThinkingDisclosure(text: trace.text, seconds: trace.seconds, isLive: false)
+                                }
+                                if let payload = msg.cardPayload {
+                                    CardView(
+                                        payload: payload,
+                                        onTapOption: { option in
+                                            vm.inputText = option
+                                            Task { await handleSend() }
+                                        },
+                                        onTapWriteOwn: {
+                                            composerFocusRequest = true
+                                        }
+                                    )
+                                } else {
+                                    MessageBubble(text: msg.content, isUser: msg.role == .user)
+                                }
                             }
                         }
-                        if vm.isGenerating && !vm.currentResponse.isEmpty {
-                            MessageBubble(text: vm.currentResponse, isUser: false)
+                        if vm.isGenerating {
+                            VStack(alignment: .leading, spacing: 6) {
+                                ThinkingDisclosure(
+                                    text: vm.currentThinking,
+                                    seconds: vm.currentThinkingSeconds,
+                                    isLive: vm.currentResponse.isEmpty
+                                )
+                                if !vm.currentResponse.isEmpty {
+                                    MessageBubble(text: vm.currentResponse, isUser: false)
+                                }
+                            }
                         }
                         if !vm.citations.isEmpty {
                             RAGCitationView(citations: vm.citations, onTap: { _ in })

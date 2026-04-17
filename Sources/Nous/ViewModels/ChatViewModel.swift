@@ -1,6 +1,11 @@
 import Foundation
 import Observation
 
+struct ThinkingTrace {
+    let text: String
+    let seconds: Double
+}
+
 @Observable
 final class ChatViewModel {
 
@@ -11,6 +16,9 @@ final class ChatViewModel {
     var inputText: String = ""
     var isGenerating: Bool = false
     var currentResponse: String = ""
+    var currentThinking: String = ""
+    var currentThinkingSeconds: Double? = nil
+    var thinkingByMessageId: [UUID: ThinkingTrace] = [:]
     var citations: [SearchResult] = []
 
     // MARK: - Dependencies
@@ -50,6 +58,9 @@ final class ChatViewModel {
         messages = []
         citations = []
         currentResponse = ""
+        currentThinking = ""
+        currentThinkingSeconds = nil
+        thinkingByMessageId = [:]
     }
 
     func loadConversation(_ node: NousNode) {
@@ -57,6 +68,9 @@ final class ChatViewModel {
         messages = (try? nodeStore.fetchMessages(nodeId: node.id)) ?? []
         citations = []
         currentResponse = ""
+        currentThinking = ""
+        currentThinkingSeconds = nil
+        thinkingByMessageId = [:]
     }
 
     // MARK: - Send (RAG Pipeline)
@@ -76,6 +90,8 @@ final class ChatViewModel {
         inputText = ""
         isGenerating = true
         currentResponse = ""
+        currentThinking = ""
+        currentThinkingSeconds = nil
         defer { isGenerating = false }
 
         // Step 1: Create conversation node if nil
@@ -137,10 +153,25 @@ final class ChatViewModel {
         }
 
         // Step 8: Stream response
+        var thinkingStartedAt: Date? = nil
+        var thinkingEndedAt: Date? = nil
         do {
             let stream = try await llm.generate(messages: llmMessages, system: context)
             for try await chunk in stream {
-                currentResponse += chunk
+                switch chunk {
+                case .thought(let text):
+                    if thinkingStartedAt == nil { thinkingStartedAt = Date() }
+                    currentThinking += text
+                case .answer(let text):
+                    if let start = thinkingStartedAt, thinkingEndedAt == nil {
+                        thinkingEndedAt = Date()
+                        currentThinkingSeconds = Date().timeIntervalSince(start)
+                    }
+                    currentResponse += text
+                }
+            }
+            if let start = thinkingStartedAt, thinkingEndedAt == nil {
+                currentThinkingSeconds = Date().timeIntervalSince(start)
             }
         } catch {
             currentResponse = "Error: \(error.localizedDescription)"
@@ -148,10 +179,14 @@ final class ChatViewModel {
 
         // Step 9: Parse tags and save assistant message
         let parsed = ResponseTagParser.parse(currentResponse)
+        let capturedThinking = currentThinking
+        let capturedSeconds = currentThinkingSeconds ?? 0
         switch parsed {
         case .defer_:
             // Nous chose silence. Do not append a message; keep composer active.
             currentResponse = ""
+            currentThinking = ""
+            currentThinkingSeconds = nil
             return
 
         case .card(let payload):
@@ -163,6 +198,9 @@ final class ChatViewModel {
             )
             try? nodeStore.insertMessage(assistantMessage)
             messages.append(assistantMessage)
+            if !capturedThinking.isEmpty {
+                thinkingByMessageId[assistantMessage.id] = ThinkingTrace(text: capturedThinking, seconds: capturedSeconds)
+            }
 
         case .plain(let text):
             let assistantMessage = Message(
@@ -172,7 +210,12 @@ final class ChatViewModel {
             )
             try? nodeStore.insertMessage(assistantMessage)
             messages.append(assistantMessage)
+            if !capturedThinking.isEmpty {
+                thinkingByMessageId[assistantMessage.id] = ThinkingTrace(text: capturedThinking, seconds: capturedSeconds)
+            }
         }
+        currentThinking = ""
+        currentThinkingSeconds = nil
 
         // Step 10: Async task — update node embedding + regenerate edges
         let nodeId = node.id

@@ -33,7 +33,7 @@ final class LocalLLMService: LLMService {
         isLoaded = true
     }
 
-    func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
+    func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<LLMChunk, Error> {
         guard let container = modelContainer else {
             throw LLMError.modelNotLoaded
         }
@@ -67,7 +67,7 @@ final class LocalLLMService: LLMService {
             Task {
                 for await generation in stream {
                     if let chunk = generation.chunk {
-                        continuation.yield(chunk)
+                        continuation.yield(.answer(chunk))
                     }
                 }
                 continuation.finish()

@@ -19,6 +19,7 @@
 		2FA85CB0FB6256D80D30DE6F /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A13A1040D67FB96CF59C6154 /* ContentView.swift */; };
 		30EB1D0F191710EF17D5D13C /* ChatArea.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D5C933D2CDA967B8AAFCD32 /* ChatArea.swift */; };
 		FEB01BB691E530382CBEA50B /* CardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E27921F584AEE87B0732CB2 /* CardView.swift */; };
+		7E8F9A0B1C2D3E4F50617283 /* ThinkingDisclosure.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F9A0B1C2D3E4F5061728394 /* ThinkingDisclosure.swift */; };
 		36814239C5034618D724A807 /* SetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 768CDC34E8F6272348EC152B /* SetupView.swift */; };
 		37AF74D6A8F3E2D7631E3BB8 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = 289331BB87BCDA02BF10FBFA /* MLXLLM */; };
 		3A38D50339D27DC72856B618 /* WindowConfigurator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFA7FC708EEBC903409D5DD9 /* WindowConfigurator.swift */; };
@@ -77,6 +78,7 @@
 		36CB503D39BB65E14D694E13 /* GraphEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GraphEngine.swift; sourceTree = "<group>"; };
 		3D5C933D2CDA967B8AAFCD32 /* ChatArea.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatArea.swift; sourceTree = "<group>"; };
 		9E27921F584AEE87B0732CB2 /* CardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardView.swift; sourceTree = "<group>"; };
+		8F9A0B1C2D3E4F5061728394 /* ThinkingDisclosure.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThinkingDisclosure.swift; sourceTree = "<group>"; };
 		404B6377A2EDDF0C97784FD2 /* AttachedFileContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachedFileContext.swift; sourceTree = "<group>"; };
 		47242B87233D17F872ED3113 /* SettingsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsViewModel.swift; sourceTree = "<group>"; };
 		4BBA2D70209E6211449AEADC /* AppColor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppColor.swift; sourceTree = "<group>"; };
@@ -282,6 +284,7 @@
 				F0A35FC2025E4781FA8CEBE4 /* RAGCitationView.swift */,
 				FEA896134861BEAADF98E800 /* SettingsView.swift */,
 				768CDC34E8F6272348EC152B /* SetupView.swift */,
+				8F9A0B1C2D3E4F5061728394 /* ThinkingDisclosure.swift */,
 				B15EC86BFA4A972D811E5ADB /* WelcomeView.swift */,
 			);
 			path = Views;
@@ -418,6 +421,7 @@
 				3B0C4ADB2DE8F304261A454E /* SettingsView.swift in Sources */,
 				4E112F0AA516567676B1413E /* SettingsViewModel.swift in Sources */,
 				36814239C5034618D724A807 /* SetupView.swift in Sources */,
+				7E8F9A0B1C2D3E4F50617283 /* ThinkingDisclosure.swift in Sources */,
 				9CA12F6A78C6C54FA3535947 /* VectorStore.swift in Sources */,
 				07FFF1026087C07958572C54 /* WelcomeView.swift in Sources */,
 				3A38D50339D27DC72856B618 /* WindowConfigurator.swift in Sources */,

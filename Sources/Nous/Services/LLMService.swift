@@ -7,8 +7,13 @@ enum LLMProvider: String, Codable, CaseIterable {
     case openai = "OpenAI API"
 }
 
+enum LLMChunk {
+    case thought(String)
+    case answer(String)
+}
+
 protocol LLMService {
-    func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error>
+    func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<LLMChunk, Error>
 }
 
 struct LLMMessage {
@@ -22,7 +27,7 @@ struct ClaudeLLMService: LLMService {
     let apiKey: String
     var model: String = "claude-sonnet-4-6-20250414"
 
-    func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
+    func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<LLMChunk, Error> {
         let url = URL(string: "https://api.anthropic.com/v1/messages")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -71,7 +76,7 @@ struct ClaudeLLMService: LLMService {
                             let text = delta["text"] as? String
                         else { continue }
 
-                        continuation.yield(text)
+                        continuation.yield(.answer(text))
                     }
                     continuation.finish()
                 } catch {
@@ -88,7 +93,7 @@ struct OpenAILLMService: LLMService {
     let apiKey: String
     var model: String = "gpt-4o"
 
-    func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
+    func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<LLMChunk, Error> {
         let url = URL(string: "https://api.openai.com/v1/chat/completions")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -136,7 +141,7 @@ struct OpenAILLMService: LLMService {
                             let text = delta["content"] as? String
                         else { continue }
 
-                        continuation.yield(text)
+                        continuation.yield(.answer(text))
                     }
                     continuation.finish()
                 } catch {
@@ -153,7 +158,7 @@ struct GeminiLLMService: LLMService {
     let apiKey: String
     var model: String = "gemini-2.5-pro"
 
-    func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
+    func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<LLMChunk, Error> {
         let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):streamGenerateContent?alt=sse&key=\(apiKey)")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -175,25 +180,46 @@ struct GeminiLLMService: LLMService {
         }
         body["generationConfig"] = [
             "temperature": 0.7,
-            "maxOutputTokens": 8192
+            "maxOutputTokens": 8192,
+            "thinkingConfig": [
+                "includeThoughts": true
+            ]
         ]
 
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let systemLen = system?.count ?? 0
+        let userLen = messages.map(\.content.count).reduce(0, +)
+        print("[Gemini] req model=\(model) system.chars=\(systemLen) user.chars=\(userLen)")
+        let startedAt = Date()
 
         return AsyncThrowingStream { continuation in
             Task {
                 do {
                     let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                    let headerTime = Date().timeIntervalSince(startedAt)
+                    print("[Gemini] headers in \(String(format: "%.2f", headerTime))s")
                     guard let httpResponse = response as? HTTPURLResponse else {
                         continuation.finish(throwing: LLMError.invalidResponse)
                         return
                     }
                     guard httpResponse.statusCode == 200 else {
+                        var bodyText = ""
+                        for try await line in bytes.lines {
+                            bodyText += line + "\n"
+                            if bodyText.count > 2000 { break }
+                        }
+                        print("[Gemini] HTTP \(httpResponse.statusCode) body: \(bodyText)")
                         continuation.finish(throwing: LLMError.httpError(httpResponse.statusCode))
                         return
                     }
 
+                    var firstByteTime: TimeInterval? = nil
                     for try await line in bytes.lines {
+                        if firstByteTime == nil, line.hasPrefix("data: ") {
+                            firstByteTime = Date().timeIntervalSince(startedAt)
+                            print("[Gemini] first byte in \(String(format: "%.2f", firstByteTime!))s")
+                        }
                         guard line.hasPrefix("data: ") else { continue }
                         let data = String(line.dropFirst(6))
 
@@ -203,12 +229,17 @@ struct GeminiLLMService: LLMService {
                             let candidates = json["candidates"] as? [[String: Any]],
                             let first = candidates.first,
                             let content = first["content"] as? [String: Any],
-                            let parts = content["parts"] as? [[String: Any]],
-                            let text = parts.first?["text"] as? String
+                            let parts = content["parts"] as? [[String: Any]]
                         else { continue }
 
-                        continuation.yield(text)
+                        for part in parts {
+                            guard let text = part["text"] as? String else { continue }
+                            let isThought = (part["thought"] as? Bool) ?? false
+                            continuation.yield(isThought ? .thought(text) : .answer(text))
+                        }
                     }
+                    let total = Date().timeIntervalSince(startedAt)
+                    print("[Gemini] stream complete in \(String(format: "%.2f", total))s")
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
