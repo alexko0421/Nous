@@ -9,6 +9,13 @@ extension Notification.Name {
 final class NodeStore {
 
     private let db: Database
+    /// Serializes multi-statement transactions on the single SQLite connection.
+    /// SQLite's connection-level mutex serializes individual calls, but
+    /// `BEGIN ... COMMIT` pairs are not atomic as a group: two overlapping
+    /// `inTransaction` calls race at `BEGIN` and one fails with "cannot start
+    /// a transaction within a transaction". This lock closes that window so
+    /// v2.2b dual-writes don't silently drop entries under concurrent refreshes.
+    private let transactionLock = NSLock()
 
     init(path: String) throws {
         db = try Database(path: path)
@@ -118,12 +125,36 @@ final class NodeStore {
             );
         """)
 
+        // Structured entries table (v2.2b). Written in parallel with the v2.1
+        // blob tables above; blob remains the read path until v2.2c cuts over.
+        // At most one `active` entry per (scope, scopeRefId); older actives are
+        // set to `superseded` and linked via `supersededBy` on each refresh.
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS memory_entries (
+                id              TEXT PRIMARY KEY,
+                scope           TEXT NOT NULL,
+                scopeRefId      TEXT,
+                kind            TEXT NOT NULL,
+                stability       TEXT NOT NULL,
+                status          TEXT NOT NULL,
+                content         TEXT NOT NULL,
+                confidence      REAL NOT NULL DEFAULT 0.8,
+                sourceNodeIds   TEXT NOT NULL DEFAULT '[]',
+                createdAt       REAL NOT NULL,
+                updatedAt       REAL NOT NULL,
+                lastConfirmedAt REAL,
+                expiresAt       REAL,
+                supersededBy    TEXT
+            );
+        """)
+
         // Indexes
         try db.exec("CREATE INDEX IF NOT EXISTS idx_nodes_projectId  ON nodes(projectId);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_messages_nodeId  ON messages(nodeId);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_edges_sourceId   ON edges(sourceId);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_edges_targetId   ON edges(targetId);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_conversation_memory_updatedAt ON conversation_memory(updatedAt);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_entries_scope_ref_status ON memory_entries(scope, scopeRefId, status);")
     }
 
     /// Direct access for migrator (transaction control, table-exists probing).
@@ -359,6 +390,8 @@ final class NodeStore {
     }
 
     func inTransaction(_ work: () throws -> Void) throws {
+        transactionLock.lock()
+        defer { transactionLock.unlock() }
         try db.exec("BEGIN TRANSACTION;")
         do {
             try work()
@@ -526,6 +559,198 @@ final class NodeStore {
         """)
         try stmt.bind(projectId.uuidString, at: 1)
         try stmt.step()
+    }
+
+    // MARK: - Memory Entries (v2.2b)
+
+    /// Fetch every project's memory blob. Used by MemoryEntriesMigrator to
+    /// bootstrap entries from existing v2.1 scope tables without mutating them.
+    func fetchAllProjectMemories() throws -> [ProjectMemory] {
+        let stmt = try db.prepare("""
+            SELECT projectId, content, updatedAt FROM project_memory;
+        """)
+        var results: [ProjectMemory] = []
+        while try stmt.step() {
+            guard let projectId = (stmt.text(at: 0)).flatMap({ UUID(uuidString: $0) }) else { continue }
+            let content = stmt.text(at: 1) ?? ""
+            let updatedAt = Date(timeIntervalSince1970: stmt.double(at: 2))
+            results.append(ProjectMemory(projectId: projectId, content: content, updatedAt: updatedAt))
+        }
+        return results
+    }
+
+    /// Fetch every conversation's memory blob. Used by MemoryEntriesMigrator.
+    func fetchAllConversationMemories() throws -> [ConversationMemory] {
+        let stmt = try db.prepare("""
+            SELECT nodeId, content, updatedAt FROM conversation_memory;
+        """)
+        var results: [ConversationMemory] = []
+        while try stmt.step() {
+            guard let nodeId = (stmt.text(at: 0)).flatMap({ UUID(uuidString: $0) }) else { continue }
+            let content = stmt.text(at: 1) ?? ""
+            let updatedAt = Date(timeIntervalSince1970: stmt.double(at: 2))
+            results.append(ConversationMemory(nodeId: nodeId, content: content, updatedAt: updatedAt))
+        }
+        return results
+    }
+
+    func insertMemoryEntry(_ entry: MemoryEntry) throws {
+        let stmt = try db.prepare("""
+            INSERT INTO memory_entries
+              (id, scope, scopeRefId, kind, stability, status, content, confidence,
+               sourceNodeIds, createdAt, updatedAt, lastConfirmedAt, expiresAt, supersededBy)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """)
+        try stmt.bind(entry.id.uuidString, at: 1)
+        try stmt.bind(entry.scope.rawValue, at: 2)
+        try stmt.bind(entry.scopeRefId?.uuidString, at: 3)
+        try stmt.bind(entry.kind.rawValue, at: 4)
+        try stmt.bind(entry.stability.rawValue, at: 5)
+        try stmt.bind(entry.status.rawValue, at: 6)
+        try stmt.bind(entry.content, at: 7)
+        try stmt.bind(entry.confidence, at: 8)
+        try stmt.bind(encodeSourceNodeIds(entry.sourceNodeIds), at: 9)
+        try stmt.bind(entry.createdAt.timeIntervalSince1970, at: 10)
+        try stmt.bind(entry.updatedAt.timeIntervalSince1970, at: 11)
+        try stmt.bind(entry.lastConfirmedAt?.timeIntervalSince1970, at: 12)
+        try stmt.bind(entry.expiresAt?.timeIntervalSince1970, at: 13)
+        try stmt.bind(entry.supersededBy?.uuidString, at: 14)
+        try stmt.step()
+    }
+
+    /// Returns every entry (any status). Useful for debug/inspector and tests.
+    func fetchMemoryEntries() throws -> [MemoryEntry] {
+        let stmt = try db.prepare("""
+            SELECT id, scope, scopeRefId, kind, stability, status, content, confidence,
+                   sourceNodeIds, createdAt, updatedAt, lastConfirmedAt, expiresAt, supersededBy
+            FROM memory_entries
+            ORDER BY updatedAt DESC;
+        """)
+        var results: [MemoryEntry] = []
+        while try stmt.step() {
+            if let entry = memoryEntryFrom(stmt) { results.append(entry) }
+        }
+        return results
+    }
+
+    /// Returns the single `active` entry for a given (scope, scopeRefId), if any.
+    /// v2.2b invariant: at most one active entry per scope+ref at any moment.
+    func fetchActiveMemoryEntry(scope: MemoryScope, scopeRefId: UUID?) throws -> MemoryEntry? {
+        let sql: String
+        let stmt: Statement
+        if let scopeRefId {
+            sql = """
+                SELECT id, scope, scopeRefId, kind, stability, status, content, confidence,
+                       sourceNodeIds, createdAt, updatedAt, lastConfirmedAt, expiresAt, supersededBy
+                FROM memory_entries
+                WHERE scope = ? AND scopeRefId = ? AND status = 'active'
+                ORDER BY updatedAt DESC
+                LIMIT 1;
+            """
+            stmt = try db.prepare(sql)
+            try stmt.bind(scope.rawValue, at: 1)
+            try stmt.bind(scopeRefId.uuidString, at: 2)
+        } else {
+            sql = """
+                SELECT id, scope, scopeRefId, kind, stability, status, content, confidence,
+                       sourceNodeIds, createdAt, updatedAt, lastConfirmedAt, expiresAt, supersededBy
+                FROM memory_entries
+                WHERE scope = ? AND scopeRefId IS NULL AND status = 'active'
+                ORDER BY updatedAt DESC
+                LIMIT 1;
+            """
+            stmt = try db.prepare(sql)
+            try stmt.bind(scope.rawValue, at: 1)
+        }
+        guard try stmt.step() else { return nil }
+        return memoryEntryFrom(stmt)
+    }
+
+    /// Marks every currently-`active` entry in (scope, scopeRefId) as
+    /// `superseded`, linking them to the replacement via `supersededBy`. Called
+    /// atomically in the same transaction as the replacement insert so there is
+    /// never a window where two active entries coexist for the same scope+ref.
+    func supersedeActiveMemoryEntries(
+        scope: MemoryScope,
+        scopeRefId: UUID?,
+        replacementId: UUID,
+        at now: Date
+    ) throws {
+        let sql: String
+        let stmt: Statement
+        if let scopeRefId {
+            sql = """
+                UPDATE memory_entries
+                SET status = 'superseded', supersededBy = ?, updatedAt = ?
+                WHERE scope = ? AND scopeRefId = ? AND status = 'active';
+            """
+            stmt = try db.prepare(sql)
+            try stmt.bind(replacementId.uuidString, at: 1)
+            try stmt.bind(now.timeIntervalSince1970, at: 2)
+            try stmt.bind(scope.rawValue, at: 3)
+            try stmt.bind(scopeRefId.uuidString, at: 4)
+        } else {
+            sql = """
+                UPDATE memory_entries
+                SET status = 'superseded', supersededBy = ?, updatedAt = ?
+                WHERE scope = ? AND scopeRefId IS NULL AND status = 'active';
+            """
+            stmt = try db.prepare(sql)
+            try stmt.bind(replacementId.uuidString, at: 1)
+            try stmt.bind(now.timeIntervalSince1970, at: 2)
+            try stmt.bind(scope.rawValue, at: 3)
+        }
+        try stmt.step()
+    }
+
+    private func encodeSourceNodeIds(_ ids: [UUID]) -> String {
+        let strings = ids.map { $0.uuidString }
+        guard let data = try? JSONSerialization.data(withJSONObject: strings),
+              let json = String(data: data, encoding: .utf8) else {
+            return "[]"
+        }
+        return json
+    }
+
+    private func decodeSourceNodeIds(_ json: String) -> [UUID] {
+        guard let data = json.data(using: .utf8),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [String] else {
+            return []
+        }
+        return arr.compactMap { UUID(uuidString: $0) }
+    }
+
+    private func memoryEntryFrom(_ stmt: Statement) -> MemoryEntry? {
+        guard let idText = stmt.text(at: 0), let id = UUID(uuidString: idText) else { return nil }
+        guard let scopeText = stmt.text(at: 1), let scope = MemoryScope(rawValue: scopeText) else { return nil }
+        let scopeRefId: UUID? = stmt.text(at: 2).flatMap { UUID(uuidString: $0) }
+        guard let kindText = stmt.text(at: 3), let kind = MemoryKind(rawValue: kindText) else { return nil }
+        guard let stabilityText = stmt.text(at: 4), let stability = MemoryStability(rawValue: stabilityText) else { return nil }
+        guard let statusText = stmt.text(at: 5), let status = MemoryStatus(rawValue: statusText) else { return nil }
+        let content = stmt.text(at: 6) ?? ""
+        let confidence = stmt.double(at: 7)
+        let sourceNodeIds = decodeSourceNodeIds(stmt.text(at: 8) ?? "[]")
+        let createdAt = Date(timeIntervalSince1970: stmt.double(at: 9))
+        let updatedAt = Date(timeIntervalSince1970: stmt.double(at: 10))
+        let lastConfirmedAt: Date? = stmt.isNull(at: 11) ? nil : Date(timeIntervalSince1970: stmt.double(at: 11))
+        let expiresAt: Date? = stmt.isNull(at: 12) ? nil : Date(timeIntervalSince1970: stmt.double(at: 12))
+        let supersededBy: UUID? = stmt.text(at: 13).flatMap { UUID(uuidString: $0) }
+        return MemoryEntry(
+            id: id,
+            scope: scope,
+            scopeRefId: scopeRefId,
+            kind: kind,
+            stability: stability,
+            status: status,
+            content: content,
+            confidence: confidence,
+            sourceNodeIds: sourceNodeIds,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            lastConfirmedAt: lastConfirmedAt,
+            expiresAt: expiresAt,
+            supersededBy: supersededBy
+        )
     }
 
     // MARK: - Projects

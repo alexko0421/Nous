@@ -378,6 +378,140 @@ final class UserMemoryServiceTests: XCTestCase {
             "threshold met — refreshProject should be allowed to fire"
         )
     }
+
+    // MARK: - v2.2b dual-write parity
+
+    /// v2.2b invariant: after `refreshConversation`, the saved blob and the
+    /// active memory_entry must have identical content. That property is what
+    /// makes v2.2c's read-path cutover a non-semantic change — we can flip
+    /// consumers from blob to entry and the user-visible memory does not move.
+    func testRefreshConversationDualWritesBlobAndEntry() async throws {
+        let capture = PromptCapture()
+        let reply = "- Alex is debugging a retain cycle in an async sequence"
+        let mock = MockLLMService(capture: capture, reply: reply)
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let node = NousNode(type: .conversation, title: "Parity chat", content: "")
+        try store.insertNode(node)
+
+        let messages: [Message] = [
+            Message(nodeId: node.id, role: .user,
+                    content: "I have a retain cycle in my AsyncStream onTermination closure",
+                    timestamp: Date(timeIntervalSince1970: 1))
+        ]
+
+        await service.refreshConversation(nodeId: node.id, projectId: nil, messages: messages)
+
+        let blob = try store.fetchConversationMemory(nodeId: node.id)
+        XCTAssertNotNil(blob, "conversation blob must be written")
+
+        let entry = try store.fetchActiveMemoryEntry(scope: .conversation, scopeRefId: node.id)
+        XCTAssertNotNil(entry, "active memory_entry must be written (dual-write)")
+
+        XCTAssertEqual(
+            entry?.content, blob?.content,
+            "blob/entry content parity — v2.2c read-path cutover relies on this"
+        )
+        XCTAssertEqual(entry?.scope, .conversation)
+        XCTAssertEqual(entry?.scopeRefId, node.id)
+        XCTAssertEqual(entry?.stability, .temporary,
+                       "conversation-scope entries are temporary (wipe with chat)")
+        XCTAssertEqual(entry?.sourceNodeIds, [node.id],
+                       "conversation entry must cite its own node as source")
+    }
+
+    /// v2.2b parity for project scope. `refreshProject` aggregates its child
+    /// chats into a blob; the mirrored entry must carry that same aggregated
+    /// content.
+    func testRefreshProjectDualWritesBlobAndEntry() async throws {
+        let capture = PromptCapture()
+        let mock = MockLLMService(capture: capture, reply: "- Project-level rollup line")
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let project = Project(title: "Parity project")
+        try store.insertProject(project)
+        let chat = NousNode(type: .conversation, title: "child", content: "", projectId: project.id)
+        try store.insertNode(chat)
+
+        // Seed a conversation blob so refreshProject has something to roll up.
+        try store.saveConversationMemory(
+            ConversationMemory(
+                nodeId: chat.id,
+                content: "- child-chat insight",
+                updatedAt: Date(timeIntervalSince1970: 10)
+            )
+        )
+
+        await service.refreshProject(projectId: project.id)
+
+        let blob = try store.fetchProjectMemory(projectId: project.id)
+        XCTAssertNotNil(blob, "project blob must be written")
+
+        let entry = try store.fetchActiveMemoryEntry(scope: .project, scopeRefId: project.id)
+        XCTAssertNotNil(entry, "active project memory_entry must be written")
+
+        XCTAssertEqual(
+            entry?.content, blob?.content,
+            "project blob/entry content parity"
+        )
+        XCTAssertEqual(entry?.stability, .stable,
+                       "project-scope entries persist across chats")
+    }
+
+    /// v2.2b supersede invariant: a second refresh marks the first active
+    /// entry as `superseded` with `supersededBy` pointing to the new row, and
+    /// leaves exactly one active entry for the scope+ref.
+    func testRefreshConversationSecondCallSupersedesFirstEntry() async throws {
+        let capture1 = PromptCapture()
+        let service1 = UserMemoryService(
+            nodeStore: store,
+            llmServiceProvider: { MockLLMService(capture: capture1, reply: "- first summary line") }
+        )
+
+        let node = NousNode(type: .conversation, title: "Supersede chat", content: "")
+        try store.insertNode(node)
+
+        let firstMessages: [Message] = [
+            Message(nodeId: node.id, role: .user,
+                    content: "First distinctive evidence payload about Alex's shipping cadence",
+                    timestamp: Date(timeIntervalSince1970: 1))
+        ]
+        await service1.refreshConversation(nodeId: node.id, projectId: nil, messages: firstMessages)
+
+        let firstEntry = try store.fetchActiveMemoryEntry(scope: .conversation, scopeRefId: node.id)
+        XCTAssertNotNil(firstEntry, "first refresh must write an entry")
+        let firstId = firstEntry!.id
+
+        let capture2 = PromptCapture()
+        let service2 = UserMemoryService(
+            nodeStore: store,
+            llmServiceProvider: { MockLLMService(capture: capture2, reply: "- second summary line") }
+        )
+        let secondMessages: [Message] = [
+            Message(nodeId: node.id, role: .user,
+                    content: "Second distinctive evidence payload covering different territory",
+                    timestamp: Date(timeIntervalSince1970: 2))
+        ]
+        await service2.refreshConversation(nodeId: node.id, projectId: nil, messages: secondMessages)
+
+        let secondEntry = try store.fetchActiveMemoryEntry(scope: .conversation, scopeRefId: node.id)
+        XCTAssertNotNil(secondEntry, "second refresh must write a new entry")
+        XCTAssertNotEqual(secondEntry?.id, firstId, "second entry must be a new row")
+
+        let all = try store.fetchMemoryEntries()
+            .filter { $0.scope == .conversation && $0.scopeRefId == node.id }
+        XCTAssertEqual(all.count, 2, "supersede preserves history — both rows kept")
+
+        let active = all.filter { $0.status == .active }
+        XCTAssertEqual(active.count, 1, "exactly one active entry per scope+ref at any moment")
+        XCTAssertEqual(active.first?.id, secondEntry?.id)
+
+        let superseded = all.first { $0.id == firstId }
+        XCTAssertEqual(superseded?.status, .superseded,
+                       "old entry must be marked superseded, not deleted")
+        XCTAssertEqual(superseded?.supersededBy, secondEntry?.id,
+                       "supersededBy must point at the replacement — history chain intact")
+    }
 }
 
 // MARK: - Test doubles

@@ -34,6 +34,15 @@ struct ContentView: View {
             print("[Nous] MemoryV2Migrator failed: \(error)")
         }
 
+        // v2.2b: bootstrap memory_entries from existing scope blobs. Idempotent
+        // via schema_meta.memory_entries_version. 1 blob → 1 entry, content
+        // preserved so blob/entry parity holds post-migration.
+        do {
+            try MemoryEntriesMigrator.runIfNeeded(store: ns)
+        } catch {
+            print("[Nous] MemoryEntriesMigrator failed: \(error)")
+        }
+
         let vs = VectorStore(nodeStore: ns)
         let es = EmbeddingService()
         let llm = LocalLLMService()
