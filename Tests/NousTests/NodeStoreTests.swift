@@ -105,6 +105,20 @@ final class NodeStoreTests: XCTestCase {
         XCTAssertEqual(favorites.first?.title, "Favorite")
     }
 
+    func testFetchRecentConversationsExcludesCurrentNode() throws {
+        let older = makeNode(title: "Older Chat", type: .conversation, content: "Old transcript")
+        try store.insertNode(older)
+
+        var newer = makeNode(title: "Newer Chat", type: .conversation, content: "New transcript")
+        newer.updatedAt = Date().addingTimeInterval(60)
+        try store.insertNode(newer)
+
+        let recents = try store.fetchRecentConversations(limit: 5, excludingId: newer.id)
+
+        XCTAssertEqual(recents.count, 1)
+        XCTAssertEqual(recents.first?.id, older.id)
+    }
+
     // MARK: - Message Tests
 
     func testInsertAndFetchMessages() throws {
@@ -125,6 +139,154 @@ final class NodeStoreTests: XCTestCase {
         XCTAssertEqual(messages[1].content, "Hi there")
         XCTAssertEqual(messages[0].role, .user)
         XCTAssertEqual(messages[1].role, .assistant)
+    }
+
+    // MARK: - Memory scope tests (v2.1)
+
+    func testSaveAndFetchGlobalMemory() throws {
+        let memory = GlobalMemory(
+            content: "## Identity\n- Alex is a solo founder.\n",
+            updatedAt: Date(timeIntervalSince1970: 1234)
+        )
+        try store.saveGlobalMemory(memory)
+
+        let fetched = try store.fetchGlobalMemory()
+        XCTAssertEqual(fetched?.content, memory.content)
+        XCTAssertEqual(fetched?.updatedAt.timeIntervalSince1970, 1234)
+    }
+
+    func testSaveAndFetchProjectMemory() throws {
+        let project = Project(title: "P")
+        try store.insertProject(project)
+
+        let memory = ProjectMemory(projectId: project.id, content: "- project thing", updatedAt: Date())
+        try store.saveProjectMemory(memory)
+
+        let fetched = try store.fetchProjectMemory(projectId: project.id)
+        XCTAssertEqual(fetched?.projectId, project.id)
+        XCTAssertEqual(fetched?.content, "- project thing")
+    }
+
+    func testProjectMemoryCascadeOnProjectDelete() throws {
+        let project = Project(title: "P")
+        try store.insertProject(project)
+        try store.saveProjectMemory(
+            ProjectMemory(projectId: project.id, content: "keep me", updatedAt: Date())
+        )
+
+        XCTAssertNotNil(try store.fetchProjectMemory(projectId: project.id))
+
+        try store.deleteProject(id: project.id)
+
+        XCTAssertNil(try store.fetchProjectMemory(projectId: project.id),
+                     "Deleting project must cascade-delete its project_memory row")
+    }
+
+    func testSaveAndFetchConversationMemory() throws {
+        let node = makeNode(type: .conversation)
+        try store.insertNode(node)
+
+        let memory = ConversationMemory(nodeId: node.id, content: "- chat gist", updatedAt: Date())
+        try store.saveConversationMemory(memory)
+
+        let fetched = try store.fetchConversationMemory(nodeId: node.id)
+        XCTAssertEqual(fetched?.nodeId, node.id)
+        XCTAssertEqual(fetched?.content, "- chat gist")
+    }
+
+    func testConversationMemoryCascadeOnNodeDelete() throws {
+        let node = makeNode(type: .conversation)
+        try store.insertNode(node)
+        try store.saveConversationMemory(
+            ConversationMemory(nodeId: node.id, content: "keep me", updatedAt: Date())
+        )
+
+        XCTAssertNotNil(try store.fetchConversationMemory(nodeId: node.id))
+
+        try store.deleteNode(id: node.id)
+
+        XCTAssertNil(try store.fetchConversationMemory(nodeId: node.id),
+                     "Deleting node must cascade-delete its conversation_memory row")
+    }
+
+    /// P1 fix from post-commit /plan-eng-review Codex round: the previous
+    /// row-counting approach broke for single-active-chat projects. Because
+    /// `saveConversationMemory` uses INSERT OR REPLACE, a project with ONE
+    /// hot chat that refreshes 10 times stays at COUNT(rows)=1 forever and
+    /// never rolls up. The counter table stores EVENTS, not rows — each
+    /// successful conversation refresh bumps it via UPSERT. Project refresh
+    /// resets it. The signal still lives in SQLite so it survives app quit.
+    func testProjectRefreshCounterTracksEventsNotRows() throws {
+        let project = Project(title: "Single-hot-chat project")
+        try store.insertProject(project)
+
+        let chat = makeNode(type: .conversation, projectId: project.id)
+        try store.insertNode(chat)
+
+        XCTAssertEqual(
+            try store.readProjectRefreshCounter(projectId: project.id), 0,
+            "no refreshes yet → 0"
+        )
+
+        // Refresh the SAME chat 3 times (this is the case the row-counting
+        // version got wrong — INSERT OR REPLACE kept the row count at 1).
+        try store.incrementProjectRefreshCounter(projectId: project.id)
+        try store.incrementProjectRefreshCounter(projectId: project.id)
+        try store.incrementProjectRefreshCounter(projectId: project.id)
+
+        XCTAssertEqual(
+            try store.readProjectRefreshCounter(projectId: project.id), 3,
+            "3 events on a single chat — threshold must fire"
+        )
+
+        // Project rollup → counter resets to 0.
+        try store.resetProjectRefreshCounter(projectId: project.id)
+        XCTAssertEqual(
+            try store.readProjectRefreshCounter(projectId: project.id), 0,
+            "rollup resets the counter"
+        )
+
+        // Further refreshes start counting from zero again.
+        try store.incrementProjectRefreshCounter(projectId: project.id)
+        XCTAssertEqual(try store.readProjectRefreshCounter(projectId: project.id), 1)
+    }
+
+    /// Cross-project contamination guard — bumping project A's counter must
+    /// not touch project B's.
+    func testProjectRefreshCounterScopedToProject() throws {
+        let projectA = Project(title: "A")
+        let projectB = Project(title: "B")
+        try store.insertProject(projectA)
+        try store.insertProject(projectB)
+
+        try store.incrementProjectRefreshCounter(projectId: projectA.id)
+        try store.incrementProjectRefreshCounter(projectId: projectA.id)
+        try store.incrementProjectRefreshCounter(projectId: projectB.id)
+
+        XCTAssertEqual(try store.readProjectRefreshCounter(projectId: projectA.id), 2)
+        XCTAssertEqual(try store.readProjectRefreshCounter(projectId: projectB.id), 1)
+
+        // Reset A doesn't touch B.
+        try store.resetProjectRefreshCounter(projectId: projectA.id)
+        XCTAssertEqual(try store.readProjectRefreshCounter(projectId: projectA.id), 0)
+        XCTAssertEqual(try store.readProjectRefreshCounter(projectId: projectB.id), 1)
+    }
+
+    /// Deleting a project must cascade-delete its refresh-state row so a
+    /// recycled project UUID can't inherit the predecessor's counter.
+    func testProjectRefreshCounterCascadeOnProjectDelete() throws {
+        let project = Project(title: "Doomed")
+        try store.insertProject(project)
+        try store.incrementProjectRefreshCounter(projectId: project.id)
+        try store.incrementProjectRefreshCounter(projectId: project.id)
+        XCTAssertEqual(try store.readProjectRefreshCounter(projectId: project.id), 2)
+
+        try store.deleteProject(id: project.id)
+
+        XCTAssertEqual(
+            try store.readProjectRefreshCounter(projectId: project.id), 0,
+            "deleting the project must cascade-delete its refresh-state row"
+        )
     }
 
     // MARK: - Project Tests

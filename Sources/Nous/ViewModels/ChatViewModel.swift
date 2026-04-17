@@ -20,6 +20,8 @@ final class ChatViewModel {
     private let vectorStore: VectorStore
     private let embeddingService: EmbeddingService
     private let graphEngine: GraphEngine
+    private let userMemoryService: UserMemoryService
+    private let userMemoryScheduler: UserMemoryScheduler
     private let llmServiceProvider: () -> (any LLMService)?
 
     // MARK: - Init
@@ -29,12 +31,16 @@ final class ChatViewModel {
         vectorStore: VectorStore,
         embeddingService: EmbeddingService,
         graphEngine: GraphEngine,
+        userMemoryService: UserMemoryService,
+        userMemoryScheduler: UserMemoryScheduler,
         llmServiceProvider: @escaping () -> (any LLMService)?
     ) {
         self.nodeStore = nodeStore
         self.vectorStore = vectorStore
         self.embeddingService = embeddingService
         self.graphEngine = graphEngine
+        self.userMemoryService = userMemoryService
+        self.userMemoryScheduler = userMemoryScheduler
         self.llmServiceProvider = llmServiceProvider
     }
 
@@ -88,6 +94,10 @@ final class ChatViewModel {
         }
 
         let context = ChatViewModel.assembleContext(
+            globalMemory: userMemoryService.currentGlobal(),
+            projectMemory: node.projectId.flatMap { userMemoryService.currentProject(projectId: $0) },
+            conversationMemory: userMemoryService.currentConversation(nodeId: node.id),
+            recentConversations: [],
             citations: [],
             projectGoal: projectGoal,
             activeQuickActionMode: mode,
@@ -133,6 +143,7 @@ final class ChatViewModel {
             currentMode: activeQuickActionMode,
             assistantContent: assistantContent
         )
+        scheduleUserMemoryRefresh(for: node, messages: messages)
     }
 
     // MARK: - Send (RAG Pipeline)
@@ -188,10 +199,19 @@ final class ChatViewModel {
             projectGoal = project.goal
         }
 
+        let recentConversations = (try? nodeStore.fetchRecentConversations(
+            limit: 2,
+            excludingId: node.id
+        )) ?? []
+
         // Step 5: Assemble context
         let shouldAllowInteractiveClarification = activeQuickActionMode != nil
 
         let context = ChatViewModel.assembleContext(
+            globalMemory: userMemoryService.currentGlobal(),
+            projectMemory: node.projectId.flatMap { userMemoryService.currentProject(projectId: $0) },
+            conversationMemory: userMemoryService.currentConversation(nodeId: node.id),
+            recentConversations: recentConversations,
             citations: citations,
             projectGoal: projectGoal,
             attachments: attachments,
@@ -241,6 +261,7 @@ final class ChatViewModel {
             currentMode: activeQuickActionMode,
             assistantContent: assistantContent
         )
+        scheduleUserMemoryRefresh(for: node, messages: messages)
 
         // Step 10: Async task — update node embedding + regenerate edges
         let nodeId = node.id
@@ -274,6 +295,10 @@ final class ChatViewModel {
     // MARK: - Context Assembly
 
     static func assembleContext(
+        globalMemory: String?,
+        projectMemory: String?,
+        conversationMemory: String?,
+        recentConversations: [NousNode],
         citations: [SearchResult],
         projectGoal: String?,
         attachments: [AttachedFileContext] = [],
@@ -285,12 +310,36 @@ final class ChatViewModel {
         // Layer 1: Anchor — who Nous is (immutable)
         parts.append(anchor)
 
-        // Layer 2: Project context (if active)
+        // Layer 2a: Global identity memory (across all chats)
+        if let globalMemory, !globalMemory.isEmpty {
+            parts.append("---\n\nLONG-TERM MEMORY ABOUT ALEX:\n\(globalMemory)")
+        }
+
+        // Layer 2b: Project memory (only when this chat has a projectId)
+        if let projectMemory, !projectMemory.isEmpty {
+            parts.append("---\n\nTHIS PROJECT'S CONTEXT:\n\(projectMemory)")
+        }
+
+        // Layer 2c: This chat's own thread memory
+        if let conversationMemory, !conversationMemory.isEmpty {
+            parts.append("---\n\nTHIS CHAT'S THREAD SO FAR:\n\(conversationMemory)")
+        }
+
+        // Layer 3: Project context (if active)
         if let goal = projectGoal, !goal.isEmpty {
             parts.append("---\n\nCURRENT PROJECT GOAL: \(goal)")
         }
 
-        // Layer 3: Attached files (if any)
+        // Layer 4: Recent conversations for cross-window continuity
+        if !recentConversations.isEmpty {
+            parts.append("---\n\nRECENT CONVERSATIONS WITH ALEX:")
+            for conversation in recentConversations {
+                let snippet = String(conversation.content.prefix(280))
+                parts.append("\"\(conversation.title)\": \(snippet)")
+            }
+        }
+
+        // Layer 5: Attached files (if any)
         if !attachments.isEmpty {
             parts.append("---\n\nATTACHED FILES:")
             for attachment in attachments {
@@ -302,7 +351,7 @@ final class ChatViewModel {
             }
         }
 
-        // Layer 4: Retrieved knowledge (RAG)
+        // Layer 6: Retrieved knowledge (RAG)
         if !citations.isEmpty {
             parts.append("---\n\nRELEVANT KNOWLEDGE FROM ALEX'S NOTES AND CONVERSATIONS:")
             for (index, result) in citations.enumerated() {
@@ -463,5 +512,21 @@ final class ChatViewModel {
         }
 
         return fallback
+    }
+
+    /// Routes refresh work through the scheduler actor so it serialises after
+    /// the reply stream + persist step, avoiding MLX container contention on
+    /// local models (v2.1 §5, Q9=B).
+    private func scheduleUserMemoryRefresh(for node: NousNode, messages: [Message]) {
+        let nodeId = node.id
+        let projectId = node.projectId
+        let snapshot = messages
+        Task { [userMemoryScheduler] in
+            await userMemoryScheduler.enqueueConversationRefresh(
+                nodeId: nodeId,
+                projectId: projectId,
+                messages: snapshot
+            )
+        }
     }
 }

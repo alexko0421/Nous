@@ -69,12 +69,65 @@ final class NodeStore {
             );
         """)
 
+        // Schema version tracking. Lives in SQLite so it survives app reinstall
+        // and iCloud restore, unlike UserDefaults. See MemoryV2Migrator.
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS schema_meta (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+        """)
+
+        // Three scopes for cross-chat memory (v2.1).
+        // Old single `user_memory` table is created only by pre-v2.1 binaries;
+        // MemoryV2Migrator copy-and-drops it during the upgrade boot.
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS global_memory (
+                id        INTEGER PRIMARY KEY CHECK (id = 1),
+                content   TEXT NOT NULL DEFAULT '',
+                updatedAt REAL NOT NULL
+            );
+        """)
+
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS project_memory (
+                projectId TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+                content   TEXT NOT NULL DEFAULT '',
+                updatedAt REAL NOT NULL
+            );
+        """)
+
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS conversation_memory (
+                nodeId    TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
+                content   TEXT NOT NULL DEFAULT '',
+                updatedAt REAL NOT NULL
+            );
+        """)
+
+        // Per-project counter of conversation refreshes since the last project
+        // rollup. Incremented atomically on every refreshConversation inside a
+        // project, reset to 0 when refreshProject fires. Replaces the broken
+        // "count cm rows with updatedAt > project_memory.updatedAt" heuristic,
+        // which always returned 1 for single-active-chat projects because
+        // conversation_memory is INSERT OR REPLACE (one row per chat).
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS project_refresh_state (
+                projectId TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+                counter   INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+
         // Indexes
         try db.exec("CREATE INDEX IF NOT EXISTS idx_nodes_projectId  ON nodes(projectId);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_messages_nodeId  ON messages(nodeId);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_edges_sourceId   ON edges(sourceId);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_edges_targetId   ON edges(targetId);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_conversation_memory_updatedAt ON conversation_memory(updatedAt);")
     }
+
+    /// Direct access for migrator (transaction control, table-exists probing).
+    var rawDatabase: Database { db }
 
     private func ensureColumnExists(table: String, column: String, alterSQL: String) throws {
         let stmt = try db.prepare("PRAGMA table_info(\(table));")
@@ -221,6 +274,41 @@ final class NodeStore {
         return results
     }
 
+    func fetchRecentConversations(limit: Int, excludingId: UUID? = nil) throws -> [NousNode] {
+        let sql: String
+        if excludingId == nil {
+            sql = """
+                SELECT id, type, title, content, emoji, embedding, projectId, isFavorite, createdAt, updatedAt
+                FROM nodes
+                WHERE type='conversation' AND content != ''
+                ORDER BY updatedAt DESC
+                LIMIT ?;
+            """
+        } else {
+            sql = """
+                SELECT id, type, title, content, emoji, embedding, projectId, isFavorite, createdAt, updatedAt
+                FROM nodes
+                WHERE type='conversation' AND id != ? AND content != ''
+                ORDER BY updatedAt DESC
+                LIMIT ?;
+            """
+        }
+
+        let stmt = try db.prepare(sql)
+        if let excludingId {
+            try stmt.bind(excludingId.uuidString, at: 1)
+            try stmt.bind(limit, at: 2)
+        } else {
+            try stmt.bind(limit, at: 1)
+        }
+
+        var results: [NousNode] = []
+        while try stmt.step() {
+            results.append(nodeFrom(stmt))
+        }
+        return results
+    }
+
     private func nodeFrom(_ stmt: Statement) -> NousNode {
         let id = UUID(uuidString: stmt.text(at: 0) ?? "") ?? UUID()
         let type = NodeType(rawValue: stmt.text(at: 1) ?? "") ?? .note
@@ -268,6 +356,116 @@ final class NodeStore {
             results.append(Message(id: id, nodeId: nId, role: role, content: content, timestamp: timestamp))
         }
         return results
+    }
+
+    // MARK: - Memory scopes (v2.1)
+
+    // --- Global ---
+
+    func fetchGlobalMemory() throws -> GlobalMemory? {
+        let stmt = try db.prepare("""
+            SELECT content, updatedAt FROM global_memory WHERE id = 1;
+        """)
+        guard try stmt.step() else { return nil }
+        let content = stmt.text(at: 0) ?? ""
+        let updatedAt = Date(timeIntervalSince1970: stmt.double(at: 1))
+        return GlobalMemory(content: content, updatedAt: updatedAt)
+    }
+
+    func saveGlobalMemory(_ memory: GlobalMemory) throws {
+        let stmt = try db.prepare("""
+            INSERT OR REPLACE INTO global_memory (id, content, updatedAt)
+            VALUES (1, ?, ?);
+        """)
+        try stmt.bind(memory.content, at: 1)
+        try stmt.bind(memory.updatedAt.timeIntervalSince1970, at: 2)
+        try stmt.step()
+    }
+
+    // --- Project ---
+
+    func fetchProjectMemory(projectId: UUID) throws -> ProjectMemory? {
+        let stmt = try db.prepare("""
+            SELECT content, updatedAt FROM project_memory WHERE projectId = ?;
+        """)
+        try stmt.bind(projectId.uuidString, at: 1)
+        guard try stmt.step() else { return nil }
+        let content = stmt.text(at: 0) ?? ""
+        let updatedAt = Date(timeIntervalSince1970: stmt.double(at: 1))
+        return ProjectMemory(projectId: projectId, content: content, updatedAt: updatedAt)
+    }
+
+    func saveProjectMemory(_ memory: ProjectMemory) throws {
+        let stmt = try db.prepare("""
+            INSERT OR REPLACE INTO project_memory (projectId, content, updatedAt)
+            VALUES (?, ?, ?);
+        """)
+        try stmt.bind(memory.projectId.uuidString, at: 1)
+        try stmt.bind(memory.content, at: 2)
+        try stmt.bind(memory.updatedAt.timeIntervalSince1970, at: 3)
+        try stmt.step()
+    }
+
+    // --- Conversation ---
+
+    func fetchConversationMemory(nodeId: UUID) throws -> ConversationMemory? {
+        let stmt = try db.prepare("""
+            SELECT content, updatedAt FROM conversation_memory WHERE nodeId = ?;
+        """)
+        try stmt.bind(nodeId.uuidString, at: 1)
+        guard try stmt.step() else { return nil }
+        let content = stmt.text(at: 0) ?? ""
+        let updatedAt = Date(timeIntervalSince1970: stmt.double(at: 1))
+        return ConversationMemory(nodeId: nodeId, content: content, updatedAt: updatedAt)
+    }
+
+    func saveConversationMemory(_ memory: ConversationMemory) throws {
+        let stmt = try db.prepare("""
+            INSERT OR REPLACE INTO conversation_memory (nodeId, content, updatedAt)
+            VALUES (?, ?, ?);
+        """)
+        try stmt.bind(memory.nodeId.uuidString, at: 1)
+        try stmt.bind(memory.content, at: 2)
+        try stmt.bind(memory.updatedAt.timeIntervalSince1970, at: 3)
+        try stmt.step()
+    }
+
+    /// Atomically increments the per-project refresh counter by 1, creating the
+    /// row if absent. Called inside the transaction that persists a
+    /// conversation_memory update, so the count is an event count (refreshes
+    /// performed) not a row count (distinct chats refreshed). See Codex
+    /// adversarial review post-be089e5 finding #6 for why row-counting was
+    /// wrong: a single hot chat refreshed 5x is 1 row, never hits threshold.
+    func incrementProjectRefreshCounter(projectId: UUID) throws {
+        let stmt = try db.prepare("""
+            INSERT INTO project_refresh_state (projectId, counter) VALUES (?, 1)
+            ON CONFLICT(projectId) DO UPDATE SET counter = counter + 1;
+        """)
+        try stmt.bind(projectId.uuidString, at: 1)
+        try stmt.step()
+    }
+
+    /// Reads the current refresh counter for this project (0 if no row exists).
+    func readProjectRefreshCounter(projectId: UUID) throws -> Int {
+        let stmt = try db.prepare("""
+            SELECT counter FROM project_refresh_state WHERE projectId = ?;
+        """)
+        try stmt.bind(projectId.uuidString, at: 1)
+        guard try stmt.step() else { return 0 }
+        return stmt.int(at: 0)
+    }
+
+    /// Resets the refresh counter to 0. Called at the end of refreshProject so
+    /// the next threshold-3 window starts fresh. Atomic w.r.t. concurrent
+    /// incrementProjectRefreshCounter calls — a refresh landing mid-rollup
+    /// counts toward the next window, which is the desired semantic.
+    func resetProjectRefreshCounter(projectId: UUID) throws {
+        let stmt = try db.prepare("""
+            INSERT INTO project_refresh_state (projectId, counter) VALUES (?, 0)
+            ON CONFLICT(projectId) DO UPDATE SET counter = 0;
+        """)
+        try stmt.bind(projectId.uuidString, at: 1)
+        try stmt.step()
     }
 
     // MARK: - Projects
