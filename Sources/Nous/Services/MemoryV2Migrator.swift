@@ -135,6 +135,17 @@ enum MemoryV2Migrator {
         }
 
         let parsed = parseGlobalContent(from: oldSummary)
+        let rawTrimmed = oldSummary.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Codex #5: if raw summary had real content but the parser extracted
+        // nothing keepable, we're about to destroy data that Alex might still
+        // want (e.g. a future v1 release adds headings we don't yet recognise,
+        // or the summary format drifted). Abort the migration so next boot can
+        // retry after a migrator fix. Without this guard DROP TABLE fires and
+        // the data is unrecoverable.
+        if parsed.isEmpty && !rawTrimmed.isEmpty {
+            throw MigrationError.unrecognisedUserMemoryContent
+        }
 
         if !parsed.isEmpty {
             let writeStmt = try db.prepare("""
@@ -147,6 +158,13 @@ enum MemoryV2Migrator {
         }
 
         try db.exec("DROP TABLE user_memory;")
+    }
+
+    enum MigrationError: Error {
+        /// Raised when user_memory.summary has content but parseGlobalContent
+        /// returned empty. Migration aborts and rolls back so the old table
+        /// survives for manual inspection / migrator-fix retry.
+        case unrecognisedUserMemoryContent
     }
 }
 

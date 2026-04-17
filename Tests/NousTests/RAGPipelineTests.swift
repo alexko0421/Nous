@@ -50,10 +50,9 @@ final class RAGPipelineTests: XCTestCase {
             SearchResult(node: node1, similarity: 0.92),
             SearchResult(node: node2, similarity: 0.78)
         ]
-        let recentConversation = NousNode(
-            type: .conversation,
+        let recentConversation = (
             title: "Funding worries",
-            content: "Alex said cash runway is tight and school is only for visa status."
+            memory: "Alex said cash runway is tight and school is only for visa status."
         )
 
         let projectGoal = "Build a Swift concurrency learning app"
@@ -95,6 +94,35 @@ final class RAGPipelineTests: XCTestCase {
         // Verify relevance percentages
         XCTAssertTrue(context.contains("92%"))
         XCTAssertTrue(context.contains("78%"))
+    }
+
+    /// Codex #4: the recent-conversations layer must be fed from
+    /// conversation_memory (Alex-only, evidence-filtered), NOT the raw
+    /// transcript. The type signature itself is the strongest guarantee
+    /// (`[(title, memory)]` — no way to pass a NousNode through). This test
+    /// verifies the positive side: whatever string the caller supplies as
+    /// `memory` shows up in the context under the right heading, untouched.
+    /// The anchor contains literal "Nous:" formatting examples, so we avoid
+    /// over-broad assertions that would false-positive on the anchor.
+    func testAssembleContextUsesEvidenceFilteredRecents() {
+        let distinctive = "F-1 visa constraints shape investing approach"
+        let recent = (title: "Old chat", memory: distinctive)
+
+        let context = ChatViewModel.assembleContext(
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [recent],
+            citations: [],
+            projectGoal: nil
+        )
+
+        XCTAssertTrue(context.contains("RECENT CONVERSATIONS WITH ALEX:"),
+                      "recent-conversations heading should appear")
+        XCTAssertTrue(context.contains(distinctive),
+                      "evidence-filtered memory must survive into context")
+        XCTAssertTrue(context.contains("\"Old chat\": \(distinctive)"),
+                      "recent entry must use the (title, memory) tuple verbatim")
     }
 
     func testInteractiveClarificationInstructionsAppearOnlyWhenEnabled() {

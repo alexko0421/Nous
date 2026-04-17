@@ -199,7 +199,7 @@ final class ChatViewModel {
             projectGoal = project.goal
         }
 
-        let recentConversations = (try? nodeStore.fetchRecentConversations(
+        let recentConversations = (try? nodeStore.fetchRecentConversationMemories(
             limit: 2,
             excludingId: node.id
         )) ?? []
@@ -298,7 +298,7 @@ final class ChatViewModel {
         globalMemory: String?,
         projectMemory: String?,
         conversationMemory: String?,
-        recentConversations: [NousNode],
+        recentConversations: [(title: String, memory: String)],
         citations: [SearchResult],
         projectGoal: String?,
         attachments: [AttachedFileContext] = [],
@@ -330,11 +330,14 @@ final class ChatViewModel {
             parts.append("---\n\nCURRENT PROJECT GOAL: \(goal)")
         }
 
-        // Layer 4: Recent conversations for cross-window continuity
+        // Layer 4: Recent conversations for cross-window continuity.
+        // Uses the conversation_memory summary (Alex-only, evidence-filtered),
+        // NOT the raw transcript — raw content includes Nous's own replies and
+        // would reintroduce self-confirmation across chats. See Codex #4.
         if !recentConversations.isEmpty {
             parts.append("---\n\nRECENT CONVERSATIONS WITH ALEX:")
             for conversation in recentConversations {
-                let snippet = String(conversation.content.prefix(280))
+                let snippet = String(conversation.memory.prefix(280))
                 parts.append("\"\(conversation.title)\": \(snippet)")
             }
         }
