@@ -4,53 +4,99 @@ import Foundation
 ///
 /// Per v2.1 §5 scheduling decision (Q9=B): conversation refresh is enqueued
 /// only AFTER the assistant message has been fully streamed and persisted,
-/// and a prior in-flight refresh for the same node is cancelled (debounce).
+/// and prior in-flight refreshes for the same node are superseded by the
+/// newer `messages` array. Cancellation is properly serialised — the new
+/// task awaits the prior task's `.value` before doing its own work, so two
+/// LLM streams can never run concurrently for the same node (MLX has one
+/// mouth, one ear; overlap = contention + clobbered conversation_memory).
 ///
-/// Project refresh fires on a counter cadence (§14.1): every Nth
-/// conversation-refresh within a project triggers `refreshProject` for that
-/// project. Counter is per-project, in-memory, and resets on app launch.
+/// Project refresh is timestamp-derived (§14.1 / Eng Review #3). The trigger
+/// reads how many conversation_memory rows in this project have been written
+/// since the last `project_memory.updatedAt` and fires refreshProject once the
+/// threshold is met. The signal lives in SQLite, so it survives app quit —
+/// the previous in-memory counter silently reset on every launch and could
+/// prevent a heavy-churn project from ever rolling up.
 actor UserMemoryScheduler {
 
-    static let projectRefreshEveryN = 3
+    static let projectRefreshThreshold = 3
 
     private let service: UserMemoryService
     private var inFlightByNode: [UUID: Task<Void, Never>] = [:]
-    private var projectCounter: [UUID: Int] = [:]
+    /// Per-node monotonic generation counter. Each enqueue bumps the gen; the
+    /// task's cleanup only clears the slot if its gen is still the latest —
+    /// otherwise a newer task has already replaced us.
+    private var generationByNode: [UUID: Int] = [:]
 
     init(service: UserMemoryService) {
         self.service = service
     }
 
     /// Enqueue a conversation refresh. If one is already in flight for the same
-    /// `nodeId`, it is cancelled — the newer `messages` array is authoritative.
-    /// If `projectId` is non-nil, bumps the per-project counter and fires
-    /// `refreshProject` when the counter hits the threshold.
+    /// `nodeId`, the new task cancels it and awaits its completion before
+    /// starting, guaranteeing serialisation. If `projectId` is non-nil, checks
+    /// the timestamp-derived project-refresh threshold after the conversation
+    /// refresh completes and fires `refreshProject` when it is met.
     func enqueueConversationRefresh(
         nodeId: UUID,
         projectId: UUID?,
         messages: [Message]
     ) {
-        inFlightByNode[nodeId]?.cancel()
+        let pending = inFlightByNode[nodeId]
+        let generation = (generationByNode[nodeId] ?? 0) + 1
+        generationByNode[nodeId] = generation
+        let threshold = Self.projectRefreshThreshold
 
-        let task = Task { [service] in
-            await service.refreshConversation(nodeId: nodeId, messages: messages)
+        let task = Task { [service, weak self] in
+            // Serialise on the prior in-flight task so two LLM streams can't
+            // overlap for the same node. `Task.cancel()` alone is non-blocking;
+            // without awaiting `.value` the prior stream could still be mid-
+            // write to conversation_memory while we start the new one.
+            if let pending {
+                pending.cancel()
+                _ = await pending.value
+            }
+
+            // A yet-newer enqueue may have cancelled us while we awaited the
+            // prior task. If so, skip the refresh — the newer task owns the
+            // fresher `messages` snapshot and will do the work.
+            if !Task.isCancelled {
+                await service.refreshConversation(nodeId: nodeId, messages: messages)
+                if let projectId,
+                   service.shouldRefreshProject(projectId: projectId, threshold: threshold) {
+                    await service.refreshProject(projectId: projectId)
+                }
+            }
+
+            // Finally-path cleanup: drop the slot so stale entries don't cause
+            // spurious cancels on future enqueues. Guarded by generation so a
+            // newer task that replaced us doesn't get accidentally cleared.
+            await self?.taskDidComplete(nodeId: nodeId, generation: generation)
         }
         inFlightByNode[nodeId] = task
+    }
 
-        guard let projectId else { return }
-        let next = (projectCounter[projectId] ?? 0) + 1
-        if next >= Self.projectRefreshEveryN {
-            projectCounter[projectId] = 0
-            Task { [service] in
-                await service.refreshProject(projectId: projectId)
-            }
-        } else {
-            projectCounter[projectId] = next
+    /// Cleanup handler called from the end of every scheduled task. Only
+    /// clears the slot if no newer enqueue has replaced this task.
+    private func taskDidComplete(nodeId: UUID, generation: Int) {
+        guard generationByNode[nodeId] == generation else { return }
+        inFlightByNode.removeValue(forKey: nodeId)
+        generationByNode.removeValue(forKey: nodeId)
+    }
+
+    // MARK: - Test hooks
+
+    /// Awaits every in-flight task. After this returns, no refresh work is
+    /// outstanding for any node (each task's last action is to clear its own
+    /// slot via `taskDidComplete`). Used by tests to avoid timing-dependent
+    /// sleeps.
+    func waitUntilIdle() async {
+        while let task = inFlightByNode.values.first {
+            _ = await task.value
         }
     }
 
-    // Test hook: inspect counter state without triggering side effects.
-    func currentProjectCounter(for projectId: UUID) -> Int {
-        projectCounter[projectId] ?? 0
+    /// Whether a refresh is currently scheduled for this node.
+    func isInFlight(nodeId: UUID) -> Bool {
+        inFlightByNode[nodeId] != nil
     }
 }

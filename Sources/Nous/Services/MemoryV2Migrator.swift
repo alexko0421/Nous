@@ -13,7 +13,15 @@ enum MemoryV2Migrator {
 
     /// Run at app startup after `NodeStore` has created tables. Wraps all work
     /// in a BEGIN/COMMIT transaction so partial failure rolls back cleanly.
-    static func runIfNeeded(db: Database) throws {
+    ///
+    /// `faultInjectAfterMigrate` is a test-only hook that fires between the
+    /// row-copy step and the schema-version stamp, used by T1b to prove the
+    /// ROLLBACK path actually restores pre-migration state. Production callers
+    /// pass nil (the default).
+    static func runIfNeeded(
+        db: Database,
+        faultInjectAfterMigrate: (() throws -> Void)? = nil
+    ) throws {
         try db.exec("BEGIN TRANSACTION;")
         do {
             let currentVersion = try readMemoryVersion(db: db)
@@ -24,6 +32,7 @@ enum MemoryV2Migrator {
                 if try tableExists(db: db, name: "user_memory") {
                     try migrateFromUserMemory(db: db)
                 }
+                try faultInjectAfterMigrate?()
                 try writeMemoryVersion(db: db, value: targetVersion)
             }
             // currentVersion == targetVersion: already migrated, no-op.

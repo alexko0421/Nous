@@ -417,6 +417,35 @@ final class NodeStore {
         try stmt.step()
     }
 
+    /// Number of conversation_memory rows for nodes in this project whose
+    /// `updatedAt` is strictly greater than this project's `project_memory.updatedAt`
+    /// (or 0 if no project_memory row exists). Drives the timestamp-derived
+    /// project-refresh trigger so the signal survives app restarts (prior
+    /// in-memory counter silently died on quit — see plan §14.1 / Eng Review #3).
+    func countConversationMemoryUpdatesSinceProjectMemory(projectId: UUID) throws -> Int {
+        let lastProjectRefresh: Double
+        let pmStmt = try db.prepare("""
+            SELECT updatedAt FROM project_memory WHERE projectId = ?;
+        """)
+        try pmStmt.bind(projectId.uuidString, at: 1)
+        if try pmStmt.step() {
+            lastProjectRefresh = pmStmt.double(at: 0)
+        } else {
+            lastProjectRefresh = 0
+        }
+
+        let countStmt = try db.prepare("""
+            SELECT COUNT(*)
+            FROM conversation_memory cm
+            JOIN nodes n ON cm.nodeId = n.id
+            WHERE n.projectId = ? AND cm.updatedAt > ?;
+        """)
+        try countStmt.bind(projectId.uuidString, at: 1)
+        try countStmt.bind(lastProjectRefresh, at: 2)
+        _ = try countStmt.step()
+        return countStmt.int(at: 0)
+    }
+
     // MARK: - Projects
 
     func insertProject(_ project: Project) throws {

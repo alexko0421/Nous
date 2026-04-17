@@ -42,16 +42,49 @@ final class UserMemoryService {
         return Self.cap(content, budget: Self.conversationBudget)
     }
 
+    /// True when this project has accumulated `threshold` or more
+    /// conversation_memory writes since the last `refreshProject` (or ever, if
+    /// the project has never been refreshed). Timestamp-derived so the signal
+    /// survives app restart — see plan §14.1 / Eng Review #3.
+    func shouldRefreshProject(projectId: UUID, threshold: Int) -> Bool {
+        let count = (try? nodeStore.countConversationMemoryUpdatesSinceProjectMemory(projectId: projectId)) ?? 0
+        return count >= threshold
+    }
+
     // MARK: - Write
 
     /// Called after each completed send. Summarises **only** Alex's user-role
     /// turns for this chat. Assistant turns are excluded to prevent the
     /// self-confirmation loop (Nous's own replies becoming next turn's evidence).
+    ///
+    /// Evidence filter is content-level, not just role-level: markdown quote
+    /// blocks (`> …`) are stripped and any user turn whose remaining text is
+    /// ≥60% similar to a prior assistant turn in the same conversation is
+    /// dropped. This protects invariant #4 when Alex pastes Nous's reply back
+    /// into his next message (a common clarification pattern).
     func refreshConversation(nodeId: UUID, messages: [Message]) async {
-        let userTurns = messages
+        let priorAssistantTurns: [String] = messages
+            .filter { $0.role == .assistant }
+            .map { Self.stripQuoteBlocks($0.content) }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        let cleanedUserTurns: [String] = messages
             .filter { $0.role == .user }
+            .compactMap { msg -> String? in
+                let stripped = Self.stripQuoteBlocks(msg.content)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !stripped.isEmpty else { return nil }
+                for prior in priorAssistantTurns {
+                    if Self.tokenJaccard(stripped, prior) >= 0.6 {
+                        return nil
+                    }
+                }
+                return stripped
+            }
+
+        let userTurns = cleanedUserTurns
             .suffix(8)
-            .map(\.content)
             .joined(separator: "\n---\n")
 
         guard !userTurns.isEmpty else { return }
@@ -163,6 +196,15 @@ final class UserMemoryService {
     /// v1: invoked by the Memory Inspector UI when Alex explicitly promotes a
     /// project-level fact to identity level. v2 will auto-promote when the same
     /// fact recurs across ≥3 projects.
+    ///
+    /// PRECONDITION — Phase 3 ONLY. Do not call from Phase 1 / 1.5 code paths,
+    /// tests that aren't exercising Phase 3, or any future auto-promote loop
+    /// until Phase 3 ships edit-lock + dedup. This method does a read-modify-
+    /// write on `global_memory` with no concurrency guard — two callers racing
+    /// will silently clobber each other (and any in-progress user edit in the
+    /// Memory Inspector). The Phase 3 Memory Inspector is the sole authorised
+    /// caller; Phase 1.5's debug inspector is read-only and must never reach
+    /// this path.
     func promoteToGlobal(candidate: String) async {
         let trimmedCandidate = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedCandidate.isEmpty else { return }
@@ -210,6 +252,28 @@ final class UserMemoryService {
     }
 
     // MARK: - Helpers
+
+    /// Removes markdown blockquote lines (`> …` or `>> …`) from content.
+    /// Used to drop quoted assistant text that Alex pastes into his next turn.
+    static func stripQuoteBlocks(_ content: String) -> String {
+        content
+            .components(separatedBy: .newlines)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix(">") }
+            .joined(separator: "\n")
+    }
+
+    /// Jaccard similarity over lowercased whitespace-split tokens. Returns a
+    /// value in [0.0, 1.0]. Short strings (<3 tokens) return 0 to avoid false
+    /// positives from common words like "ok" / "thanks".
+    static func tokenJaccard(_ a: String, _ b: String) -> Double {
+        let tokensA = Set(a.lowercased().split(whereSeparator: \.isWhitespace).map(String.init))
+        let tokensB = Set(b.lowercased().split(whereSeparator: \.isWhitespace).map(String.init))
+        guard tokensA.count >= 3, tokensB.count >= 3 else { return 0 }
+        let intersection = tokensA.intersection(tokensB).count
+        let union = tokensA.union(tokensB).count
+        guard union > 0 else { return 0 }
+        return Double(intersection) / Double(union)
+    }
 
     /// Returns trimmed content capped at `budget` characters, or nil if empty.
     /// Truncates at the last newline before the cap to avoid mid-line cuts.
