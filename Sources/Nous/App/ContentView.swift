@@ -16,6 +16,7 @@ struct ContentView: View {
     @State private var embeddingService = EmbeddingService()
     @State private var localLLM = LocalLLMService()
     @State private var graphEngine: GraphEngine
+    @State private var userMemoryService: UserMemoryService
     @State private var settingsVM: SettingsViewModel
     @State private var chatVM: ChatViewModel
     @State private var noteVM: NoteViewModel
@@ -24,20 +25,34 @@ struct ContentView: View {
     init() {
         let dbPath = Self.databasePath()
         let ns = try! NodeStore(path: dbPath)
+
+        // One-time migration from pre-v2.1 user_memory blob. No-op if already done.
+        // Idempotent: guarded by schema_meta.memory_version.
+        do {
+            try MemoryV2Migrator.runIfNeeded(db: ns.rawDatabase)
+        } catch {
+            print("[Nous] MemoryV2Migrator failed: \(error)")
+        }
+
         let vs = VectorStore(nodeStore: ns)
         let es = EmbeddingService()
         let llm = LocalLLMService()
         let ge = GraphEngine(nodeStore: ns, vectorStore: vs)
         let svm = SettingsViewModel(embeddingService: es, localLLM: llm, nodeStore: ns)
+        let ums = UserMemoryService(nodeStore: ns, llmServiceProvider: { svm.makeLLMService() })
+        let scheduler = UserMemoryScheduler(service: ums)
 
         _nodeStore = State(initialValue: ns)
         _vectorStore = State(initialValue: vs)
         _embeddingService = State(initialValue: es)
         _localLLM = State(initialValue: llm)
         _graphEngine = State(initialValue: ge)
+        _userMemoryService = State(initialValue: ums)
         _settingsVM = State(initialValue: svm)
         _chatVM = State(initialValue: ChatViewModel(
             nodeStore: ns, vectorStore: vs, embeddingService: es, graphEngine: ge,
+            userMemoryService: ums,
+            userMemoryScheduler: scheduler,
             llmServiceProvider: { svm.makeLLMService() }
         ))
         _noteVM = State(initialValue: NoteViewModel(nodeStore: ns, vectorStore: vs, embeddingService: es, graphEngine: ge))

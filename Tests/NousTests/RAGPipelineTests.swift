@@ -50,16 +50,39 @@ final class RAGPipelineTests: XCTestCase {
             SearchResult(node: node1, similarity: 0.92),
             SearchResult(node: node2, similarity: 0.78)
         ]
+        let recentConversation = NousNode(
+            type: .conversation,
+            title: "Funding worries",
+            content: "Alex said cash runway is tight and school is only for visa status."
+        )
 
         let projectGoal = "Build a Swift concurrency learning app"
+        let userMemory = """
+        ## Identity
+        - Alex is a solo founder.
+        """
 
-        let context = ChatViewModel.assembleContext(citations: citations, projectGoal: projectGoal)
+        let context = ChatViewModel.assembleContext(
+            globalMemory: userMemory,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [recentConversation],
+            citations: citations,
+            projectGoal: projectGoal
+        )
 
         // Verify anchor prompt is present without depending on one exact language variant
         XCTAssertTrue(context.contains("Nous"))
 
+        // Verify long-term user memory is included
+        XCTAssertTrue(context.contains("Alex is a solo founder"))
+
         // Verify project goal is included
         XCTAssertTrue(context.contains(projectGoal))
+
+        // Verify recent conversation is included
+        XCTAssertTrue(context.contains("Funding worries"))
+        XCTAssertTrue(context.contains("cash runway is tight"))
 
         // Verify citation titles are present
         XCTAssertTrue(context.contains("Actor isolation notes"))
@@ -76,12 +99,20 @@ final class RAGPipelineTests: XCTestCase {
 
     func testInteractiveClarificationInstructionsAppearOnlyWhenEnabled() {
         let enabled = ChatViewModel.assembleContext(
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
             citations: [],
             projectGoal: nil,
             activeQuickActionMode: .direction,
             allowInteractiveClarification: true
         )
         let disabled = ChatViewModel.assembleContext(
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
             citations: [],
             projectGoal: nil,
             activeQuickActionMode: .direction,

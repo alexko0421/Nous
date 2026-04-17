@@ -35,7 +35,7 @@ final class SettingsViewModel {
 
     private let embeddingService: EmbeddingService
     private let localLLM: LocalLLMService
-    private let nodeStore: NodeStore
+    let nodeStore: NodeStore
 
     // MARK: - UserDefaults keys
 

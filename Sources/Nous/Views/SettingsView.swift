@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @Bindable var vm: SettingsViewModel
+    @State private var showMemoryInspector = false
 
     var body: some View {
         ScrollView {
@@ -87,6 +88,27 @@ struct SettingsView: View {
                     }
                 }
 
+                // ── Memory (debug) ──
+                settingsCard {
+                    VStack(alignment: .leading, spacing: 12) {
+                        sectionLabel("Memory (debug)")
+                        HStack {
+                            Text("Inspect what Nous has learned across scopes.")
+                                .font(.system(size: 13, design: .rounded))
+                                .foregroundColor(AppColor.colaDarkText.opacity(0.7))
+                            Spacer()
+                            Button("Open") { showMemoryInspector = true }
+                                .buttonStyle(.plain)
+                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(AppColor.colaOrange)
+                                .clipShape(Capsule())
+                        }
+                    }
+                }
+
                 Spacer(minLength: 20)
             }
             .padding(24)
@@ -95,6 +117,9 @@ struct SettingsView: View {
         .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
         .onAppear {
             vm.updateStats()
+        }
+        .sheet(isPresented: $showMemoryInspector) {
+            MemoryDebugInspector(nodeStore: vm.nodeStore)
         }
     }
 

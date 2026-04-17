@@ -105,6 +105,20 @@ final class NodeStoreTests: XCTestCase {
         XCTAssertEqual(favorites.first?.title, "Favorite")
     }
 
+    func testFetchRecentConversationsExcludesCurrentNode() throws {
+        let older = makeNode(title: "Older Chat", type: .conversation, content: "Old transcript")
+        try store.insertNode(older)
+
+        var newer = makeNode(title: "Newer Chat", type: .conversation, content: "New transcript")
+        newer.updatedAt = Date().addingTimeInterval(60)
+        try store.insertNode(newer)
+
+        let recents = try store.fetchRecentConversations(limit: 5, excludingId: newer.id)
+
+        XCTAssertEqual(recents.count, 1)
+        XCTAssertEqual(recents.first?.id, older.id)
+    }
+
     // MARK: - Message Tests
 
     func testInsertAndFetchMessages() throws {
@@ -125,6 +139,74 @@ final class NodeStoreTests: XCTestCase {
         XCTAssertEqual(messages[1].content, "Hi there")
         XCTAssertEqual(messages[0].role, .user)
         XCTAssertEqual(messages[1].role, .assistant)
+    }
+
+    // MARK: - Memory scope tests (v2.1)
+
+    func testSaveAndFetchGlobalMemory() throws {
+        let memory = GlobalMemory(
+            content: "## Identity\n- Alex is a solo founder.\n",
+            updatedAt: Date(timeIntervalSince1970: 1234)
+        )
+        try store.saveGlobalMemory(memory)
+
+        let fetched = try store.fetchGlobalMemory()
+        XCTAssertEqual(fetched?.content, memory.content)
+        XCTAssertEqual(fetched?.updatedAt.timeIntervalSince1970, 1234)
+    }
+
+    func testSaveAndFetchProjectMemory() throws {
+        let project = Project(title: "P")
+        try store.insertProject(project)
+
+        let memory = ProjectMemory(projectId: project.id, content: "- project thing", updatedAt: Date())
+        try store.saveProjectMemory(memory)
+
+        let fetched = try store.fetchProjectMemory(projectId: project.id)
+        XCTAssertEqual(fetched?.projectId, project.id)
+        XCTAssertEqual(fetched?.content, "- project thing")
+    }
+
+    func testProjectMemoryCascadeOnProjectDelete() throws {
+        let project = Project(title: "P")
+        try store.insertProject(project)
+        try store.saveProjectMemory(
+            ProjectMemory(projectId: project.id, content: "keep me", updatedAt: Date())
+        )
+
+        XCTAssertNotNil(try store.fetchProjectMemory(projectId: project.id))
+
+        try store.deleteProject(id: project.id)
+
+        XCTAssertNil(try store.fetchProjectMemory(projectId: project.id),
+                     "Deleting project must cascade-delete its project_memory row")
+    }
+
+    func testSaveAndFetchConversationMemory() throws {
+        let node = makeNode(type: .conversation)
+        try store.insertNode(node)
+
+        let memory = ConversationMemory(nodeId: node.id, content: "- chat gist", updatedAt: Date())
+        try store.saveConversationMemory(memory)
+
+        let fetched = try store.fetchConversationMemory(nodeId: node.id)
+        XCTAssertEqual(fetched?.nodeId, node.id)
+        XCTAssertEqual(fetched?.content, "- chat gist")
+    }
+
+    func testConversationMemoryCascadeOnNodeDelete() throws {
+        let node = makeNode(type: .conversation)
+        try store.insertNode(node)
+        try store.saveConversationMemory(
+            ConversationMemory(nodeId: node.id, content: "keep me", updatedAt: Date())
+        )
+
+        XCTAssertNotNil(try store.fetchConversationMemory(nodeId: node.id))
+
+        try store.deleteNode(id: node.id)
+
+        XCTAssertNil(try store.fetchConversationMemory(nodeId: node.id),
+                     "Deleting node must cascade-delete its conversation_memory row")
     }
 
     // MARK: - Project Tests

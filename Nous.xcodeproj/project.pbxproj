@@ -23,6 +23,12 @@
 		36814239C5034618D724A807 /* SetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 768CDC34E8F6272348EC152B /* SetupView.swift */; };
 		37AF74D6A8F3E2D7631E3BB8 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = 289331BB87BCDA02BF10FBFA /* MLXLLM */; };
 		3A38D50339D27DC72856B618 /* WindowConfigurator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFA7FC708EEBC903409D5DD9 /* WindowConfigurator.swift */; };
+		3AC7D6ED0C8ECFC7B2925CAE /* UserMemoryProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61F80CE82A4CBD8E318753AF /* UserMemoryProfile.swift */; };
+		ABCDEF1234567890AABBCC02 /* MemoryV2Migrator.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCDEF1234567890AABBCC01 /* MemoryV2Migrator.swift */; };
+		ABCDEF1234567890AABBCC04 /* UserMemoryScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCDEF1234567890AABBCC03 /* UserMemoryScheduler.swift */; };
+		ABCDEF1234567890AABBCC06 /* MemoryV2MigratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCDEF1234567890AABBCC05 /* MemoryV2MigratorTests.swift */; };
+		ABCDEF1234567890AABBCC08 /* UserMemoryServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCDEF1234567890AABBCC07 /* UserMemoryServiceTests.swift */; };
+		ABCDEF1234567890AABBCC0A /* MemoryDebugInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCDEF1234567890AABBCC09 /* MemoryDebugInspector.swift */; };
 		3B0C4ADB2DE8F304261A454E /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEA896134861BEAADF98E800 /* SettingsView.swift */; };
 		3E6FF46E8E6E947CF7B7AADF /* NousApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84AC99FE1331146CEC54C75D /* NousApp.swift */; };
 		3F9476D3C06B0F30A271AC5F /* GraphEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36CB503D39BB65E14D694E13 /* GraphEngine.swift */; };
@@ -55,6 +61,7 @@
 		C95610E7DF1F4FD56EAED862 /* TopicEmojiResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE7BA25891C49772FFB4BCC0 /* TopicEmojiResolver.swift */; };
 		D67AE98AD27B27D71D9962AE /* GalaxyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26B0833FF90A3381A73858CE /* GalaxyView.swift */; };
 		D707ED9BF3B1B7CD5C6A6CB0 /* VectorStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C94FF3DE937E45E699C4E0A2 /* VectorStoreTests.swift */; };
+		DDBD058147B497D397D7DAC0 /* UserMemoryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1F0851321FDD912EBEA901F /* UserMemoryService.swift */; };
 		DE8F51349E0FA0FA45C61D09 /* LocalLLMService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92D5AA1CB7980A98700AB726 /* LocalLLMService.swift */; };
 		E2BA1CBDD071A778D65A719A /* anchor.md in Resources */ = {isa = PBXBuildFile; fileRef = 29A9E0EFFECF3C48A6B1D69F /* anchor.md */; };
 		E6978899110C57909E022FFD /* ClarificationCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3154A6E7BC8B7FD38EF8B21 /* ClarificationCard.swift */; };
@@ -92,6 +99,12 @@
 		55859ED677DFDB237447B2EC /* Message.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Message.swift; sourceTree = "<group>"; };
 		593E59F6467AEF07EEFC96B6 /* Database.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Database.swift; sourceTree = "<group>"; };
 		5B93C993AA118825C12F999B /* VectorStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VectorStore.swift; sourceTree = "<group>"; };
+		61F80CE82A4CBD8E318753AF /* UserMemoryProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserMemoryProfile.swift; sourceTree = "<group>"; };
+		ABCDEF1234567890AABBCC01 /* MemoryV2Migrator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryV2Migrator.swift; sourceTree = "<group>"; };
+		ABCDEF1234567890AABBCC03 /* UserMemoryScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserMemoryScheduler.swift; sourceTree = "<group>"; };
+		ABCDEF1234567890AABBCC05 /* MemoryV2MigratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryV2MigratorTests.swift; sourceTree = "<group>"; };
+		ABCDEF1234567890AABBCC07 /* UserMemoryServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserMemoryServiceTests.swift; sourceTree = "<group>"; };
+		ABCDEF1234567890AABBCC09 /* MemoryDebugInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryDebugInspector.swift; sourceTree = "<group>"; };
 		63558731B5D9A45DD29170B9 /* NousTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NousTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		69184F11E49CB01A84551833 /* ClarificationCardParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClarificationCardParserTests.swift; sourceTree = "<group>"; };
 		6E88716E75C10545B684D5FD /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModel.swift; sourceTree = "<group>"; };
@@ -119,6 +132,7 @@
 		DE7BA25891C49772FFB4BCC0 /* TopicEmojiResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopicEmojiResolver.swift; sourceTree = "<group>"; };
 		E3AC0F0D30E0A4039BD3E7B6 /* SpriteKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SpriteKit.framework; path = System/Library/Frameworks/SpriteKit.framework; sourceTree = SDKROOT; };
 		F0A35FC2025E4781FA8CEBE4 /* RAGCitationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RAGCitationView.swift; sourceTree = "<group>"; };
+		F1F0851321FDD912EBEA901F /* UserMemoryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserMemoryService.swift; sourceTree = "<group>"; };
 		F839455BCBC5668612A6A606 /* LLMService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMService.swift; sourceTree = "<group>"; };
 		FEA896134861BEAADF98E800 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		FEADD90223D5DCBFDE74F5DE /* Accelerate.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Accelerate.framework; path = System/Library/Frameworks/Accelerate.framework; sourceTree = SDKROOT; };
@@ -213,6 +227,7 @@
 				CC28A679A68D922546206E9D /* NousNode.swift */,
 				AB46BB1DCA54C416A6215077 /* Project.swift */,
 				065102465F744BEAC0593D67 /* QuickActionMode.swift */,
+				61F80CE82A4CBD8E318753AF /* UserMemoryProfile.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -235,8 +250,11 @@
 				36CB503D39BB65E14D694E13 /* GraphEngine.swift */,
 				F839455BCBC5668612A6A606 /* LLMService.swift */,
 				92D5AA1CB7980A98700AB726 /* LocalLLMService.swift */,
+				ABCDEF1234567890AABBCC01 /* MemoryV2Migrator.swift */,
 				728E7385459EB842724E8BCA /* NodeStore.swift */,
 				DE7BA25891C49772FFB4BCC0 /* TopicEmojiResolver.swift */,
+				ABCDEF1234567890AABBCC03 /* UserMemoryScheduler.swift */,
+				F1F0851321FDD912EBEA901F /* UserMemoryService.swift */,
 				5B93C993AA118825C12F999B /* VectorStore.swift */,
 			);
 			path = Services;
@@ -267,9 +285,11 @@
 			children = (
 				69184F11E49CB01A84551833 /* ClarificationCardParserTests.swift */,
 				ABFA60716BE28FDBDC5D4B01 /* GraphEngineTests.swift */,
+				ABCDEF1234567890AABBCC05 /* MemoryV2MigratorTests.swift */,
 				840F091AC2ADF85B26F1884A /* NodeStoreTests.swift */,
 				CE5485D2A957CBBB28E2D627 /* RAGPipelineTests.swift */,
 				1B2D97D9D7ACB3B0FAA8B275 /* TopicEmojiResolverTests.swift */,
+				ABCDEF1234567890AABBCC07 /* UserMemoryServiceTests.swift */,
 				C94FF3DE937E45E699C4E0A2 /* VectorStoreTests.swift */,
 			);
 			name = NousTests;
@@ -285,6 +305,7 @@
 				54D7B196613E93EAF2C72EF8 /* GalaxyScene.swift */,
 				26B0833FF90A3381A73858CE /* GalaxyView.swift */,
 				A47BC60463D5E92044AFDB86 /* LeftSidebar.swift */,
+				ABCDEF1234567890AABBCC09 /* MemoryDebugInspector.swift */,
 				783585E09595EF502C060F91 /* NoteEditor.swift */,
 				99A974153DB5C96A52796407 /* NoteListView.swift */,
 				10115CC57E8933F62B3A81F0 /* ProjectListView.swift */,
@@ -431,6 +452,11 @@
 				4E112F0AA516567676B1413E /* SettingsViewModel.swift in Sources */,
 				36814239C5034618D724A807 /* SetupView.swift in Sources */,
 				C95610E7DF1F4FD56EAED862 /* TopicEmojiResolver.swift in Sources */,
+				ABCDEF1234567890AABBCC02 /* MemoryV2Migrator.swift in Sources */,
+				ABCDEF1234567890AABBCC04 /* UserMemoryScheduler.swift in Sources */,
+				ABCDEF1234567890AABBCC0A /* MemoryDebugInspector.swift in Sources */,
+				3AC7D6ED0C8ECFC7B2925CAE /* UserMemoryProfile.swift in Sources */,
+				DDBD058147B497D397D7DAC0 /* UserMemoryService.swift in Sources */,
 				9CA12F6A78C6C54FA3535947 /* VectorStore.swift in Sources */,
 				07FFF1026087C07958572C54 /* WelcomeView.swift in Sources */,
 				3A38D50339D27DC72856B618 /* WindowConfigurator.swift in Sources */,
@@ -443,9 +469,11 @@
 			files = (
 				ACC542F83437ECF80EF63CDD /* ClarificationCardParserTests.swift in Sources */,
 				4D4E88E3F6E50302A15F3D83 /* GraphEngineTests.swift in Sources */,
+				ABCDEF1234567890AABBCC06 /* MemoryV2MigratorTests.swift in Sources */,
 				4116C4885DF5E1CB2FE62225 /* NodeStoreTests.swift in Sources */,
 				8C7CFB0C2C5581CFEBD55BFE /* RAGPipelineTests.swift in Sources */,
 				C7EB96C3AFE8F67879B139E3 /* TopicEmojiResolverTests.swift in Sources */,
+				ABCDEF1234567890AABBCC08 /* UserMemoryServiceTests.swift in Sources */,
 				D707ED9BF3B1B7CD5C6A6CB0 /* VectorStoreTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
