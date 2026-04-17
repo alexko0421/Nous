@@ -28,6 +28,12 @@ actor UserMemoryScheduler {
     /// task's cleanup only clears the slot if its gen is still the latest —
     /// otherwise a newer task has already replaced us.
     private var generationByNode: [UUID: Int] = [:]
+    /// Codex #3: per-projectId lock. Two refreshProject calls for the same
+    /// project must not run concurrently — they'd each read a snapshot of
+    /// conversation_memory, feed it to the LLM independently, and the later
+    /// writer clobbers the earlier one with a stale-at-write-time summary.
+    /// This set guards the critical section; concurrent attempts skip cleanly.
+    private var refreshingProjects: Set<UUID> = []
 
     init(service: UserMemoryService) {
         self.service = service
@@ -64,8 +70,10 @@ actor UserMemoryScheduler {
             if !Task.isCancelled {
                 await service.refreshConversation(nodeId: nodeId, projectId: projectId, messages: messages)
                 if let projectId,
-                   service.shouldRefreshProject(projectId: projectId, threshold: threshold) {
+                   service.shouldRefreshProject(projectId: projectId, threshold: threshold),
+                   await self?.tryAcquireProjectLock(projectId: projectId) == true {
                     await service.refreshProject(projectId: projectId)
+                    await self?.releaseProjectLock(projectId: projectId)
                 }
             }
 
@@ -83,6 +91,27 @@ actor UserMemoryScheduler {
         guard generationByNode[nodeId] == generation else { return }
         inFlightByNode.removeValue(forKey: nodeId)
         generationByNode.removeValue(forKey: nodeId)
+    }
+
+    /// Codex #3: atomically try to acquire the refresh lock for a project.
+    /// Returns true if the caller should run refreshProject; false if another
+    /// task has it and the caller should bail out. Actor isolation makes the
+    /// check-and-insert atomic — no explicit mutex needed. Internal (not
+    /// private) so the unit test can exercise the mechanism directly without
+    /// having to race the full enqueue path.
+    func tryAcquireProjectLock(projectId: UUID) -> Bool {
+        if refreshingProjects.contains(projectId) { return false }
+        refreshingProjects.insert(projectId)
+        return true
+    }
+
+    func releaseProjectLock(projectId: UUID) {
+        refreshingProjects.remove(projectId)
+    }
+
+    /// Test hook: whether the project-refresh lock is held for this project.
+    func isRefreshingProject(projectId: UUID) -> Bool {
+        refreshingProjects.contains(projectId)
     }
 
     // MARK: - Test hooks

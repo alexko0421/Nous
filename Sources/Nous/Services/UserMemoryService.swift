@@ -123,16 +123,25 @@ final class UserMemoryService {
 
             var updated = ""
             for try await chunk in stream {
+                // Codex #2: cooperative cancel. When the scheduler cancels this
+                // task because a newer enqueue arrived, stop consuming tokens
+                // and skip the write so the fresher `messages` snapshot wins.
+                if Task.isCancelled { return }
                 updated += chunk
             }
 
+            if Task.isCancelled { return }
             let trimmed = updated.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
-            try? nodeStore.saveConversationMemory(
-                ConversationMemory(nodeId: nodeId, content: trimmed, updatedAt: Date())
-            )
+            Self.logPersistenceErrors("saveConversationMemory") {
+                try nodeStore.saveConversationMemory(
+                    ConversationMemory(nodeId: nodeId, content: trimmed, updatedAt: Date())
+                )
+            }
             if let projectId = projectId {
-                try? nodeStore.incrementProjectRefreshCounter(projectId: projectId)
+                Self.logPersistenceErrors("incrementProjectRefreshCounter") {
+                    try nodeStore.incrementProjectRefreshCounter(projectId: projectId)
+                }
             }
         } catch {
             return
@@ -186,15 +195,21 @@ final class UserMemoryService {
 
             var updated = ""
             for try await chunk in stream {
+                if Task.isCancelled { return }
                 updated += chunk
             }
 
+            if Task.isCancelled { return }
             let trimmed = updated.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
-            try? nodeStore.saveProjectMemory(
-                ProjectMemory(projectId: projectId, content: trimmed, updatedAt: Date())
-            )
-            try? nodeStore.resetProjectRefreshCounter(projectId: projectId)
+            Self.logPersistenceErrors("saveProjectMemory") {
+                try nodeStore.saveProjectMemory(
+                    ProjectMemory(projectId: projectId, content: trimmed, updatedAt: Date())
+                )
+            }
+            Self.logPersistenceErrors("resetProjectRefreshCounter") {
+                try nodeStore.resetProjectRefreshCounter(projectId: projectId)
+            }
         } catch {
             return
         }
@@ -245,14 +260,18 @@ final class UserMemoryService {
 
             var updated = ""
             for try await chunk in stream {
+                if Task.isCancelled { return }
                 updated += chunk
             }
 
+            if Task.isCancelled { return }
             let trimmed = updated.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
-            try? nodeStore.saveGlobalMemory(
-                GlobalMemory(content: trimmed, updatedAt: Date())
-            )
+            Self.logPersistenceErrors("saveGlobalMemory") {
+                try nodeStore.saveGlobalMemory(
+                    GlobalMemory(content: trimmed, updatedAt: Date())
+                )
+            }
         } catch {
             return
         }
@@ -280,6 +299,21 @@ final class UserMemoryService {
         let union = tokensA.union(tokensB).count
         guard union > 0 else { return 0 }
         return Double(intersection) / Double(union)
+    }
+
+    /// Codex #7: replaces `try?` for persistence writes. Silently swallowing
+    /// SQLite failures means Alex's memory could stop being saved and he'd
+    /// never know. We still don't rethrow (an occasional write failure must
+    /// not crash a user-facing chat), but DEBUG builds log so the failure is
+    /// visible while iterating locally. Prod is silent by design.
+    static func logPersistenceErrors(_ label: String, _ work: () throws -> Void) {
+        do {
+            try work()
+        } catch {
+            #if DEBUG
+            print("[UserMemoryService] \(label) failed: \(error)")
+            #endif
+        }
     }
 
     /// Returns trimmed content capped at `budget` characters, or nil if empty.

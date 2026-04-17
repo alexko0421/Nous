@@ -249,6 +249,45 @@ final class UserMemoryServiceTests: XCTestCase {
         XCTAssertFalse(stillInFlight, "inFlight slot must be cleared after the final task completes")
     }
 
+    /// Codex #3: per-project refreshProject lock mechanism. Two refreshProject
+    /// calls for the same projectId must not run concurrently — they'd each
+    /// feed a snapshot of conversation_memory to the LLM and clobber each
+    /// other's write. Actor isolation makes tryAcquire atomic, so the second
+    /// concurrent attempt sees the lock held and skips. Different projects
+    /// must not block each other, and release must make the lock reusable.
+    func testProjectRefreshLockSerializesSameProjectButAllowsDifferentProjects() async throws {
+        let mock = MockLLMService(capture: PromptCapture(), reply: "unused")
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+        let scheduler = UserMemoryScheduler(service: service)
+
+        let projectA = UUID()
+        let projectB = UUID()
+
+        // First acquire for A: must succeed.
+        let first = await scheduler.tryAcquireProjectLock(projectId: projectA)
+        XCTAssertTrue(first, "first acquire must succeed")
+        let heldAfterFirst = await scheduler.isRefreshingProject(projectId: projectA)
+        XCTAssertTrue(heldAfterFirst, "lock flag must be set after acquire")
+
+        // Second acquire for same project: must fail — lock is held.
+        let second = await scheduler.tryAcquireProjectLock(projectId: projectA)
+        XCTAssertFalse(second, "second concurrent acquire for same project must fail")
+
+        // Different project: must not be blocked.
+        let other = await scheduler.tryAcquireProjectLock(projectId: projectB)
+        XCTAssertTrue(other, "different project must not be blocked by A's lock")
+
+        // Release A, then re-acquire: must succeed.
+        await scheduler.releaseProjectLock(projectId: projectA)
+        let heldAfterRelease = await scheduler.isRefreshingProject(projectId: projectA)
+        XCTAssertFalse(heldAfterRelease, "release must clear the lock flag")
+        let third = await scheduler.tryAcquireProjectLock(projectId: projectA)
+        XCTAssertTrue(third, "after release, same project must be re-acquirable")
+
+        await scheduler.releaseProjectLock(projectId: projectA)
+        await scheduler.releaseProjectLock(projectId: projectB)
+    }
+
     /// Two tasks for DIFFERENT nodes should be allowed to run concurrently —
     /// serialisation is per-node. This guards against an over-zealous fix that
     /// accidentally globally-serialises all refreshes.

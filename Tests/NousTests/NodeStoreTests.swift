@@ -119,6 +119,63 @@ final class NodeStoreTests: XCTestCase {
         XCTAssertEqual(recents.first?.id, older.id)
     }
 
+    /// Codex #4: the evidence-filtered recent feed returns only chats that
+    /// have a non-empty conversation_memory row, and returns the memory
+    /// content (Alex-only, post-extractor) rather than node.content (raw
+    /// transcript with "Alex:"/"Nous:" markers).
+    func testFetchRecentConversationMemoriesUsesConversationMemoryNotTranscript() throws {
+        let chatWithMemory = makeNode(
+            title: "Chat with memory",
+            type: .conversation,
+            content: "Alex: hi\n\nNous: hi there, raw transcript leaks should not survive"
+        )
+        try store.insertNode(chatWithMemory)
+        try store.saveConversationMemory(
+            ConversationMemory(
+                nodeId: chatWithMemory.id,
+                content: "- Alex wants Nous to remember evidence-only notes",
+                updatedAt: Date(timeIntervalSince1970: 1000)
+            )
+        )
+
+        // A chat with no conversation_memory yet — must be excluded.
+        let chatWithoutMemory = makeNode(
+            title: "No memory yet",
+            type: .conversation,
+            content: "Alex: test\n\nNous: reply"
+        )
+        try store.insertNode(chatWithoutMemory)
+
+        let recents = try store.fetchRecentConversationMemories(limit: 5)
+
+        XCTAssertEqual(recents.count, 1, "chat without conversation_memory must be skipped")
+        XCTAssertEqual(recents.first?.title, "Chat with memory")
+        XCTAssertEqual(recents.first?.memory,
+                       "- Alex wants Nous to remember evidence-only notes")
+        XCTAssertFalse(recents.first?.memory.contains("Nous:") ?? true,
+                       "raw assistant marker must not reach the recent feed")
+    }
+
+    func testFetchRecentConversationMemoriesExcludesCurrentNode() throws {
+        let older = makeNode(title: "Older", type: .conversation)
+        try store.insertNode(older)
+        try store.saveConversationMemory(
+            ConversationMemory(nodeId: older.id, content: "- older memory",
+                               updatedAt: Date(timeIntervalSince1970: 100))
+        )
+
+        let current = makeNode(title: "Current", type: .conversation)
+        try store.insertNode(current)
+        try store.saveConversationMemory(
+            ConversationMemory(nodeId: current.id, content: "- current memory",
+                               updatedAt: Date(timeIntervalSince1970: 200))
+        )
+
+        let recents = try store.fetchRecentConversationMemories(limit: 5, excludingId: current.id)
+        XCTAssertEqual(recents.count, 1)
+        XCTAssertEqual(recents.first?.title, "Older")
+    }
+
     // MARK: - Message Tests
 
     func testInsertAndFetchMessages() throws {

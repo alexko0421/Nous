@@ -222,6 +222,63 @@ final class MemoryV2MigratorTests: XCTestCase {
         }
     }
 
+    /// Codex #5: destructive DROP TABLE guard. If user_memory.summary has real
+    /// content but parseGlobalContent returns empty (e.g. a future release added
+    /// headings we don't yet recognise), the migration MUST abort and leave the
+    /// old table intact so Alex can recover. Without this guard the DROP fires
+    /// and the data is unrecoverable.
+    func testMigrationAbortsWhenRawHasContentButParseReturnsEmpty() throws {
+        let db = store.rawDatabase
+
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS user_memory (
+                id        INTEGER PRIMARY KEY CHECK (id = 1),
+                summary   TEXT NOT NULL DEFAULT '',
+                updatedAt REAL NOT NULL
+            );
+        """)
+        // Real content but NO ## headings → parseGlobalContent returns empty.
+        let unrecognised = "Alex prefers Cantonese. Runs macOS. No SSN right now."
+        let seedTimestamp = 1_700_000_000.0
+        let seedStmt = try db.prepare("""
+            INSERT OR REPLACE INTO user_memory (id, summary, updatedAt) VALUES (1, ?, ?);
+        """)
+        try seedStmt.bind(unrecognised, at: 1)
+        try seedStmt.bind(seedTimestamp, at: 2)
+        try seedStmt.step()
+
+        XCTAssertThrowsError(try MemoryV2Migrator.runIfNeeded(db: db)) { error in
+            guard case MemoryV2Migrator.MigrationError.unrecognisedUserMemoryContent = error else {
+                XCTFail("expected unrecognisedUserMemoryContent, got \(error)")
+                return
+            }
+        }
+
+        // user_memory table must still exist — DROP was rolled back.
+        do {
+            let stmt = try db.prepare("""
+                SELECT name FROM sqlite_master WHERE type='table' AND name='user_memory';
+            """)
+            XCTAssertTrue(try stmt.step(), "user_memory must survive the abort")
+        }
+
+        // Row content must be untouched.
+        do {
+            let stmt = try db.prepare("SELECT summary FROM user_memory WHERE id = 1;")
+            XCTAssertTrue(try stmt.step())
+            XCTAssertEqual(stmt.text(at: 0), unrecognised,
+                           "user_memory.summary mutated despite abort")
+        }
+
+        // global_memory must have no row and schema_meta must NOT be stamped.
+        XCTAssertNil(try store.fetchGlobalMemory())
+        do {
+            let stmt = try db.prepare("SELECT value FROM schema_meta WHERE key='memory_version';")
+            XCTAssertFalse(try stmt.step(),
+                           "memory_version stamped despite abort — retry would silently skip")
+        }
+    }
+
     func testMigrationOnFreshInstallStampsVersionOnly() throws {
         let db = store.rawDatabase
 

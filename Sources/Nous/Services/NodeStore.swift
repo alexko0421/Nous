@@ -274,6 +274,55 @@ final class NodeStore {
         return results
     }
 
+    /// Codex #4: the evidence-filtered recent-conversations feed. Returns the
+    /// `conversation_memory.content` (already stripped of assistant replies
+    /// via the v2.1 extractor) joined to the node's title, NOT the raw
+    /// transcript. Using raw node.content leaks "Nous: …" turns back into the
+    /// next chat's system prompt, reintroducing the self-confirmation loop
+    /// that conversation_memory was architected to prevent. Chats without a
+    /// conversation_memory row are skipped — they have no safe content yet.
+    func fetchRecentConversationMemories(
+        limit: Int,
+        excludingId: UUID? = nil
+    ) throws -> [(title: String, memory: String)] {
+        let sql: String
+        if excludingId == nil {
+            sql = """
+                SELECT n.title, cm.content
+                FROM nodes n
+                JOIN conversation_memory cm ON cm.nodeId = n.id
+                WHERE n.type='conversation' AND TRIM(cm.content) != ''
+                ORDER BY cm.updatedAt DESC
+                LIMIT ?;
+            """
+        } else {
+            sql = """
+                SELECT n.title, cm.content
+                FROM nodes n
+                JOIN conversation_memory cm ON cm.nodeId = n.id
+                WHERE n.type='conversation' AND n.id != ? AND TRIM(cm.content) != ''
+                ORDER BY cm.updatedAt DESC
+                LIMIT ?;
+            """
+        }
+
+        let stmt = try db.prepare(sql)
+        if let excludingId {
+            try stmt.bind(excludingId.uuidString, at: 1)
+            try stmt.bind(limit, at: 2)
+        } else {
+            try stmt.bind(limit, at: 1)
+        }
+
+        var results: [(title: String, memory: String)] = []
+        while try stmt.step() {
+            let title = stmt.text(at: 0) ?? ""
+            let memory = stmt.text(at: 1) ?? ""
+            results.append((title: title, memory: memory))
+        }
+        return results
+    }
+
     func fetchRecentConversations(limit: Int, excludingId: UUID? = nil) throws -> [NousNode] {
         let sql: String
         if excludingId == nil {
