@@ -45,7 +45,7 @@ final class UserMemoryServiceTests: XCTestCase {
             Message(nodeId: node.id, role: .assistant, content: asstTurn3, timestamp: Date(timeIntervalSince1970: 6)),
         ]
 
-        await service.refreshConversation(nodeId: node.id, messages: messages)
+        await service.refreshConversation(nodeId: node.id, projectId: nil, messages: messages)
 
         guard let sentPrompt = await capture.prompt() else {
             XCTFail("MockLLMService was never called")
@@ -101,7 +101,7 @@ final class UserMemoryServiceTests: XCTestCase {
                     timestamp: Date(timeIntervalSince1970: 3)),
         ]
 
-        await service.refreshConversation(nodeId: node.id, messages: messages)
+        await service.refreshConversation(nodeId: node.id, projectId: nil, messages: messages)
 
         guard let sentPrompt = await capture.prompt() else {
             XCTFail("MockLLMService was never called")
@@ -140,7 +140,7 @@ final class UserMemoryServiceTests: XCTestCase {
                     timestamp: Date(timeIntervalSince1970: 4)),
         ]
 
-        await service.refreshConversation(nodeId: node.id, messages: messages)
+        await service.refreshConversation(nodeId: node.id, projectId: nil, messages: messages)
 
         guard let sentPrompt = await capture.prompt() else {
             XCTFail("MockLLMService was never called")
@@ -183,12 +183,11 @@ final class UserMemoryServiceTests: XCTestCase {
                                     "identical 6-token strings must score ~1.0")
     }
 
-    // MARK: - shouldRefreshProject (timestamp-derived trigger, §14.1 / Eng Review #3)
+    // MARK: - shouldRefreshProject (counter-table trigger)
 
-    /// Service-level smoke test for the timestamp-based project-refresh gate.
-    /// The `NodeStoreTests.testCountConversationMemoryUpdatesSinceProjectMemory`
-    /// covers the SQL semantics; this one covers the threshold comparison that
-    /// UserMemoryScheduler actually calls.
+    /// Service-level smoke test for the counter-based project-refresh gate.
+    /// `NodeStoreTests` covers the UPSERT + cascade semantics; this one covers
+    /// the threshold comparison that `UserMemoryScheduler` actually calls.
     func testShouldRefreshProjectRespectsThreshold() throws {
         let mock = MockLLMService(capture: PromptCapture(), reply: "unused")
         let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
@@ -196,43 +195,21 @@ final class UserMemoryServiceTests: XCTestCase {
         let project = Project(title: "Threshold test")
         try store.insertProject(project)
 
-        let chat = NousNode(type: .conversation, title: "c", content: "", projectId: project.id)
-        try store.insertNode(chat)
+        XCTAssertFalse(service.shouldRefreshProject(projectId: project.id, threshold: 3),
+                       "0 events — below threshold")
 
-        // 0 refreshes — always below threshold.
-        XCTAssertFalse(service.shouldRefreshProject(projectId: project.id, threshold: 3))
+        try store.incrementProjectRefreshCounter(projectId: project.id)
+        XCTAssertFalse(service.shouldRefreshProject(projectId: project.id, threshold: 3),
+                       "1 event — below threshold")
 
-        // 1 refresh — still below.
-        try store.saveConversationMemory(
-            ConversationMemory(nodeId: chat.id, content: "c1", updatedAt: Date(timeIntervalSince1970: 100))
-        )
-        XCTAssertFalse(service.shouldRefreshProject(projectId: project.id, threshold: 3))
+        try store.incrementProjectRefreshCounter(projectId: project.id)
+        try store.incrementProjectRefreshCounter(projectId: project.id)
+        XCTAssertTrue(service.shouldRefreshProject(projectId: project.id, threshold: 3),
+                      "3 events — threshold met")
 
-        // Same nodeId re-saved counts as 1 update (INSERT OR REPLACE). Two more
-        // distinct chats needed to cross the threshold.
-        let chat2 = NousNode(type: .conversation, title: "c2", content: "", projectId: project.id)
-        let chat3 = NousNode(type: .conversation, title: "c3", content: "", projectId: project.id)
-        try store.insertNode(chat2)
-        try store.insertNode(chat3)
-        try store.saveConversationMemory(
-            ConversationMemory(nodeId: chat2.id, content: "c2", updatedAt: Date(timeIntervalSince1970: 200))
-        )
-        try store.saveConversationMemory(
-            ConversationMemory(nodeId: chat3.id, content: "c3", updatedAt: Date(timeIntervalSince1970: 300))
-        )
-        XCTAssertTrue(
-            service.shouldRefreshProject(projectId: project.id, threshold: 3),
-            "3 distinct chats with fresh conversation_memory → fire project refresh"
-        )
-
-        // After the project refresh writes a newer timestamp, the count resets.
-        try store.saveProjectMemory(
-            ProjectMemory(projectId: project.id, content: "rolled up", updatedAt: Date(timeIntervalSince1970: 999))
-        )
-        XCTAssertFalse(
-            service.shouldRefreshProject(projectId: project.id, threshold: 3),
-            "project_memory.updatedAt newer than all conversation_memory → below threshold"
-        )
+        try store.resetProjectRefreshCounter(projectId: project.id)
+        XCTAssertFalse(service.shouldRefreshProject(projectId: project.id, threshold: 3),
+                       "counter reset after project rollup — below threshold again")
     }
 
     // MARK: - Scheduler Task-cancel serialisation (§5 / Eng Review #3)
@@ -319,11 +296,48 @@ final class UserMemoryServiceTests: XCTestCase {
             Message(nodeId: node.id, role: .assistant, content: "anyone?", timestamp: Date(timeIntervalSince1970: 2)),
         ]
 
-        await service.refreshConversation(nodeId: node.id, messages: assistantOnly)
+        await service.refreshConversation(nodeId: node.id, projectId: nil, messages: assistantOnly)
 
         let prompt = await capture.prompt()
         XCTAssertNil(prompt, "LLM must not be called when there are no user turns")
         XCTAssertNil(try store.fetchConversationMemory(nodeId: node.id))
+    }
+
+    /// P0 fix from Codex adversarial /ship review (finding #6): a project
+    /// with a single hot chat refreshed N times must roll up. The previous
+    /// row-counting trigger confused `INSERT OR REPLACE` (one row per chat)
+    /// with events and stranded single-active-chat projects at COUNT=1
+    /// forever. The counter now increments per successful refresh so this
+    /// case reliably fires.
+    func testRefreshConversationIncrementsProjectCounterForHotChat() async throws {
+        let capture = PromptCapture()
+        let mock = MockLLMService(capture: capture, reply: "- staying on topic")
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let project = Project(title: "Single hot chat")
+        try store.insertProject(project)
+        let chat = NousNode(type: .conversation, title: "hot", content: "", projectId: project.id)
+        try store.insertNode(chat)
+
+        // Three refreshes of the SAME chat. Distinctive user evidence so the
+        // similarity gate doesn't drop the turn.
+        for i in 1...3 {
+            let messages = [
+                Message(nodeId: chat.id, role: .user,
+                        content: "Iteration \(i) of the same hot chat with distinctive evidence payload",
+                        timestamp: Date(timeIntervalSince1970: Double(i)))
+            ]
+            await service.refreshConversation(nodeId: chat.id, projectId: project.id, messages: messages)
+        }
+
+        XCTAssertEqual(
+            try store.readProjectRefreshCounter(projectId: project.id), 3,
+            "counter must track EVENTS, not rows — single hot chat refreshed 3x must be 3"
+        )
+        XCTAssertTrue(
+            service.shouldRefreshProject(projectId: project.id, threshold: 3),
+            "threshold met — refreshProject should be allowed to fire"
+        )
     }
 }
 

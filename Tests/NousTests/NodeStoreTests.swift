@@ -209,109 +209,83 @@ final class NodeStoreTests: XCTestCase {
                      "Deleting node must cascade-delete its conversation_memory row")
     }
 
-    /// P1 fix from post-commit /plan-eng-review: the previous in-memory
-    /// counter silently reset on every app launch, which meant a project
-    /// that refreshed 2 conversations then got quit-and-reopened would
-    /// never roll up to project memory. Timestamp-derived trigger survives
-    /// app restart because the signal lives in SQLite.
-    func testCountConversationMemoryUpdatesSinceProjectMemory() throws {
-        let project = Project(title: "Cross-chat memory")
+    /// P1 fix from post-commit /plan-eng-review Codex round: the previous
+    /// row-counting approach broke for single-active-chat projects. Because
+    /// `saveConversationMemory` uses INSERT OR REPLACE, a project with ONE
+    /// hot chat that refreshes 10 times stays at COUNT(rows)=1 forever and
+    /// never rolls up. The counter table stores EVENTS, not rows — each
+    /// successful conversation refresh bumps it via UPSERT. Project refresh
+    /// resets it. The signal still lives in SQLite so it survives app quit.
+    func testProjectRefreshCounterTracksEventsNotRows() throws {
+        let project = Project(title: "Single-hot-chat project")
         try store.insertProject(project)
 
-        let chat1 = makeNode(type: .conversation, projectId: project.id)
-        let chat2 = makeNode(type: .conversation, projectId: project.id)
-        let chat3 = makeNode(type: .conversation, projectId: project.id)
-        try store.insertNode(chat1)
-        try store.insertNode(chat2)
-        try store.insertNode(chat3)
+        let chat = makeNode(type: .conversation, projectId: project.id)
+        try store.insertNode(chat)
 
-        // No project_memory yet → every non-empty conversation_memory row counts.
         XCTAssertEqual(
-            try store.countConversationMemoryUpdatesSinceProjectMemory(projectId: project.id),
-            0,
-            "no conversation_memory rows yet → 0"
+            try store.readProjectRefreshCounter(projectId: project.id), 0,
+            "no refreshes yet → 0"
         )
 
-        // Three conversation refreshes at t=100,200,300 — no project_memory row yet.
-        try store.saveConversationMemory(
-            ConversationMemory(nodeId: chat1.id, content: "c1", updatedAt: Date(timeIntervalSince1970: 100))
-        )
-        try store.saveConversationMemory(
-            ConversationMemory(nodeId: chat2.id, content: "c2", updatedAt: Date(timeIntervalSince1970: 200))
-        )
-        try store.saveConversationMemory(
-            ConversationMemory(nodeId: chat3.id, content: "c3", updatedAt: Date(timeIntervalSince1970: 300))
-        )
+        // Refresh the SAME chat 3 times (this is the case the row-counting
+        // version got wrong — INSERT OR REPLACE kept the row count at 1).
+        try store.incrementProjectRefreshCounter(projectId: project.id)
+        try store.incrementProjectRefreshCounter(projectId: project.id)
+        try store.incrementProjectRefreshCounter(projectId: project.id)
+
         XCTAssertEqual(
-            try store.countConversationMemoryUpdatesSinceProjectMemory(projectId: project.id),
-            3,
-            "3 chats refreshed + no project_memory → 3 updates visible to the trigger"
+            try store.readProjectRefreshCounter(projectId: project.id), 3,
+            "3 events on a single chat — threshold must fire"
         )
 
-        // Project refresh lands at t=400. Everything is now older; count resets.
-        try store.saveProjectMemory(
-            ProjectMemory(projectId: project.id, content: "rolled up", updatedAt: Date(timeIntervalSince1970: 400))
-        )
+        // Project rollup → counter resets to 0.
+        try store.resetProjectRefreshCounter(projectId: project.id)
         XCTAssertEqual(
-            try store.countConversationMemoryUpdatesSinceProjectMemory(projectId: project.id),
-            0,
-            "project_memory.updatedAt is now ahead of every conversation_memory — count resets to 0"
+            try store.readProjectRefreshCounter(projectId: project.id), 0,
+            "rollup resets the counter"
         )
 
-        // Two fresh conversation refreshes at t=500, 600 — below threshold (3).
-        try store.saveConversationMemory(
-            ConversationMemory(nodeId: chat1.id, content: "c1 v2", updatedAt: Date(timeIntervalSince1970: 500))
-        )
-        try store.saveConversationMemory(
-            ConversationMemory(nodeId: chat2.id, content: "c2 v2", updatedAt: Date(timeIntervalSince1970: 600))
-        )
-        XCTAssertEqual(
-            try store.countConversationMemoryUpdatesSinceProjectMemory(projectId: project.id),
-            2,
-            "2 fresh refreshes since project rollup"
-        )
-
-        // Third refresh crosses the threshold; rescuable even after an app restart
-        // because the counter lives in SQLite.
-        try store.saveConversationMemory(
-            ConversationMemory(nodeId: chat3.id, content: "c3 v2", updatedAt: Date(timeIntervalSince1970: 700))
-        )
-        XCTAssertEqual(
-            try store.countConversationMemoryUpdatesSinceProjectMemory(projectId: project.id),
-            3,
-            "threshold met durably — survives app relaunch"
-        )
+        // Further refreshes start counting from zero again.
+        try store.incrementProjectRefreshCounter(projectId: project.id)
+        XCTAssertEqual(try store.readProjectRefreshCounter(projectId: project.id), 1)
     }
 
-    /// A conversation_memory row in a DIFFERENT project must not bump this
-    /// project's counter — cross-project contamination protection.
-    func testCountConversationMemoryUpdatesScopedToProject() throws {
+    /// Cross-project contamination guard — bumping project A's counter must
+    /// not touch project B's.
+    func testProjectRefreshCounterScopedToProject() throws {
         let projectA = Project(title: "A")
         let projectB = Project(title: "B")
         try store.insertProject(projectA)
         try store.insertProject(projectB)
 
-        let chatA = makeNode(type: .conversation, projectId: projectA.id)
-        let chatB = makeNode(type: .conversation, projectId: projectB.id)
-        try store.insertNode(chatA)
-        try store.insertNode(chatB)
+        try store.incrementProjectRefreshCounter(projectId: projectA.id)
+        try store.incrementProjectRefreshCounter(projectId: projectA.id)
+        try store.incrementProjectRefreshCounter(projectId: projectB.id)
 
-        try store.saveConversationMemory(
-            ConversationMemory(nodeId: chatA.id, content: "a", updatedAt: Date(timeIntervalSince1970: 100))
-        )
-        try store.saveConversationMemory(
-            ConversationMemory(nodeId: chatB.id, content: "b", updatedAt: Date(timeIntervalSince1970: 200))
-        )
+        XCTAssertEqual(try store.readProjectRefreshCounter(projectId: projectA.id), 2)
+        XCTAssertEqual(try store.readProjectRefreshCounter(projectId: projectB.id), 1)
+
+        // Reset A doesn't touch B.
+        try store.resetProjectRefreshCounter(projectId: projectA.id)
+        XCTAssertEqual(try store.readProjectRefreshCounter(projectId: projectA.id), 0)
+        XCTAssertEqual(try store.readProjectRefreshCounter(projectId: projectB.id), 1)
+    }
+
+    /// Deleting a project must cascade-delete its refresh-state row so a
+    /// recycled project UUID can't inherit the predecessor's counter.
+    func testProjectRefreshCounterCascadeOnProjectDelete() throws {
+        let project = Project(title: "Doomed")
+        try store.insertProject(project)
+        try store.incrementProjectRefreshCounter(projectId: project.id)
+        try store.incrementProjectRefreshCounter(projectId: project.id)
+        XCTAssertEqual(try store.readProjectRefreshCounter(projectId: project.id), 2)
+
+        try store.deleteProject(id: project.id)
 
         XCTAssertEqual(
-            try store.countConversationMemoryUpdatesSinceProjectMemory(projectId: projectA.id),
-            1,
-            "project A should only see its own chat refreshes"
-        )
-        XCTAssertEqual(
-            try store.countConversationMemoryUpdatesSinceProjectMemory(projectId: projectB.id),
-            1,
-            "project B should only see its own chat refreshes"
+            try store.readProjectRefreshCounter(projectId: project.id), 0,
+            "deleting the project must cascade-delete its refresh-state row"
         )
     }
 

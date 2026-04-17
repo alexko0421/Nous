@@ -10,12 +10,14 @@ import Foundation
 /// LLM streams can never run concurrently for the same node (MLX has one
 /// mouth, one ear; overlap = contention + clobbered conversation_memory).
 ///
-/// Project refresh is timestamp-derived (§14.1 / Eng Review #3). The trigger
-/// reads how many conversation_memory rows in this project have been written
-/// since the last `project_memory.updatedAt` and fires refreshProject once the
-/// threshold is met. The signal lives in SQLite, so it survives app quit —
-/// the previous in-memory counter silently reset on every launch and could
-/// prevent a heavy-churn project from ever rolling up.
+/// Project refresh uses a persisted event counter (`project_refresh_state`).
+/// Each successful conversation refresh increments the counter for its project
+/// atomically via SQLite UPSERT; `refreshProject` resets it to 0. Fires once
+/// the counter crosses `projectRefreshThreshold`. Living in SQLite means the
+/// signal survives app quit, and counting EVENTS (not rows) means a single
+/// heavy-churn chat refreshed N times correctly triggers rollup — the earlier
+/// row-counting version confused `INSERT OR REPLACE` (one row per chat) with
+/// events and stranded single-active-chat projects at COUNT=1 forever.
 actor UserMemoryScheduler {
 
     static let projectRefreshThreshold = 3
@@ -60,7 +62,7 @@ actor UserMemoryScheduler {
             // prior task. If so, skip the refresh — the newer task owns the
             // fresher `messages` snapshot and will do the work.
             if !Task.isCancelled {
-                await service.refreshConversation(nodeId: nodeId, messages: messages)
+                await service.refreshConversation(nodeId: nodeId, projectId: projectId, messages: messages)
                 if let projectId,
                    service.shouldRefreshProject(projectId: projectId, threshold: threshold) {
                     await service.refreshProject(projectId: projectId)

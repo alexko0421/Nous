@@ -105,6 +105,19 @@ final class NodeStore {
             );
         """)
 
+        // Per-project counter of conversation refreshes since the last project
+        // rollup. Incremented atomically on every refreshConversation inside a
+        // project, reset to 0 when refreshProject fires. Replaces the broken
+        // "count cm rows with updatedAt > project_memory.updatedAt" heuristic,
+        // which always returned 1 for single-active-chat projects because
+        // conversation_memory is INSERT OR REPLACE (one row per chat).
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS project_refresh_state (
+                projectId TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+                counter   INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+
         // Indexes
         try db.exec("CREATE INDEX IF NOT EXISTS idx_nodes_projectId  ON nodes(projectId);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_messages_nodeId  ON messages(nodeId);")
@@ -417,33 +430,42 @@ final class NodeStore {
         try stmt.step()
     }
 
-    /// Number of conversation_memory rows for nodes in this project whose
-    /// `updatedAt` is strictly greater than this project's `project_memory.updatedAt`
-    /// (or 0 if no project_memory row exists). Drives the timestamp-derived
-    /// project-refresh trigger so the signal survives app restarts (prior
-    /// in-memory counter silently died on quit — see plan §14.1 / Eng Review #3).
-    func countConversationMemoryUpdatesSinceProjectMemory(projectId: UUID) throws -> Int {
-        let lastProjectRefresh: Double
-        let pmStmt = try db.prepare("""
-            SELECT updatedAt FROM project_memory WHERE projectId = ?;
+    /// Atomically increments the per-project refresh counter by 1, creating the
+    /// row if absent. Called inside the transaction that persists a
+    /// conversation_memory update, so the count is an event count (refreshes
+    /// performed) not a row count (distinct chats refreshed). See Codex
+    /// adversarial review post-be089e5 finding #6 for why row-counting was
+    /// wrong: a single hot chat refreshed 5x is 1 row, never hits threshold.
+    func incrementProjectRefreshCounter(projectId: UUID) throws {
+        let stmt = try db.prepare("""
+            INSERT INTO project_refresh_state (projectId, counter) VALUES (?, 1)
+            ON CONFLICT(projectId) DO UPDATE SET counter = counter + 1;
         """)
-        try pmStmt.bind(projectId.uuidString, at: 1)
-        if try pmStmt.step() {
-            lastProjectRefresh = pmStmt.double(at: 0)
-        } else {
-            lastProjectRefresh = 0
-        }
+        try stmt.bind(projectId.uuidString, at: 1)
+        try stmt.step()
+    }
 
-        let countStmt = try db.prepare("""
-            SELECT COUNT(*)
-            FROM conversation_memory cm
-            JOIN nodes n ON cm.nodeId = n.id
-            WHERE n.projectId = ? AND cm.updatedAt > ?;
+    /// Reads the current refresh counter for this project (0 if no row exists).
+    func readProjectRefreshCounter(projectId: UUID) throws -> Int {
+        let stmt = try db.prepare("""
+            SELECT counter FROM project_refresh_state WHERE projectId = ?;
         """)
-        try countStmt.bind(projectId.uuidString, at: 1)
-        try countStmt.bind(lastProjectRefresh, at: 2)
-        _ = try countStmt.step()
-        return countStmt.int(at: 0)
+        try stmt.bind(projectId.uuidString, at: 1)
+        guard try stmt.step() else { return 0 }
+        return stmt.int(at: 0)
+    }
+
+    /// Resets the refresh counter to 0. Called at the end of refreshProject so
+    /// the next threshold-3 window starts fresh. Atomic w.r.t. concurrent
+    /// incrementProjectRefreshCounter calls — a refresh landing mid-rollup
+    /// counts toward the next window, which is the desired semantic.
+    func resetProjectRefreshCounter(projectId: UUID) throws {
+        let stmt = try db.prepare("""
+            INSERT INTO project_refresh_state (projectId, counter) VALUES (?, 0)
+            ON CONFLICT(projectId) DO UPDATE SET counter = 0;
+        """)
+        try stmt.bind(projectId.uuidString, at: 1)
+        try stmt.step()
     }
 
     // MARK: - Projects

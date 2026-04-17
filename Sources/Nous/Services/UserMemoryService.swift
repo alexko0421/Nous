@@ -42,12 +42,15 @@ final class UserMemoryService {
         return Self.cap(content, budget: Self.conversationBudget)
     }
 
-    /// True when this project has accumulated `threshold` or more
-    /// conversation_memory writes since the last `refreshProject` (or ever, if
-    /// the project has never been refreshed). Timestamp-derived so the signal
-    /// survives app restart — see plan §14.1 / Eng Review #3.
+    /// True when this project has accumulated `threshold` or more conversation
+    /// refreshes since the last `refreshProject` (or ever, if the project has
+    /// never been refreshed). Backed by `project_refresh_state.counter`, which
+    /// increments once per successful conversation refresh and resets to 0
+    /// after a project refresh. Counts EVENTS, not rows, so a single hot chat
+    /// refreshed N times will correctly cross the threshold — the row-counting
+    /// version confused `INSERT OR REPLACE` (one row per chat) with events.
     func shouldRefreshProject(projectId: UUID, threshold: Int) -> Bool {
-        let count = (try? nodeStore.countConversationMemoryUpdatesSinceProjectMemory(projectId: projectId)) ?? 0
+        let count = (try? nodeStore.readProjectRefreshCounter(projectId: projectId)) ?? 0
         return count >= threshold
     }
 
@@ -62,7 +65,7 @@ final class UserMemoryService {
     /// ≥60% similar to a prior assistant turn in the same conversation is
     /// dropped. This protects invariant #4 when Alex pastes Nous's reply back
     /// into his next message (a common clarification pattern).
-    func refreshConversation(nodeId: UUID, messages: [Message]) async {
+    func refreshConversation(nodeId: UUID, projectId: UUID?, messages: [Message]) async {
         let priorAssistantTurns: [String] = messages
             .filter { $0.role == .assistant }
             .map { Self.stripQuoteBlocks($0.content) }
@@ -128,6 +131,9 @@ final class UserMemoryService {
             try? nodeStore.saveConversationMemory(
                 ConversationMemory(nodeId: nodeId, content: trimmed, updatedAt: Date())
             )
+            if let projectId = projectId {
+                try? nodeStore.incrementProjectRefreshCounter(projectId: projectId)
+            }
         } catch {
             return
         }
@@ -188,6 +194,7 @@ final class UserMemoryService {
             try? nodeStore.saveProjectMemory(
                 ProjectMemory(projectId: projectId, content: trimmed, updatedAt: Date())
             )
+            try? nodeStore.resetProjectRefreshCounter(projectId: projectId)
         } catch {
             return
         }
