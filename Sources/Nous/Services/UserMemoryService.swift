@@ -24,22 +24,53 @@ final class UserMemoryService {
 
     // MARK: - Read (used by ChatViewModel.assembleContext)
 
+    /// v2.2c cutover: reads come from the active `memory_entries` row, not the
+    /// legacy v2.1 blob. The blob is still written (v2.2b dual-write) as a
+    /// safety net — if some edge case leaves an entry missing (migrator bug,
+    /// partial write), we fall back to the blob so the user never sees a
+    /// silent memory wipe. Fallback removal is deferred to v2.2d after soak.
+    ///
+    /// Content parity (entry.content == blob.content for the same scope+ref)
+    /// is enforced at write time (see `writeScopeEntry`) so this cutover is a
+    /// non-semantic flip by construction.
     func currentGlobal() -> String? {
-        let content = (try? nodeStore.fetchGlobalMemory())?.content
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let content = readActiveEntryOrBlob(
+            scope: .global,
+            scopeRefId: nil,
+            blobContent: { (try? nodeStore.fetchGlobalMemory())?.content }
+        )
         return Self.cap(content, budget: Self.globalBudget)
     }
 
     func currentProject(projectId: UUID) -> String? {
-        let content = (try? nodeStore.fetchProjectMemory(projectId: projectId))?.content
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let content = readActiveEntryOrBlob(
+            scope: .project,
+            scopeRefId: projectId,
+            blobContent: { (try? nodeStore.fetchProjectMemory(projectId: projectId))?.content }
+        )
         return Self.cap(content, budget: Self.projectBudget)
     }
 
     func currentConversation(nodeId: UUID) -> String? {
-        let content = (try? nodeStore.fetchConversationMemory(nodeId: nodeId))?.content
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let content = readActiveEntryOrBlob(
+            scope: .conversation,
+            scopeRefId: nodeId,
+            blobContent: { (try? nodeStore.fetchConversationMemory(nodeId: nodeId))?.content }
+        )
         return Self.cap(content, budget: Self.conversationBudget)
+    }
+
+    /// Entry-first read with blob fallback. Trims and coerces empty → "".
+    private func readActiveEntryOrBlob(
+        scope: MemoryScope,
+        scopeRefId: UUID?,
+        blobContent: () -> String?
+    ) -> String {
+        if let entry = try? nodeStore.fetchActiveMemoryEntry(scope: scope, scopeRefId: scopeRefId) {
+            let trimmed = entry.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        return (blobContent() ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// True when this project has accumulated `threshold` or more conversation
