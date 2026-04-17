@@ -24,53 +24,32 @@ final class UserMemoryService {
 
     // MARK: - Read (used by ChatViewModel.assembleContext)
 
-    /// v2.2c cutover: reads come from the active `memory_entries` row, not the
-    /// legacy v2.1 blob. The blob is still written (v2.2b dual-write) as a
-    /// safety net — if some edge case leaves an entry missing (migrator bug,
-    /// partial write), we fall back to the blob so the user never sees a
-    /// silent memory wipe. Fallback removal is deferred to v2.2d after soak.
-    ///
-    /// Content parity (entry.content == blob.content for the same scope+ref)
-    /// is enforced at write time (see `writeScopeEntry`) so this cutover is a
-    /// non-semantic flip by construction.
+    /// v2.2d: reads come exclusively from `memory_entries`. The v2.1 blob
+    /// fallback from v2.2c is gone — entries are now the sole source of truth.
+    /// Pre-v2.2 blobs are still read once by `MemoryEntriesMigrator` at first
+    /// boot to seed the entries table; after that, blobs are frozen and never
+    /// touched.
     func currentGlobal() -> String? {
-        let content = readActiveEntryOrBlob(
-            scope: .global,
-            scopeRefId: nil,
-            blobContent: { (try? nodeStore.fetchGlobalMemory())?.content }
-        )
+        let content = readActiveEntry(scope: .global, scopeRefId: nil)
         return Self.cap(content, budget: Self.globalBudget)
     }
 
     func currentProject(projectId: UUID) -> String? {
-        let content = readActiveEntryOrBlob(
-            scope: .project,
-            scopeRefId: projectId,
-            blobContent: { (try? nodeStore.fetchProjectMemory(projectId: projectId))?.content }
-        )
+        let content = readActiveEntry(scope: .project, scopeRefId: projectId)
         return Self.cap(content, budget: Self.projectBudget)
     }
 
     func currentConversation(nodeId: UUID) -> String? {
-        let content = readActiveEntryOrBlob(
-            scope: .conversation,
-            scopeRefId: nodeId,
-            blobContent: { (try? nodeStore.fetchConversationMemory(nodeId: nodeId))?.content }
-        )
+        let content = readActiveEntry(scope: .conversation, scopeRefId: nodeId)
         return Self.cap(content, budget: Self.conversationBudget)
     }
 
-    /// Entry-first read with blob fallback. Trims and coerces empty → "".
-    private func readActiveEntryOrBlob(
-        scope: MemoryScope,
-        scopeRefId: UUID?,
-        blobContent: () -> String?
-    ) -> String {
-        if let entry = try? nodeStore.fetchActiveMemoryEntry(scope: scope, scopeRefId: scopeRefId) {
-            let trimmed = entry.content.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty { return trimmed }
+    /// Returns the active entry's content trimmed, or "" if no active entry.
+    private func readActiveEntry(scope: MemoryScope, scopeRefId: UUID?) -> String {
+        guard let entry = try? nodeStore.fetchActiveMemoryEntry(scope: scope, scopeRefId: scopeRefId) else {
+            return ""
         }
-        return (blobContent() ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return entry.content.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// True when this project has accumulated `threshold` or more conversation
@@ -165,14 +144,9 @@ final class UserMemoryService {
             let trimmed = updated.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
             let now = Date()
-            Self.logPersistenceErrors("saveConversationMemory") {
-                try nodeStore.saveConversationMemory(
-                    ConversationMemory(nodeId: nodeId, content: trimmed, updatedAt: now)
-                )
-            }
-            // v2.2b dual-write: mirror the saved blob into memory_entries. Blob
-            // write above is still the source of truth for v2.1 reads; entries
-            // become the source of truth in v2.2c.
+            // v2.2d: entry-only write. The v2.1 conversation_memory blob is
+            // frozen at its v2.2b-migration snapshot; we no longer dual-write
+            // it. Entries are now the sole source of truth.
             writeScopeEntry(
                 scope: .conversation,
                 scopeRefId: nodeId,
@@ -192,17 +166,23 @@ final class UserMemoryService {
         }
     }
 
-    /// Aggregates all conversation_memory rows for nodes in this project into a
-    /// single project-level blob. Called by `UserMemoryScheduler` on a counter
-    /// cadence (every N conversation refreshes in the same project).
+    /// Aggregates all active conversation memory_entries for nodes in this
+    /// project into a single project-level rollup. Called by
+    /// `UserMemoryScheduler` on a counter cadence (every N conversation
+    /// refreshes in the same project).
+    ///
+    /// v2.2d: aggregation reads from `memory_entries` (active conversation
+    /// rows) instead of the frozen v2.1 `conversation_memory` blob.
     func refreshProject(projectId: UUID) async {
         guard let nodes = try? nodeStore.fetchNodes(projectId: projectId) else { return }
 
         let convoBlobs = nodes.compactMap { node -> String? in
-            guard let memory = try? nodeStore.fetchConversationMemory(nodeId: node.id) else {
+            guard let entry = try? nodeStore.fetchActiveMemoryEntry(
+                scope: .conversation, scopeRefId: node.id
+            ) else {
                 return nil
             }
-            let trimmed = memory.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmed = entry.content.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return nil }
             return "[\(node.title)]\n\(trimmed)"
         }
@@ -247,11 +227,7 @@ final class UserMemoryService {
             let trimmed = updated.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
             let now = Date()
-            Self.logPersistenceErrors("saveProjectMemory") {
-                try nodeStore.saveProjectMemory(
-                    ProjectMemory(projectId: projectId, content: trimmed, updatedAt: now)
-                )
-            }
+            // v2.2d: entry-only write.
             writeScopeEntry(
                 scope: .project,
                 scopeRefId: projectId,
@@ -322,11 +298,7 @@ final class UserMemoryService {
             let trimmed = updated.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
             let now = Date()
-            Self.logPersistenceErrors("saveGlobalMemory") {
-                try nodeStore.saveGlobalMemory(
-                    GlobalMemory(content: trimmed, updatedAt: now)
-                )
-            }
+            // v2.2d: entry-only write.
             writeScopeEntry(
                 scope: .global,
                 scopeRefId: nil,
