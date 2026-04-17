@@ -358,6 +358,17 @@ final class NodeStore {
         return results
     }
 
+    func inTransaction(_ work: () throws -> Void) throws {
+        try db.exec("BEGIN TRANSACTION;")
+        do {
+            try work()
+            try db.exec("COMMIT;")
+        } catch {
+            try? db.exec("ROLLBACK;")
+            throw error
+        }
+    }
+
     private func nodeFrom(_ stmt: Statement) -> NousNode {
         let id = UUID(uuidString: stmt.text(at: 0) ?? "") ?? UUID()
         let type = NodeType(rawValue: stmt.text(at: 1) ?? "") ?? .note
