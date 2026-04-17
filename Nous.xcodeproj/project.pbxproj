@@ -30,6 +30,9 @@
 		ABCDEF1234567890AABBCC08 /* UserMemoryServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCDEF1234567890AABBCC07 /* UserMemoryServiceTests.swift */; };
 		ABCDEF1234567890AABBCC0A /* MemoryDebugInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCDEF1234567890AABBCC09 /* MemoryDebugInspector.swift */; };
 		ABCDEF1234567890AABBCC0C /* ChatViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCDEF1234567890AABBCC0B /* ChatViewModelTests.swift */; };
+		ABCDEF1234567890AABBCC0E /* MemoryEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCDEF1234567890AABBCC0D /* MemoryEntry.swift */; };
+		ABCDEF1234567890AABBCC10 /* MemoryEntriesMigrator.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCDEF1234567890AABBCC0F /* MemoryEntriesMigrator.swift */; };
+		ABCDEF1234567890AABBCC12 /* MemoryEntriesMigratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCDEF1234567890AABBCC11 /* MemoryEntriesMigratorTests.swift */; };
 		3B0C4ADB2DE8F304261A454E /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEA896134861BEAADF98E800 /* SettingsView.swift */; };
 		3E6FF46E8E6E947CF7B7AADF /* NousApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84AC99FE1331146CEC54C75D /* NousApp.swift */; };
 		3F9476D3C06B0F30A271AC5F /* GraphEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36CB503D39BB65E14D694E13 /* GraphEngine.swift */; };
@@ -107,6 +110,9 @@
 		ABCDEF1234567890AABBCC07 /* UserMemoryServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserMemoryServiceTests.swift; sourceTree = "<group>"; };
 		ABCDEF1234567890AABBCC09 /* MemoryDebugInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryDebugInspector.swift; sourceTree = "<group>"; };
 		ABCDEF1234567890AABBCC0B /* ChatViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModelTests.swift; sourceTree = "<group>"; };
+		ABCDEF1234567890AABBCC0D /* MemoryEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryEntry.swift; sourceTree = "<group>"; };
+		ABCDEF1234567890AABBCC0F /* MemoryEntriesMigrator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryEntriesMigrator.swift; sourceTree = "<group>"; };
+		ABCDEF1234567890AABBCC11 /* MemoryEntriesMigratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryEntriesMigratorTests.swift; sourceTree = "<group>"; };
 		63558731B5D9A45DD29170B9 /* NousTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NousTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		69184F11E49CB01A84551833 /* ClarificationCardParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClarificationCardParserTests.swift; sourceTree = "<group>"; };
 		6E88716E75C10545B684D5FD /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModel.swift; sourceTree = "<group>"; };
@@ -224,6 +230,7 @@
 			children = (
 				404B6377A2EDDF0C97784FD2 /* AttachedFileContext.swift */,
 				A3154A6E7BC8B7FD38EF8B21 /* ClarificationCard.swift */,
+				ABCDEF1234567890AABBCC0D /* MemoryEntry.swift */,
 				55859ED677DFDB237447B2EC /* Message.swift */,
 				98307413B1A35533835FC1ED /* NodeEdge.swift */,
 				CC28A679A68D922546206E9D /* NousNode.swift */,
@@ -252,6 +259,7 @@
 				36CB503D39BB65E14D694E13 /* GraphEngine.swift */,
 				F839455BCBC5668612A6A606 /* LLMService.swift */,
 				92D5AA1CB7980A98700AB726 /* LocalLLMService.swift */,
+				ABCDEF1234567890AABBCC0F /* MemoryEntriesMigrator.swift */,
 				ABCDEF1234567890AABBCC01 /* MemoryV2Migrator.swift */,
 				728E7385459EB842724E8BCA /* NodeStore.swift */,
 				DE7BA25891C49772FFB4BCC0 /* TopicEmojiResolver.swift */,
@@ -288,6 +296,7 @@
 				ABCDEF1234567890AABBCC0B /* ChatViewModelTests.swift */,
 				69184F11E49CB01A84551833 /* ClarificationCardParserTests.swift */,
 				ABFA60716BE28FDBDC5D4B01 /* GraphEngineTests.swift */,
+				ABCDEF1234567890AABBCC11 /* MemoryEntriesMigratorTests.swift */,
 				ABCDEF1234567890AABBCC05 /* MemoryV2MigratorTests.swift */,
 				840F091AC2ADF85B26F1884A /* NodeStoreTests.swift */,
 				CE5485D2A957CBBB28E2D627 /* RAGPipelineTests.swift */,
@@ -458,6 +467,8 @@
 				ABCDEF1234567890AABBCC02 /* MemoryV2Migrator.swift in Sources */,
 				ABCDEF1234567890AABBCC04 /* UserMemoryScheduler.swift in Sources */,
 				ABCDEF1234567890AABBCC0A /* MemoryDebugInspector.swift in Sources */,
+				ABCDEF1234567890AABBCC0E /* MemoryEntry.swift in Sources */,
+				ABCDEF1234567890AABBCC10 /* MemoryEntriesMigrator.swift in Sources */,
 				3AC7D6ED0C8ECFC7B2925CAE /* UserMemoryProfile.swift in Sources */,
 				DDBD058147B497D397D7DAC0 /* UserMemoryService.swift in Sources */,
 				9CA12F6A78C6C54FA3535947 /* VectorStore.swift in Sources */,
@@ -474,6 +485,7 @@
 				ACC542F83437ECF80EF63CDD /* ClarificationCardParserTests.swift in Sources */,
 				4D4E88E3F6E50302A15F3D83 /* GraphEngineTests.swift in Sources */,
 				ABCDEF1234567890AABBCC06 /* MemoryV2MigratorTests.swift in Sources */,
+				ABCDEF1234567890AABBCC12 /* MemoryEntriesMigratorTests.swift in Sources */,
 				4116C4885DF5E1CB2FE62225 /* NodeStoreTests.swift in Sources */,
 				8C7CFB0C2C5581CFEBD55BFE /* RAGPipelineTests.swift in Sources */,
 				C7EB96C3AFE8F67879B139E3 /* TopicEmojiResolverTests.swift in Sources */,

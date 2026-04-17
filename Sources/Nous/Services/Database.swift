@@ -129,6 +129,20 @@ final class Statement {
     }
 
     @discardableResult
+    func bind(_ value: Double?, at index: Int32) throws -> Statement {
+        let rc: Int32
+        if let value {
+            rc = sqlite3_bind_double(stmt, index, value)
+        } else {
+            rc = sqlite3_bind_null(stmt, index)
+        }
+        guard rc == SQLITE_OK else {
+            throw DatabaseError.bindFailed("bind double? at \(index): rc=\(rc)")
+        }
+        return self
+    }
+
+    @discardableResult
     func bind(_ value: Float, at index: Int32) throws -> Statement {
         let rc = sqlite3_bind_double(stmt, index, Double(value))
         guard rc == SQLITE_OK else {

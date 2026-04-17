@@ -133,11 +133,24 @@ final class UserMemoryService {
             if Task.isCancelled { return }
             let trimmed = updated.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
+            let now = Date()
             Self.logPersistenceErrors("saveConversationMemory") {
                 try nodeStore.saveConversationMemory(
-                    ConversationMemory(nodeId: nodeId, content: trimmed, updatedAt: Date())
+                    ConversationMemory(nodeId: nodeId, content: trimmed, updatedAt: now)
                 )
             }
+            // v2.2b dual-write: mirror the saved blob into memory_entries. Blob
+            // write above is still the source of truth for v2.1 reads; entries
+            // become the source of truth in v2.2c.
+            writeScopeEntry(
+                scope: .conversation,
+                scopeRefId: nodeId,
+                content: trimmed,
+                kind: .thread,
+                stability: .temporary,
+                sourceNodeIds: [nodeId],
+                now: now
+            )
             if let projectId = projectId {
                 Self.logPersistenceErrors("incrementProjectRefreshCounter") {
                     try nodeStore.incrementProjectRefreshCounter(projectId: projectId)
@@ -202,11 +215,21 @@ final class UserMemoryService {
             if Task.isCancelled { return }
             let trimmed = updated.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
+            let now = Date()
             Self.logPersistenceErrors("saveProjectMemory") {
                 try nodeStore.saveProjectMemory(
-                    ProjectMemory(projectId: projectId, content: trimmed, updatedAt: Date())
+                    ProjectMemory(projectId: projectId, content: trimmed, updatedAt: now)
                 )
             }
+            writeScopeEntry(
+                scope: .project,
+                scopeRefId: projectId,
+                content: trimmed,
+                kind: .thread,
+                stability: .stable,
+                sourceNodeIds: [],
+                now: now
+            )
             Self.logPersistenceErrors("resetProjectRefreshCounter") {
                 try nodeStore.resetProjectRefreshCounter(projectId: projectId)
             }
@@ -267,13 +290,77 @@ final class UserMemoryService {
             if Task.isCancelled { return }
             let trimmed = updated.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
+            let now = Date()
             Self.logPersistenceErrors("saveGlobalMemory") {
                 try nodeStore.saveGlobalMemory(
-                    GlobalMemory(content: trimmed, updatedAt: Date())
+                    GlobalMemory(content: trimmed, updatedAt: now)
                 )
             }
+            writeScopeEntry(
+                scope: .global,
+                scopeRefId: nil,
+                content: trimmed,
+                kind: .identity,
+                stability: .stable,
+                sourceNodeIds: [],
+                now: now
+            )
         } catch {
             return
+        }
+    }
+
+    // MARK: - v2.2b dual-write
+
+    /// Mirror a freshly-saved scope blob into `memory_entries` so entries grow
+    /// as a structured journal alongside v2.1's blob source-of-truth. Called
+    /// after each successful `saveGlobalMemory` / `saveProjectMemory` /
+    /// `saveConversationMemory`.
+    ///
+    /// **Invariant**: for every (scope, scopeRefId), at most one `active` entry
+    /// at any moment. The older active (if any) is marked `superseded` and
+    /// linked to the replacement via `supersededBy`, preserving evolution
+    /// history. Wrapped in a single transaction so a crash mid-write can never
+    /// leave two concurrent actives.
+    ///
+    /// **Parity property**: after this completes,
+    /// `fetchActiveMemoryEntry(scope, scopeRefId).content == scope blob content`.
+    /// v2.2b tests assert this invariant; v2.2c will use it to flip the read
+    /// path from blob to entry without behavior change.
+    ///
+    /// Failures are swallowed (logged in DEBUG) — entries are a shadow index
+    /// in v2.2b; a missing entry row must never crash a chat. Blob write above
+    /// still holds the user-visible memory.
+    private func writeScopeEntry(
+        scope: MemoryScope,
+        scopeRefId: UUID?,
+        content: String,
+        kind: MemoryKind,
+        stability: MemoryStability,
+        sourceNodeIds: [UUID],
+        now: Date
+    ) {
+        let newEntry = MemoryEntry(
+            scope: scope,
+            scopeRefId: scopeRefId,
+            kind: kind,
+            stability: stability,
+            content: content,
+            sourceNodeIds: sourceNodeIds,
+            createdAt: now,
+            updatedAt: now,
+            lastConfirmedAt: now
+        )
+        Self.logPersistenceErrors("writeScopeEntry(\(scope.rawValue))") {
+            try nodeStore.inTransaction {
+                try nodeStore.supersedeActiveMemoryEntries(
+                    scope: scope,
+                    scopeRefId: scopeRefId,
+                    replacementId: newEntry.id,
+                    at: now
+                )
+                try nodeStore.insertMemoryEntry(newEntry)
+            }
         }
     }
 
