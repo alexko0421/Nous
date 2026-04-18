@@ -155,7 +155,7 @@ enum JudgeFallbackReason: String, Codable {
     case timeout
     case apiError = "api_error"
     case badJSON = "bad_json"
-    case unknownEntryID = "unknown_entry_id"
+    case unknownEntryId = "unknown_entry_id"
     case providerLocal = "provider_local"
     case judgeUnavailable = "judge_unavailable"  // judge LLM factory returned nil (missing API key, etc.)
 }
@@ -1885,7 +1885,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
         XCTAssertFalse(system.contains("RELEVANT PRIOR MEMORY"))
 
         let events = telemetry.recentJudgeEvents(limit: 5, filter: .none)
-        XCTAssertEqual(events.first?.fallbackReason, .unknownEntryID)
+        XCTAssertEqual(events.first?.fallbackReason, .unknownEntryId)
     }
 
     @MainActor
@@ -2051,7 +2051,7 @@ if currentProvider == .local {
                 focusBlock = ChatViewModel.buildFocusBlock(entryId: matched.id, rawText: rawEntry.content)
                 fallbackReason = .ok
             } else {
-                fallbackReason = .unknownEntryID
+                fallbackReason = .unknownEntryId
                 profile = .supportive
             }
         } else {
@@ -2277,7 +2277,7 @@ if currentProvider == .local {
                 focusBlock = ChatViewModel.buildFocusBlock(entryId: matched.id, rawText: rawEntry.content)
                 fallbackReason = .ok
             } else {
-                fallbackReason = .unknownEntryID
+                fallbackReason = .unknownEntryId
                 profile = .supportive
             }
         } else {
@@ -2560,7 +2560,7 @@ Stacked on PR 3. Spec: docs/superpowers/specs/2026-04-17-proactive-surfacing-des
 ## Test plan
 - [ ] should_provoke=true injects provocative profile + focus block
 - [ ] should_provoke=false uses supportive profile, no focus block
-- [ ] unknown entry_id → supportive, fallbackReason=.unknownEntryID
+- [ ] unknown entry_id → supportive, fallbackReason=.unknownEntryId
 - [ ] judge timeout → supportive, fallbackReason=.timeout
 - [ ] local provider → supportive, judge never called, fallbackReason=.providerLocal
 - [ ] cloud provider without judge LLMService → supportive, fallbackReason=.judgeUnavailable
@@ -2730,7 +2730,7 @@ struct JudgeEventsTab: View {
                     Text("Not provoked").tag(JudgeEventFilter.shouldProvoke(false))
                     Text("Failures").tag(JudgeEventFilter.fallback(.timeout))
                     Text("Bad JSON").tag(JudgeEventFilter.fallback(.badJSON))
-                    Text("Scope breach").tag(JudgeEventFilter.fallback(.unknownEntryID))
+                    Text("Scope breach").tag(JudgeEventFilter.fallback(.unknownEntryId))
                 }
                 .pickerStyle(.menu)
                 Button("Refresh") { reload() }
