@@ -349,4 +349,31 @@ final class ProvocationOrchestrationTests: XCTestCase {
         XCTAssertTrue(slowJudge.wasCancelled,
                       "startNewConversation must cancel the in-flight judge task")
     }
+
+    @MainActor
+    func testFeedbackUpdatesEvent() async throws {
+        let entryId = UUID()
+        try store.insertMemoryEntry(MemoryEntry(
+            id: entryId, scope: .global, kind: .preference, stability: .stable,
+            content: "don't compete on price", sourceNodeIds: []
+        ))
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: true, userState: .deciding,
+            shouldProvoke: true, entryId: entryId.uuidString, reason: "conflict"
+        )
+        viewModel.inputText = "going cheap"
+        await viewModel.send()
+
+        guard let assistantMessage = viewModel.messages.last(where: { $0.role == .assistant }),
+              let eventId = viewModel.judgeEventId(forMessageId: assistantMessage.id)
+        else {
+            XCTFail("expected a judge event for the provoked assistant message")
+            return
+        }
+
+        viewModel.recordFeedback(forMessageId: assistantMessage.id, feedback: .down)
+
+        let updated = try store.fetchJudgeEvent(id: eventId)
+        XCTAssertEqual(updated?.userFeedback, .down)
+    }
 }

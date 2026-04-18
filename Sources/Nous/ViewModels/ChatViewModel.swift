@@ -895,3 +895,23 @@ final class ChatViewModel {
         }
     }
 }
+
+extension ChatViewModel {
+
+    @MainActor
+    func judgeEventId(forMessageId messageId: UUID) -> UUID? {
+        let events = governanceTelemetry.recentJudgeEvents(limit: 500, filter: .none)
+        guard let match = events.first(where: { $0.messageId == messageId }),
+              match.fallbackReason == .ok else { return nil }
+        guard let verdictData = match.verdictJSON.data(using: .utf8),
+              let verdict = try? JSONDecoder().decode(JudgeVerdict.self, from: verdictData),
+              verdict.shouldProvoke else { return nil }
+        return match.id
+    }
+
+    @MainActor
+    func recordFeedback(forMessageId messageId: UUID, feedback: JudgeFeedback) {
+        guard let eventId = judgeEventId(forMessageId: messageId) else { return }
+        governanceTelemetry.recordFeedback(eventId: eventId, feedback: feedback)
+    }
+}
