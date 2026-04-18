@@ -1071,7 +1071,7 @@ extension NodeStore {
         """)
         try stmt.bind(nodeId.uuidString, at: 1)
         guard try stmt.step() else { return nil }
-        let raw = try stmt.text(at: 0)
+        let raw = stmt.text(at: 0)
         return raw.flatMap(ChatMode.init(rawValue:))
     }
 

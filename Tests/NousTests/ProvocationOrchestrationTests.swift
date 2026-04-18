@@ -422,4 +422,23 @@ final class ProvocationOrchestrationTests: XCTestCase {
         let nodeId = UUID()
         XCTAssertNil(try store.latestChatMode(forNode: nodeId))
     }
+
+    func testLatestChatModeIgnoresOtherNodes() throws {
+        let targetId = UUID()
+        let otherId = UUID()
+        let target = NousNode(id: targetId, type: .conversation, title: "target")
+        let other = NousNode(id: otherId, type: .conversation, title: "other")
+        try store.insertNode(target)
+        try store.insertNode(other)
+
+        let now = Date()
+        let unrelated = JudgeEvent(
+            id: UUID(), ts: now, nodeId: otherId, messageId: nil,
+            chatMode: .strategist, provider: .claude,
+            verdictJSON: "{}", fallbackReason: .ok, userFeedback: nil, feedbackTs: nil
+        )
+        try store.appendJudgeEvent(unrelated)
+
+        XCTAssertNil(try store.latestChatMode(forNode: targetId))
+    }
 }
