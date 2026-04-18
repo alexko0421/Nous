@@ -25,7 +25,7 @@ The hard problem is not "retrieve more." It is the **annoyance threshold**: when
 | Behavior delivery | Two swappable `BehaviorProfile` enum cases (Swift-native v1) | Matches existing `ChatMode.contextBlock` shape; migrates to markdown-in-bundle cleanly |
 | ChatMode role | Explicit input to judge; strategist lowers the provoke threshold, companion raises it | Still a real user-intent signal (not a hard gate, but not merely a "prior" either) — encoded as concrete rules in the judge prompt |
 | Orchestration location | `ChatViewModel` (or a new `ResponseOrchestrator` extracted from it), **not** `LLMService` | `LLMService` is a pure provider transport (`generate(messages:system:)`). Memory assembly, chat-mode resolution, judge invocation, and telemetry logging already live at the ViewModel layer. Pushing orchestration down into `LLMService` would make the provider layer know about memory entries, modes, and telemetry — a boundary violation. |
-| Citable entry pool | Explicit `{id, text}` pool (vectorStore citations + raw `memory_entries` fetched by id), **separate from** the summary blocks the main call consumes | Main call today consumes `currentGlobal()` / `currentEssentialStory()` / `currentBoundedEvidence()` / etc. — these are summaries without per-entry IDs. Judge's `entry_id` must resolve into a pool that the orchestrator can also look up by ID to inject the raw text into the main prompt. Without this split, the judge quotes one thing and the main model quotes another. |
+| Citable entry pool | Independent `[CitableEntry]` pool built by **node-hit bridging** (node-level vector hits mapped to `memory_entries` via `sourceNodeIds`) + recency-seeded per-scope entries. **Not** the same retrieval as what feeds the main call's summary context. | Main call today consumes `currentGlobal()` / `currentEssentialStory()` / `currentBoundedEvidence()` / etc. — these are summaries without per-entry IDs. Judge's `entry_id` must resolve into a pool that the orchestrator can also look up by ID to inject the raw text into the main prompt. Without this split, the judge quotes one thing and the main model quotes another. See "Citable Pool Retrieval Path" for the v1 implementation. |
 | Judge provider scope (v1) | Cloud providers only (Claude / Gemini / OpenAI). Local MLX disabled. | `LocalLLMService`'s default is `Llama-3.2-3B-Instruct-4bit`; strict JSON on a 3B 4-bit quant is not reliable. When user's active provider is local, feature degrades to supportive-only (no judge call). |
 | Telemetry substrate | New SQLite-backed event log via NodeStore, **not** `UserDefaults` counters | Current `GovernanceTelemetryStore` (55 lines, UserDefaults) stores counters + one last-prompt-trace blob. It cannot support the "last N verdicts, filter by user_state / should_provoke, correlate with thumbs-down" review loop this feature depends on. |
 | Failure default | Silent fallback to `.supportive` profile | Never block or degrade the main reply |
@@ -82,7 +82,7 @@ The existing `VectorStore.search(query:topK:excludeIds:)` ([VectorStore.swift:31
 **v1 approach — node-hit bridging, no new embedding pipeline:**
 
 1. Run the existing node-level `VectorStore.search(...)` for the current user message (this call is already happening for `citations` in `ChatViewModel.send()` step 3 — reuse its results, don't re-run).
-2. For each `SearchResult.node`, look up `memory_entries` whose `source_node_id` (or equivalent linkage already used by `UserMemoryService`, e.g. the `sourceNodeId` reference at `UserMemoryService.swift:269`) points back to that node.
+2. For each `SearchResult.node`, look up `memory_entries` whose `sourceNodeIds: [UUID]` array ([`MemoryEntry.swift:43`](Sources/Nous/Models/MemoryEntry.swift)) contains the hit node's id. This linkage already exists — `UserMemoryService` uses it today (`UserMemoryService.swift:289`, iterating `entry.sourceNodeIds`). **No new schema column is being added**; the implementation just queries the existing field in the reverse direction.
 3. Deduplicate by entry id.
 4. Union with a small set of **recency-seeded entries** per active scope (most recent N at global / project / conversation) so the pool isn't blind to recent claims that happen not to embed-match this turn.
 5. Filter by v2.2 scope-boundary rules before returning.
@@ -138,7 +138,7 @@ enum BehaviorProfile {
 }
 ```
 
-Provocative profile will instruct the main model to: acknowledge the user's current point briefly, then surface the referenced prior entry verbatim, and name the tension in plain language. It must not lecture or moralize. It must remain in the tone set by `ChatMode` (companion = softer provoke, strategist = sharper).
+Provocative profile will instruct the main model to: acknowledge the user's current point briefly, surface the referenced prior entry (quoting a key line faithfully when one exists, or paraphrasing tightly when the entry is a rollup / bullets — see the focus block in Data Flow step 7), and name the tension in plain language. It must not lecture or moralize. It must remain in the tone set by `ChatMode` (companion = softer provoke, strategist = sharper).
 
 Exact `contextBlock` wording is in scope of the implementation plan, not this spec.
 
