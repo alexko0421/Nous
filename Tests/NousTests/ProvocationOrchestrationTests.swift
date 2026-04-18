@@ -521,6 +521,9 @@ final class ProvocationOrchestrationTests: XCTestCase {
             provocationJudgeFactory: { _ in localJudge },
             governanceTelemetry: telemetry
         )
+        let convo = NousNode(type: .conversation, title: "seed", projectId: nil)
+        try store.insertNode(convo)
+        localVM.currentNode = convo
         localVM.activeChatMode = .strategist
 
         localVM.inputText = "hi"
@@ -536,6 +539,9 @@ final class ProvocationOrchestrationTests: XCTestCase {
 
     @MainActor
     func testJudgeTimeoutFallbackKeepsActiveMode() async throws {
+        let convo = NousNode(type: .conversation, title: "seed", projectId: nil)
+        try store.insertNode(convo)
+        viewModel.currentNode = convo
         viewModel.activeChatMode = .strategist
         judge.nextError = .timeout
 
@@ -604,7 +610,6 @@ final class ProvocationOrchestrationTests: XCTestCase {
 
         // Seed something unrelated first so we know we're testing empty-for-this-node, not empty-table
         viewModel.activeChatMode = .strategist
-        viewModel.currentNode = node  // set currentNode so the test is clean
 
         viewModel.loadConversation(node)
 
@@ -614,7 +619,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
     @MainActor
     func testStartNewConversationResetsToNil() throws {
         viewModel.activeChatMode = .strategist
-        viewModel.startNewConversation(title: "new", projectId: nil, resetMode: true)
+        viewModel.startNewConversation(title: "new", projectId: nil)
         XCTAssertNil(viewModel.activeChatMode)
     }
 }
