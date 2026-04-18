@@ -51,13 +51,14 @@ Driver is `ChatViewModel.send()` (or a `ResponseOrchestrator` extracted from it)
 
 1. User sends a message.
 2. **Summary context assembly** — unchanged from today. `ChatViewModel.assembleContext(...)` composes the summary layers (`currentGlobal`, `currentEssentialStory`, `currentUserModel`, `currentBoundedEvidence`, `currentProject`, `currentConversation`, `recentConversations`, `citations`, `projectGoal`, attachments). These feed the main prompt, not the judge.
-3. **Citable entry pool assembly** — new. Orchestrator calls `UserMemoryService.citableEntryPool(...)`, which returns `[CitableEntry]` with IDs. v1 sources: top-K `memory_entries` by vector-search relevance (the same search that populates `citations`) + explicit recent entries at each active scope. This is the **only** pool the judge may cite from.
+3. **Citable entry pool assembly** — new. Orchestrator calls `UserMemoryService.citableEntryPool(...)`, which returns `[CitableEntry]` with IDs. This is the **only** pool the judge may cite from. See "Citable Pool Retrieval Path" below for how it's built — importantly, this is *not* the same retrieval as the existing `VectorStore.search(...)`, which works at node level, not entry level.
 4. **Provider capability check** — if the active provider is `.local`, skip steps 5–6 entirely, go straight to step 7 with `.supportive`. Log a `judge_skipped_local` event.
 5. **Judge call** — `ProvocationJudge.judge(userMessage, citablePool, chatMode, provider)` issues one small-model call (Haiku or equivalent on current provider). Returns `JudgeVerdict`.
 6. **Verdict validation + telemetry** — orchestrator verifies `verdict.entryId` (when present) is actually in the pool. If not → treat as Scenario 3 failure. Record the verdict (valid or not) in the SQLite `judge_events` table.
 7. **Profile selection + main prompt composition:**
    - `verdict.shouldProvoke == false` (or step 4/6 forced fallback) → `BehaviorProfile.supportive`.
-   - `verdict.shouldProvoke == true` → `BehaviorProfile.provocative`. Orchestrator looks up the full raw entry by `verdict.entryId` from `NodeStore` and appends a dedicated block into the system prompt: `"FOCUS ON THIS MEMORY: <text>. Surface it in your reply and name the tension with the user's current claim."`
+   - `verdict.shouldProvoke == true` → `BehaviorProfile.provocative`. Orchestrator looks up the full raw entry by `verdict.entryId` from `NodeStore` and appends a dedicated focus block into the system prompt. The block gives the main model the entry's raw text **and** instructions on how to use it — quoting a key line faithfully when one exists, or paraphrasing tightly when the entry is a rollup / bullets. The goal is precision, not mechanical verbatim reproduction.
+     - Example focus block: `"RELEVANT PRIOR MEMORY (id=<X>):\n<raw entry text>\n\nSurface this memory in your reply. Name the tension with Alex's current claim in plain language. Quote one specific line from the memory faithfully if there is one to quote; otherwise paraphrase tightly. Do not reword the memory into a summary and pretend you remembered it differently."`
    - System prompt order: anchor → summary context (unchanged) → `profile.contextBlock` → (optional) focus block.
 8. **Main call** — `LLMService.generate(messages:system:)` streams the reply.
 
@@ -70,9 +71,30 @@ Driver is `ChatViewModel.send()` (or a `ResponseOrchestrator` extracted from it)
 ### Why Judge Has Its Own Entry Pool (and Why It's Not the Main Call's Context)
 
 - **Main call's context is summaries**, not addressable entries. `currentGlobal()`, `currentEssentialStory()`, `currentBoundedEvidence()` all return string blocks already compressed — the judge has no stable ID to return that would make sense to the main model.
-- **Citable pool is raw `memory_entries` with IDs.** v1 pool is drawn from vector-search hits over the same `memory_entries` table the summary layers were derived from, so by construction the judge cannot cite anything the system didn't already consider relevant for this turn.
+- **Citable pool is raw `memory_entries` with IDs.** See retrieval path below.
 - When the judge says "provoke via entry X," the orchestrator explicitly injects X's raw text into the main prompt. This guarantees the main model quotes the same thing the judge reasoned about — there is no gap between judge-pool and main-model-pool.
 - v2.2 scope-boundary invariant is preserved: the pool builder respects scope (global / project / conversation) the same way existing retrieval does.
+
+### Citable Pool Retrieval Path (v1)
+
+The existing `VectorStore.search(query:topK:excludeIds:)` ([VectorStore.swift:31](Sources/Nous/Services/VectorStore.swift)) returns `[SearchResult]` where each result wraps a `NousNode`, **not** a `memory_entries` row. Node-level embeddings are the only embeddings present today. So `citableEntryPool(...)` cannot simply "reuse the citations search"; it must bridge node hits to entries.
+
+**v1 approach — node-hit bridging, no new embedding pipeline:**
+
+1. Run the existing node-level `VectorStore.search(...)` for the current user message (this call is already happening for `citations` in `ChatViewModel.send()` step 3 — reuse its results, don't re-run).
+2. For each `SearchResult.node`, look up `memory_entries` whose `source_node_id` (or equivalent linkage already used by `UserMemoryService`, e.g. the `sourceNodeId` reference at `UserMemoryService.swift:269`) points back to that node.
+3. Deduplicate by entry id.
+4. Union with a small set of **recency-seeded entries** per active scope (most recent N at global / project / conversation) so the pool isn't blind to recent claims that happen not to embed-match this turn.
+5. Filter by v2.2 scope-boundary rules before returning.
+
+Pool is capped at roughly 10-20 entries to keep the judge prompt small.
+
+**What v1 deliberately does NOT do:**
+
+- Does **not** introduce entry-level embeddings, a separate vector index, or a new search method. Doing so is a larger subsystem change; defer until pool-quality telemetry proves node-hit bridging is insufficient.
+- Does **not** attempt to rank within the bridged pool beyond "vector-hit entries first, then recency fallback." The judge does the judgment; the pool just has to be the right *set*.
+
+If post-launch telemetry shows the judge frequently `tension_exists == false` on turns where Alex (via 👎 or manual review) would expect it to fire — that's the signal that entry-level embeddings are now justified. Until then, node-hit bridging is load-bearing.
 
 ## Judge Prompt Contract
 
@@ -196,7 +218,7 @@ The `MemoryDebugInspector` gains a new tab backed by `recentJudgeEvents(...)`, r
 
 - **v2.2 block-level `memory_entries`** already merged (PRs #4–#7). Without entry-level addressability, `entry_id` citation is not possible.
 - **NodeStore migration** adding the `judge_events` table (see Telemetry Substrate above).
-- **`UserMemoryService` extension** with `citableEntryPool(...)` method returning raw `[CitableEntry]` from `memory_entries` (IDs preserved). v1 implementation: reuse the vector-search path already used for `citations`, plus top-N recent per-scope entries.
+- **`UserMemoryService` extension** with `citableEntryPool(...)` method returning raw `[CitableEntry]` from `memory_entries` (IDs preserved). v1 implementation uses **node-hit bridging** (node-level vector hits mapped to entries via `source_node_id`) + recency-seeded per-scope entries. No new entry-level embedding pipeline in v1 — see "Citable Pool Retrieval Path" in Data Flow.
 - `GovernanceTelemetryStore` gains SQLite-backed event methods; existing UserDefaults counters unchanged.
 - `ChatMode` enum unchanged structurally — passed as explicit input to judge.
 - Existing `MemoryDebugInspector` view gains a new tab; no new view hierarchy needed.
