@@ -395,4 +395,31 @@ final class ProvocationOrchestrationTests: XCTestCase {
         let updated = try store.fetchJudgeEvent(id: eventId)
         XCTAssertEqual(updated?.userFeedback, .down)
     }
+
+    func testLatestChatModeReturnsNewestRow() throws {
+        let nodeId = UUID()
+        let node = NousNode(id: nodeId, type: .conversation, title: "t")
+        try store.insertNode(node)
+
+        let now = Date()
+        let e1 = JudgeEvent(
+            id: UUID(), ts: now.addingTimeInterval(-10), nodeId: nodeId, messageId: nil,
+            chatMode: .companion, provider: .claude,
+            verdictJSON: "{}", fallbackReason: .ok, userFeedback: nil, feedbackTs: nil
+        )
+        let e2 = JudgeEvent(
+            id: UUID(), ts: now, nodeId: nodeId, messageId: nil,
+            chatMode: .strategist, provider: .claude,
+            verdictJSON: "{}", fallbackReason: .ok, userFeedback: nil, feedbackTs: nil
+        )
+        try store.appendJudgeEvent(e1)
+        try store.appendJudgeEvent(e2)
+
+        XCTAssertEqual(try store.latestChatMode(forNode: nodeId), .strategist)
+    }
+
+    func testLatestChatModeReturnsNilWhenNoRows() throws {
+        let nodeId = UUID()
+        XCTAssertNil(try store.latestChatMode(forNode: nodeId))
+    }
 }

@@ -1062,6 +1062,19 @@ extension NodeStore {
         try stmt.step()
     }
 
+    func latestChatMode(forNode nodeId: UUID) throws -> ChatMode? {
+        let stmt = try db.prepare("""
+            SELECT chatMode FROM judge_events
+            WHERE nodeId = ?
+            ORDER BY ts DESC
+            LIMIT 1;
+        """)
+        try stmt.bind(nodeId.uuidString, at: 1)
+        guard try stmt.step() else { return nil }
+        let raw = try stmt.text(at: 0)
+        return raw.flatMap(ChatMode.init(rawValue:))
+    }
+
     private func judgeEventFrom(_ stmt: Statement) -> JudgeEvent? {
         guard let idStr = stmt.text(at: 0), let id = UUID(uuidString: idStr),
               let nodeIdStr = stmt.text(at: 2), let nodeId = UUID(uuidString: nodeIdStr),
