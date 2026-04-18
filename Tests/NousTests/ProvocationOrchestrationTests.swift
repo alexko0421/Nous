@@ -255,4 +255,98 @@ final class ProvocationOrchestrationTests: XCTestCase {
         let events = telemetry.recentJudgeEvents(limit: 10, filter: .none)
         XCTAssertEqual(events.count, 0, "cancelled judge must not log any judge event")
     }
+
+    @MainActor
+    func testLoadConversationCancelsInFlightJudge() async throws {
+        final class SlowJudge: Judging {
+            var wasCancelled = false
+            func judge(userMessage: String, citablePool: [CitableEntry],
+                       chatMode: ChatMode, provider: LLMProvider) async throws -> JudgeVerdict {
+                do {
+                    try await Task.sleep(nanoseconds: 2_000_000_000)
+                } catch {
+                    wasCancelled = true
+                    throw CancellationError()
+                }
+                return JudgeVerdict(tensionExists: false, userState: .exploring,
+                                    shouldProvoke: false, entryId: nil, reason: "slow")
+            }
+        }
+        let slowJudge = SlowJudge()
+        let vectorStore = VectorStore(nodeStore: store)
+        let memoryService = UserMemoryService(nodeStore: store, llmServiceProvider: { self.llm })
+        viewModel = ChatViewModel(
+            nodeStore: store,
+            vectorStore: vectorStore,
+            embeddingService: EmbeddingService(),
+            graphEngine: GraphEngine(nodeStore: store, vectorStore: vectorStore),
+            userMemoryService: memoryService,
+            userMemoryScheduler: UserMemoryScheduler(service: memoryService),
+            llmServiceProvider: { self.llm },
+            currentProviderProvider: { .claude },
+            judgeLLMServiceFactory: { CannedLLMService() },
+            provocationJudgeFactory: { _ in slowJudge },
+            governanceTelemetry: telemetry
+        )
+
+        viewModel.inputText = "first"
+        let sendTask = Task { await self.viewModel.send() }
+        try await Task.sleep(nanoseconds: 100_000_000)  // let the judge enter its sleep
+
+        // User navigates to a different conversation.
+        let otherNode = NousNode(type: .conversation, title: "other", projectId: nil)
+        try store.insertNode(otherNode)
+        viewModel.loadConversation(otherNode)
+
+        await sendTask.value
+
+        XCTAssertTrue(slowJudge.wasCancelled,
+                      "loadConversation must cancel the in-flight judge task")
+        XCTAssertNil(llm.receivedSystem,
+                     "cancelled judge must short-circuit send() before main LLM call")
+        let events = telemetry.recentJudgeEvents(limit: 10, filter: .none)
+        XCTAssertEqual(events.count, 0,
+                       "cancelled judge must not log any judge event")
+    }
+
+    @MainActor
+    func testStartNewConversationCancelsInFlightJudge() async throws {
+        final class SlowJudge: Judging {
+            var wasCancelled = false
+            func judge(userMessage: String, citablePool: [CitableEntry],
+                       chatMode: ChatMode, provider: LLMProvider) async throws -> JudgeVerdict {
+                do { try await Task.sleep(nanoseconds: 2_000_000_000) }
+                catch { wasCancelled = true; throw CancellationError() }
+                return JudgeVerdict(tensionExists: false, userState: .exploring,
+                                    shouldProvoke: false, entryId: nil, reason: "slow")
+            }
+        }
+        let slowJudge = SlowJudge()
+        let vectorStore = VectorStore(nodeStore: store)
+        let memoryService = UserMemoryService(nodeStore: store, llmServiceProvider: { self.llm })
+        viewModel = ChatViewModel(
+            nodeStore: store,
+            vectorStore: vectorStore,
+            embeddingService: EmbeddingService(),
+            graphEngine: GraphEngine(nodeStore: store, vectorStore: vectorStore),
+            userMemoryService: memoryService,
+            userMemoryScheduler: UserMemoryScheduler(service: memoryService),
+            llmServiceProvider: { self.llm },
+            currentProviderProvider: { .claude },
+            judgeLLMServiceFactory: { CannedLLMService() },
+            provocationJudgeFactory: { _ in slowJudge },
+            governanceTelemetry: telemetry
+        )
+
+        viewModel.inputText = "first"
+        let sendTask = Task { await self.viewModel.send() }
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        viewModel.startNewConversation(title: "fresh")
+
+        await sendTask.value
+
+        XCTAssertTrue(slowJudge.wasCancelled,
+                      "startNewConversation must cancel the in-flight judge task")
+    }
 }

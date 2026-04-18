@@ -63,9 +63,17 @@ final class ChatViewModel {
         self.defaultProjectId = defaultProjectId
     }
 
+    deinit {
+        // VM teardown — make sure no judge task outlives us.
+        inFlightJudgeTask?.cancel()
+        inFlightJudgeTaskId = nil
+    }
+
     // MARK: - Conversation Management
 
+    @MainActor
     func startNewConversation(title: String = "New Conversation", projectId: UUID? = nil) {
+        cancelInFlightJudge()  // any in-flight judge belonged to the old conversation
         let node = NousNode(
             type: .conversation,
             title: title,
@@ -80,7 +88,9 @@ final class ChatViewModel {
         NotificationCenter.default.post(name: .nousNodesDidChange, object: nil)
     }
 
+    @MainActor
     func loadConversation(_ node: NousNode) {
+        cancelInFlightJudge()  // switching conversations invalidates any pending verdict
         currentNode = node
         messages = (try? nodeStore.fetchMessages(nodeId: node.id)) ?? []
         citations = []

@@ -101,6 +101,7 @@ struct ContentView: View {
                     selectedNodeId: currentSidebarNodeId,
                     onNodeSelected: { node in navigateToNode(node) },
                     onNewChat: {
+                        chatVM.cancelInFlightJudge()
                         chatVM.currentNode = nil
                         chatVM.messages = []
                         chatVM.citations = []
