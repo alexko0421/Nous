@@ -157,6 +157,7 @@ enum JudgeFallbackReason: String, Codable {
     case badJSON = "bad_json"
     case unknownEntryID = "unknown_entry_id"
     case providerLocal = "provider_local"
+    case judgeUnavailable = "judge_unavailable"  // judge LLM factory returned nil (missing API key, etc.)
 }
 
 struct JudgeVerdict: Codable, Equatable {
@@ -407,6 +408,7 @@ final class JudgeEventsStoreTests: XCTestCase {
 
     private func makeEvent(
         id: UUID = UUID(),
+        ts: Date = Date(),
         nodeId: UUID = UUID(),
         fallback: JudgeFallbackReason = .ok
     ) -> JudgeEvent {
@@ -419,7 +421,7 @@ final class JudgeEventsStoreTests: XCTestCase {
         )
         let verdictJSON = String(data: try! JSONEncoder().encode(verdict), encoding: .utf8)!
         return JudgeEvent(
-            id: id, ts: Date(), nodeId: nodeId, messageId: nil,
+            id: id, ts: ts, nodeId: nodeId, messageId: nil,
             chatMode: .companion, provider: .claude,
             verdictJSON: verdictJSON, fallbackReason: fallback,
             userFeedback: nil, feedbackTs: nil
@@ -438,9 +440,15 @@ final class JudgeEventsStoreTests: XCTestCase {
     }
 
     func testRecentJudgeEventsReturnsNewestFirst() throws {
+        // Use explicit monotonic timestamps — two Date() calls in quick succession can be equal
+        // on some hardware, and "ORDER BY ts DESC" doesn't guarantee insertion order within a tie.
+        let baseTs = Date()
         let ids = (0..<3).map { _ in UUID() }
-        for id in ids {
-            try store.appendJudgeEvent(makeEvent(id: id))
+        for (i, id) in ids.enumerated() {
+            try store.appendJudgeEvent(makeEvent(
+                id: id,
+                ts: baseTs.addingTimeInterval(TimeInterval(i))
+            ))
         }
         let recent = try store.recentJudgeEvents(limit: 10, filter: .none)
         XCTAssertEqual(recent.count, 3)
@@ -1609,14 +1617,42 @@ EOF
 
 This is the behavior-change PR. When merged, the app starts interjecting.
 
-### Task 4.1: Inject provider accessor and judge factory into `ChatViewModel`
+### Task 4.1: Inject provider accessor and judge factories into `ChatViewModel`
 
 **Files:**
 - Modify: `Sources/Nous/ViewModels/ChatViewModel.swift`
+- Modify: `Sources/Nous/ViewModels/SettingsViewModel.swift`
 - Modify: `Sources/Nous/App/ContentView.swift`
 - Test: `Tests/NousTests/ProvocationOrchestrationTests.swift` (shell for upcoming tasks)
 
-- [ ] **Step 1: Add the new stored properties + init params** on `ChatViewModel`.
+> **Design note — small-model judge:** the judge is a separate, fast/cheap call; it MUST NOT reuse the main conversation's `LLMService` (which is tuned for long, high-quality responses). We introduce a sibling factory `judgeLLMServiceFactory` that returns an `LLMService` configured with the provider's fastest small model (Haiku / Flash-Lite / gpt-4o-mini). For `.local` the factory returns nil and the orchestration skips the judge entirely (see Spec — local provider is out of v1 scope for strict JSON). If a cloud provider has no API key configured, the factory also returns nil and we log `fallbackReason=.judgeUnavailable`.
+
+- [ ] **Step 1: Add `makeJudgeLLMService()` to `SettingsViewModel`.**
+
+In `Sources/Nous/ViewModels/SettingsViewModel.swift`, right after the existing `makeLLMService()` method (around line 135):
+
+```swift
+/// Returns an LLMService configured with a fast, cheap model for the provocation judge.
+/// Returns nil for .local (3B model unreliable for strict JSON output — v1 scope) or when
+/// the relevant API key is missing. Callers fall back to .judgeUnavailable.
+func makeJudgeLLMService() -> (any LLMService)? {
+    switch selectedProvider {
+    case .local:
+        return nil
+    case .gemini:
+        guard !geminiApiKey.isEmpty else { return nil }
+        return GeminiLLMService(apiKey: geminiApiKey, model: "gemini-2.5-flash-lite")
+    case .claude:
+        guard !claudeApiKey.isEmpty else { return nil }
+        return ClaudeLLMService(apiKey: claudeApiKey, model: "claude-haiku-4-5-20251001")
+    case .openai:
+        guard !openaiApiKey.isEmpty else { return nil }
+        return OpenAILLMService(apiKey: openaiApiKey, model: "gpt-4o-mini")
+    }
+}
+```
+
+- [ ] **Step 2: Add the new stored properties + init params** on `ChatViewModel`.
 
 In `ChatViewModel.swift`, near the existing `llmServiceProvider` property (around line 28):
 
@@ -1625,12 +1661,18 @@ In `ChatViewModel.swift`, near the existing `llmServiceProvider` property (aroun
 private let llmServiceProvider: () -> (any LLMService)?
 // New:
 private let currentProviderProvider: () -> LLMProvider
-private let provocationJudgeFactory: (any LLMService) -> ProvocationJudge
-// Tracks the in-flight judge task so it can be cancelled when a new message arrives.
-private var inFlightJudgeTask: Task<Void, Never>?
+// Separate factory that returns a small, fast LLMService for the judge. Must NOT
+// be the same as llmServiceProvider — the judge is strict-JSON / latency-sensitive.
+private let judgeLLMServiceFactory: () -> (any LLMService)?
+private let provocationJudgeFactory: (any LLMService) -> any Judging
+// Tracks the in-flight judge Task so it can be cancelled (e.g., on conversation switch).
+// Typed as the inner throwing task so cancel() propagates into the judge call.
+private var inFlightJudgeTask: Task<JudgeVerdict, Error>?
 ```
 
-Update the `init(...)` to accept both new closures (default the factory to the real `ProvocationJudge`):
+> **v1 cancellation scope:** `send()` begins with `guard ..., !isGenerating else { return }`, so a rapid second `send()` while the first turn is still generating is a no-op — it does NOT drive cancellation. We keep `inFlightJudgeTask` because there IS a v1 cancellation vector: **view/VM teardown and conversation switching** (the VM is re-created when the user picks a different conversation, invalidating any in-flight verdict). We deliberately do NOT loosen the `isGenerating` gate in v1 — doing so would let a second `send()` double-stream the assistant reply, which is a bigger footgun than the narrow "re-thinking mid-send" flow it enables.
+
+Update the `init(...)` to accept all new closures (default the judge factory to the real `ProvocationJudge`):
 
 ```swift
 init(
@@ -1642,7 +1684,8 @@ init(
     governanceTelemetry: GovernanceTelemetryStore,
     llmServiceProvider: @escaping () -> (any LLMService)?,
     currentProviderProvider: @escaping () -> LLMProvider,
-    provocationJudgeFactory: @escaping (any LLMService) -> ProvocationJudge = { ProvocationJudge(llmService: $0) },
+    judgeLLMServiceFactory: @escaping () -> (any LLMService)?,
+    provocationJudgeFactory: @escaping (any LLMService) -> any Judging = { ProvocationJudge(llmService: $0) },
     defaultProjectId: UUID? = nil
 ) {
     self.nodeStore = nodeStore
@@ -1653,12 +1696,13 @@ init(
     self.governanceTelemetry = governanceTelemetry
     self.llmServiceProvider = llmServiceProvider
     self.currentProviderProvider = currentProviderProvider
+    self.judgeLLMServiceFactory = judgeLLMServiceFactory
     self.provocationJudgeFactory = provocationJudgeFactory
     self.defaultProjectId = defaultProjectId
 }
 ```
 
-- [ ] **Step 2: Update both `ChatViewModel(...)` call sites in `ContentView.swift`** to pass `currentProviderProvider: { svm.selectedProvider }`. Leave `provocationJudgeFactory` defaulted in production.
+- [ ] **Step 3: Update both `ChatViewModel(...)` call sites in `ContentView.swift`** to pass the new closures. Leave `provocationJudgeFactory` defaulted in production.
 
 Example diff context — find lines similar to:
 
@@ -1670,9 +1714,10 @@ Add right after (matching indent):
 
 ```swift
 currentProviderProvider: { svm.selectedProvider },
+judgeLLMServiceFactory: { svm.makeJudgeLLMService() },
 ```
 
-- [ ] **Step 3: Build to confirm the wiring compiles**
+- [ ] **Step 4: Build to confirm the wiring compiles**
 
 ```bash
 xcodebuild build -project Nous.xcodeproj -scheme Nous \
@@ -1681,12 +1726,13 @@ xcodebuild build -project Nous.xcodeproj -scheme Nous \
 
 Expected: BUILD SUCCEEDED.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add Sources/Nous/ViewModels/ChatViewModel.swift \
+        Sources/Nous/ViewModels/SettingsViewModel.swift \
         Sources/Nous/App/ContentView.swift
-git commit -m "feat(provocation): inject provider accessor + judge factory into ChatViewModel"
+git commit -m "feat(provocation): inject provider accessor + judge factories into ChatViewModel"
 ```
 
 ---
@@ -1765,6 +1811,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
             governanceTelemetry: telemetry,
             llmServiceProvider: { self.llm },
             currentProviderProvider: { .claude },
+            judgeLLMServiceFactory: { CannedLLMService() },
             provocationJudgeFactory: { _ in self.judge }
         )
     }
@@ -1857,7 +1904,9 @@ final class ProvocationOrchestrationTests: XCTestCase {
 
     @MainActor
     func testLocalProviderSkipsJudge() async throws {
-        // Rebuild vm with local provider.
+        // Rebuild vm with local provider. judgeLLMServiceFactory returns nil on .local,
+        // BUT the orchestration short-circuits on provider == .local BEFORE consulting the
+        // factory, so we return nil here and assert the factory is never consulted.
         viewModel = ChatViewModel(
             nodeStore: store,
             vectorStore: VectorStore(nodeStore: store),
@@ -1867,6 +1916,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
             governanceTelemetry: telemetry,
             llmServiceProvider: { self.llm },
             currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
             provocationJudgeFactory: { _ in
                 // If this ever runs, the test fails loudly.
                 let j = StubJudge()
@@ -1883,6 +1933,36 @@ final class ProvocationOrchestrationTests: XCTestCase {
 
         let events = telemetry.recentJudgeEvents(limit: 5, filter: .none)
         XCTAssertEqual(events.first?.fallbackReason, .providerLocal)
+    }
+
+    @MainActor
+    func testCloudProviderWithoutJudgeServiceLogsUnavailable() async throws {
+        // Cloud provider selected but judgeLLMServiceFactory returned nil (missing API key).
+        viewModel = ChatViewModel(
+            nodeStore: store,
+            vectorStore: VectorStore(nodeStore: store),
+            embeddingService: EmbeddingService(),
+            graphEngine: GraphEngine(nodeStore: store),
+            userMemoryService: UserMemoryService(nodeStore: store, llmServiceProvider: { self.llm }),
+            governanceTelemetry: telemetry,
+            llmServiceProvider: { self.llm },
+            currentProviderProvider: { .claude },
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in
+                let j = StubJudge()
+                j.nextError = .apiError
+                return j
+            }
+        )
+
+        viewModel.inputText = "anything"
+        await viewModel.send()
+
+        let system = llm.receivedSystem ?? ""
+        XCTAssertTrue(system.contains("BEHAVIOR: SUPPORTIVE"))
+
+        let events = telemetry.recentJudgeEvents(limit: 5, filter: .none)
+        XCTAssertEqual(events.first?.fallbackReason, .judgeUnavailable)
     }
 }
 ```
@@ -1923,15 +2003,9 @@ protocol Judging {
 extension ProvocationJudge: Judging {}
 ```
 
-In `ChatViewModel.swift`, change the factory type:
+`ChatViewModel`'s factory type was already declared as `(any LLMService) -> any Judging` in Task 4.1 Step 2 — no further change needed there.
 
-```swift
-private let provocationJudgeFactory: (any LLMService) -> any Judging
-// ...
-provocationJudgeFactory: @escaping (any LLMService) -> any Judging = { ProvocationJudge(llmService: $0) },
-```
-
-And in the test above, replace `class StubJudge: ProvocationJudge` with `final class StubJudge: Judging` (remove the `init()`, remove `override`, remove the super call; drop the unused `CannedLLMService` init, and pass `self.judge` directly into the factory closure).
+In the test above, replace `class StubJudge: ProvocationJudge` with `final class StubJudge: Judging` (remove the `init()`, remove `override`, remove the super call; drop the unused `CannedLLMService` init, and pass `self.judge` directly into the factory closure).
 
 - [ ] **Step 4: Extend `send()` to drive the orchestration.**
 
@@ -1956,9 +2030,10 @@ var focusBlock: String? = nil
 
 if currentProvider == .local {
     fallbackReason = .providerLocal
-} else {
-    inFlightJudgeTask?.cancel()
-    let judge = provocationJudgeFactory(llm)
+} else if let judgeLLM = judgeLLMServiceFactory() {
+    // NOTE: Task 4.3 wraps this call in a tracked Task<JudgeVerdict, Error> so it's cancellable
+    // on conversation switch. For now the call is inline and synchronous-await — rewritten below.
+    let judge = provocationJudgeFactory(judgeLLM)
     do {
         let verdict = try await judge.judge(
             userMessage: promptQuery,
@@ -1988,11 +2063,14 @@ if currentProvider == .local {
     } catch JudgeError.badJSON {
         fallbackReason = .badJSON
     } catch is CancellationError {
-        // A new message arrived mid-judge. Drop this reply entirely.
+        // Judge was cancelled (conversation switch / VM teardown). Drop this reply entirely.
         return
     } catch {
         fallbackReason = .apiError
     }
+} else {
+    // Cloud provider selected but API key missing / factory returned nil.
+    fallbackReason = .judgeUnavailable
 }
 
 // Step 5d: compose final system prompt
@@ -2088,13 +2166,18 @@ git commit -m "feat(provocation): wire judge into ChatViewModel.send with profil
 
 ---
 
-### Task 4.3: Implement in-flight cancellation for rapid message sends
+### Task 4.3: Wrap the judge call in a trackable, cancellable Task
 
 **Files:**
 - Modify: `Sources/Nous/ViewModels/ChatViewModel.swift`
 - Test: append to `Tests/NousTests/ProvocationOrchestrationTests.swift`
 
-The orchestration-level `inFlightJudgeTask` already exists as a property from Task 4.1. Task 4.2 partially wired cancellation (`inFlightJudgeTask?.cancel()` before invoking the factory). This task wraps the judge call in an actual `Task` so the cancel call has an effect, and adds a test.
+**Rationale and v1 scope:**
+- `send()` begins with `guard ..., !isGenerating else { return }` at `ChatViewModel.swift:206`. A rapid second `send()` while the first turn is streaming is therefore a no-op at the gate — it does NOT drive judge cancellation. We deliberately do NOT loosen this gate in v1; doing so would double-stream the assistant reply into the same conversation, which is a much bigger footgun than the narrow "re-think mid-send" flow it would enable.
+- The cancellation vector that IS real in v1 is **conversation switch / VM teardown**. If the user navigates to a different conversation while a judge call is still running, the verdict belongs to a node that is no longer active. We need to cancel cleanly so we don't log a stale event (and the task's `CancellationError` short-circuits `send()` via the existing `catch is CancellationError { return }`).
+- To make that cancellation actually propagate, `inFlightJudgeTask` is typed `Task<JudgeVerdict, Error>?` (the **inner** throwing task), not a `Task<Void, Never>` wrapper. Cancelling the wrapper does not cancel the real judge call underneath it; cancelling the inner task directly does.
+
+This task (1) wraps the judge call in a tracked inner `Task<JudgeVerdict, Error>`, (2) exposes `cancelInFlightJudge()` so external triggers (conversation switch, teardown) can cancel it, and (3) adds a test that drives cancellation via that method.
 
 - [ ] **Step 1: Write the failing test** (append to `ProvocationOrchestrationTests.swift`)
 
@@ -2102,21 +2185,17 @@ The orchestration-level `inFlightJudgeTask` already exists as a property from Ta
 // Append to Tests/NousTests/ProvocationOrchestrationTests.swift
 
 @MainActor
-func testRapidSecondSendCancelsInFlightJudge() async throws {
-    // A judge that stalls on the first call and returns quickly on the second.
-    final class SlowThenFastJudge: Judging {
-        var calls = 0
+func testExternalCancellationShortCircuitsJudge() async throws {
+    // A judge that sleeps long enough for us to fire cancelInFlightJudge() mid-call.
+    final class SlowJudge: Judging {
         func judge(userMessage: String, citablePool: [CitableEntry],
                    chatMode: ChatMode, provider: LLMProvider) async throws -> JudgeVerdict {
-            calls += 1
-            if calls == 1 {
-                try await Task.sleep(nanoseconds: 500_000_000) // 0.5s
-            }
+            try await Task.sleep(nanoseconds: 2_000_000_000)  // 2s — long enough to cancel
+            try Task.checkCancellation()  // propagate cancel even if sleep was swallowed
             return JudgeVerdict(tensionExists: false, userState: .exploring,
-                                shouldProvoke: false, entryId: nil, reason: "fast")
+                                shouldProvoke: false, entryId: nil, reason: "slow")
         }
     }
-    let slowJudge = SlowThenFastJudge()
     viewModel = ChatViewModel(
         nodeStore: store,
         vectorStore: VectorStore(nodeStore: store),
@@ -2126,27 +2205,25 @@ func testRapidSecondSendCancelsInFlightJudge() async throws {
         governanceTelemetry: telemetry,
         llmServiceProvider: { self.llm },
         currentProviderProvider: { .claude },
-        provocationJudgeFactory: { _ in slowJudge }
+        judgeLLMServiceFactory: { CannedLLMService() },
+        provocationJudgeFactory: { _ in SlowJudge() }
     )
 
-    viewModel.inputText = "first"
-    async let first: Void = viewModel.send()
+    viewModel.inputText = "test"
+    // Fire send() without awaiting; cancel shortly after so the judge is interrupted.
+    let sendTask = Task { await viewModel.send() }
+    try await Task.sleep(nanoseconds: 100_000_000)  // 100ms — judge is now sleeping inside
+    viewModel.cancelInFlightJudge()
+    await sendTask.value
 
-    // Give the first send a moment to start the judge.
-    try? await Task.sleep(nanoseconds: 50_000_000)
+    // The cancelled judge must not have produced a main-LLM call
+    // (send() returns early in the CancellationError branch, before llm.generate()).
+    XCTAssertNil(llm.receivedSystem,
+                 "cancelled judge must short-circuit send() before the main LLM call")
 
-    viewModel.inputText = "second"
-    await viewModel.send()
-    await first
-
-    // Only the second send should have produced a completed judge event.
+    // And no judge event should be logged for a cancelled turn.
     let events = telemetry.recentJudgeEvents(limit: 10, filter: .none)
-    XCTAssertGreaterThanOrEqual(events.count, 1, "at least the second send must log")
-    // The first send, having been cancelled, should not appear as `.ok`. If it appears at all,
-    // it appears with `.apiError` (cancellation is caught in the `catch is CancellationError`
-    // branch which returns early without logging — but if that catch is missing, the test fails).
-    XCTAssertFalse(events.contains { $0.fallbackReason == .ok } && events.count > 1,
-                   "cancelled first send must not log an .ok event")
+    XCTAssertEqual(events.count, 0, "cancelled judge must not log any judge event")
 }
 ```
 
@@ -2155,22 +2232,29 @@ func testRapidSecondSendCancelsInFlightJudge() async throws {
 ```bash
 xcodebuild test -project Nous.xcodeproj -scheme Nous \
   -destination 'platform=macOS' \
-  -only-testing:NousTests/ProvocationOrchestrationTests/testRapidSecondSendCancelsInFlightJudge \
+  -only-testing:NousTests/ProvocationOrchestrationTests/testExternalCancellationShortCircuitsJudge \
   -quiet
 ```
 
-Expected: FAIL — the current implementation calls `await judge.judge(...)` directly, not inside a cancellable `Task`.
+Expected: FAIL — `cancelInFlightJudge()` doesn't exist yet, and the judge call isn't wrapped in a trackable task.
 
-- [ ] **Step 3: Wrap the judge call in a tracked `Task`**
+- [ ] **Step 3: Wrap the judge call in a tracked inner `Task`**
 
-In `ChatViewModel.send()` replace the judge invocation block added in Task 4.2 with:
+In `ChatViewModel.send()` replace the judge invocation block added in Task 4.2 with the tracked-task form:
 
 ```swift
 if currentProvider == .local {
     fallbackReason = .providerLocal
-} else {
+} else if let judgeLLM = judgeLLMServiceFactory() {
+    // Cancel any previous in-flight judge (e.g., from a prior conversation).
+    // In v1 this is belt-and-braces — the isGenerating gate already prevents a rapid
+    // second send on the *same* conversation. The real trigger for cancellation is
+    // cancelInFlightJudge() called externally (e.g., from a future conversation-switch hook).
     inFlightJudgeTask?.cancel()
-    let judge = provocationJudgeFactory(llm)
+
+    let judge = provocationJudgeFactory(judgeLLM)
+    // Store the INNER throwing task directly — not a Void wrapper — so cancel() propagates
+    // into the judge's async work (Task.sleep, URLSession, etc. all respect cancellation).
     let task = Task { () async throws -> JudgeVerdict in
         try await judge.judge(
             userMessage: promptQuery,
@@ -2179,27 +2263,64 @@ if currentProvider == .local {
             provider: currentProvider
         )
     }
-    // Capture a placeholder so a later-arriving send can cancel this one.
-    // We erase the specific return type to a Void-returning task.
-    inFlightJudgeTask = Task { _ = try? await task.value }
+    inFlightJudgeTask = task
 
     do {
         let verdict = try await task.value
         verdictForLog = verdict
-        // … existing provoke/unknown-id branching from Task 4.2 unchanged …
+
+        if verdict.shouldProvoke, let entryIdStr = verdict.entryId {
+            if let matched = citablePool.first(where: { $0.id == entryIdStr }),
+               let uuid = UUID(uuidString: entryIdStr),
+               let rawEntry = try? nodeStore.fetchMemoryEntry(id: uuid) {
+                profile = .provocative
+                focusBlock = ChatViewModel.buildFocusBlock(entryId: matched.id, rawText: rawEntry.content)
+                fallbackReason = .ok
+            } else {
+                fallbackReason = .unknownEntryID
+                profile = .supportive
+            }
+        } else {
+            fallbackReason = .ok
+            profile = .supportive
+        }
     } catch JudgeError.timeout {
         fallbackReason = .timeout
     } catch JudgeError.badJSON {
         fallbackReason = .badJSON
     } catch is CancellationError {
-        return  // discard this turn — a newer one is in flight
+        // External cancellation (conversation switch / VM teardown). Discard this turn
+        // entirely — no main-LLM call, no judge event logged, no assistant message.
+        return
     } catch {
         fallbackReason = .apiError
     }
+
+    // Clear the slot only if it still points at our task. If a later send() stored its
+    // own task we must not clobber it.
+    if inFlightJudgeTask === task {
+        inFlightJudgeTask = nil
+    }
+} else {
+    fallbackReason = .judgeUnavailable
 }
 ```
 
-- [ ] **Step 4: Run the cancellation test to verify it passes**
+- [ ] **Step 4: Expose `cancelInFlightJudge()` on `ChatViewModel`**
+
+Add this method near the other public methods (e.g., right after `send(...)`):
+
+```swift
+/// External hook to cancel an in-flight judge call (conversation switch, VM teardown, etc.).
+/// Safe to call at any time — no-op if no judge is running.
+@MainActor
+func cancelInFlightJudge() {
+    inFlightJudgeTask?.cancel()
+    inFlightJudgeTask = nil
+}
+```
+
+- [ ] **Step 5: Run the cancellation test to verify it passes**
 
 ```bash
 xcodebuild test -project Nous.xcodeproj -scheme Nous \
@@ -2209,12 +2330,12 @@ xcodebuild test -project Nous.xcodeproj -scheme Nous \
 
 Expected: all ProvocationOrchestrationTests pass including the new cancellation one.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add Sources/Nous/ViewModels/ChatViewModel.swift \
         Tests/NousTests/ProvocationOrchestrationTests.swift
-git commit -m "feat(provocation): cancel in-flight judge on rapid second send"
+git commit -m "feat(provocation): track judge task for external cancellation (conversation switch)"
 ```
 
 ---
@@ -2233,10 +2354,12 @@ Stacked on PR 3. Spec: docs/superpowers/specs/2026-04-17-proactive-surfacing-des
 
 ## Summary
 **First behavior-changing PR** — interjections start happening.
-- send() now: assembles citable pool, calls judge, validates entry_id, selects BehaviorProfile, appends focus block, logs JudgeEvent
-- Provider .local skips the judge entirely
+- send() now: assembles citable pool, calls judge via a small-model LLMService (Haiku / Flash-Lite / gpt-4o-mini), validates entry_id, selects BehaviorProfile, appends focus block, logs JudgeEvent
+- Judge uses a separate `judgeLLMServiceFactory` — never the main conversation's LLMService
+- Provider .local skips the judge entirely (small local model is unreliable for strict JSON in v1)
+- Cloud provider with missing API key → fallbackReason=.judgeUnavailable
 - Unknown entry_id / malformed JSON / timeout all fall back to .supportive with appropriate fallbackReason
-- Rapid second send cancels the in-flight judge
+- Inner-typed `inFlightJudgeTask` exposed via `cancelInFlightJudge()` for external cancellation (conversation switch / VM teardown). v1 does NOT loosen the `isGenerating` gate — rapid second sends are still blocked at the top of `send()`.
 
 ## Test plan
 - [ ] should_provoke=true injects provocative profile + focus block
@@ -2244,7 +2367,8 @@ Stacked on PR 3. Spec: docs/superpowers/specs/2026-04-17-proactive-surfacing-des
 - [ ] unknown entry_id → supportive, fallbackReason=.unknownEntryID
 - [ ] judge timeout → supportive, fallbackReason=.timeout
 - [ ] local provider → supportive, judge never called, fallbackReason=.providerLocal
-- [ ] rapid second send cancels in-flight judge
+- [ ] cloud provider without judge LLMService → supportive, fallbackReason=.judgeUnavailable
+- [ ] cancelInFlightJudge() short-circuits send() before the main LLM call and logs nothing
 EOF
 )"
 ```
