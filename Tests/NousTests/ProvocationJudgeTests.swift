@@ -128,4 +128,26 @@ final class ProvocationJudgeTests: XCTestCase {
         XCTAssertTrue(prompt.contains("strategist"), "judge prompt must include chat mode")
         XCTAssertTrue(prompt.contains("compete on price"), "judge prompt must include entry text")
     }
+
+    func testExtractsJSONFromProseWithEscapedQuotes() async throws {
+        let fake = FakeLLMService(output: """
+        Sure! Here's the verdict:
+
+        {"tension_exists": true, "user_state": "deciding", "should_provoke": true, "entry_id": "E1", "reason": "say \\"hi\\" but question the framing"}
+
+        Let me know if you need more.
+        """)
+        let judge = ProvocationJudge(llmService: fake, timeout: 1.0)
+
+        let verdict = try await judge.judge(
+            userMessage: "should I proceed?",
+            citablePool: pool(),
+            chatMode: .companion,
+            provider: .claude
+        )
+
+        XCTAssertTrue(verdict.shouldProvoke)
+        XCTAssertTrue(verdict.reason.contains("hi"), "reason should contain the escaped quoted 'hi'")
+        XCTAssertEqual(verdict.entryId, "E1")
+    }
 }

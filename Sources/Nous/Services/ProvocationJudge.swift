@@ -104,16 +104,28 @@ final class ProvocationJudge {
     /// Pulls the first top-level `{...}` block out of free-form model output.
     /// Tolerates leading prose or stray backticks from models that don't perfectly follow
     /// "output JSON only" instructions.
+    /// String-aware: correctly handles escaped quotes and literal `}` inside strings.
     static func extractJSONObject(from text: String) -> String? {
         guard let start = text.firstIndex(of: "{") else { return nil }
         var depth = 0
+        var inString = false
+        var escaped = false
         var idx = start
         while idx < text.endIndex {
             let ch = text[idx]
-            if ch == "{" { depth += 1 }
-            if ch == "}" {
-                depth -= 1
-                if depth == 0 { return String(text[start...idx]) }
+
+            if escaped {
+                escaped = false
+            } else if ch == "\\" && inString {
+                escaped = true
+            } else if ch == "\"" {
+                inString.toggle()
+            } else if !inString {
+                if ch == "{" { depth += 1 }
+                if ch == "}" {
+                    depth -= 1
+                    if depth == 0 { return String(text[start...idx]) }
+                }
             }
             idx = text.index(after: idx)
         }
