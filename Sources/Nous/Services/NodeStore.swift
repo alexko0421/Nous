@@ -705,6 +705,28 @@ final class NodeStore {
         return results
     }
 
+    /// Reverse lookup: all memory_entries whose `sourceNodeIds` JSON array contains the given node id.
+    /// Backs the Citable Pool's node-hit bridging path. Defaults to active-only rows (v2.2 invariant).
+    func fetchMemoryEntries(withSourceNodeId nodeId: UUID, activeOnly: Bool = true) throws -> [MemoryEntry] {
+        let activeClause = activeOnly ? "AND status = 'active'" : ""
+        let stmt = try db.prepare("""
+            SELECT id, scope, scopeRefId, kind, stability, status, content, confidence,
+                   sourceNodeIds, createdAt, updatedAt, lastConfirmedAt, expiresAt, supersededBy
+            FROM memory_entries
+            WHERE EXISTS (
+                SELECT 1 FROM json_each(memory_entries.sourceNodeIds)
+                WHERE json_each.value = ?
+            ) \(activeClause)
+            ORDER BY updatedAt DESC;
+        """)
+        try stmt.bind(nodeId.uuidString, at: 1)
+        var out: [MemoryEntry] = []
+        while try stmt.step() {
+            if let entry = memoryEntryFrom(stmt) { out.append(entry) }
+        }
+        return out
+    }
+
     /// Returns the single `active` entry for a given (scope, scopeRefId), if any.
     /// v2.2b invariant: at most one active entry per scope+ref at any moment.
     func fetchActiveMemoryEntry(scope: MemoryScope, scopeRefId: UUID?) throws -> MemoryEntry? {

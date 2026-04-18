@@ -497,4 +497,53 @@ final class NodeStoreTests: XCTestCase {
         let remaining = try store.fetchEdges(nodeId: nodeA.id)
         XCTAssertTrue(remaining.isEmpty)
     }
+
+    // MARK: - Memory Entry Reverse Lookup Tests
+
+    func testFetchMemoryEntriesWithSourceNodeId() throws {
+        let nodeA = UUID()
+        let nodeB = UUID()
+
+        let entry1 = MemoryEntry(
+            scope: .global, kind: .preference, stability: .stable,
+            content: "E1", sourceNodeIds: [nodeA]
+        )
+        let entry2 = MemoryEntry(
+            scope: .project, scopeRefId: UUID(), kind: .thread, stability: .temporary,
+            content: "E2", sourceNodeIds: [nodeA, nodeB]
+        )
+        let entry3 = MemoryEntry(
+            scope: .conversation, scopeRefId: UUID(), kind: .temporaryContext, stability: .temporary,
+            content: "E3", sourceNodeIds: [nodeB]
+        )
+        try store.insertMemoryEntry(entry1)
+        try store.insertMemoryEntry(entry2)
+        try store.insertMemoryEntry(entry3)
+
+        let hitsA = try store.fetchMemoryEntries(withSourceNodeId: nodeA)
+        XCTAssertEqual(Set(hitsA.map(\.id)), Set([entry1.id, entry2.id]))
+
+        let hitsB = try store.fetchMemoryEntries(withSourceNodeId: nodeB)
+        XCTAssertEqual(Set(hitsB.map(\.id)), Set([entry2.id, entry3.id]))
+
+        let hitsUnknown = try store.fetchMemoryEntries(withSourceNodeId: UUID())
+        XCTAssertTrue(hitsUnknown.isEmpty)
+    }
+
+    func testFetchMemoryEntriesWithSourceNodeIdIgnoresNonActive() throws {
+        let nodeA = UUID()
+        var entry = MemoryEntry(
+            scope: .global, kind: .preference, stability: .stable,
+            content: "E", sourceNodeIds: [nodeA]
+        )
+        try store.insertMemoryEntry(entry)
+        entry.status = .superseded
+        try store.updateMemoryEntry(entry)
+
+        let hits = try store.fetchMemoryEntries(withSourceNodeId: nodeA, activeOnly: true)
+        XCTAssertTrue(hits.isEmpty)
+
+        let allHits = try store.fetchMemoryEntries(withSourceNodeId: nodeA, activeOnly: false)
+        XCTAssertEqual(allHits.count, 1)
+    }
 }
