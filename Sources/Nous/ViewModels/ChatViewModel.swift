@@ -13,7 +13,9 @@ final class ChatViewModel {
     var currentResponse: String = ""
     var citations: [SearchResult] = []
     var activeQuickActionMode: QuickActionMode?
+    var activeChatMode: ChatMode = .companion
     var defaultProjectId: UUID?
+    var lastPromptGovernanceTrace: PromptGovernanceTrace?
 
     // MARK: - Dependencies
 
@@ -24,6 +26,7 @@ final class ChatViewModel {
     private let userMemoryService: UserMemoryService
     private let userMemoryScheduler: UserMemoryScheduler
     private let llmServiceProvider: () -> (any LLMService)?
+    private let governanceTelemetry: GovernanceTelemetryStore
 
     // MARK: - Init
 
@@ -34,7 +37,8 @@ final class ChatViewModel {
         graphEngine: GraphEngine,
         userMemoryService: UserMemoryService,
         userMemoryScheduler: UserMemoryScheduler,
-        llmServiceProvider: @escaping () -> (any LLMService)?
+        llmServiceProvider: @escaping () -> (any LLMService)?,
+        governanceTelemetry: GovernanceTelemetryStore = GovernanceTelemetryStore()
     ) {
         self.nodeStore = nodeStore
         self.vectorStore = vectorStore
@@ -43,6 +47,7 @@ final class ChatViewModel {
         self.userMemoryService = userMemoryService
         self.userMemoryScheduler = userMemoryScheduler
         self.llmServiceProvider = llmServiceProvider
+        self.governanceTelemetry = governanceTelemetry
     }
 
     // MARK: - Conversation Management
@@ -74,6 +79,11 @@ final class ChatViewModel {
         activeQuickActionMode = mode
     }
 
+    func setChatMode(_ mode: ChatMode) {
+        activeChatMode = mode
+    }
+
+    @MainActor
     func beginQuickActionConversation(_ mode: QuickActionMode) async {
         guard !isGenerating else { return }
 
@@ -95,7 +105,21 @@ final class ChatViewModel {
         }
 
         let context = ChatViewModel.assembleContext(
+            chatMode: activeChatMode,
+            currentUserInput: ChatViewModel.quickActionOpeningPrompt(for: mode),
             globalMemory: userMemoryService.currentGlobal(),
+            essentialStory: userMemoryService.currentEssentialStory(
+                projectId: node.projectId,
+                excludingConversationId: node.id
+            ),
+            userModel: userMemoryService.currentUserModel(
+                projectId: node.projectId,
+                conversationId: node.id
+            ),
+            memoryEvidence: userMemoryService.currentBoundedEvidence(
+                projectId: node.projectId,
+                excludingConversationId: node.id
+            ),
             projectMemory: node.projectId.flatMap { userMemoryService.currentProject(projectId: $0) },
             conversationMemory: userMemoryService.currentConversation(nodeId: node.id),
             recentConversations: [],
@@ -104,6 +128,33 @@ final class ChatViewModel {
             activeQuickActionMode: mode,
             allowInteractiveClarification: false
         )
+        let promptTrace = ChatViewModel.governanceTrace(
+            chatMode: activeChatMode,
+            currentUserInput: ChatViewModel.quickActionOpeningPrompt(for: mode),
+            globalMemory: userMemoryService.currentGlobal(),
+            essentialStory: userMemoryService.currentEssentialStory(
+                projectId: node.projectId,
+                excludingConversationId: node.id
+            ),
+            userModel: userMemoryService.currentUserModel(
+                projectId: node.projectId,
+                conversationId: node.id
+            ),
+            memoryEvidence: userMemoryService.currentBoundedEvidence(
+                projectId: node.projectId,
+                excludingConversationId: node.id
+            ),
+            projectMemory: node.projectId.flatMap { userMemoryService.currentProject(projectId: $0) },
+            conversationMemory: userMemoryService.currentConversation(nodeId: node.id),
+            recentConversations: [],
+            citations: [],
+            projectGoal: projectGoal,
+            attachments: [],
+            activeQuickActionMode: mode,
+            allowInteractiveClarification: false
+        )
+        lastPromptGovernanceTrace = promptTrace
+        governanceTelemetry.recordPromptTrace(promptTrace)
 
         guard let llm = llmServiceProvider() else {
             let errorContent = "Please configure an LLM in Settings."
@@ -149,6 +200,7 @@ final class ChatViewModel {
 
     // MARK: - Send (RAG Pipeline)
 
+    @MainActor
     func send(attachments: [AttachedFileContext] = []) async {
         let query = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard (!query.isEmpty || !attachments.isEmpty), !isGenerating else { return }
@@ -209,7 +261,21 @@ final class ChatViewModel {
         let shouldAllowInteractiveClarification = activeQuickActionMode != nil
 
         let context = ChatViewModel.assembleContext(
+            chatMode: activeChatMode,
+            currentUserInput: promptQuery,
             globalMemory: userMemoryService.currentGlobal(),
+            essentialStory: userMemoryService.currentEssentialStory(
+                projectId: node.projectId,
+                excludingConversationId: node.id
+            ),
+            userModel: userMemoryService.currentUserModel(
+                projectId: node.projectId,
+                conversationId: node.id
+            ),
+            memoryEvidence: userMemoryService.currentBoundedEvidence(
+                projectId: node.projectId,
+                excludingConversationId: node.id
+            ),
             projectMemory: node.projectId.flatMap { userMemoryService.currentProject(projectId: $0) },
             conversationMemory: userMemoryService.currentConversation(nodeId: node.id),
             recentConversations: recentConversations,
@@ -219,9 +285,36 @@ final class ChatViewModel {
             activeQuickActionMode: activeQuickActionMode,
             allowInteractiveClarification: shouldAllowInteractiveClarification
         )
+        let promptTrace = ChatViewModel.governanceTrace(
+            chatMode: activeChatMode,
+            currentUserInput: promptQuery,
+            globalMemory: userMemoryService.currentGlobal(),
+            essentialStory: userMemoryService.currentEssentialStory(
+                projectId: node.projectId,
+                excludingConversationId: node.id
+            ),
+            userModel: userMemoryService.currentUserModel(
+                projectId: node.projectId,
+                conversationId: node.id
+            ),
+            memoryEvidence: userMemoryService.currentBoundedEvidence(
+                projectId: node.projectId,
+                excludingConversationId: node.id
+            ),
+            projectMemory: node.projectId.flatMap { userMemoryService.currentProject(projectId: $0) },
+            conversationMemory: userMemoryService.currentConversation(nodeId: node.id),
+            recentConversations: recentConversations,
+            citations: citations,
+            projectGoal: projectGoal,
+            attachments: attachments,
+            activeQuickActionMode: activeQuickActionMode,
+            allowInteractiveClarification: shouldAllowInteractiveClarification
+        )
+        lastPromptGovernanceTrace = promptTrace
+        governanceTelemetry.recordPromptTrace(promptTrace)
 
         // Step 6: Build LLMMessage array from conversation history
-        var llmMessages: [LLMMessage] = messages.map { msg in
+        let llmMessages: [LLMMessage] = messages.map { msg in
             LLMMessage(
                 role: msg.role == .user ? "user" : "assistant",
                 content: msg.content
@@ -267,8 +360,12 @@ final class ChatViewModel {
         // Step 10: Async task — update node embedding + regenerate edges
         let nodeId = node.id
         let fullContent = messages.map(\.content).joined(separator: "\n")
-        Task.detached(priority: .background) { [weak self] in
-            guard let self else { return }
+        let embeddingService = self.embeddingService
+        let vectorStore = self.vectorStore
+        let nodeStore = self.nodeStore
+        let graphEngine = self.graphEngine
+
+        Task.detached(priority: .background) {
             if let embedding = try? embeddingService.embed(fullContent) {
                 try? vectorStore.storeEmbedding(embedding, for: nodeId)
                 if var updatedNode = try? nodeStore.fetchNode(id: nodeId) {
@@ -285,7 +382,7 @@ final class ChatViewModel {
     /// This is who Nous is. It does not change with context.
     private static let anchor: String = {
         guard let url = Bundle.main.url(forResource: "anchor", withExtension: "md"),
-              let content = try? String(contentsOf: url) else {
+              let content = try? String(contentsOf: url, encoding: .utf8) else {
             print("[Nous] WARNING: anchor.md not found in bundle, using fallback")
             return "You are Nous, Alex 最信任嘅朋友。用广东话回应，语气好似同好朋友倾偈咁。Be warm, genuine, and direct."
         }
@@ -296,7 +393,12 @@ final class ChatViewModel {
     // MARK: - Context Assembly
 
     static func assembleContext(
+        chatMode: ChatMode = .companion,
+        currentUserInput: String? = nil,
         globalMemory: String?,
+        essentialStory: String? = nil,
+        userModel: UserModel? = nil,
+        memoryEvidence: [MemoryEvidenceSnippet] = [],
         projectMemory: String?,
         conversationMemory: String?,
         recentConversations: [(title: String, memory: String)],
@@ -307,6 +409,7 @@ final class ChatViewModel {
         allowInteractiveClarification: Bool = false
     ) -> String {
         var parts: [String] = []
+        let highRiskSafetyMode = SafetyGuardrails.isHighRiskQuery(currentUserInput)
 
         // Layer 1: Anchor — who Nous is (immutable)
         parts.append(anchor)
@@ -316,15 +419,72 @@ final class ChatViewModel {
             parts.append("---\n\nLONG-TERM MEMORY ABOUT ALEX:\n\(globalMemory)")
         }
 
-        // Layer 2b: Project memory (only when this chat has a projectId)
+        // Layer 2b: bounded wake-up layer bridging identity and scoped recall.
+        if let essentialStory, !essentialStory.isEmpty {
+            parts.append("---\n\nBROADER SITUATION RIGHT NOW:\n\(essentialStory)")
+        }
+
+        // Layer 2c: Project memory (only when this chat has a projectId)
         if let projectMemory, !projectMemory.isEmpty {
             parts.append("---\n\nTHIS PROJECT'S CONTEXT:\n\(projectMemory)")
         }
 
-        // Layer 2c: This chat's own thread memory
+        // Layer 2d: This chat's own thread memory
         if let conversationMemory, !conversationMemory.isEmpty {
             parts.append("---\n\nTHIS CHAT'S THREAD SO FAR:\n\(conversationMemory)")
         }
+
+        // Layer 2e: bounded evidence backing the higher-priority memory layers.
+        if !memoryEvidence.isEmpty {
+            parts.append("---\n\nSHORT SOURCE EVIDENCE FOR THE ABOVE MEMORY:")
+            for evidence in memoryEvidence {
+                parts.append("- \(evidence.label) · \"\(evidence.sourceTitle)\": \(evidence.snippet)")
+            }
+        }
+
+        parts.append(
+            """
+            ---
+
+            MEMORY INTERPRETATION POLICY:
+            If you notice a personal pattern, state it as a hypothesis unless Alex clearly confirmed it or it is strongly supported across multiple moments.
+            Prefer wording like: "I might be wrong, but...", "One hypothesis is...", "Does this fit, or is something else more true?"
+            Do not present diagnoses or identity labels as certainty.
+            """
+        )
+
+        parts.append(
+            """
+            ---
+
+            CORE SAFETY POLICY:
+            Do not encourage Alex to become emotionally dependent on Nous.
+            Do not present medical, psychological, or legal certainty when the situation is ambiguous.
+            Respect memory boundaries: if Alex asks not to store something, or asked for consent before sensitive storage, do not silently turn that into durable memory.
+            """
+        )
+
+        if highRiskSafetyMode {
+            parts.append(
+                """
+                ---
+
+                HIGH-RISK SAFETY MODE:
+                Alex may be describing imminent danger, self-harm, abuse, or another acute safety issue.
+                Prioritize immediate safety, grounding, and real-world human support over abstract analysis.
+                Be calm, direct, and practical.
+                If he may be in immediate danger, encourage contacting local emergency services or a trusted nearby person right now.
+                Do not romanticize self-destruction, isolation, or dependency.
+                """
+            )
+        }
+
+        if let userModel,
+           let promptBlock = userModel.promptBlock(includeIdentity: globalMemory?.isEmpty ?? true) {
+            parts.append("---\n\nDERIVED USER MODEL:\n\(promptBlock)")
+        }
+
+        parts.append("---\n\nACTIVE CHAT MODE: \(chatMode.label)\n\(chatMode.contextBlock)")
 
         // Layer 3: Project context (if active)
         if let goal = projectGoal, !goal.isEmpty {
@@ -332,9 +492,10 @@ final class ChatViewModel {
         }
 
         // Layer 4: Recent conversations for cross-window continuity.
-        // Uses the conversation_memory summary (Alex-only, evidence-filtered),
-        // NOT the raw transcript — raw content includes Nous's own replies and
-        // would reintroduce self-confirmation across chats. See Codex #4.
+        // Uses active conversation memory entries (Alex-only,
+        // evidence-filtered), NOT the raw transcript — raw content includes
+        // Nous's own replies and would reintroduce self-confirmation across
+        // chats. See Codex #4.
         if !recentConversations.isEmpty {
             parts.append("---\n\nRECENT CONVERSATIONS WITH ALEX:")
             for conversation in recentConversations {
@@ -407,6 +568,48 @@ final class ChatViewModel {
         return parts.joined(separator: "\n\n")
     }
 
+    static func governanceTrace(
+        chatMode: ChatMode = .companion,
+        currentUserInput: String? = nil,
+        globalMemory: String?,
+        essentialStory: String? = nil,
+        userModel: UserModel? = nil,
+        memoryEvidence: [MemoryEvidenceSnippet] = [],
+        projectMemory: String?,
+        conversationMemory: String?,
+        recentConversations: [(title: String, memory: String)],
+        citations: [SearchResult],
+        projectGoal: String?,
+        attachments: [AttachedFileContext] = [],
+        activeQuickActionMode: QuickActionMode? = nil,
+        allowInteractiveClarification: Bool = false
+    ) -> PromptGovernanceTrace {
+        var layers = ["anchor", "memory_interpretation_policy", "core_safety_policy", "chat_mode"]
+        let highRiskQueryDetected = SafetyGuardrails.isHighRiskQuery(currentUserInput)
+
+        if let globalMemory, !globalMemory.isEmpty { layers.append("global_memory") }
+        if let essentialStory, !essentialStory.isEmpty { layers.append("essential_story") }
+        if let projectMemory, !projectMemory.isEmpty { layers.append("project_memory") }
+        if let conversationMemory, !conversationMemory.isEmpty { layers.append("conversation_memory") }
+        if !memoryEvidence.isEmpty { layers.append("memory_evidence") }
+        if let userModel, !userModel.isEmpty { layers.append("user_model") }
+        if let projectGoal, !projectGoal.isEmpty { layers.append("project_goal") }
+        if !recentConversations.isEmpty { layers.append("recent_conversations") }
+        if !attachments.isEmpty { layers.append("attachments") }
+        if !citations.isEmpty { layers.append("citations") }
+        if activeQuickActionMode != nil { layers.append("quick_action_mode") }
+        if allowInteractiveClarification { layers.append("interactive_clarification") }
+        if chatMode == .strategist { layers.append("strategist_mode") }
+        if highRiskQueryDetected { layers.append("high_risk_safety_mode") }
+
+        return PromptGovernanceTrace(
+            promptLayers: layers,
+            evidenceAttached: !memoryEvidence.isEmpty,
+            safetyPolicyInvoked: highRiskQueryDetected,
+            highRiskQueryDetected: highRiskQueryDetected
+        )
+    }
+
     private static func userMessageContent(query: String, attachmentNames: [String]) -> String {
         guard !attachmentNames.isEmpty else { return query }
         return "\(query)\n\nFiles: \(attachmentNames.joined(separator: ", "))"
@@ -463,10 +666,13 @@ final class ChatViewModel {
                     refreshedNode.updatedAt = Date()
                     refreshedNode.emoji = emoji
                     try? nodeStore.updateNode(refreshedNode)
-                    if currentNode?.id == refreshedNode.id {
-                        currentNode = refreshedNode
+                    let finalNode = refreshedNode
+                    await MainActor.run {
+                        if self.currentNode?.id == finalNode.id {
+                            self.currentNode = finalNode
+                        }
+                        NotificationCenter.default.post(name: .nousNodesDidChange, object: nil)
                     }
-                    NotificationCenter.default.post(name: .nousNodesDidChange, object: nil)
                 }
             } else {
                 node.emoji = currentEmoji
@@ -525,6 +731,12 @@ final class ChatViewModel {
         let nodeId = node.id
         let projectId = node.projectId
         let snapshot = messages
+        let shouldPersist = userMemoryService.shouldPersistMemory(messages: snapshot, projectId: projectId)
+        if !shouldPersist {
+            governanceTelemetry.recordMemoryStorageSuppressed()
+            return
+        }
+
         Task { [userMemoryScheduler] in
             await userMemoryScheduler.enqueueConversationRefresh(
                 nodeId: nodeId,

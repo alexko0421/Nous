@@ -45,7 +45,7 @@ final class NoteViewModel {
     }
 
     func createNote(projectId: UUID? = nil) throws {
-        var node = NousNode(type: .note, title: "Untitled", projectId: projectId)
+        let node = NousNode(type: .note, title: "Untitled", projectId: projectId)
         try nodeStore.insertNode(node)
         loadNotes()
         openNote(node)
@@ -107,8 +107,9 @@ final class NoteViewModel {
         if var updatedNode = try? nodeStore.fetchNode(id: note.id) {
             updatedNode.embedding = embedding
             try? graphEngine.regenerateEdges(for: updatedNode)
+            let refreshedNode = updatedNode
             await MainActor.run {
-                self.currentNote = updatedNode
+                self.currentNote = refreshedNode
                 self.loadRelatedNodes()
             }
         }

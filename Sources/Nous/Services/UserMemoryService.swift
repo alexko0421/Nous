@@ -5,21 +5,34 @@ import Foundation
 /// `.context/plans/cross-chat-memory-v2.md` §5 for the architecture.
 final class UserMemoryService {
 
+    enum PersonalInferenceDisposition {
+        case unconfirmed
+        case confirmed
+        case repeatedEvidence
+        case rejected
+    }
+
     // Per-layer token budgets from plan §6. Cap at read time so the database
     // can hold longer content if needed but the prompt stays bounded.
     static let globalBudget = 600
+    static let essentialStoryBudget = 500
     static let projectBudget = 400
     static let conversationBudget = 200
+    static let evidenceSnippetBudget = 180
+    static let userModelFacetLimit = 3
 
     private let nodeStore: NodeStore
     private let llmServiceProvider: () -> (any LLMService)?
+    private let governanceTelemetry: GovernanceTelemetryStore?
 
     init(
         nodeStore: NodeStore,
-        llmServiceProvider: @escaping () -> (any LLMService)?
+        llmServiceProvider: @escaping () -> (any LLMService)?,
+        governanceTelemetry: GovernanceTelemetryStore? = nil
     ) {
         self.nodeStore = nodeStore
         self.llmServiceProvider = llmServiceProvider
+        self.governanceTelemetry = governanceTelemetry
     }
 
     // MARK: - Read (used by ChatViewModel.assembleContext)
@@ -42,6 +55,296 @@ final class UserMemoryService {
     func currentConversation(nodeId: UUID) -> String? {
         let content = readActiveEntry(scope: .conversation, scopeRefId: nodeId)
         return Self.cap(content, budget: Self.conversationBudget)
+    }
+
+    /// Derived "wake-up" layer between stable identity and scoped/project
+    /// memory. This is intentionally not a second canonical store — it is a
+    /// bounded blend of current project context and recent live threads, with
+    /// one stable backdrop line from global memory when available.
+    func currentEssentialStory(
+        projectId: UUID?,
+        excludingConversationId: UUID? = nil
+    ) -> String? {
+        let globalMemory = readActiveEntry(scope: .global, scopeRefId: nil)
+
+        var projectTitle: String?
+        var projectMemory: String = ""
+        if let projectId {
+            projectTitle = (try? nodeStore.fetchProject(id: projectId))?.title ?? "Untitled Project"
+            projectMemory = readActiveEntry(scope: .project, scopeRefId: projectId)
+        }
+
+        let recentConversations = (try? nodeStore.fetchRecentConversationMemories(
+            limit: 2,
+            excludingId: excludingConversationId
+        )) ?? []
+
+        var lines: [String] = []
+        var seen: Set<String> = []
+
+        for line in Self.extractSummaryLines(from: projectMemory, limit: 2) {
+            let formatted = "- Current project (\(projectTitle ?? "Untitled Project")): \(line)"
+            let key = Self.normalizedLine(formatted)
+            if seen.insert(key).inserted {
+                lines.append(formatted)
+            }
+        }
+
+        for conversation in recentConversations {
+            let summary = Self.extractSummaryLines(from: conversation.memory, limit: 1).first
+                ?? Self.preview(conversation.memory, maxChars: 140)
+            guard !summary.isEmpty else { continue }
+            let formatted = "- Recent thread (\(conversation.title)): \(summary)"
+            let key = Self.normalizedLine(formatted)
+            if seen.insert(key).inserted {
+                lines.append(formatted)
+            }
+        }
+
+        if !lines.isEmpty,
+           let backdrop = Self.extractSummaryLines(from: globalMemory, limit: 1).first {
+            let formatted = "- Stable backdrop: \(backdrop)"
+            let key = Self.normalizedLine(formatted)
+            if seen.insert(key).inserted {
+                lines.insert(formatted, at: 0)
+            }
+        }
+
+        guard !lines.isEmpty else { return nil }
+        return Self.cap(lines.joined(separator: "\n"), budget: Self.essentialStoryBudget)
+    }
+
+    /// Selects a tiny amount of raw supporting evidence for the memory layers
+    /// most likely to matter in the current turn. This keeps the prompt
+    /// grounded without dumping large transcript blocks back into context.
+    func currentBoundedEvidence(
+        projectId: UUID?,
+        excludingConversationId: UUID? = nil,
+        limit: Int = 2
+    ) -> [MemoryEvidenceSnippet] {
+        guard limit > 0 else { return [] }
+
+        var candidates: [(label: String, entry: MemoryEntry)] = []
+
+        if let projectId,
+           let projectEntry = try? nodeStore.fetchActiveMemoryEntry(scope: .project, scopeRefId: projectId),
+           !projectEntry.sourceNodeIds.isEmpty {
+            candidates.append(("Project context", projectEntry))
+        }
+
+        let recentConversationEntries = ((try? nodeStore.fetchMemoryEntries()) ?? [])
+            .filter { $0.scope == .conversation && $0.status == .active }
+            .filter { entry in
+                guard let scopeRefId = entry.scopeRefId else { return false }
+                return scopeRefId != excludingConversationId
+            }
+            .sorted { $0.updatedAt > $1.updatedAt }
+            .prefix(2)
+
+        for entry in recentConversationEntries where !entry.sourceNodeIds.isEmpty {
+            candidates.append(("Recent thread", entry))
+        }
+
+        if let globalEntry = try? nodeStore.fetchActiveMemoryEntry(scope: .global, scopeRefId: nil),
+           !globalEntry.sourceNodeIds.isEmpty {
+            candidates.append(("Long-term memory", globalEntry))
+        }
+
+        var snippets: [MemoryEvidenceSnippet] = []
+        var usedSourceNodeIds: Set<UUID> = []
+
+        for candidate in candidates {
+            guard let snippet = selectEvidenceSnippet(
+                for: candidate.entry,
+                label: candidate.label,
+                excludingConversationId: excludingConversationId,
+                usedSourceNodeIds: &usedSourceNodeIds
+            ) else {
+                continue
+            }
+            snippets.append(snippet)
+            if snippets.count == limit { break }
+        }
+
+        return snippets
+    }
+
+    func currentIdentityModel() -> [String] {
+        guard let globalEntry = try? nodeStore.fetchActiveMemoryEntry(scope: .global, scopeRefId: nil),
+              globalEntry.confidence >= 0.8 else {
+            return []
+        }
+        return Array(
+            Self.extractSummaryLines(from: globalEntry.content, limit: Self.userModelFacetLimit)
+                .prefix(Self.userModelFacetLimit)
+        )
+    }
+
+    func currentGoalModel(projectId: UUID?, conversationId: UUID? = nil) -> [String] {
+        var lines: [String] = []
+        var seen: Set<String> = []
+
+        if let projectId,
+           let project = try? nodeStore.fetchProject(id: projectId),
+           !project.goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let trimmedGoal = project.goal.trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = Self.normalizedLine(trimmedGoal)
+            if seen.insert(key).inserted {
+                lines.append(trimmedGoal)
+            }
+        }
+
+        for line in facetLines(
+            from: goalModelEntries(projectId: projectId, conversationId: conversationId),
+            keywords: [
+                "goal", "build", "ship", "trying to", "want to", "wants to",
+                "priority", "focus", "plan to", "need to"
+            ],
+            minConfidence: 0.8,
+            limit: Self.userModelFacetLimit
+        ) {
+            let key = Self.normalizedLine(line)
+            guard seen.insert(key).inserted else { continue }
+            lines.append(line)
+            if lines.count == Self.userModelFacetLimit { break }
+        }
+
+        return lines
+    }
+
+    func currentWorkStyleModel(projectId: UUID?, conversationId: UUID? = nil) -> [String] {
+        facetLines(
+            from: workStyleEntries(projectId: projectId, conversationId: conversationId),
+            keywords: [
+                "prefer", "prefers", "direct", "simple", "first principles",
+                "challenge", "support", "framing", "concise", "control",
+                "fast", "deliberate"
+            ],
+            minConfidence: 0.85,
+            limit: Self.userModelFacetLimit
+        )
+    }
+
+    func currentMemoryBoundary(projectId: UUID?, conversationId: UUID? = nil) -> [String] {
+        facetLines(
+            from: boundaryEntries(projectId: projectId, conversationId: conversationId),
+            keywords: [
+                "remember", "memory", "store", "stored", "privacy",
+                "permission", "ask first", "boundary", "do not store",
+                "don't store", "do not keep", "consent", "ask before"
+            ],
+            minConfidence: 0.8,
+            limit: 2
+        )
+    }
+
+    func currentUserModel(projectId: UUID?, conversationId: UUID? = nil) -> UserModel? {
+        let model = UserModel(
+            identity: currentIdentityModel(),
+            goals: currentGoalModel(projectId: projectId, conversationId: conversationId),
+            workStyle: currentWorkStyleModel(projectId: projectId, conversationId: conversationId),
+            memoryBoundary: currentMemoryBoundary(projectId: projectId, conversationId: conversationId)
+        )
+        return model.isEmpty ? nil : model
+    }
+
+    func shouldPersistMemory(messages: [Message], projectId: UUID?) -> Bool {
+        guard let latestUserMessage = messages.reversed().first(where: { $0.role == .user }) else {
+            return true
+        }
+
+        let latestContent = Self.stripQuoteBlocks(latestUserMessage.content)
+        if SafetyGuardrails.containsHardMemoryOptOut(latestContent) {
+            return false
+        }
+
+        let boundaries = currentMemoryBoundary(projectId: projectId)
+        if SafetyGuardrails.requiresConsentForSensitiveMemory(boundaryLines: boundaries),
+           SafetyGuardrails.containsSensitiveMemory(latestContent) {
+            return false
+        }
+
+        return true
+    }
+
+    func allMemoryEntries() -> [MemoryEntry] {
+        ((try? nodeStore.fetchMemoryEntries()) ?? [])
+            .sorted { lhs, rhs in
+                if lhs.updatedAt == rhs.updatedAt {
+                    return lhs.createdAt > rhs.createdAt
+                }
+                return lhs.updatedAt > rhs.updatedAt
+            }
+    }
+
+    func sourceSnippets(for entryId: UUID, limit: Int = 3) -> [MemoryEvidenceSnippet] {
+        guard limit > 0,
+              let entry = try? nodeStore.fetchMemoryEntry(id: entryId) else {
+            return []
+        }
+
+        var snippets: [MemoryEvidenceSnippet] = []
+        var usedSourceNodeIds: Set<UUID> = []
+
+        for sourceNodeId in dedupeSourceNodeIds(entry.sourceNodeIds) {
+            guard !usedSourceNodeIds.contains(sourceNodeId) else { continue }
+            guard let node = try? nodeStore.fetchNode(id: sourceNodeId) else { continue }
+            let snippet = extractEvidenceSnippet(from: node)
+            guard !snippet.isEmpty else { continue }
+
+            usedSourceNodeIds.insert(sourceNodeId)
+            snippets.append(
+                MemoryEvidenceSnippet(
+                    label: scopeLabel(for: entry.scope),
+                    sourceNodeId: sourceNodeId,
+                    sourceTitle: node.title.isEmpty ? "Untitled" : node.title,
+                    snippet: snippet
+                )
+            )
+
+            if snippets.count == limit { break }
+        }
+
+        return snippets
+    }
+
+    @discardableResult
+    func confirmMemoryEntry(id: UUID) -> Bool {
+        let didMutate = mutateMemoryEntry(id: id) { entry in
+            guard entry.status == .active else { return false }
+            let now = Date()
+            entry.updatedAt = now
+            entry.lastConfirmedAt = now
+            entry.confidence = max(entry.confidence, entry.stability == .stable ? 0.95 : 0.9)
+            return true
+        }
+        if didMutate {
+            governanceTelemetry?.increment(.memoryPrecision)
+        }
+        return didMutate
+    }
+
+    @discardableResult
+    func archiveMemoryEntry(id: UUID) -> Bool {
+        mutateMemoryEntry(id: id) { entry in
+            guard entry.status != .archived else { return false }
+            entry.status = .archived
+            entry.updatedAt = Date()
+            return true
+        }
+    }
+
+    @discardableResult
+    func deleteMemoryEntry(id: UUID) -> Bool {
+        do {
+            try nodeStore.deleteMemoryEntry(id: id)
+            return true
+        } catch {
+            #if DEBUG
+            print("[UserMemoryService] deleteMemoryEntry failed: \(error)")
+            #endif
+            return false
+        }
     }
 
     /// Returns the active entry's content trimmed, or "" if no active entry.
@@ -176,6 +479,8 @@ final class UserMemoryService {
     func refreshProject(projectId: UUID) async {
         guard let nodes = try? nodeStore.fetchNodes(projectId: projectId) else { return }
 
+        var projectSourceNodeIds: [UUID] = []
+        var seenSourceNodeIds: Set<UUID> = []
         let convoBlobs = nodes.compactMap { node -> String? in
             guard let entry = try? nodeStore.fetchActiveMemoryEntry(
                 scope: .conversation, scopeRefId: node.id
@@ -184,6 +489,10 @@ final class UserMemoryService {
             }
             let trimmed = entry.content.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return nil }
+            let sourceIds = entry.sourceNodeIds.isEmpty ? [node.id] : entry.sourceNodeIds
+            for sourceId in sourceIds where seenSourceNodeIds.insert(sourceId).inserted {
+                projectSourceNodeIds.append(sourceId)
+            }
             return "[\(node.title)]\n\(trimmed)"
         }
 
@@ -234,7 +543,7 @@ final class UserMemoryService {
                 content: trimmed,
                 kind: .thread,
                 stability: .stable,
-                sourceNodeIds: [],
+                sourceNodeIds: projectSourceNodeIds,
                 now: now
             )
             Self.logPersistenceErrors("resetProjectRefreshCounter") {
@@ -257,10 +566,28 @@ final class UserMemoryService {
     /// Memory Inspector). The Phase 3 Memory Inspector is the sole authorised
     /// caller; Phase 1.5's debug inspector is read-only and must never reach
     /// this path.
-    func promoteToGlobal(candidate: String) async {
+    func promoteToGlobal(
+        candidate: String,
+        sourceNodeIds: [UUID] = [],
+        confirmation: PersonalInferenceDisposition = .unconfirmed
+    ) async -> Bool {
         let trimmedCandidate = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedCandidate.isEmpty else { return }
-        guard let llm = llmServiceProvider() else { return }
+        guard !trimmedCandidate.isEmpty else { return false }
+
+        let dedupedSourceNodeIds = dedupeSourceNodeIds(sourceNodeIds)
+        switch confirmation {
+        case .unconfirmed:
+            return false
+        case .rejected:
+            rejectGlobalCandidate(trimmedCandidate)
+            return false
+        case .repeatedEvidence:
+            guard dedupedSourceNodeIds.count >= 2 else { return false }
+        case .confirmed:
+            break
+        }
+
+        guard let llm = llmServiceProvider() else { return false }
 
         let existing = currentGlobal() ?? ""
         let existingBlock = existing.isEmpty ? "[none yet]" : existing
@@ -290,13 +617,13 @@ final class UserMemoryService {
 
             var updated = ""
             for try await chunk in stream {
-                if Task.isCancelled { return }
+                if Task.isCancelled { return false }
                 updated += chunk
             }
 
-            if Task.isCancelled { return }
+            if Task.isCancelled { return false }
             let trimmed = updated.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return }
+            guard !trimmed.isEmpty else { return false }
             let now = Date()
             // v2.2d: entry-only write.
             writeScopeEntry(
@@ -305,35 +632,27 @@ final class UserMemoryService {
                 content: trimmed,
                 kind: .identity,
                 stability: .stable,
-                sourceNodeIds: [],
+                sourceNodeIds: dedupedSourceNodeIds,
+                confidence: confirmation == .confirmed ? 0.95 : 0.85,
+                lastConfirmedAt: now,
                 now: now
             )
+            return true
         } catch {
-            return
+            return false
         }
     }
 
-    // MARK: - v2.2b dual-write
+    // MARK: - Canonical scope writes
 
-    /// Mirror a freshly-saved scope blob into `memory_entries` so entries grow
-    /// as a structured journal alongside v2.1's blob source-of-truth. Called
-    /// after each successful `saveGlobalMemory` / `saveProjectMemory` /
-    /// `saveConversationMemory`.
+    /// Persist the latest scope summary into canonical `memory_entries`.
+    /// One active entry exists per `(scope, scopeRefId)`; older actives are
+    /// superseded and linked via `supersededBy` so the evolution chain stays
+    /// inspectable. Wrapped in one transaction so the read path never sees two
+    /// concurrent actives for the same scope.
     ///
-    /// **Invariant**: for every (scope, scopeRefId), at most one `active` entry
-    /// at any moment. The older active (if any) is marked `superseded` and
-    /// linked to the replacement via `supersededBy`, preserving evolution
-    /// history. Wrapped in a single transaction so a crash mid-write can never
-    /// leave two concurrent actives.
-    ///
-    /// **Parity property**: after this completes,
-    /// `fetchActiveMemoryEntry(scope, scopeRefId).content == scope blob content`.
-    /// v2.2b tests assert this invariant; v2.2c will use it to flip the read
-    /// path from blob to entry without behavior change.
-    ///
-    /// Failures are swallowed (logged in DEBUG) — entries are a shadow index
-    /// in v2.2b; a missing entry row must never crash a chat. Blob write above
-    /// still holds the user-visible memory.
+    /// Failures are swallowed (logged in DEBUG) because an occasional memory
+    /// write failure should not crash a user-facing chat.
     private func writeScopeEntry(
         scope: MemoryScope,
         scopeRefId: UUID?,
@@ -341,6 +660,8 @@ final class UserMemoryService {
         kind: MemoryKind,
         stability: MemoryStability,
         sourceNodeIds: [UUID],
+        confidence: Double = 0.8,
+        lastConfirmedAt: Date? = nil,
         now: Date
     ) {
         let newEntry = MemoryEntry(
@@ -349,10 +670,11 @@ final class UserMemoryService {
             kind: kind,
             stability: stability,
             content: content,
+            confidence: confidence,
             sourceNodeIds: sourceNodeIds,
             createdAt: now,
             updatedAt: now,
-            lastConfirmedAt: now
+            lastConfirmedAt: lastConfirmedAt ?? now
         )
         Self.logPersistenceErrors("writeScopeEntry(\(scope.rawValue))") {
             try nodeStore.inTransaction {
@@ -365,6 +687,236 @@ final class UserMemoryService {
                 try nodeStore.insertMemoryEntry(newEntry)
             }
         }
+    }
+
+    private func selectEvidenceSnippet(
+        for entry: MemoryEntry,
+        label: String,
+        excludingConversationId: UUID?,
+        usedSourceNodeIds: inout Set<UUID>
+    ) -> MemoryEvidenceSnippet? {
+        for sourceNodeId in dedupeSourceNodeIds(entry.sourceNodeIds) {
+            if let excludingConversationId, sourceNodeId == excludingConversationId {
+                continue
+            }
+            guard !usedSourceNodeIds.contains(sourceNodeId) else { continue }
+            guard let node = try? nodeStore.fetchNode(id: sourceNodeId) else { continue }
+            let snippet = extractEvidenceSnippet(from: node)
+            guard !snippet.isEmpty else { continue }
+            usedSourceNodeIds.insert(sourceNodeId)
+            return MemoryEvidenceSnippet(
+                label: label,
+                sourceNodeId: sourceNodeId,
+                sourceTitle: node.title,
+                snippet: snippet
+            )
+        }
+        return nil
+    }
+
+    private func mutateMemoryEntry(
+        id: UUID,
+        transform: (inout MemoryEntry) -> Bool
+    ) -> Bool {
+        guard var entry = try? nodeStore.fetchMemoryEntry(id: id) else {
+            return false
+        }
+        guard transform(&entry) else { return false }
+        do {
+            try nodeStore.updateMemoryEntry(entry)
+            return true
+        } catch {
+            #if DEBUG
+            print("[UserMemoryService] mutateMemoryEntry failed: \(error)")
+            #endif
+            return false
+        }
+    }
+
+    private func rejectGlobalCandidate(_ candidate: String) {
+        guard var activeEntry = try? nodeStore.fetchActiveMemoryEntry(scope: .global, scopeRefId: nil) else {
+            return
+        }
+        guard contentReferencesCandidate(activeEntry.content, candidate: candidate) else { return }
+
+        activeEntry.status = .conflicted
+        activeEntry.confidence = min(activeEntry.confidence, 0.2)
+        activeEntry.lastConfirmedAt = nil
+        activeEntry.updatedAt = Date()
+
+        Self.logPersistenceErrors("rejectGlobalCandidate") {
+            try nodeStore.updateMemoryEntry(activeEntry)
+        }
+        governanceTelemetry?.increment(.overInferenceRate)
+    }
+
+    private func contentReferencesCandidate(_ content: String, candidate: String) -> Bool {
+        let normalizedCandidate = Self.normalizedLine(candidate)
+        guard !normalizedCandidate.isEmpty else { return false }
+
+        if Self.normalizedLine(content).contains(normalizedCandidate) {
+            return true
+        }
+
+        return Self.extractSummaryLines(from: content, limit: 12).contains { line in
+            let normalizedLine = Self.normalizedLine(line)
+            return normalizedLine.contains(normalizedCandidate)
+                || normalizedCandidate.contains(normalizedLine)
+                || Self.tokenJaccard(normalizedLine, normalizedCandidate) >= 0.6
+        }
+    }
+
+    private func extractEvidenceSnippet(from node: NousNode) -> String {
+        switch node.type {
+        case .conversation:
+            if let recentUserMessage = recentUserEvidence(nodeId: node.id) {
+                return recentUserMessage
+            }
+            if let transcriptExcerpt = alexTranscriptEvidence(node.content) {
+                return transcriptExcerpt
+            }
+        case .note:
+            break
+        }
+
+        for line in Self.extractSummaryLines(from: node.content, limit: 1) {
+            if !line.isEmpty {
+                return Self.preview(line, maxChars: Self.evidenceSnippetBudget)
+            }
+        }
+
+        return Self.preview(node.content, maxChars: Self.evidenceSnippetBudget)
+    }
+
+    private func scopeLabel(for scope: MemoryScope) -> String {
+        switch scope {
+        case .global:
+            return "Global memory"
+        case .project:
+            return "Project memory"
+        case .conversation:
+            return "Thread memory"
+        }
+    }
+
+    private func goalModelEntries(projectId: UUID?, conversationId: UUID?) -> [MemoryEntry] {
+        var entries: [MemoryEntry] = []
+        if let projectId,
+           let projectEntry = try? nodeStore.fetchActiveMemoryEntry(scope: .project, scopeRefId: projectId) {
+            entries.append(projectEntry)
+        }
+        if let conversationId,
+           let conversationEntry = try? nodeStore.fetchActiveMemoryEntry(scope: .conversation, scopeRefId: conversationId) {
+            entries.append(conversationEntry)
+        }
+        entries.append(contentsOf: recentActiveConversationEntries(excludingConversationId: conversationId, limit: 2))
+        return entries
+    }
+
+    private func workStyleEntries(projectId: UUID?, conversationId: UUID?) -> [MemoryEntry] {
+        var entries: [MemoryEntry] = []
+        if let globalEntry = try? nodeStore.fetchActiveMemoryEntry(scope: .global, scopeRefId: nil) {
+            entries.append(globalEntry)
+        }
+        if let projectId,
+           let projectEntry = try? nodeStore.fetchActiveMemoryEntry(scope: .project, scopeRefId: projectId) {
+            entries.append(projectEntry)
+        }
+        if let conversationId,
+           let conversationEntry = try? nodeStore.fetchActiveMemoryEntry(scope: .conversation, scopeRefId: conversationId) {
+            entries.append(conversationEntry)
+        }
+        return entries
+    }
+
+    private func boundaryEntries(projectId: UUID?, conversationId: UUID?) -> [MemoryEntry] {
+        var entries: [MemoryEntry] = []
+        if let globalEntry = try? nodeStore.fetchActiveMemoryEntry(scope: .global, scopeRefId: nil) {
+            entries.append(globalEntry)
+        }
+        if let projectId,
+           let projectEntry = try? nodeStore.fetchActiveMemoryEntry(scope: .project, scopeRefId: projectId) {
+            entries.append(projectEntry)
+        }
+        if let conversationId,
+           let conversationEntry = try? nodeStore.fetchActiveMemoryEntry(scope: .conversation, scopeRefId: conversationId) {
+            entries.append(conversationEntry)
+        }
+        entries.append(contentsOf: recentActiveConversationEntries(excludingConversationId: conversationId, limit: 2))
+        return entries
+    }
+
+    private func recentActiveConversationEntries(
+        excludingConversationId: UUID?,
+        limit: Int
+    ) -> [MemoryEntry] {
+        guard limit > 0 else { return [] }
+        return ((try? nodeStore.fetchMemoryEntries()) ?? [])
+            .filter { $0.scope == .conversation && $0.status == .active }
+            .filter { entry in
+                guard let scopeRefId = entry.scopeRefId else { return false }
+                return scopeRefId != excludingConversationId
+            }
+            .sorted { $0.updatedAt > $1.updatedAt }
+            .prefix(limit)
+            .map { $0 }
+    }
+
+    private func facetLines(
+        from entries: [MemoryEntry],
+        keywords: [String],
+        minConfidence: Double,
+        limit: Int
+    ) -> [String] {
+        guard limit > 0 else { return [] }
+
+        let normalizedKeywords = keywords.map(Self.normalizedLine)
+        var lines: [String] = []
+        var seen: Set<String> = []
+
+        for entry in entries where entry.status == .active && entry.confidence >= minConfidence {
+            for line in Self.extractSummaryLines(from: entry.content, limit: 12) {
+                let normalized = Self.normalizedLine(line)
+                guard !normalized.isEmpty else { continue }
+                guard normalizedKeywords.contains(where: { normalized.contains($0) }) else { continue }
+                guard seen.insert(normalized).inserted else { continue }
+                lines.append(line)
+                if lines.count == limit { return lines }
+            }
+        }
+
+        return lines
+    }
+
+    private func recentUserEvidence(nodeId: UUID) -> String? {
+        guard let messages = try? nodeStore.fetchMessages(nodeId: nodeId) else { return nil }
+
+        for message in messages.reversed() where message.role == .user {
+            let cleaned = Self.stripQuoteBlocks(message.content)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleaned.isEmpty else { continue }
+            return Self.preview(cleaned, maxChars: Self.evidenceSnippetBudget)
+        }
+
+        return nil
+    }
+
+    private func alexTranscriptEvidence(_ transcript: String) -> String? {
+        let turns = transcript.components(separatedBy: "\n\n")
+        for turn in turns.reversed() {
+            let trimmed = turn.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.hasPrefix("Alex:") else { continue }
+            let content = trimmed.dropFirst("Alex:".count)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !content.isEmpty else { continue }
+            return Self.preview(content, maxChars: Self.evidenceSnippetBudget)
+        }
+        return nil
+    }
+
+    private func dedupeSourceNodeIds(_ ids: [UUID]) -> [UUID] {
+        var seen: Set<UUID> = []
+        return ids.filter { seen.insert($0).inserted }
     }
 
     // MARK: - Helpers
@@ -418,5 +970,49 @@ final class UserMemoryService {
             return String(content[..<lastNewline]).trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return String(head)
+    }
+
+    private static func extractSummaryLines(from content: String, limit: Int) -> [String] {
+        guard limit > 0 else { return [] }
+
+        var lines: [String] = []
+        var seen: Set<String> = []
+
+        for rawLine in content.components(separatedBy: .newlines) {
+            var trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            guard !trimmed.hasPrefix("#") else { continue }
+
+            if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("• ") {
+                trimmed = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespacesAndNewlines)
+            } else if trimmed.hasPrefix("-") || trimmed.hasPrefix("*") || trimmed.hasPrefix("•") {
+                trimmed = String(trimmed.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+
+            guard !trimmed.isEmpty else { continue }
+            let key = normalizedLine(trimmed)
+            guard seen.insert(key).inserted else { continue }
+            lines.append(trimmed)
+            if lines.count == limit { break }
+        }
+
+        return lines
+    }
+
+    private static func preview(_ content: String, maxChars: Int) -> String {
+        let trimmed = content
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > maxChars else { return trimmed }
+        let limit = trimmed.index(trimmed.startIndex, offsetBy: maxChars)
+        return String(trimmed[..<limit]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func normalizedLine(_ content: String) -> String {
+        content
+            .lowercased()
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
     }
 }

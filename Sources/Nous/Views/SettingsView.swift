@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @Bindable var vm: SettingsViewModel
+    let userMemoryService: UserMemoryService
     @State private var showMemoryInspector = false
 
     var body: some View {
@@ -88,12 +89,12 @@ struct SettingsView: View {
                     }
                 }
 
-                // ── Memory (debug) ──
+                // ── Memory ──
                 settingsCard {
                     VStack(alignment: .leading, spacing: 12) {
-                        sectionLabel("Memory (debug)")
+                        sectionLabel("Memory")
                         HStack {
-                            Text("Inspect what Nous has learned across scopes.")
+                            Text("Inspect, confirm, archive, or delete what Nous remembers.")
                                 .font(.system(size: 13, design: .rounded))
                                 .foregroundColor(AppColor.colaDarkText.opacity(0.7))
                             Spacer()
@@ -119,7 +120,7 @@ struct SettingsView: View {
             vm.updateStats()
         }
         .sheet(isPresented: $showMemoryInspector) {
-            MemoryDebugInspector(nodeStore: vm.nodeStore)
+            MemoryDebugInspector(nodeStore: vm.nodeStore, userMemoryService: userMemoryService)
         }
     }
 
