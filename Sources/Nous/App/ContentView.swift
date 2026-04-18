@@ -125,7 +125,7 @@ struct ContentView: View {
                 case .galaxy:
                     GalaxyView(vm: galaxyVM, onNodeSelected: { node in navigateToNode(node) })
                 case .settings:
-                    SettingsView(vm: settingsVM, userMemoryService: userMemoryService)
+                    SettingsView(vm: settingsVM, userMemoryService: userMemoryService, telemetry: governanceTelemetry)
                 }
 
                 // Tab navigation is handled via sidebar icons (Galaxy, Project)

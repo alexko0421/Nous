@@ -959,7 +959,7 @@ final class NodeStore {
 
 // MARK: - Judge Events
 
-enum JudgeEventFilter: Equatable {
+enum JudgeEventFilter: Equatable, Hashable {
     case none
     case fallback(JudgeFallbackReason)
     case shouldProvoke(Bool)

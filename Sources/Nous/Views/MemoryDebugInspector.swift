@@ -3,7 +3,14 @@ import SwiftUI
 struct MemoryDebugInspector: View {
     let nodeStore: NodeStore
     let userMemoryService: UserMemoryService
+    let telemetry: GovernanceTelemetryStore
 
+    private enum InspectorTab {
+        case memory
+        case judge
+    }
+
+    @State private var selectedInspectorTab: InspectorTab = .memory
     @State private var entries: [MemoryEntry] = []
     @State private var projectTitles: [UUID: String] = [:]
     @State private var nodeTitles: [UUID: String] = [:]
@@ -34,14 +41,28 @@ struct MemoryDebugInspector: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                header
-                controlsCard
-                entriesCard
-                Spacer(minLength: 20)
+        VStack(spacing: 0) {
+            header
+                .padding(.horizontal, 24)
+                .padding(.top, 24)
+                .padding(.bottom, 12)
+
+            TabView(selection: $selectedInspectorTab) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        controlsCard
+                        entriesCard
+                        Spacer(minLength: 20)
+                    }
+                    .padding(24)
+                }
+                .tabItem { Label("Memory", systemImage: "brain") }
+                .tag(InspectorTab.memory)
+
+                JudgeEventsTab(telemetry: telemetry)
+                    .tabItem { Label("Judge", systemImage: "wand.and.sparkles") }
+                    .tag(InspectorTab.judge)
             }
-            .padding(24)
         }
         .frame(minWidth: 820, minHeight: 640)
         .background(AppColor.colaBeige)
@@ -646,5 +667,61 @@ struct MemoryDebugInspector: View {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .short
         return formatter.localizedString(for: date, relativeTo: Date())
+    }
+}
+
+struct JudgeEventsTab: View {
+    let telemetry: GovernanceTelemetryStore
+    @State private var filter: JudgeEventFilter = .none
+    @State private var events: [JudgeEvent] = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Picker("Filter", selection: $filter) {
+                    Text("All").tag(JudgeEventFilter.none)
+                    Text("Provoked").tag(JudgeEventFilter.shouldProvoke(true))
+                    Text("Not provoked").tag(JudgeEventFilter.shouldProvoke(false))
+                    Text("Failures").tag(JudgeEventFilter.fallback(.timeout))
+                    Text("Bad JSON").tag(JudgeEventFilter.fallback(.badJSON))
+                    Text("Scope breach").tag(JudgeEventFilter.fallback(.unknownEntryId))
+                }
+                .pickerStyle(.menu)
+                Button("Refresh") { reload() }
+            }
+            List(events, id: \.id) { event in
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(event.ts.formatted(date: .omitted, time: .standard))
+                            .font(.caption.monospaced())
+                        Text(event.chatMode.rawValue)
+                            .font(.caption)
+                            .padding(.horizontal, 6)
+                            .background(.secondary.opacity(0.15))
+                            .clipShape(Capsule())
+                        Text(event.fallbackReason.rawValue)
+                            .font(.caption)
+                            .foregroundStyle(event.fallbackReason == .ok ? .green : .orange)
+                        if let fb = event.userFeedback {
+                            Image(systemName: fb == .up ? "hand.thumbsup.fill" : "hand.thumbsdown.fill")
+                                .font(.caption)
+                                .foregroundStyle(fb == .up ? .green : .red)
+                        }
+                    }
+                    Text(event.verdictJSON)
+                        .font(.caption2.monospaced())
+                        .lineLimit(3)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 2)
+            }
+        }
+        .padding()
+        .onAppear(perform: reload)
+        .onChange(of: filter) { _, _ in reload() }
+    }
+
+    private func reload() {
+        events = telemetry.recentJudgeEvents(limit: 200, filter: filter)
     }
 }

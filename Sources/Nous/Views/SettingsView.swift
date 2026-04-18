@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @Bindable var vm: SettingsViewModel
     let userMemoryService: UserMemoryService
+    let telemetry: GovernanceTelemetryStore
     @State private var showMemoryInspector = false
 
     var body: some View {
@@ -120,7 +121,7 @@ struct SettingsView: View {
             vm.updateStats()
         }
         .sheet(isPresented: $showMemoryInspector) {
-            MemoryDebugInspector(nodeStore: vm.nodeStore, userMemoryService: userMemoryService)
+            MemoryDebugInspector(nodeStore: vm.nodeStore, userMemoryService: userMemoryService, telemetry: telemetry)
         }
     }
 
