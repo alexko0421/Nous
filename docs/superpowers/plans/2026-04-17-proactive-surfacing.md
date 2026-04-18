@@ -2340,7 +2340,203 @@ git commit -m "feat(provocation): track judge task for external cancellation (co
 
 ---
 
-### Task 4.4: PR 4 open
+### Task 4.4: Wire `cancelInFlightJudge()` into real conversation-switch paths
+
+**Files:**
+- Modify: `Sources/Nous/ViewModels/ChatViewModel.swift`
+- Modify: `Sources/Nous/App/ContentView.swift`
+- Test: append to `Tests/NousTests/ProvocationOrchestrationTests.swift`
+
+Task 4.3 exposed `cancelInFlightJudge()` but left it as orphan API — nothing in the product calls it, so the cancellation path is only exercised by tests. This task connects it to the three real vectors in the current codebase:
+
+1. **`ChatViewModel.loadConversation(_:)`** (`ChatViewModel.swift:70`) — user picks a different conversation from the sidebar.
+2. **`ChatViewModel.startNewConversation(...)`** (`ChatViewModel.swift:55`) — user starts a fresh conversation (also fires from the quick-action flow at line 90).
+3. **`ContentView.swift:102`** — explicit reset (`chatVM.currentNode = nil`) when the user clicks "new chat".
+4. **`ChatViewModel.deinit`** — process-level cleanup (defensive; in practice the VM outlives any single judge call, but a deinit hook means a leaked judge task can never outlive the VM).
+
+- [ ] **Step 1: Write the failing test** (append to `ProvocationOrchestrationTests.swift`)
+
+```swift
+// Append to Tests/NousTests/ProvocationOrchestrationTests.swift
+
+@MainActor
+func testLoadConversationCancelsInFlightJudge() async throws {
+    final class SlowJudge: Judging {
+        var wasCancelled = false
+        func judge(userMessage: String, citablePool: [CitableEntry],
+                   chatMode: ChatMode, provider: LLMProvider) async throws -> JudgeVerdict {
+            do {
+                try await Task.sleep(nanoseconds: 2_000_000_000)
+            } catch {
+                wasCancelled = true
+                throw CancellationError()
+            }
+            return JudgeVerdict(tensionExists: false, userState: .exploring,
+                                shouldProvoke: false, entryId: nil, reason: "slow")
+        }
+    }
+    let slowJudge = SlowJudge()
+    viewModel = ChatViewModel(
+        nodeStore: store,
+        vectorStore: VectorStore(nodeStore: store),
+        embeddingService: EmbeddingService(),
+        graphEngine: GraphEngine(nodeStore: store),
+        userMemoryService: UserMemoryService(nodeStore: store, llmServiceProvider: { self.llm }),
+        governanceTelemetry: telemetry,
+        llmServiceProvider: { self.llm },
+        currentProviderProvider: { .claude },
+        judgeLLMServiceFactory: { CannedLLMService() },
+        provocationJudgeFactory: { _ in slowJudge }
+    )
+
+    viewModel.inputText = "first"
+    let sendTask = Task { await viewModel.send() }
+    try await Task.sleep(nanoseconds: 100_000_000)  // let the judge enter its sleep
+
+    // User navigates to a different conversation.
+    let otherNode = NousNode(type: .conversation, title: "other", projectId: nil)
+    try store.insertNode(otherNode)
+    viewModel.loadConversation(otherNode)
+
+    await sendTask.value
+
+    XCTAssertTrue(slowJudge.wasCancelled,
+                  "loadConversation must cancel the in-flight judge task")
+    XCTAssertNil(llm.receivedSystem,
+                 "cancelled judge must short-circuit send() before main LLM call")
+    let events = telemetry.recentJudgeEvents(limit: 10, filter: .none)
+    XCTAssertEqual(events.count, 0,
+                   "cancelled judge must not log any judge event")
+}
+
+@MainActor
+func testStartNewConversationCancelsInFlightJudge() async throws {
+    final class SlowJudge: Judging {
+        var wasCancelled = false
+        func judge(userMessage: String, citablePool: [CitableEntry],
+                   chatMode: ChatMode, provider: LLMProvider) async throws -> JudgeVerdict {
+            do { try await Task.sleep(nanoseconds: 2_000_000_000) }
+            catch { wasCancelled = true; throw CancellationError() }
+            return JudgeVerdict(tensionExists: false, userState: .exploring,
+                                shouldProvoke: false, entryId: nil, reason: "slow")
+        }
+    }
+    let slowJudge = SlowJudge()
+    viewModel = ChatViewModel(
+        nodeStore: store,
+        vectorStore: VectorStore(nodeStore: store),
+        embeddingService: EmbeddingService(),
+        graphEngine: GraphEngine(nodeStore: store),
+        userMemoryService: UserMemoryService(nodeStore: store, llmServiceProvider: { self.llm }),
+        governanceTelemetry: telemetry,
+        llmServiceProvider: { self.llm },
+        currentProviderProvider: { .claude },
+        judgeLLMServiceFactory: { CannedLLMService() },
+        provocationJudgeFactory: { _ in slowJudge }
+    )
+
+    viewModel.inputText = "first"
+    let sendTask = Task { await viewModel.send() }
+    try await Task.sleep(nanoseconds: 100_000_000)
+
+    viewModel.startNewConversation(title: "fresh")
+
+    await sendTask.value
+
+    XCTAssertTrue(slowJudge.wasCancelled,
+                  "startNewConversation must cancel the in-flight judge task")
+}
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+```bash
+xcodebuild test -project Nous.xcodeproj -scheme Nous \
+  -destination 'platform=macOS' \
+  -only-testing:NousTests/ProvocationOrchestrationTests/testLoadConversationCancelsInFlightJudge \
+  -only-testing:NousTests/ProvocationOrchestrationTests/testStartNewConversationCancelsInFlightJudge \
+  -quiet
+```
+
+Expected: FAIL — `loadConversation` and `startNewConversation` don't cancel anything yet.
+
+- [ ] **Step 3: Add the hook calls in `ChatViewModel`**
+
+In `ChatViewModel.swift`, at the **top** of `loadConversation(_:)` (line 70), before `currentNode = node`:
+
+```swift
+func loadConversation(_ node: NousNode) {
+    cancelInFlightJudge()  // switching conversations invalidates any pending verdict
+    currentNode = node
+    messages = (try? nodeStore.fetchMessages(nodeId: node.id)) ?? []
+    citations = []
+    currentResponse = ""
+    activeQuickActionMode = nil
+}
+```
+
+At the top of `startNewConversation(title:projectId:)` (line 55), before building the new `NousNode`:
+
+```swift
+func startNewConversation(title: String = "New Conversation", projectId: UUID? = nil) {
+    cancelInFlightJudge()  // any in-flight judge belonged to the old conversation
+    let node = NousNode(
+        type: .conversation,
+        title: title,
+        projectId: projectId
+    )
+    // …rest unchanged
+}
+```
+
+Add a `deinit` on `ChatViewModel` (anywhere in the class body; near the initializer is fine):
+
+```swift
+deinit {
+    // VM teardown — make sure no judge task outlives us.
+    inFlightJudgeTask?.cancel()
+}
+```
+
+> Note: `deinit` runs on whatever thread releases the last reference, so we can't call the `@MainActor`-isolated `cancelInFlightJudge()` from here. Cancelling the stored `Task` reference directly is thread-safe (Swift `Task.cancel()` is documented as callable from any context) and does the same thing.
+
+- [ ] **Step 4: Hook the `ContentView` "new chat" reset**
+
+In `ContentView.swift`, find the line `chatVM.currentNode = nil` (around line 102) and replace:
+
+```swift
+chatVM.currentNode = nil
+```
+
+with:
+
+```swift
+chatVM.cancelInFlightJudge()
+chatVM.currentNode = nil
+```
+
+- [ ] **Step 5: Run the cancellation tests to verify they pass**
+
+```bash
+xcodebuild test -project Nous.xcodeproj -scheme Nous \
+  -destination 'platform=macOS' \
+  -only-testing:NousTests/ProvocationOrchestrationTests -quiet
+```
+
+Expected: all ProvocationOrchestrationTests pass, including the two new hook tests.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add Sources/Nous/ViewModels/ChatViewModel.swift \
+        Sources/Nous/App/ContentView.swift \
+        Tests/NousTests/ProvocationOrchestrationTests.swift
+git commit -m "feat(provocation): cancel in-flight judge on conversation switch / VM teardown"
+```
+
+---
+
+### Task 4.5: PR 4 open
 
 - [ ] **Step 1: Full suite green, push, open PR**
 
@@ -2369,6 +2565,8 @@ Stacked on PR 3. Spec: docs/superpowers/specs/2026-04-17-proactive-surfacing-des
 - [ ] local provider → supportive, judge never called, fallbackReason=.providerLocal
 - [ ] cloud provider without judge LLMService → supportive, fallbackReason=.judgeUnavailable
 - [ ] cancelInFlightJudge() short-circuits send() before the main LLM call and logs nothing
+- [ ] loadConversation(_:) cancels an in-flight judge
+- [ ] startNewConversation(...) cancels an in-flight judge
 EOF
 )"
 ```
@@ -2922,13 +3120,13 @@ Cross-checking the spec against the plan:
 | `BehaviorProfile.supportive` / `.provocative` enum | Task 1.3 |
 | `JudgeVerdict` struct | Task 1.1 |
 | `CitableEntry` struct | Task 1.2 |
-| Response orchestration in ChatViewModel | Tasks 4.1–4.3 |
+| Response orchestration in ChatViewModel | Tasks 4.1–4.4 |
 | UserMemoryService.citableEntryPool | Task 2.2 |
 | LLMService unchanged | Explicit no-change (see File Structure) |
 | Materially extended GovernanceTelemetryStore | Task 1.5 |
 | NodeStore judge_events table + helpers | Task 1.4 |
 | ChatMode as explicit judge input | Task 3.1 (prompt includes chat_mode) |
-| Data flow steps 1–8 | Tasks 4.2 (5a–5e), 4.3 |
+| Data flow steps 1–8 | Tasks 4.2 (5a–5e), 4.3, 4.4 |
 | Critical timing (1.5s timeout) | Task 3.1 (withTimeout helper), tests Task 3.1 |
 | Citable Pool Retrieval Path (node-hit bridging) | Task 2.2 |
 | Judge prompt contract (schema + rules + threshold) | Task 3.1 (buildPrompt) |
@@ -2937,7 +3135,7 @@ Cross-checking the spec against the plan:
 | Error scenario 2 (malformed JSON) | Task 3.1 tests |
 | Error scenario 3 (unknown entry_id) | Task 4.2 test `testUnknownEntryIdForcesSupportiveAndLogsError` |
 | Error scenario 4 (user feedback) | Task 5.1 |
-| Error scenario 5 (cancellation on new send) | Task 4.3 |
+| Cancellation API + wiring (conversation switch / VM teardown) | Tasks 4.3, 4.4 |
 | Error scenario 6 (local provider) | Task 4.2 test `testLocalProviderSkipsJudge` |
 | Testing strategy Layer 1 | Tasks 1.1, 1.4, 2.2, 3.1, 4.2, 4.3 |
 | Testing strategy Layer 2 — fixture bank | Task 6.1 |
