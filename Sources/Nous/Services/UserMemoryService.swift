@@ -1016,3 +1016,80 @@ final class UserMemoryService {
             .joined(separator: " ")
     }
 }
+
+extension UserMemoryService {
+
+    /// Returns the entries the judge may cite this turn. Built by node-hit bridging:
+    /// for each node the main retrieval flagged relevant, collect the memory_entries
+    /// whose sourceNodeIds reference that node, deduplicate, then backfill with per-scope
+    /// recency seeds so the pool isn't blind to recent entries that happen not to
+    /// embed-match this turn. Scope-boundary invariant is enforced here.
+    ///
+    /// v1 does NOT run its own retrieval — `nodeHits` comes from the caller (ChatViewModel),
+    /// which already ran `VectorStore.search(...)` for `citations`.
+    func citableEntryPool(
+        projectId: UUID?,
+        conversationId: UUID,
+        nodeHits: [UUID],
+        capacity: Int = 15,
+        recencySeedPerScope: Int = 3
+    ) throws -> [CitableEntry] {
+        var seen = Set<UUID>()
+        var out: [CitableEntry] = []
+
+        func admit(_ entry: MemoryEntry) {
+            guard !seen.contains(entry.id) else { return }
+            guard isInScope(entry, projectId: projectId, conversationId: conversationId) else { return }
+            seen.insert(entry.id)
+            out.append(CitableEntry(
+                id: entry.id.uuidString,
+                text: entry.content,
+                scope: entry.scope
+            ))
+        }
+
+        // Pass 1 — node-hit bridging (highest priority, first into the cap).
+        for hit in nodeHits {
+            guard out.count < capacity else { break }
+            let bridged = (try? nodeStore.fetchMemoryEntries(withSourceNodeId: hit)) ?? []
+            for entry in bridged {
+                admit(entry)
+                if out.count >= capacity { break }
+            }
+        }
+
+        // Pass 2 — recency seed per active scope.
+        let globalRecent = (try? fetchRecentEntries(scope: .global, scopeRefId: nil, limit: recencySeedPerScope)) ?? []
+        globalRecent.forEach(admit)
+
+        if let projectId, out.count < capacity {
+            let projectRecent = (try? fetchRecentEntries(scope: .project, scopeRefId: projectId, limit: recencySeedPerScope)) ?? []
+            projectRecent.forEach(admit)
+        }
+
+        if out.count < capacity {
+            let conversationRecent = (try? fetchRecentEntries(scope: .conversation, scopeRefId: conversationId, limit: recencySeedPerScope)) ?? []
+            conversationRecent.forEach(admit)
+        }
+
+        return Array(out.prefix(capacity))
+    }
+
+    private func isInScope(_ entry: MemoryEntry, projectId: UUID?, conversationId: UUID) -> Bool {
+        switch entry.scope {
+        case .global:
+            return true
+        case .project:
+            return entry.scopeRefId == projectId
+        case .conversation:
+            return entry.scopeRefId == conversationId
+        }
+    }
+
+    private func fetchRecentEntries(scope: MemoryScope, scopeRefId: UUID?, limit: Int) throws -> [MemoryEntry] {
+        ((try? nodeStore.fetchMemoryEntries()) ?? [])
+            .filter { $0.status == .active && $0.scope == scope && $0.scopeRefId == scopeRefId }
+            .prefix(limit)
+            .map { $0 }
+    }
+}
