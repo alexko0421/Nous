@@ -24,11 +24,9 @@ final class ProvocationOrchestrationTests: XCTestCase {
     final class StubJudge: Judging {
         var nextVerdict: JudgeVerdict?
         var nextError: JudgeError?
-        var lastReceivedPreviousMode: ChatMode? = nil
         var previousModeHistory: [ChatMode?] = []
 
         func judge(userMessage: String, citablePool: [CitableEntry], previousMode: ChatMode?, provider: LLMProvider) async throws -> JudgeVerdict {
-            lastReceivedPreviousMode = previousMode
             previousModeHistory.append(previousMode)
             if let err = nextError { throw err }
             return nextVerdict ?? JudgeVerdict(tensionExists: false, userState: .exploring, shouldProvoke: false, entryId: nil, reason: "stub default", inferredMode: .companion)
@@ -507,6 +505,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
     @MainActor
     func testLocalProviderFallbackKeepsActiveMode() async throws {
         let localLLM = CannedLLMService()
+        let localJudge = StubJudge()
         let vectorStore = VectorStore(nodeStore: store)
         let memoryService = UserMemoryService(nodeStore: store, llmServiceProvider: { localLLM })
         let localVM = ChatViewModel(
@@ -519,7 +518,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
             llmServiceProvider: { localLLM },
             currentProviderProvider: { .local },
             judgeLLMServiceFactory: { CannedLLMService() },
-            provocationJudgeFactory: { _ in self.judge },
+            provocationJudgeFactory: { _ in localJudge },
             governanceTelemetry: telemetry
         )
         localVM.activeChatMode = .strategist
@@ -531,6 +530,8 @@ final class ProvocationOrchestrationTests: XCTestCase {
         let events = telemetry.recentJudgeEvents(limit: 5, filter: .none)
         XCTAssertEqual(events.last?.chatMode, .strategist)
         XCTAssertEqual(events.last?.fallbackReason, .providerLocal)
+        XCTAssertEqual(localJudge.previousModeHistory.count, 0,
+                       ".local should short-circuit before the judge factory is called")
     }
 
     @MainActor

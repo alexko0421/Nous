@@ -29,6 +29,10 @@ final class ChatViewModel {
     private let currentProviderProvider: () -> LLMProvider
     private let judgeLLMServiceFactory: () -> (any LLMService)?
     private let provocationJudgeFactory: (any LLMService) -> any Judging
+    /// Stored as a typed `Task<JudgeVerdict, Error>` — not `Task<Void, …>` — so tests can
+    /// `await task.value` and inspect the verdict directly. The slot is guarded on clear:
+    /// a later `send()` may have already overwritten it with a new task ID, so only the task
+    /// that still owns the slot clears it (see `inFlightJudgeTaskId` guard in `send()`).
     private var inFlightJudgeTask: Task<JudgeVerdict, Error>?
     private var inFlightJudgeTaskId: UUID?
     private let governanceTelemetry: GovernanceTelemetryStore
@@ -292,8 +296,8 @@ final class ChatViewModel {
         var verdictForLog: JudgeVerdict?
         var fallbackReason: JudgeFallbackReason = .ok
         var profile: BehaviorProfile = .supportive
-        var focusBlock: String? = nil
-        var inferredMode: ChatMode? = nil
+        var focusBlock: String?
+        var inferredMode: ChatMode?
 
         if currentProvider == .local {
             fallbackReason = .providerLocal
@@ -312,6 +316,12 @@ final class ChatViewModel {
             }
             inFlightJudgeTask = task
             inFlightJudgeTaskId = taskId
+            defer {
+                if inFlightJudgeTaskId == taskId {
+                    inFlightJudgeTask = nil
+                    inFlightJudgeTaskId = nil
+                }
+            }
 
             do {
                 let verdict = try await task.value
@@ -341,11 +351,6 @@ final class ChatViewModel {
                 return
             } catch {
                 fallbackReason = .apiError
-            }
-
-            if inFlightJudgeTaskId == taskId {
-                inFlightJudgeTask = nil
-                inFlightJudgeTaskId = nil
             }
         } else {
             fallbackReason = .judgeUnavailable
