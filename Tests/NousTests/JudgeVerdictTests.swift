@@ -23,6 +23,7 @@ final class JudgeVerdictTests: XCTestCase {
         XCTAssertTrue(verdict.shouldProvoke)
         XCTAssertEqual(verdict.entryId, "ABCD-1234")
         XCTAssertTrue(verdict.reason.contains("pricing"))
+        XCTAssertEqual(verdict.inferredMode, .strategist)
     }
 
     func testDecodesNullEntryId() throws {
@@ -46,6 +47,14 @@ final class JudgeVerdictTests: XCTestCase {
     func testRejectsUnknownUserState() {
         let json = """
         { "tension_exists": false, "user_state": "bogus",
+          "should_provoke": false, "entry_id": null, "reason": "x" }
+        """.data(using: .utf8)!
+        XCTAssertThrowsError(try JSONDecoder().decode(JudgeVerdict.self, from: json))
+    }
+
+    func testRejectsMissingInferredMode() {
+        let json = """
+        { "tension_exists": false, "user_state": "venting",
           "should_provoke": false, "entry_id": null, "reason": "x" }
         """.data(using: .utf8)!
         XCTAssertThrowsError(try JSONDecoder().decode(JudgeVerdict.self, from: json))
