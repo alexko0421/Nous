@@ -9,8 +9,10 @@ final class ProvocationOrchestrationTests: XCTestCase {
         var replyOutput: String = "ok"
         var receivedSystems: [String?] = []
         var receivedSystem: String? { receivedSystems.first(where: { $0?.contains("BEHAVIOR:") == true }) ?? receivedSystems.first ?? nil }
+        var nextError: Error?
         func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
             receivedSystems.append(system)
+            if let err = nextError { throw err }
             let out = replyOutput
             return AsyncThrowingStream { cont in
                 cont.yield(out); cont.finish()
@@ -22,7 +24,12 @@ final class ProvocationOrchestrationTests: XCTestCase {
     final class StubJudge: Judging {
         var nextVerdict: JudgeVerdict?
         var nextError: JudgeError?
+        var lastReceivedPreviousMode: ChatMode? = nil
+        var previousModeHistory: [ChatMode?] = []
+
         func judge(userMessage: String, citablePool: [CitableEntry], previousMode: ChatMode?, provider: LLMProvider) async throws -> JudgeVerdict {
+            lastReceivedPreviousMode = previousMode
+            previousModeHistory.append(previousMode)
             if let err = nextError { throw err }
             return nextVerdict ?? JudgeVerdict(tensionExists: false, userState: .exploring, shouldProvoke: false, entryId: nil, reason: "stub default", inferredMode: .companion)
         }
@@ -440,5 +447,135 @@ final class ProvocationOrchestrationTests: XCTestCase {
         try store.appendJudgeEvent(unrelated)
 
         XCTAssertNil(try store.latestChatMode(forNode: targetId))
+    }
+
+    @MainActor
+    func testFirstTurnPassesNilPreviousMode() async throws {
+        XCTAssertNil(viewModel.activeChatMode)
+
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: false, userState: .exploring, shouldProvoke: false,
+            entryId: nil, reason: "first turn", inferredMode: .companion
+        )
+        viewModel.inputText = "hello"
+        await viewModel.send()
+
+        XCTAssertEqual(judge.previousModeHistory.count, 1)
+        XCTAssertNil(judge.previousModeHistory[0],
+                     "first send() must pass previousMode: nil to the judge")
+    }
+
+    @MainActor
+    func testSecondTurnPassesPriorInferredMode() async throws {
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: false, userState: .exploring, shouldProvoke: false,
+            entryId: nil, reason: "t1", inferredMode: .strategist
+        )
+        viewModel.inputText = "help me think this through"
+        await viewModel.send()
+
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: false, userState: .exploring, shouldProvoke: false,
+            entryId: nil, reason: "t2", inferredMode: .strategist
+        )
+        viewModel.inputText = "continue"
+        await viewModel.send()
+
+        XCTAssertEqual(judge.previousModeHistory.count, 2)
+        XCTAssertNil(judge.previousModeHistory[0])
+        XCTAssertEqual(judge.previousModeHistory[1], .strategist)
+    }
+
+    @MainActor
+    func testSystemPromptUsesEffectiveModeNotPriorActiveMode() async throws {
+        viewModel.activeChatMode = .companion
+
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: false, userState: .deciding, shouldProvoke: false,
+            entryId: nil, reason: "register shift", inferredMode: .strategist
+        )
+        viewModel.inputText = "break this down for me"
+        await viewModel.send()
+
+        let system = llm.receivedSystem ?? ""
+        XCTAssertTrue(system.contains("STRATEGIST MODE"),
+                      "assembleContext must have run with verdict.inferredMode (.strategist), not prior activeChatMode (.companion)")
+        XCTAssertFalse(system.contains("COMPANION MODE"),
+                       "prior mode must not leak into this turn's system prompt")
+    }
+
+    @MainActor
+    func testLocalProviderFallbackKeepsActiveMode() async throws {
+        let localLLM = CannedLLMService()
+        let vectorStore = VectorStore(nodeStore: store)
+        let memoryService = UserMemoryService(nodeStore: store, llmServiceProvider: { localLLM })
+        let localVM = ChatViewModel(
+            nodeStore: store,
+            vectorStore: vectorStore,
+            embeddingService: EmbeddingService(),
+            graphEngine: GraphEngine(nodeStore: store, vectorStore: vectorStore),
+            userMemoryService: memoryService,
+            userMemoryScheduler: UserMemoryScheduler(service: memoryService),
+            llmServiceProvider: { localLLM },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { CannedLLMService() },
+            provocationJudgeFactory: { _ in self.judge },
+            governanceTelemetry: telemetry
+        )
+        localVM.activeChatMode = .strategist
+
+        localVM.inputText = "hi"
+        await localVM.send()
+
+        XCTAssertEqual(localVM.activeChatMode, .strategist)
+        let events = telemetry.recentJudgeEvents(limit: 5, filter: .none)
+        XCTAssertEqual(events.last?.chatMode, .strategist)
+        XCTAssertEqual(events.last?.fallbackReason, .providerLocal)
+    }
+
+    @MainActor
+    func testJudgeTimeoutFallbackKeepsActiveMode() async throws {
+        viewModel.activeChatMode = .strategist
+        judge.nextError = .timeout
+
+        viewModel.inputText = "hi"
+        await viewModel.send()
+
+        XCTAssertEqual(viewModel.activeChatMode, .strategist)
+        let events = telemetry.recentJudgeEvents(limit: 5, filter: .none)
+        XCTAssertEqual(events.last?.chatMode, .strategist)
+        XCTAssertEqual(events.last?.fallbackReason, .timeout)
+    }
+
+    @MainActor
+    func testActiveChatModeUpdatedBeforeMainCall() async throws {
+        viewModel.activeChatMode = .companion
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: false, userState: .deciding, shouldProvoke: false,
+            entryId: nil, reason: "shift", inferredMode: .strategist
+        )
+        llm.nextError = NSError(domain: "test", code: 1)
+
+        viewModel.inputText = "hi"
+        await viewModel.send()
+
+        XCTAssertEqual(viewModel.activeChatMode, .strategist,
+                       "activeChatMode must be updated before the main LLM call so retry-without-reload has correct previousMode")
+    }
+
+    @MainActor
+    func testJudgeEventAppendedBeforeMainCall() async throws {
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: false, userState: .exploring, shouldProvoke: false,
+            entryId: nil, reason: "t", inferredMode: .companion
+        )
+        llm.nextError = NSError(domain: "test", code: 1)
+
+        viewModel.inputText = "hi"
+        await viewModel.send()
+
+        let events = telemetry.recentJudgeEvents(limit: 5, filter: .none)
+        XCTAssertEqual(events.count, 1, "judge_events row must persist even when main LLM call fails")
+        XCTAssertEqual(events.first?.fallbackReason, .ok)
     }
 }
