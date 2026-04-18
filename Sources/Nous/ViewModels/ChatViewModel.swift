@@ -76,7 +76,7 @@ final class ChatViewModel {
     // MARK: - Conversation Management
 
     @MainActor
-    func startNewConversation(title: String = "New Conversation", projectId: UUID? = nil) {
+    func startNewConversation(title: String = "New Conversation", projectId: UUID? = nil, resetMode: Bool = false) {
         cancelInFlightJudge()  // any in-flight judge belonged to the old conversation
         let node = NousNode(
             type: .conversation,
@@ -89,6 +89,9 @@ final class ChatViewModel {
         citations = []
         currentResponse = ""
         activeQuickActionMode = nil
+        if resetMode {
+            activeChatMode = nil  // brand-new chat has no prior judgment
+        }
         NotificationCenter.default.post(name: .nousNodesDidChange, object: nil)
     }
 
@@ -100,6 +103,7 @@ final class ChatViewModel {
         citations = []
         currentResponse = ""
         activeQuickActionMode = nil
+        activeChatMode = (try? nodeStore.latestChatMode(forNode: node.id)) ?? nil
     }
 
     func activateQuickActionMode(_ mode: QuickActionMode) {
@@ -110,7 +114,7 @@ final class ChatViewModel {
     func beginQuickActionConversation(_ mode: QuickActionMode) async {
         guard !isGenerating else { return }
 
-        startNewConversation(title: mode.label, projectId: defaultProjectId)
+        startNewConversation(title: mode.label, projectId: defaultProjectId, resetMode: true)
         activeQuickActionMode = mode
         inputText = ""
 

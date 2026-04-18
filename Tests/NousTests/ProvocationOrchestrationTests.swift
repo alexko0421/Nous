@@ -579,4 +579,42 @@ final class ProvocationOrchestrationTests: XCTestCase {
         XCTAssertEqual(events.count, 1, "judge_events row must persist even when main LLM call fails")
         XCTAssertEqual(events.first?.fallbackReason, .ok)
     }
+
+    @MainActor
+    func testLoadConversationHydratesFromLatestEvent() throws {
+        let node = NousNode(type: .conversation, title: "t", projectId: nil)
+        try store.insertNode(node)
+
+        let event = JudgeEvent(
+            id: UUID(), ts: Date(), nodeId: node.id, messageId: nil,
+            chatMode: .strategist, provider: .claude,
+            verdictJSON: "{}", fallbackReason: .ok, userFeedback: nil, feedbackTs: nil
+        )
+        try store.appendJudgeEvent(event)
+
+        viewModel.loadConversation(node)
+
+        XCTAssertEqual(viewModel.activeChatMode, .strategist)
+    }
+
+    @MainActor
+    func testLoadConversationKeepsNilWhenNoEvents() throws {
+        let node = NousNode(type: .conversation, title: "t", projectId: nil)
+        try store.insertNode(node)
+
+        // Seed something unrelated first so we know we're testing empty-for-this-node, not empty-table
+        viewModel.activeChatMode = .strategist
+        viewModel.currentNode = node  // set currentNode so the test is clean
+
+        viewModel.loadConversation(node)
+
+        XCTAssertNil(viewModel.activeChatMode)
+    }
+
+    @MainActor
+    func testStartNewConversationResetsToNil() throws {
+        viewModel.activeChatMode = .strategist
+        viewModel.startNewConversation(title: "new", projectId: nil, resetMode: true)
+        XCTAssertNil(viewModel.activeChatMode)
+    }
 }
