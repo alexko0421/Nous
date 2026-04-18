@@ -3,7 +3,7 @@ import XCTest
 
 final class ChatViewModelTests: XCTestCase {
 
-    func testChatModeDefaultsToCompanion() throws {
+    func testChatModeDefaultsToNil() throws {
         let nodeStore = try NodeStore(path: ":memory:")
         let vectorStore = VectorStore(nodeStore: nodeStore)
         let embeddingService = EmbeddingService()
@@ -23,7 +23,7 @@ final class ChatViewModelTests: XCTestCase {
             judgeLLMServiceFactory: { nil }
         )
 
-        XCTAssertEqual(vm.activeChatMode, .companion)
+        XCTAssertNil(vm.activeChatMode)
     }
 
     func testSendCreatesConversationInsideSelectedProject() async throws {
@@ -86,7 +86,7 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertEqual(vm.currentNode?.projectId, project.id)
     }
 
-    func testSetChatModeSwitchesToStrategist() throws {
+    func testActiveChatModeDefaultsToNil() throws {
         let nodeStore = try NodeStore(path: ":memory:")
         let vectorStore = VectorStore(nodeStore: nodeStore)
         let embeddingService = EmbeddingService()
@@ -106,9 +106,7 @@ final class ChatViewModelTests: XCTestCase {
             judgeLLMServiceFactory: { nil }
         )
 
-        vm.setChatMode(.strategist)
-
-        XCTAssertEqual(vm.activeChatMode, .strategist)
+        XCTAssertNil(vm.activeChatMode)
     }
 
     func testGovernanceTelemetryRecordsPromptTraceWithoutSafetyMissWhenSafetyInvoked() throws {

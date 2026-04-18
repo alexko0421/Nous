@@ -3,12 +3,10 @@ import SwiftUI
 // MARK: - Welcome Home Screen
 struct WelcomeView: View {
     @Binding var inputText: String
-    let selectedChatMode: ChatMode
     let attachments: [AttachedFileContext]
     let onPickAttachment: () -> Void
     let onRemoveAttachment: (UUID) -> Void
     let onSend: () -> Void
-    let onChatModeSelected: (ChatMode) -> Void
     let onQuickActionSelected: (QuickActionMode) -> Void
     
     @AppStorage("nous.user.name") private var userName: String = "Alex"
@@ -67,8 +65,6 @@ struct WelcomeView: View {
 
                         composerRow
 
-                        ChatModePicker(selectedMode: selectedChatMode, onSelect: onChatModeSelected)
-                        
                         HStack(spacing: 10) {
                             ForEach(quickActions, id: \.rawValue) { action in
                                 Button(action: {

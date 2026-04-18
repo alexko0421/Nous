@@ -39,12 +39,10 @@ struct ChatArea: View {
             if isWelcomeState {
                 WelcomeView(
                     inputText: $vm.inputText,
-                    selectedChatMode: vm.activeChatMode,
                     attachments: attachments,
                     onPickAttachment: { isAttachmentMenuPresented = true },
                     onRemoveAttachment: removeAttachment,
                     onSend: sendCurrentInput,
-                    onChatModeSelected: { mode in vm.setChatMode(mode) },
                     onQuickActionSelected: { mode in
                         Task {
                             await vm.beginQuickActionConversation(mode)
@@ -123,10 +121,6 @@ struct ChatArea: View {
                             ClarificationCardView(card: clarificationCard) { option in
                                 sendClarificationOption(option)
                             }
-                        }
-
-                        ChatModePicker(selectedMode: vm.activeChatMode) { mode in
-                            vm.setChatMode(mode)
                         }
 
                         if !attachments.isEmpty {

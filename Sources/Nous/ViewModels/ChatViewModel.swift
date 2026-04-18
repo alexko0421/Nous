@@ -13,7 +13,7 @@ final class ChatViewModel {
     var currentResponse: String = ""
     var citations: [SearchResult] = []
     var activeQuickActionMode: QuickActionMode?
-    var activeChatMode: ChatMode = .companion
+    var activeChatMode: ChatMode? = nil
     var defaultProjectId: UUID?
     var lastPromptGovernanceTrace: PromptGovernanceTrace?
 
@@ -102,10 +102,6 @@ final class ChatViewModel {
         activeQuickActionMode = mode
     }
 
-    func setChatMode(_ mode: ChatMode) {
-        activeChatMode = mode
-    }
-
     @MainActor
     func beginQuickActionConversation(_ mode: QuickActionMode) async {
         guard !isGenerating else { return }
@@ -128,7 +124,7 @@ final class ChatViewModel {
         }
 
         let context = ChatViewModel.assembleContext(
-            chatMode: activeChatMode,
+            chatMode: activeChatMode ?? .companion,
             currentUserInput: ChatViewModel.quickActionOpeningPrompt(for: mode),
             globalMemory: userMemoryService.currentGlobal(),
             essentialStory: userMemoryService.currentEssentialStory(
@@ -152,7 +148,7 @@ final class ChatViewModel {
             allowInteractiveClarification: false
         )
         let promptTrace = ChatViewModel.governanceTrace(
-            chatMode: activeChatMode,
+            chatMode: activeChatMode ?? .companion,
             currentUserInput: ChatViewModel.quickActionOpeningPrompt(for: mode),
             globalMemory: userMemoryService.currentGlobal(),
             essentialStory: userMemoryService.currentEssentialStory(
@@ -284,7 +280,7 @@ final class ChatViewModel {
         let shouldAllowInteractiveClarification = activeQuickActionMode != nil
 
         let context = ChatViewModel.assembleContext(
-            chatMode: activeChatMode,
+            chatMode: activeChatMode ?? .companion,
             currentUserInput: promptQuery,
             globalMemory: userMemoryService.currentGlobal(),
             essentialStory: userMemoryService.currentEssentialStory(
@@ -309,7 +305,7 @@ final class ChatViewModel {
             allowInteractiveClarification: shouldAllowInteractiveClarification
         )
         let promptTrace = ChatViewModel.governanceTrace(
-            chatMode: activeChatMode,
+            chatMode: activeChatMode ?? .companion,
             currentUserInput: promptQuery,
             globalMemory: userMemoryService.currentGlobal(),
             essentialStory: userMemoryService.currentEssentialStory(
@@ -431,7 +427,7 @@ final class ChatViewModel {
         }()
         let event = JudgeEvent(
             id: eventId, ts: Date(), nodeId: node.id, messageId: nil,
-            chatMode: activeChatMode, provider: currentProvider,
+            chatMode: activeChatMode ?? .companion, provider: currentProvider,
             verdictJSON: verdictJSONStr, fallbackReason: fallbackReason,
             userFeedback: nil, feedbackTs: nil
         )
