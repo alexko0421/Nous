@@ -325,6 +325,85 @@ final class ChatViewModel {
         lastPromptGovernanceTrace = promptTrace
         governanceTelemetry.recordPromptTrace(promptTrace)
 
+        // Step 5b: assemble citable pool for the judge
+        let nodeHits = citations.map { $0.node.id }
+        let citablePool = (try? userMemoryService.citableEntryPool(
+            projectId: node.projectId,
+            conversationId: node.id,
+            nodeHits: nodeHits
+        )) ?? []
+
+        // Step 5c: call the judge (or skip on local)
+        let currentProvider = currentProviderProvider()
+        let eventId = UUID()
+        var verdictForLog: JudgeVerdict?
+        var fallbackReason: JudgeFallbackReason = .ok
+        var profile: BehaviorProfile = .supportive
+        var focusBlock: String? = nil
+
+        if currentProvider == .local {
+            fallbackReason = .providerLocal
+        } else if let judgeLLM = judgeLLMServiceFactory() {
+            // NOTE: Task 4.3 wraps this call in a tracked Task<JudgeVerdict, Error> so it's cancellable
+            // on conversation switch. For now the call is inline and synchronous-await — rewritten below.
+            let judge = provocationJudgeFactory(judgeLLM)
+            do {
+                let verdict = try await judge.judge(
+                    userMessage: promptQuery,
+                    citablePool: citablePool,
+                    chatMode: activeChatMode,
+                    provider: currentProvider
+                )
+                verdictForLog = verdict
+
+                if verdict.shouldProvoke, let entryIdStr = verdict.entryId {
+                    if let matched = citablePool.first(where: { $0.id == entryIdStr }),
+                       let uuid = UUID(uuidString: entryIdStr),
+                       let rawEntry = try? nodeStore.fetchMemoryEntry(id: uuid) {
+                        profile = .provocative
+                        focusBlock = ChatViewModel.buildFocusBlock(entryId: matched.id, rawText: rawEntry.content)
+                        fallbackReason = .ok
+                    } else {
+                        fallbackReason = .unknownEntryId
+                        profile = .supportive
+                    }
+                } else {
+                    fallbackReason = .ok
+                    profile = .supportive
+                }
+            } catch JudgeError.timeout {
+                fallbackReason = .timeout
+            } catch JudgeError.badJSON {
+                fallbackReason = .badJSON
+            } catch is CancellationError {
+                return
+            } catch {
+                fallbackReason = .apiError
+            }
+        } else {
+            fallbackReason = .judgeUnavailable
+        }
+
+        // Step 5d: compose final system prompt
+        var finalSystemParts: [String] = [context, profile.contextBlock]
+        if let fb = focusBlock { finalSystemParts.append(fb) }
+        let finalSystem = finalSystemParts.joined(separator: "\n\n")
+
+        // Step 5e: log the judge event (do this BEFORE the main call so we have the record even if the main call fails)
+        let verdictJSONStr: String = {
+            if let v = verdictForLog, let data = try? JSONEncoder().encode(v) {
+                return String(data: data, encoding: .utf8) ?? "{}"
+            }
+            return "{}"
+        }()
+        let event = JudgeEvent(
+            id: eventId, ts: Date(), nodeId: node.id, messageId: nil,
+            chatMode: activeChatMode, provider: currentProvider,
+            verdictJSON: verdictJSONStr, fallbackReason: fallbackReason,
+            userFeedback: nil, feedbackTs: nil
+        )
+        governanceTelemetry.appendJudgeEvent(event)
+
         // Step 6: Build LLMMessage array from conversation history
         let llmMessages: [LLMMessage] = messages.map { msg in
             LLMMessage(
@@ -349,7 +428,7 @@ final class ChatViewModel {
 
         // Step 8: Stream response
         do {
-            let stream = try await llm.generate(messages: llmMessages, system: context)
+            let stream = try await llm.generate(messages: llmMessages, system: finalSystem)
             for try await chunk in stream {
                 currentResponse += chunk
             }
@@ -362,6 +441,9 @@ final class ChatViewModel {
         let assistantMessage = Message(nodeId: node.id, role: .assistant, content: assistantContent)
         try? nodeStore.insertMessage(assistantMessage)
         messages.append(assistantMessage)
+
+        // Step 9b: patch the judge event with the message it produced
+        try? nodeStore.updateJudgeEventMessageId(eventId: eventId, messageId: assistantMessage.id)
         persistConversationSnapshot(for: node.id, messages: messages, shouldRefreshEmoji: true)
         activeQuickActionMode = ChatViewModel.updatedQuickActionMode(
             currentMode: activeQuickActionMode,
@@ -386,6 +468,19 @@ final class ChatViewModel {
                 }
             }
         }
+    }
+
+    // MARK: - Focus Block
+
+    private static func buildFocusBlock(entryId: String, rawText: String) -> String {
+        """
+        RELEVANT PRIOR MEMORY (id=\(entryId)):
+        \(rawText)
+
+        Surface this memory in your reply. Name the tension with Alex's current claim in plain language.
+        Quote one specific line from the memory faithfully if there is one to quote; otherwise paraphrase tightly.
+        Do not reword the memory into a summary and pretend you remembered it differently.
+        """
     }
 
     // MARK: - Anchor (Core Identity)

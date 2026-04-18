@@ -1041,6 +1041,15 @@ extension NodeStore {
         return out
     }
 
+    func updateJudgeEventMessageId(eventId: UUID, messageId: UUID) throws {
+        let stmt = try db.prepare("""
+            UPDATE judge_events SET messageId = ? WHERE id = ?;
+        """)
+        try stmt.bind(messageId.uuidString, at: 1)
+        try stmt.bind(eventId.uuidString, at: 2)
+        try stmt.step()
+    }
+
     func updateJudgeEventFeedback(id: UUID, feedback: JudgeFeedback, at ts: Date) throws {
         let stmt = try db.prepare("""
             UPDATE judge_events
