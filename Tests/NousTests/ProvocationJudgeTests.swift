@@ -109,7 +109,7 @@ final class ProvocationJudgeTests: XCTestCase {
         }
     }
 
-    func testPromptEmbedsPoolAndChatMode() async throws {
+    func testPromptEmbedsPoolAndPreviousMode() async throws {
         let fake = FakeLLMService(output: """
         {"tension_exists":false,"user_state":"exploring","should_provoke":false,
          "entry_id":null,"reason":"no tension","inferred_mode":"companion"}
@@ -127,6 +127,25 @@ final class ProvocationJudgeTests: XCTestCase {
         XCTAssertTrue(prompt.contains("E1"), "judge prompt must include citable entry ids")
         XCTAssertTrue(prompt.contains("strategist"), "judge prompt must include chat mode")
         XCTAssertTrue(prompt.contains("compete on price"), "judge prompt must include entry text")
+    }
+
+    func testPromptEmbedsNilPreviousMode() async throws {
+        let fake = FakeLLMService(output: """
+        {"tension_exists":false,"user_state":"exploring","should_provoke":false,
+         "entry_id":null,"reason":"no tension","inferred_mode":"companion"}
+        """)
+        let judge = ProvocationJudge(llmService: fake, timeout: 1.0)
+
+        _ = try await judge.judge(
+            userMessage: "so about pricing",
+            citablePool: pool(),
+            previousMode: nil,
+            provider: .claude
+        )
+
+        let prompt = fake.receivedSystem ?? ""
+        XCTAssertTrue(prompt.contains("none (first turn)"),
+                      "Prompt must include 'none (first turn)' sentinel when previousMode is nil")
     }
 
     func testExtractsJSONFromProseWithEscapedQuotes() async throws {
