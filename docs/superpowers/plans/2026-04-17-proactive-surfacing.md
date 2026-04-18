@@ -2347,7 +2347,7 @@ git commit -m "feat(provocation): track judge task for external cancellation (co
 - Modify: `Sources/Nous/App/ContentView.swift`
 - Test: append to `Tests/NousTests/ProvocationOrchestrationTests.swift`
 
-Task 4.3 exposed `cancelInFlightJudge()` but left it as orphan API — nothing in the product calls it, so the cancellation path is only exercised by tests. This task connects it to the three real vectors in the current codebase:
+Task 4.3 exposed `cancelInFlightJudge()` but left it as orphan API — nothing in the product calls it, so the cancellation path is only exercised by tests. This task connects it to the four real vectors in the current codebase:
 
 1. **`ChatViewModel.loadConversation(_:)`** (`ChatViewModel.swift:70`) — user picks a different conversation from the sidebar.
 2. **`ChatViewModel.startNewConversation(...)`** (`ChatViewModel.swift:55`) — user starts a fresh conversation (also fires from the quick-action flow at line 90).
