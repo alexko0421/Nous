@@ -18,7 +18,9 @@ final class ChatViewModelTests: XCTestCase {
             graphEngine: graphEngine,
             userMemoryService: userMemoryService,
             userMemoryScheduler: scheduler,
-            llmServiceProvider: { nil }
+            llmServiceProvider: { nil },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil }
         )
 
         XCTAssertEqual(vm.activeChatMode, .companion)
@@ -39,7 +41,9 @@ final class ChatViewModelTests: XCTestCase {
             graphEngine: graphEngine,
             userMemoryService: userMemoryService,
             userMemoryScheduler: scheduler,
-            llmServiceProvider: { nil }
+            llmServiceProvider: { nil },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil }
         )
 
         let project = Project(title: "Nous")
@@ -68,7 +72,9 @@ final class ChatViewModelTests: XCTestCase {
             graphEngine: graphEngine,
             userMemoryService: userMemoryService,
             userMemoryScheduler: scheduler,
-            llmServiceProvider: { nil }
+            llmServiceProvider: { nil },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil }
         )
 
         let project = Project(title: "Memory Project")
@@ -95,7 +101,9 @@ final class ChatViewModelTests: XCTestCase {
             graphEngine: graphEngine,
             userMemoryService: userMemoryService,
             userMemoryScheduler: scheduler,
-            llmServiceProvider: { nil }
+            llmServiceProvider: { nil },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil }
         )
 
         vm.setChatMode(.strategist)

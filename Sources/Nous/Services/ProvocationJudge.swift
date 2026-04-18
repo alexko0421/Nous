@@ -7,6 +7,17 @@ enum JudgeError: Error, Equatable {
     case emptyOutput
 }
 
+protocol Judging {
+    func judge(
+        userMessage: String,
+        citablePool: [CitableEntry],
+        chatMode: ChatMode,
+        provider: LLMProvider
+    ) async throws -> JudgeVerdict
+}
+
+extension ProvocationJudge: Judging {}
+
 final class ProvocationJudge {
     private let llmService: any LLMService
     private let timeout: TimeInterval

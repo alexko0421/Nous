@@ -134,6 +134,22 @@ final class SettingsViewModel {
         }
     }
 
+    func makeJudgeLLMService() -> (any LLMService)? {
+        switch selectedProvider {
+        case .local:
+            return nil
+        case .gemini:
+            guard !geminiApiKey.isEmpty else { return nil }
+            return GeminiLLMService(apiKey: geminiApiKey, model: "gemini-2.5-flash-lite")
+        case .claude:
+            guard !claudeApiKey.isEmpty else { return nil }
+            return ClaudeLLMService(apiKey: claudeApiKey, model: "claude-haiku-4-5-20251001")
+        case .openai:
+            guard !openaiApiKey.isEmpty else { return nil }
+            return OpenAILLMService(apiKey: openaiApiKey, model: "gpt-4o-mini")
+        }
+    }
+
     // MARK: - Private helpers
 
     private func syncModelState() {

@@ -26,6 +26,10 @@ final class ChatViewModel {
     private let userMemoryService: UserMemoryService
     private let userMemoryScheduler: UserMemoryScheduler
     private let llmServiceProvider: () -> (any LLMService)?
+    private let currentProviderProvider: () -> LLMProvider
+    private let judgeLLMServiceFactory: () -> (any LLMService)?
+    private let provocationJudgeFactory: (any LLMService) -> any Judging
+    private var inFlightJudgeTask: Task<JudgeVerdict, Error>?
     private let governanceTelemetry: GovernanceTelemetryStore
 
     // MARK: - Init
@@ -38,7 +42,11 @@ final class ChatViewModel {
         userMemoryService: UserMemoryService,
         userMemoryScheduler: UserMemoryScheduler,
         llmServiceProvider: @escaping () -> (any LLMService)?,
-        governanceTelemetry: GovernanceTelemetryStore = GovernanceTelemetryStore()
+        currentProviderProvider: @escaping () -> LLMProvider,
+        judgeLLMServiceFactory: @escaping () -> (any LLMService)?,
+        provocationJudgeFactory: @escaping (any LLMService) -> any Judging = { ProvocationJudge(llmService: $0) },
+        governanceTelemetry: GovernanceTelemetryStore = GovernanceTelemetryStore(),
+        defaultProjectId: UUID? = nil
     ) {
         self.nodeStore = nodeStore
         self.vectorStore = vectorStore
@@ -47,7 +55,11 @@ final class ChatViewModel {
         self.userMemoryService = userMemoryService
         self.userMemoryScheduler = userMemoryScheduler
         self.llmServiceProvider = llmServiceProvider
+        self.currentProviderProvider = currentProviderProvider
+        self.judgeLLMServiceFactory = judgeLLMServiceFactory
+        self.provocationJudgeFactory = provocationJudgeFactory
         self.governanceTelemetry = governanceTelemetry
+        self.defaultProjectId = defaultProjectId
     }
 
     // MARK: - Conversation Management

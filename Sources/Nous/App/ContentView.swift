@@ -70,6 +70,8 @@ struct ContentView: View {
             userMemoryService: ums,
             userMemoryScheduler: scheduler,
             llmServiceProvider: { svm.makeLLMService() },
+            currentProviderProvider: { svm.selectedProvider },
+            judgeLLMServiceFactory: { svm.makeJudgeLLMService() },
             governanceTelemetry: governanceTelemetry
         ))
         _noteVM = State(initialValue: NoteViewModel(nodeStore: ns, vectorStore: vs, embeddingService: es, graphEngine: ge))
