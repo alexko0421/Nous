@@ -1,0 +1,9 @@
+{
+  "name": "03-no-tension-benign-question",
+  "user_message": "what time is it in Tokyo right now?",
+  "chat_mode": "companion",
+  "citable_pool": [
+    { "id": "E1", "text": "Alex prefers morning coffee dark roast.", "scope": "global" }
+  ],
+  "expected": { "should_provoke": false }
+}

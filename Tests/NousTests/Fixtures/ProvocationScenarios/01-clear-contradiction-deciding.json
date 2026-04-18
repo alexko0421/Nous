@@ -1,0 +1,10 @@
+{
+  "name": "01-clear-contradiction-deciding",
+  "user_message": "I'm just going to go with the cheapest vendor — whatever gets us live this week.",
+  "chat_mode": "companion",
+  "citable_pool": [
+    { "id": "E1", "text": "Alex has explicitly said multiple times he doesn't want to compete on price and wants to avoid anchoring on cheapest-wins.", "scope": "global" },
+    { "id": "E2", "text": "Alex mentioned he prefers 松弛 coffee shops.", "scope": "global" }
+  ],
+  "expected": { "should_provoke": true, "user_state": "deciding", "entry_id": "E1" }
+}

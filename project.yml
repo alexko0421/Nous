@@ -34,6 +34,27 @@ targets:
         product: MLXEmbedders
       - sdk: Accelerate.framework
       - sdk: SpriteKit.framework
+  ProvocationFixtureRunner:
+    type: tool
+    platform: macOS
+    deploymentTarget: "26.0"
+    sources:
+      - Sources/ProvocationFixtureRunner
+      - path: Sources/Nous/Services/ProvocationJudge.swift
+        group: ProvocationFixtureRunner/Shared
+      - path: Sources/Nous/Services/LLMService.swift
+        group: ProvocationFixtureRunner/Shared
+      - path: Sources/Nous/Models/JudgeVerdict.swift
+        group: ProvocationFixtureRunner/Shared
+      - path: Sources/Nous/Models/CitableEntry.swift
+        group: ProvocationFixtureRunner/Shared
+      - path: Sources/Nous/Models/ChatMode.swift
+        group: ProvocationFixtureRunner/Shared
+      - path: Sources/Nous/Models/MemoryEntry.swift
+        group: ProvocationFixtureRunner/Shared
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
   NousTests:
     type: bundle.unit-test
     platform: macOS
