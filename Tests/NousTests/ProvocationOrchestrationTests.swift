@@ -210,4 +210,49 @@ final class ProvocationOrchestrationTests: XCTestCase {
         let events = telemetry.recentJudgeEvents(limit: 5, filter: .none)
         XCTAssertEqual(events.first?.fallbackReason, .judgeUnavailable)
     }
+
+    @MainActor
+    func testExternalCancellationShortCircuitsJudge() async throws {
+        // A judge that sleeps long enough for us to fire cancelInFlightJudge() mid-call.
+        final class SlowJudge: Judging {
+            func judge(userMessage: String, citablePool: [CitableEntry],
+                       chatMode: ChatMode, provider: LLMProvider) async throws -> JudgeVerdict {
+                try await Task.sleep(nanoseconds: 2_000_000_000)  // 2s — long enough to cancel
+                try Task.checkCancellation()  // propagate cancel even if sleep was swallowed
+                return JudgeVerdict(tensionExists: false, userState: .exploring,
+                                    shouldProvoke: false, entryId: nil, reason: "slow")
+            }
+        }
+        let vectorStore = VectorStore(nodeStore: store)
+        let memoryService = UserMemoryService(nodeStore: store, llmServiceProvider: { self.llm })
+        viewModel = ChatViewModel(
+            nodeStore: store,
+            vectorStore: vectorStore,
+            embeddingService: EmbeddingService(),
+            graphEngine: GraphEngine(nodeStore: store, vectorStore: vectorStore),
+            userMemoryService: memoryService,
+            userMemoryScheduler: UserMemoryScheduler(service: memoryService),
+            llmServiceProvider: { self.llm },
+            currentProviderProvider: { .claude },
+            judgeLLMServiceFactory: { CannedLLMService() },
+            provocationJudgeFactory: { _ in SlowJudge() },
+            governanceTelemetry: telemetry
+        )
+
+        viewModel.inputText = "test"
+        // Fire send() without awaiting; cancel shortly after so the judge is interrupted.
+        let sendTask = Task { await self.viewModel.send() }
+        try await Task.sleep(nanoseconds: 100_000_000)  // 100ms — judge is now sleeping inside
+        viewModel.cancelInFlightJudge()
+        await sendTask.value
+
+        // The cancelled judge must not have produced a main-LLM call
+        // (send() returns early in the CancellationError branch, before llm.generate()).
+        XCTAssertNil(llm.receivedSystem,
+                     "cancelled judge must short-circuit send() before the main LLM call")
+
+        // And no judge event should be logged for a cancelled turn.
+        let events = telemetry.recentJudgeEvents(limit: 10, filter: .none)
+        XCTAssertEqual(events.count, 0, "cancelled judge must not log any judge event")
+    }
 }

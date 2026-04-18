@@ -30,6 +30,7 @@ final class ChatViewModel {
     private let judgeLLMServiceFactory: () -> (any LLMService)?
     private let provocationJudgeFactory: (any LLMService) -> any Judging
     private var inFlightJudgeTask: Task<JudgeVerdict, Error>?
+    private var inFlightJudgeTaskId: UUID?
     private let governanceTelemetry: GovernanceTelemetryStore
 
     // MARK: - Init
@@ -344,16 +345,29 @@ final class ChatViewModel {
         if currentProvider == .local {
             fallbackReason = .providerLocal
         } else if let judgeLLM = judgeLLMServiceFactory() {
-            // NOTE: Task 4.3 wraps this call in a tracked Task<JudgeVerdict, Error> so it's cancellable
-            // on conversation switch. For now the call is inline and synchronous-await — rewritten below.
+            // Cancel any previous in-flight judge (e.g., from a prior conversation).
+            // In v1 this is belt-and-braces — the isGenerating gate already prevents a rapid
+            // second send on the *same* conversation. The real trigger for cancellation is
+            // cancelInFlightJudge() called externally (e.g., from a future conversation-switch hook).
+            inFlightJudgeTask?.cancel()
+
             let judge = provocationJudgeFactory(judgeLLM)
-            do {
-                let verdict = try await judge.judge(
+            // Store the INNER throwing task directly — not a Void wrapper — so cancel() propagates
+            // into the judge's async work (Task.sleep, URLSession, etc. all respect cancellation).
+            let taskId = UUID()
+            let task = Task { () async throws -> JudgeVerdict in
+                try await judge.judge(
                     userMessage: promptQuery,
                     citablePool: citablePool,
                     chatMode: activeChatMode,
                     provider: currentProvider
                 )
+            }
+            inFlightJudgeTask = task
+            inFlightJudgeTaskId = taskId
+
+            do {
+                let verdict = try await task.value
                 verdictForLog = verdict
 
                 if verdict.shouldProvoke, let entryIdStr = verdict.entryId {
@@ -376,9 +390,18 @@ final class ChatViewModel {
             } catch JudgeError.badJSON {
                 fallbackReason = .badJSON
             } catch is CancellationError {
+                // External cancellation (conversation switch / VM teardown). Discard this turn
+                // entirely — no main-LLM call, no judge event logged, no assistant message.
                 return
             } catch {
                 fallbackReason = .apiError
+            }
+
+            // Clear the slot only if it still points at our task. If a later send() stored its
+            // own task we must not clobber it.
+            if inFlightJudgeTaskId == taskId {
+                inFlightJudgeTask = nil
+                inFlightJudgeTaskId = nil
             }
         } else {
             fallbackReason = .judgeUnavailable
@@ -468,6 +491,15 @@ final class ChatViewModel {
                 }
             }
         }
+    }
+
+    /// External hook to cancel an in-flight judge call (conversation switch, VM teardown, etc.).
+    /// Safe to call at any time — no-op if no judge is running.
+    @MainActor
+    func cancelInFlightJudge() {
+        inFlightJudgeTask?.cancel()
+        inFlightJudgeTask = nil
+        inFlightJudgeTaskId = nil
     }
 
     // MARK: - Focus Block
