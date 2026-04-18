@@ -24,7 +24,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
         var nextError: JudgeError?
         func judge(userMessage: String, citablePool: [CitableEntry], chatMode: ChatMode, provider: LLMProvider) async throws -> JudgeVerdict {
             if let err = nextError { throw err }
-            return nextVerdict ?? JudgeVerdict(tensionExists: false, userState: .exploring, shouldProvoke: false, entryId: nil, reason: "stub default")
+            return nextVerdict ?? JudgeVerdict(tensionExists: false, userState: .exploring, shouldProvoke: false, entryId: nil, reason: "stub default", inferredMode: .companion)
         }
     }
 
@@ -65,6 +65,25 @@ final class ProvocationOrchestrationTests: XCTestCase {
         super.tearDown()
     }
 
+    func testJudgeVerdictParsesInferredMode() throws {
+        let json = """
+        {
+          "tension_exists": true,
+          "user_state": "deciding",
+          "should_provoke": true,
+          "entry_id": "E1",
+          "reason": "pricing conflict",
+          "inferred_mode": "strategist"
+        }
+        """.data(using: .utf8)!
+
+        let verdict = try JSONDecoder().decode(JudgeVerdict.self, from: json)
+
+        XCTAssertEqual(verdict.inferredMode, .strategist)
+        XCTAssertEqual(verdict.shouldProvoke, true)
+        XCTAssertEqual(verdict.userState, .deciding)
+    }
+
     @MainActor
     func testShouldProvokeTrueInjectsFocusBlock() async throws {
         let entryId = UUID()
@@ -78,7 +97,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
         judge.nextVerdict = JudgeVerdict(
             tensionExists: true, userState: .deciding,
             shouldProvoke: true, entryId: entryId.uuidString,
-            reason: "pricing conflict"
+            reason: "pricing conflict", inferredMode: .companion
         )
 
         viewModel.inputText = "I'm going with the cheapest option on purpose"
@@ -101,7 +120,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
     func testShouldProvokeFalseUsesSupportiveProfile() async throws {
         judge.nextVerdict = JudgeVerdict(
             tensionExists: false, userState: .exploring,
-            shouldProvoke: false, entryId: nil, reason: "no tension"
+            shouldProvoke: false, entryId: nil, reason: "no tension", inferredMode: .companion
         )
 
         viewModel.inputText = "just thinking out loud"
@@ -118,7 +137,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
         judge.nextVerdict = JudgeVerdict(
             tensionExists: true, userState: .deciding,
             shouldProvoke: true, entryId: "not-in-pool",
-            reason: "ghost"
+            reason: "ghost", inferredMode: .companion
         )
 
         viewModel.inputText = "anything"
@@ -220,7 +239,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
                 try await Task.sleep(nanoseconds: 2_000_000_000)  // 2s — long enough to cancel
                 try Task.checkCancellation()  // propagate cancel even if sleep was swallowed
                 return JudgeVerdict(tensionExists: false, userState: .exploring,
-                                    shouldProvoke: false, entryId: nil, reason: "slow")
+                                    shouldProvoke: false, entryId: nil, reason: "slow", inferredMode: .companion)
             }
         }
         let vectorStore = VectorStore(nodeStore: store)
@@ -269,7 +288,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
                     throw CancellationError()
                 }
                 return JudgeVerdict(tensionExists: false, userState: .exploring,
-                                    shouldProvoke: false, entryId: nil, reason: "slow")
+                                    shouldProvoke: false, entryId: nil, reason: "slow", inferredMode: .companion)
             }
         }
         let slowJudge = SlowJudge()
@@ -318,7 +337,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
                 do { try await Task.sleep(nanoseconds: 2_000_000_000) }
                 catch { wasCancelled = true; throw CancellationError() }
                 return JudgeVerdict(tensionExists: false, userState: .exploring,
-                                    shouldProvoke: false, entryId: nil, reason: "slow")
+                                    shouldProvoke: false, entryId: nil, reason: "slow", inferredMode: .companion)
             }
         }
         let slowJudge = SlowJudge()
@@ -359,7 +378,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
         ))
         judge.nextVerdict = JudgeVerdict(
             tensionExists: true, userState: .deciding,
-            shouldProvoke: true, entryId: entryId.uuidString, reason: "conflict"
+            shouldProvoke: true, entryId: entryId.uuidString, reason: "conflict", inferredMode: .companion
         )
         viewModel.inputText = "going cheap"
         await viewModel.send()

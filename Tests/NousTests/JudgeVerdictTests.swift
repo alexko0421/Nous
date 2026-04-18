@@ -61,13 +61,13 @@ final class JudgeVerdictTests: XCTestCase {
     func testProfileFromVerdictRespectsShouldProvoke() {
         let provokingVerdict = JudgeVerdict(
             tensionExists: true, userState: .deciding,
-            shouldProvoke: true, entryId: "x", reason: "r"
+            shouldProvoke: true, entryId: "x", reason: "r", inferredMode: .companion
         )
         XCTAssertEqual(BehaviorProfile(verdict: provokingVerdict), .provocative)
 
         let quietVerdict = JudgeVerdict(
             tensionExists: false, userState: .venting,
-            shouldProvoke: false, entryId: nil, reason: "r"
+            shouldProvoke: false, entryId: nil, reason: "r", inferredMode: .companion
         )
         XCTAssertEqual(BehaviorProfile(verdict: quietVerdict), .supportive)
     }
