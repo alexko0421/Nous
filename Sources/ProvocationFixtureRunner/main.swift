@@ -48,11 +48,22 @@ var failures = 0
 for file in files {
     let data = try Data(contentsOf: file)
     let fx = try JSONDecoder().decode(FixtureCase.self, from: data)
+
+    let unknownScope = fx.citablePool.first(where: { MemoryScope(rawValue: $0.scope) == nil })
+    if let bad = unknownScope {
+        failures += 1
+        print("💥 \(fx.name) — unknown scope '\(bad.scope)' in citable_pool")
+        continue
+    }
+    guard let mode = ChatMode(rawValue: fx.chatMode) else {
+        failures += 1
+        print("💥 \(fx.name) — unknown chat_mode '\(fx.chatMode)'")
+        continue
+    }
     let pool = fx.citablePool.map { CitableEntry(
         id: $0.id, text: $0.text,
-        scope: MemoryScope(rawValue: $0.scope) ?? .global
+        scope: MemoryScope(rawValue: $0.scope)!
     )}
-    let mode = ChatMode(rawValue: fx.chatMode) ?? .companion
 
     do {
         let verdict = try await judge.judge(

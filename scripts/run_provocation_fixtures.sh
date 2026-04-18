@@ -17,6 +17,7 @@ cd "$(dirname "$0")/.."
 
 # Runs ProvocationFixtureRunner, a small executable target added alongside the main target.
 # It iterates the directory, runs each fixture through ProvocationJudge, and prints diff rows.
+echo "Building ProvocationFixtureRunner..."
 xcodebuild -project Nous.xcodeproj -scheme ProvocationFixtureRunner \
   -destination 'platform=macOS' -quiet build
 
