@@ -12,7 +12,7 @@ enum JudgeFallbackReason: String, Codable {
     case timeout
     case apiError = "api_error"
     case badJSON = "bad_json"
-    case unknownEntryID = "unknown_entry_id"
+    case unknownEntryId = "unknown_entry_id"
     case providerLocal = "provider_local"
     case judgeUnavailable = "judge_unavailable"  // judge LLM factory returned nil (missing API key, etc.)
 }
