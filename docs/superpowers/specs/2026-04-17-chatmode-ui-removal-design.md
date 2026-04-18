@@ -34,6 +34,12 @@ Remove the `ChatModePicker` UI. Let the `ProvocationJudge` infer `ChatMode` per 
 struct JudgeVerdict {
     // existing fields: shouldProvoke, userState, entryId, reason, behaviorProfile...
     let inferredMode: ChatMode   // NEW
+
+    enum CodingKeys: String, CodingKey {
+        // existing keys (snake_case convention): should_provoke, user_state,
+        // entry_id, behavior_profile, ...
+        case inferredMode = "inferred_mode"   // NEW
+    }
 }
 
 // Sources/Nous/Services/ProvocationJudge.swift
@@ -46,6 +52,8 @@ protocol Judging {
     ) async throws -> JudgeVerdict
 }
 ```
+
+**JSON key convention.** All `JudgeVerdict` JSON fields use snake_case (`should_provoke`, `user_state`, `entry_id`, `behavior_profile`). The new field follows the same convention: `"inferred_mode": "companion" | "strategist"`. Fixture JSON and test strings MUST use snake_case; `CodingKeys` maps the Swift camelCase property to the JSON key.
 
 ### D2. Soft continuity bias in the judge prompt
 
@@ -126,11 +134,24 @@ Both methods are already `@MainActor` after the proactive-surfacing work, so no 
 
 The `ProvocationJudge`'s existing `fallbackReason` telemetry already captures why a fallback occurred; no new reason codes needed.
 
+### D7. Quick-action opener path
+
+The Welcome quick-action chips (`Direction` / `Brainstorm` / `Mental Health`) call `ChatViewModel.beginQuickActionConversation(_:)`, which is a canned one-shot LLM call: it creates a new conversation, assembles context with a pre-written opening prompt, calls the main LLM once, and saves the assistant message. There is no user message to judge on this turn.
+
+Rule: **the quick-action opener uses `.companion` as a hardcoded framing and does not run `ProvocationJudge`.**
+
+Concretely in `beginQuickActionConversation(_:)`:
+- `assembleContext(..., chatMode: .companion)` — the opener is a warm, neutral "AI's opening move," not something the user asked for in a specific register yet.
+- No `judge_events` row is appended. The opener is not a judged turn.
+- `activeChatMode` stays `nil` after the opener completes. This matters: the user's first real reply afterward is still treated as a first judged turn (`previousMode: nil` in the judge call), so the judge can freely pick either mode based on the user's register rather than being anchored to `.companion`.
+
+This keeps the quick-action path simple (no new judge call on a prompt the user didn't write) and preserves the "first real turn" property of the subsequent user message.
+
 ## Tests
 
 ### Unit tests (`Tests/NousTests/ProvocationOrchestrationTests.swift`)
 
-- `testJudgeVerdictParsesInferredMode` — verdict JSON with `"inferredMode": "strategist"` round-trips.
+- `testJudgeVerdictParsesInferredMode` — verdict JSON with `"inferred_mode": "strategist"` (snake_case per D1) round-trips into `JudgeVerdict.inferredMode == .strategist`.
 - `testFirstTurnPassesNilPreviousMode` — `CannedJudge` records the `previousMode` arg it received; assert nil.
 - `testSecondTurnPassesPriorInferredMode` — after T1 returns `.strategist`, T2's `previousMode` arg equals `.strategist`.
 - `testSystemPromptUsesEffectiveModeNotActiveModePre` — assemble happens with inferred mode, not stale prior.
@@ -138,8 +159,9 @@ The `ProvocationJudge`'s existing `fallbackReason` telemetry already captures wh
 - `testJudgeTimeoutFallbackKeepsActiveMode` — timeout path: `effectiveMode == activeChatMode`.
 - `testJudgeEventAppendedBeforeMainCall` — use a failing main-call stub; assert `judge_events` row exists after throw.
 - `testLoadConversationHydratesFromLatestEvent` — seed `judge_events` with `.strategist` latest, load node, assert `activeChatMode == .strategist`.
-- `testLoadConversationDefaultsCompanionWhenNoEvents` — empty `judge_events`, assert `.companion`.
-- `testStartNewConversationResetsToCompanion` — regardless of prior state, new chat starts `.companion`.
+- `testLoadConversationKeepsNilWhenNoEvents` — empty `judge_events`, assert `activeChatMode == nil` (so the next send treats it as a first judged turn with `previousMode: nil`).
+- `testStartNewConversationResetsToNil` — regardless of prior state, new chat starts `activeChatMode == nil`.
+- `testQuickActionOpenerUsesCompanionAndDoesNotRunJudge` — invoke `beginQuickActionConversation(_:)`, assert (a) the assembled context used `.companion`, (b) no `judge_events` row was written, (c) `activeChatMode` is still `nil` after the opener.
 
 ### Fixture bank (`Tests/NousTests/Fixtures/ProvocationScenarios/`)
 
