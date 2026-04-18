@@ -149,6 +149,24 @@ final class NodeStore {
             );
         """)
 
+        // judge_events — append-only per-turn verdict log. Feedback columns patched
+        // after the fact. verdict_json kept as a blob so adding fields to
+        // JudgeVerdict doesn't require a schema migration.
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS judge_events (
+                id              TEXT PRIMARY KEY,
+                ts              REAL NOT NULL,
+                nodeId          TEXT NOT NULL,
+                messageId       TEXT,
+                chatMode        TEXT NOT NULL,
+                provider        TEXT NOT NULL,
+                verdictJSON     TEXT NOT NULL,
+                fallbackReason  TEXT NOT NULL,
+                userFeedback    TEXT,
+                feedbackTs      REAL
+            );
+        """)
+
         // Indexes
         try db.exec("CREATE INDEX IF NOT EXISTS idx_nodes_projectId  ON nodes(projectId);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_messages_nodeId  ON messages(nodeId);")
@@ -156,6 +174,8 @@ final class NodeStore {
         try db.exec("CREATE INDEX IF NOT EXISTS idx_edges_targetId   ON edges(targetId);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_conversation_memory_updatedAt ON conversation_memory(updatedAt);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_entries_scope_ref_status ON memory_entries(scope, scopeRefId, status);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_judge_events_ts ON judge_events(ts);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_judge_events_fallback ON judge_events(fallbackReason);")
     }
 
     /// Direct access for migrator (transaction control, table-exists probing).
@@ -912,5 +932,127 @@ final class NodeStore {
         let strength = Float(stmt.double(at: 3))
         let type = EdgeType(rawValue: stmt.text(at: 4) ?? "") ?? .semantic
         return NodeEdge(id: id, sourceId: sourceId, targetId: targetId, strength: strength, type: type)
+    }
+}
+
+// MARK: - Judge Events
+
+enum JudgeEventFilter: Equatable {
+    case none
+    case fallback(JudgeFallbackReason)
+    case shouldProvoke(Bool)
+    case userState(UserState)
+}
+
+extension NodeStore {
+
+    func appendJudgeEvent(_ event: JudgeEvent) throws {
+        let stmt = try db.prepare("""
+            INSERT INTO judge_events
+              (id, ts, nodeId, messageId, chatMode, provider,
+               verdictJSON, fallbackReason, userFeedback, feedbackTs)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """)
+        try stmt.bind(event.id.uuidString, at: 1)
+        try stmt.bind(event.ts.timeIntervalSince1970, at: 2)
+        try stmt.bind(event.nodeId.uuidString, at: 3)
+        try stmt.bind(event.messageId?.uuidString, at: 4)
+        try stmt.bind(event.chatMode.rawValue, at: 5)
+        try stmt.bind(event.provider.rawValue, at: 6)
+        try stmt.bind(event.verdictJSON, at: 7)
+        try stmt.bind(event.fallbackReason.rawValue, at: 8)
+        try stmt.bind(event.userFeedback?.rawValue, at: 9)
+        try stmt.bind(event.feedbackTs?.timeIntervalSince1970, at: 10)
+        try stmt.step()
+    }
+
+    func fetchJudgeEvent(id: UUID) throws -> JudgeEvent? {
+        let stmt = try db.prepare("""
+            SELECT id, ts, nodeId, messageId, chatMode, provider,
+                   verdictJSON, fallbackReason, userFeedback, feedbackTs
+            FROM judge_events
+            WHERE id = ?
+            LIMIT 1;
+        """)
+        try stmt.bind(id.uuidString, at: 1)
+        guard try stmt.step() else { return nil }
+        return judgeEventFrom(stmt)
+    }
+
+    func recentJudgeEvents(limit: Int, filter: JudgeEventFilter) throws -> [JudgeEvent] {
+        let whereClause: String
+        switch filter {
+        case .none:
+            whereClause = ""
+        case .fallback:
+            whereClause = "WHERE fallbackReason = ?"
+        case .shouldProvoke:
+            whereClause = "WHERE json_extract(verdictJSON, '$.should_provoke') = ?"
+        case .userState:
+            whereClause = "WHERE json_extract(verdictJSON, '$.user_state') = ?"
+        }
+        let stmt = try db.prepare("""
+            SELECT id, ts, nodeId, messageId, chatMode, provider,
+                   verdictJSON, fallbackReason, userFeedback, feedbackTs
+            FROM judge_events
+            \(whereClause)
+            ORDER BY ts DESC
+            LIMIT ?;
+        """)
+        switch filter {
+        case .none:
+            try stmt.bind(limit, at: 1)
+        case .fallback(let reason):
+            try stmt.bind(reason.rawValue, at: 1)
+            try stmt.bind(limit, at: 2)
+        case .shouldProvoke(let flag):
+            try stmt.bind(flag ? 1 : 0, at: 1)
+            try stmt.bind(limit, at: 2)
+        case .userState(let state):
+            try stmt.bind(state.rawValue, at: 1)
+            try stmt.bind(limit, at: 2)
+        }
+        var out: [JudgeEvent] = []
+        while try stmt.step() {
+            if let ev = judgeEventFrom(stmt) { out.append(ev) }
+        }
+        return out
+    }
+
+    func updateJudgeEventFeedback(id: UUID, feedback: JudgeFeedback, at ts: Date) throws {
+        let stmt = try db.prepare("""
+            UPDATE judge_events
+            SET userFeedback = ?, feedbackTs = ?
+            WHERE id = ?;
+        """)
+        try stmt.bind(feedback.rawValue, at: 1)
+        try stmt.bind(ts.timeIntervalSince1970, at: 2)
+        try stmt.bind(id.uuidString, at: 3)
+        try stmt.step()
+    }
+
+    private func judgeEventFrom(_ stmt: Statement) -> JudgeEvent? {
+        guard let idStr = stmt.text(at: 0), let id = UUID(uuidString: idStr),
+              let nodeIdStr = stmt.text(at: 2), let nodeId = UUID(uuidString: nodeIdStr),
+              let chatModeStr = stmt.text(at: 4), let chatMode = ChatMode(rawValue: chatModeStr),
+              let providerStr = stmt.text(at: 5), let provider = LLMProvider(rawValue: providerStr),
+              let verdictJSON = stmt.text(at: 6),
+              let fallbackStr = stmt.text(at: 7), let fallback = JudgeFallbackReason(rawValue: fallbackStr)
+        else { return nil }
+        let messageId = stmt.text(at: 3).flatMap(UUID.init(uuidString:))
+        let feedback = stmt.text(at: 8).flatMap(JudgeFeedback.init(rawValue:))
+        let feedbackTs = stmt.isNull(at: 9) ? nil : Date(timeIntervalSince1970: stmt.double(at: 9))
+        return JudgeEvent(
+            id: id,
+            ts: Date(timeIntervalSince1970: stmt.double(at: 1)),
+            nodeId: nodeId,
+            messageId: messageId,
+            chatMode: chatMode,
+            provider: provider,
+            verdictJSON: verdictJSON,
+            fallbackReason: fallback,
+            userFeedback: feedback,
+            feedbackTs: feedbackTs
+        )
     }
 }

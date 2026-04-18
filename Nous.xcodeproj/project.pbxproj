@@ -64,6 +64,7 @@
 		B69E12882C5D1B570369C9DA /* Accelerate.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FEADD90223D5DCBFDE74F5DE /* Accelerate.framework */; };
 		B6E2F015E856252747EE0324 /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E88716E75C10545B684D5FD /* ChatViewModel.swift */; };
 		B90A2FAEB0973870A4D5DA15 /* AppColor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BBA2D70209E6211449AEADC /* AppColor.swift */; };
+		BCF9612112E4F9670527753A /* JudgeEventsStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2E4B68EB530BA04A2849001 /* JudgeEventsStoreTests.swift */; };
 		C0393EDD02962EBFFE26A0DA /* GovernanceTelemetryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C26CC5C0727267AC2B3304B /* GovernanceTelemetryStore.swift */; };
 		C0CE3E7E7BEBBFF45A49A23F /* AttachmentChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5EF979813E783CA3666DEBE /* AttachmentChip.swift */; };
 		C3B66790ADAC5624E9ACC319 /* Nunito-Variable.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 4EDBF5703D7FA7CDEA64FCC8 /* Nunito-Variable.ttf */; };
@@ -73,6 +74,7 @@
 		D67AE98AD27B27D71D9962AE /* GalaxyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26B0833FF90A3381A73858CE /* GalaxyView.swift */; };
 		D707ED9BF3B1B7CD5C6A6CB0 /* VectorStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C94FF3DE937E45E699C4E0A2 /* VectorStoreTests.swift */; };
 		D7283C4FCA9F4CA028C5E1C0 /* JudgeVerdictTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 852BFAC3906357D2665F700A /* JudgeVerdictTests.swift */; };
+		D790EA45A4CCE0C0C3038462 /* JudgeEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 189A5C2739EEEFF84A430211 /* JudgeEvent.swift */; };
 		DDBD058147B497D397D7DAC0 /* UserMemoryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1F0851321FDD912EBEA901F /* UserMemoryService.swift */; };
 		DE8F51349E0FA0FA45C61D09 /* LocalLLMService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92D5AA1CB7980A98700AB726 /* LocalLLMService.swift */; };
 		E1D12DAA1238782C356063C6 /* MemoryEvidenceSnippet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 908B3A0E9135905E5FFB061B /* MemoryEvidenceSnippet.swift */; };
@@ -99,6 +101,7 @@
 		10115CC57E8933F62B3A81F0 /* ProjectListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectListView.swift; sourceTree = "<group>"; };
 		108C7FA818D0FD59A26F5BA9 /* NoteViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteViewModel.swift; sourceTree = "<group>"; };
 		12A1B273D3D94B188C07A933 /* GalaxyViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalaxyViewModel.swift; sourceTree = "<group>"; };
+		189A5C2739EEEFF84A430211 /* JudgeEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JudgeEvent.swift; sourceTree = "<group>"; };
 		1B2D97D9D7ACB3B0FAA8B275 /* TopicEmojiResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopicEmojiResolverTests.swift; sourceTree = "<group>"; };
 		1F9B36E91542F665788AD7A4 /* MemoryDebugInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryDebugInspector.swift; sourceTree = "<group>"; };
 		26B0833FF90A3381A73858CE /* GalaxyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalaxyView.swift; sourceTree = "<group>"; };
@@ -139,6 +142,7 @@
 		98307413B1A35533835FC1ED /* NodeEdge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NodeEdge.swift; sourceTree = "<group>"; };
 		99A974153DB5C96A52796407 /* NoteListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteListView.swift; sourceTree = "<group>"; };
 		A13A1040D67FB96CF59C6154 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		A2E4B68EB530BA04A2849001 /* JudgeEventsStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JudgeEventsStoreTests.swift; sourceTree = "<group>"; };
 		A3154A6E7BC8B7FD38EF8B21 /* ClarificationCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClarificationCard.swift; sourceTree = "<group>"; };
 		A47BC60463D5E92044AFDB86 /* LeftSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LeftSidebar.swift; sourceTree = "<group>"; };
 		A5EF979813E783CA3666DEBE /* AttachmentChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentChip.swift; sourceTree = "<group>"; };
@@ -255,6 +259,7 @@
 				C2521A241BB593FF07230FE0 /* ChatMode.swift */,
 				44C28A4978C6C55396ECB787 /* CitableEntry.swift */,
 				A3154A6E7BC8B7FD38EF8B21 /* ClarificationCard.swift */,
+				189A5C2739EEEFF84A430211 /* JudgeEvent.swift */,
 				BC7040454DB1276F244FDDCF /* JudgeVerdict.swift */,
 				5B872B69D5BB39FAE69D8EAB /* MemoryEntry.swift */,
 				908B3A0E9135905E5FFB061B /* MemoryEvidenceSnippet.swift */,
@@ -327,6 +332,7 @@
 				3074D3F24DDD3F020A52F9BA /* ChatViewModelTests.swift */,
 				69184F11E49CB01A84551833 /* ClarificationCardParserTests.swift */,
 				ABFA60716BE28FDBDC5D4B01 /* GraphEngineTests.swift */,
+				A2E4B68EB530BA04A2849001 /* JudgeEventsStoreTests.swift */,
 				852BFAC3906357D2665F700A /* JudgeVerdictTests.swift */,
 				C74C8FEE8BB7F18BF3C48A37 /* MemoryEntriesMigratorTests.swift */,
 				2C258CFA6F991D14ED791FE3 /* MemoryV2MigratorTests.swift */,
@@ -483,6 +489,7 @@
 				0A5C2CC50D2675DD28826232 /* GalaxyViewModel.swift in Sources */,
 				C0393EDD02962EBFFE26A0DA /* GovernanceTelemetryStore.swift in Sources */,
 				3F9476D3C06B0F30A271AC5F /* GraphEngine.swift in Sources */,
+				D790EA45A4CCE0C0C3038462 /* JudgeEvent.swift in Sources */,
 				9A2C526409C14357AFB82080 /* JudgeVerdict.swift in Sources */,
 				C55905AD05E74E6E32F864D0 /* LLMService.swift in Sources */,
 				83964444D1DEE2A22156BF34 /* LeftSidebar.swift in Sources */,
@@ -527,6 +534,7 @@
 				FB90A9F437200B44C52367F1 /* ChatViewModelTests.swift in Sources */,
 				ACC542F83437ECF80EF63CDD /* ClarificationCardParserTests.swift in Sources */,
 				4D4E88E3F6E50302A15F3D83 /* GraphEngineTests.swift in Sources */,
+				BCF9612112E4F9670527753A /* JudgeEventsStoreTests.swift in Sources */,
 				D7283C4FCA9F4CA028C5E1C0 /* JudgeVerdictTests.swift in Sources */,
 				9A2649A31B986E84AB9B4C80 /* MemoryEntriesMigratorTests.swift in Sources */,
 				293A8F632EE0107ADEF50D82 /* MemoryV2MigratorTests.swift in Sources */,
