@@ -11,7 +11,8 @@ final class JudgeVerdictTests: XCTestCase {
           "user_state": "deciding",
           "should_provoke": true,
           "entry_id": "ABCD-1234",
-          "reason": "User is choosing pricing; prior entry explicitly rejected price competition."
+          "reason": "User is choosing pricing; prior entry explicitly rejected price competition.",
+          "inferred_mode": "strategist"
         }
         """.data(using: .utf8)!
 
@@ -31,7 +32,8 @@ final class JudgeVerdictTests: XCTestCase {
           "user_state": "venting",
           "should_provoke": false,
           "entry_id": null,
-          "reason": "Venting — no interjection."
+          "reason": "Venting — no interjection.",
+          "inferred_mode": "companion"
         }
         """.data(using: .utf8)!
 

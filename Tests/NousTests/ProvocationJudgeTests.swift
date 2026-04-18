@@ -37,7 +37,7 @@ final class ProvocationJudgeTests: XCTestCase {
     func testParsesWellFormedJSONVerdict() async throws {
         let fake = FakeLLMService(output: """
         {"tension_exists":true,"user_state":"deciding","should_provoke":true,
-         "entry_id":"E1","reason":"pricing conflict"}
+         "entry_id":"E1","reason":"pricing conflict","inferred_mode":"strategist"}
         """)
         let judge = ProvocationJudge(llmService: fake, timeout: 1.0)
 
@@ -112,7 +112,7 @@ final class ProvocationJudgeTests: XCTestCase {
     func testPromptEmbedsPoolAndChatMode() async throws {
         let fake = FakeLLMService(output: """
         {"tension_exists":false,"user_state":"exploring","should_provoke":false,
-         "entry_id":null,"reason":"no tension"}
+         "entry_id":null,"reason":"no tension","inferred_mode":"companion"}
         """)
         let judge = ProvocationJudge(llmService: fake, timeout: 1.0)
 
@@ -133,7 +133,7 @@ final class ProvocationJudgeTests: XCTestCase {
         let fake = FakeLLMService(output: """
         Sure! Here's the verdict:
 
-        {"tension_exists": true, "user_state": "deciding", "should_provoke": true, "entry_id": "E1", "reason": "say \\"hi\\" but question the framing"}
+        {"tension_exists": true, "user_state": "deciding", "should_provoke": true, "entry_id": "E1", "reason": "say \\"hi\\" but question the framing", "inferred_mode": "strategist"}
 
         Let me know if you need more.
         """)
