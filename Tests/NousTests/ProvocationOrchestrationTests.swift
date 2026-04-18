@@ -622,4 +622,30 @@ final class ProvocationOrchestrationTests: XCTestCase {
         viewModel.startNewConversation(title: "new", projectId: nil)
         XCTAssertNil(viewModel.activeChatMode)
     }
+
+    @MainActor
+    func testQuickActionOpenerUsesCompanionAndDoesNotRunJudge() async throws {
+        XCTAssertNil(viewModel.activeChatMode)
+
+        // Seed the judge with a "loud" verdict to prove it DIDN'T run
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: true, userState: .deciding, shouldProvoke: true,
+            entryId: nil, reason: "should not run", inferredMode: .strategist
+        )
+
+        await viewModel.beginQuickActionConversation(.direction)
+
+        // (a) assembled context used .companion
+        let system = llm.receivedSystem ?? ""
+        XCTAssertTrue(system.contains("COMPANION MODE"),
+                      "quick-action opener must assemble with .companion")
+        XCTAssertFalse(system.contains("STRATEGIST MODE"))
+        // (b) no judge_events row
+        let events = telemetry.recentJudgeEvents(limit: 5, filter: .none)
+        XCTAssertTrue(events.isEmpty, "quick-action opener must not append judge_events")
+        // (c) activeChatMode still nil
+        XCTAssertNil(viewModel.activeChatMode)
+        // (d) the recording stub's history stays empty (no judge.judge(...) call)
+        XCTAssertTrue(judge.previousModeHistory.isEmpty)
+    }
 }

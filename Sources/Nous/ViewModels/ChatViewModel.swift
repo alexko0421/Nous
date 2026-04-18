@@ -130,7 +130,7 @@ final class ChatViewModel {
         }
 
         let context = ChatViewModel.assembleContext(
-            chatMode: activeChatMode ?? .companion,
+            chatMode: .companion,
             currentUserInput: ChatViewModel.quickActionOpeningPrompt(for: mode),
             globalMemory: userMemoryService.currentGlobal(),
             essentialStory: userMemoryService.currentEssentialStory(
@@ -154,7 +154,7 @@ final class ChatViewModel {
             allowInteractiveClarification: false
         )
         let promptTrace = ChatViewModel.governanceTrace(
-            chatMode: activeChatMode ?? .companion,
+            chatMode: .companion,
             currentUserInput: ChatViewModel.quickActionOpeningPrompt(for: mode),
             globalMemory: userMemoryService.currentGlobal(),
             essentialStory: userMemoryService.currentEssentialStory(
