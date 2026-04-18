@@ -48,4 +48,27 @@ final class JudgeVerdictTests: XCTestCase {
         """.data(using: .utf8)!
         XCTAssertThrowsError(try JSONDecoder().decode(JudgeVerdict.self, from: json))
     }
+
+    func testBehaviorProfileContextBlocksAreNonEmpty() {
+        XCTAssertFalse(BehaviorProfile.supportive.contextBlock.isEmpty)
+        XCTAssertFalse(BehaviorProfile.provocative.contextBlock.isEmpty)
+        XCTAssertNotEqual(
+            BehaviorProfile.supportive.contextBlock,
+            BehaviorProfile.provocative.contextBlock
+        )
+    }
+
+    func testProfileFromVerdictRespectsShouldProvoke() {
+        let provokingVerdict = JudgeVerdict(
+            tensionExists: true, userState: .deciding,
+            shouldProvoke: true, entryId: "x", reason: "r"
+        )
+        XCTAssertEqual(BehaviorProfile(verdict: provokingVerdict), .provocative)
+
+        let quietVerdict = JudgeVerdict(
+            tensionExists: false, userState: .venting,
+            shouldProvoke: false, entryId: nil, reason: "r"
+        )
+        XCTAssertEqual(BehaviorProfile(verdict: quietVerdict), .supportive)
+    }
 }
