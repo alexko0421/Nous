@@ -69,7 +69,7 @@ for file in files {
         let verdict = try await judge.judge(
             userMessage: fx.userMessage,
             citablePool: pool,
-            chatMode: mode,
+            previousMode: mode,
             provider: .claude
         )
         var diffs: [String] = []

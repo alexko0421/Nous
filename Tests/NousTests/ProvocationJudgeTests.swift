@@ -44,7 +44,7 @@ final class ProvocationJudgeTests: XCTestCase {
         let verdict = try await judge.judge(
             userMessage: "I'm going with the cheapest option",
             citablePool: pool(),
-            chatMode: .companion,
+            previousMode: .companion,
             provider: .claude
         )
 
@@ -60,7 +60,7 @@ final class ProvocationJudgeTests: XCTestCase {
         do {
             _ = try await judge.judge(
                 userMessage: "hi", citablePool: pool(),
-                chatMode: .companion, provider: .claude
+                previousMode: .companion, provider: .claude
             )
             XCTFail("Expected badJSON throw")
         } catch let error as JudgeError {
@@ -78,7 +78,7 @@ final class ProvocationJudgeTests: XCTestCase {
         do {
             _ = try await judge.judge(
                 userMessage: "hi", citablePool: pool(),
-                chatMode: .companion, provider: .claude
+                previousMode: .companion, provider: .claude
             )
             XCTFail("Expected apiError throw")
         } catch let error as JudgeError {
@@ -99,7 +99,7 @@ final class ProvocationJudgeTests: XCTestCase {
         do {
             _ = try await judge.judge(
                 userMessage: "hi", citablePool: pool(),
-                chatMode: .companion, provider: .claude
+                previousMode: .companion, provider: .claude
             )
             XCTFail("Expected timeout throw")
         } catch let error as JudgeError {
@@ -119,7 +119,7 @@ final class ProvocationJudgeTests: XCTestCase {
         _ = try await judge.judge(
             userMessage: "so about pricing",
             citablePool: pool(),
-            chatMode: .strategist,
+            previousMode: .strategist,
             provider: .claude
         )
 
@@ -142,7 +142,7 @@ final class ProvocationJudgeTests: XCTestCase {
         let verdict = try await judge.judge(
             userMessage: "should I proceed?",
             citablePool: pool(),
-            chatMode: .companion,
+            previousMode: .companion,
             provider: .claude
         )
 

@@ -11,7 +11,7 @@ protocol Judging {
     func judge(
         userMessage: String,
         citablePool: [CitableEntry],
-        chatMode: ChatMode,
+        previousMode: ChatMode?,
         provider: LLMProvider
     ) async throws -> JudgeVerdict
 }
@@ -30,10 +30,10 @@ final class ProvocationJudge {
     func judge(
         userMessage: String,
         citablePool: [CitableEntry],
-        chatMode: ChatMode,
+        previousMode: ChatMode?,
         provider: LLMProvider
     ) async throws -> JudgeVerdict {
-        let systemPrompt = Self.buildPrompt(pool: citablePool, chatMode: chatMode)
+        let systemPrompt = Self.buildPrompt(pool: citablePool, previousMode: previousMode)
         let llmMessages = [LLMMessage(role: "user", content: userMessage)]
 
         let rawOutput: String
@@ -63,7 +63,7 @@ final class ProvocationJudge {
 
     // MARK: Prompt
 
-    static func buildPrompt(pool: [CitableEntry], chatMode: ChatMode) -> String {
+    static func buildPrompt(pool: [CitableEntry], previousMode: ChatMode?) -> String {
         let poolText: String
         if pool.isEmpty {
             poolText = "(empty — no citable entries this turn)"
@@ -94,8 +94,8 @@ final class ProvocationJudge {
           * strategist → if tension_exists is true AND user_state ∈ {deciding, exploring}, set should_provoke = true. Soft tensions count.
           * companion  → only set should_provoke = true when the tension is strong AND clearly relevant to a decision the user is making. Soft tensions → false.
 
-        CHAT_MODE
-        \(chatMode.rawValue)
+        PREVIOUS TURN MODE
+        \(previousMode?.rawValue ?? "none (first turn)")
 
         CITABLE ENTRIES
         \(poolText)

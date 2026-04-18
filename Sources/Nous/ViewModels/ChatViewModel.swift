@@ -369,7 +369,7 @@ final class ChatViewModel {
                 try await judge.judge(
                     userMessage: promptQuery,
                     citablePool: citablePool,
-                    chatMode: activeChatMode,
+                    previousMode: activeChatMode,
                     provider: currentProvider
                 )
             }

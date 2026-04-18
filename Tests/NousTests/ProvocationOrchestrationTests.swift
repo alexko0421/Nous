@@ -22,7 +22,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
     final class StubJudge: Judging {
         var nextVerdict: JudgeVerdict?
         var nextError: JudgeError?
-        func judge(userMessage: String, citablePool: [CitableEntry], chatMode: ChatMode, provider: LLMProvider) async throws -> JudgeVerdict {
+        func judge(userMessage: String, citablePool: [CitableEntry], previousMode: ChatMode?, provider: LLMProvider) async throws -> JudgeVerdict {
             if let err = nextError { throw err }
             return nextVerdict ?? JudgeVerdict(tensionExists: false, userState: .exploring, shouldProvoke: false, entryId: nil, reason: "stub default", inferredMode: .companion)
         }
@@ -235,7 +235,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
         // A judge that sleeps long enough for us to fire cancelInFlightJudge() mid-call.
         final class SlowJudge: Judging {
             func judge(userMessage: String, citablePool: [CitableEntry],
-                       chatMode: ChatMode, provider: LLMProvider) async throws -> JudgeVerdict {
+                       previousMode: ChatMode?, provider: LLMProvider) async throws -> JudgeVerdict {
                 try await Task.sleep(nanoseconds: 2_000_000_000)  // 2s — long enough to cancel
                 try Task.checkCancellation()  // propagate cancel even if sleep was swallowed
                 return JudgeVerdict(tensionExists: false, userState: .exploring,
@@ -280,7 +280,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
         final class SlowJudge: Judging {
             var wasCancelled = false
             func judge(userMessage: String, citablePool: [CitableEntry],
-                       chatMode: ChatMode, provider: LLMProvider) async throws -> JudgeVerdict {
+                       previousMode: ChatMode?, provider: LLMProvider) async throws -> JudgeVerdict {
                 do {
                     try await Task.sleep(nanoseconds: 2_000_000_000)
                 } catch {
@@ -333,7 +333,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
         final class SlowJudge: Judging {
             var wasCancelled = false
             func judge(userMessage: String, citablePool: [CitableEntry],
-                       chatMode: ChatMode, provider: LLMProvider) async throws -> JudgeVerdict {
+                       previousMode: ChatMode?, provider: LLMProvider) async throws -> JudgeVerdict {
                 do { try await Task.sleep(nanoseconds: 2_000_000_000) }
                 catch { wasCancelled = true; throw CancellationError() }
                 return JudgeVerdict(tensionExists: false, userState: .exploring,
