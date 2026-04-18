@@ -83,4 +83,29 @@ final class JudgeEventsStoreTests: XCTestCase {
         XCTAssertEqual(fetched?.userFeedback, .down)
         XCTAssertNotNil(fetched?.feedbackTs)
     }
+
+    func testGovernanceStoreDelegatesToNodeStore() throws {
+        let defaults = UserDefaults(suiteName: "test-\(UUID().uuidString)")!
+        let telemetry = GovernanceTelemetryStore(defaults: defaults, nodeStore: store)
+
+        let event = makeEvent()
+        telemetry.appendJudgeEvent(event)
+
+        let fetched = try store.fetchJudgeEvent(id: event.id)
+        XCTAssertEqual(fetched?.id, event.id)
+
+        telemetry.recordFeedback(eventId: event.id, feedback: .up)
+        XCTAssertEqual(try store.fetchJudgeEvent(id: event.id)?.userFeedback, .up)
+    }
+
+    func testGovernanceStoreExposesRecentEvents() throws {
+        let defaults = UserDefaults(suiteName: "test-\(UUID().uuidString)")!
+        let telemetry = GovernanceTelemetryStore(defaults: defaults, nodeStore: store)
+
+        telemetry.appendJudgeEvent(makeEvent(fallback: .ok))
+        telemetry.appendJudgeEvent(makeEvent(fallback: .timeout))
+
+        let events = telemetry.recentJudgeEvents(limit: 10, filter: .none)
+        XCTAssertEqual(events.count, 2)
+    }
 }

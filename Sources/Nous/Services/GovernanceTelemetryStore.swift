@@ -2,6 +2,7 @@ import Foundation
 
 final class GovernanceTelemetryStore {
     private let defaults: UserDefaults
+    private let nodeStore: NodeStore?
 
     private enum Keys {
         static let lastPromptTrace = "nous.governance.lastPromptTrace"
@@ -13,8 +14,9 @@ final class GovernanceTelemetryStore {
         static let memoryStorageSuppressedCount = "nous.governance.memoryStorageSuppressedCount"
     }
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, nodeStore: NodeStore? = nil) {
         self.defaults = defaults
+        self.nodeStore = nodeStore
     }
 
     var lastPromptTrace: PromptGovernanceTrace? {
@@ -51,5 +53,28 @@ final class GovernanceTelemetryStore {
 
     func memoryStorageSuppressedCount() -> Int {
         defaults.integer(forKey: Keys.memoryStorageSuppressedCount)
+    }
+
+    // MARK: - Judge event API (SQLite-backed)
+
+    /// Append a judge verdict event. Silently no-op if nodeStore wasn't injected
+    /// (e.g. pre-wiring unit tests); orchestrator and production always pass one.
+    func appendJudgeEvent(_ event: JudgeEvent) {
+        guard let nodeStore else { return }
+        do { try nodeStore.appendJudgeEvent(event) }
+        catch { print("[governance] failed to append judge event: \(error)") }
+    }
+
+    /// Patch a previously-appended event with the user's 👍/👎 feedback.
+    func recordFeedback(eventId: UUID, feedback: JudgeFeedback) {
+        guard let nodeStore else { return }
+        do { try nodeStore.updateJudgeEventFeedback(id: eventId, feedback: feedback, at: Date()) }
+        catch { print("[governance] failed to update feedback: \(error)") }
+    }
+
+    /// For the inspector review panel and ad-hoc debugging.
+    func recentJudgeEvents(limit: Int, filter: JudgeEventFilter) -> [JudgeEvent] {
+        guard let nodeStore else { return [] }
+        return (try? nodeStore.recentJudgeEvents(limit: limit, filter: filter)) ?? []
     }
 }

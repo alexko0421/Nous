@@ -49,7 +49,7 @@ struct ContentView: View {
         let llm = LocalLLMService()
         let ge = GraphEngine(nodeStore: ns, vectorStore: vs)
         let svm = SettingsViewModel(embeddingService: es, localLLM: llm, nodeStore: ns)
-        let governanceTelemetry = GovernanceTelemetryStore()
+        let governanceTelemetry = GovernanceTelemetryStore(nodeStore: ns)
         let ums = UserMemoryService(
             nodeStore: ns,
             llmServiceProvider: { svm.makeLLMService() },
