@@ -125,10 +125,11 @@ final class NodeStore {
             );
         """)
 
-        // Structured entries table (v2.2b). Written in parallel with the v2.1
-        // blob tables above; blob remains the read path until v2.2c cuts over.
-        // At most one `active` entry per (scope, scopeRefId); older actives are
-        // set to `superseded` and linked via `supersededBy` on each refresh.
+        // Canonical structured memory rows. v2.2d reads and writes memory from
+        // this table; the older v2.1 blob tables remain only for bootstrap /
+        // rollback safety. At most one `active` entry exists per
+        // `(scope, scopeRefId)`; older actives are superseded and linked via
+        // `supersededBy` on each refresh.
         try db.exec("""
             CREATE TABLE IF NOT EXISTS memory_entries (
                 id              TEXT PRIMARY KEY,
@@ -305,13 +306,12 @@ final class NodeStore {
         return results
     }
 
-    /// Codex #4: the evidence-filtered recent-conversations feed. Returns the
-    /// `conversation_memory.content` (already stripped of assistant replies
-    /// via the v2.1 extractor) joined to the node's title, NOT the raw
-    /// transcript. Using raw node.content leaks "Nous: …" turns back into the
-    /// next chat's system prompt, reintroducing the self-confirmation loop
-    /// that conversation_memory was architected to prevent. Chats without a
-    /// conversation_memory row are skipped — they have no safe content yet.
+    /// Recent evidence-filtered chat memory feed used for cross-window
+    /// continuity. Reads from the active conversation `memory_entries` row,
+    /// not the frozen v2.1 `conversation_memory` blob and never the raw
+    /// transcript (`node.content`). Using raw content leaks "Nous: …" turns
+    /// back into the next chat's system prompt, reintroducing the
+    /// self-confirmation loop this memory layer exists to avoid.
     func fetchRecentConversationMemories(
         limit: Int,
         excludingId: UUID? = nil
@@ -319,20 +319,26 @@ final class NodeStore {
         let sql: String
         if excludingId == nil {
             sql = """
-                SELECT n.title, cm.content
+                SELECT n.title, me.content
                 FROM nodes n
-                JOIN conversation_memory cm ON cm.nodeId = n.id
-                WHERE n.type='conversation' AND TRIM(cm.content) != ''
-                ORDER BY cm.updatedAt DESC
+                JOIN memory_entries me
+                  ON me.scope = 'conversation'
+                 AND me.scopeRefId = n.id
+                 AND me.status = 'active'
+                WHERE n.type='conversation' AND TRIM(me.content) != ''
+                ORDER BY me.updatedAt DESC
                 LIMIT ?;
             """
         } else {
             sql = """
-                SELECT n.title, cm.content
+                SELECT n.title, me.content
                 FROM nodes n
-                JOIN conversation_memory cm ON cm.nodeId = n.id
-                WHERE n.type='conversation' AND n.id != ? AND TRIM(cm.content) != ''
-                ORDER BY cm.updatedAt DESC
+                JOIN memory_entries me
+                  ON me.scope = 'conversation'
+                 AND me.scopeRefId = n.id
+                 AND me.status = 'active'
+                WHERE n.type='conversation' AND n.id != ? AND TRIM(me.content) != ''
+                ORDER BY me.updatedAt DESC
                 LIMIT ?;
             """
         }
@@ -615,6 +621,52 @@ final class NodeStore {
         try stmt.bind(entry.lastConfirmedAt?.timeIntervalSince1970, at: 12)
         try stmt.bind(entry.expiresAt?.timeIntervalSince1970, at: 13)
         try stmt.bind(entry.supersededBy?.uuidString, at: 14)
+        try stmt.step()
+    }
+
+    func updateMemoryEntry(_ entry: MemoryEntry) throws {
+        let stmt = try db.prepare("""
+            UPDATE memory_entries
+            SET scope = ?, scopeRefId = ?, kind = ?, stability = ?, status = ?, content = ?,
+                confidence = ?, sourceNodeIds = ?, updatedAt = ?, lastConfirmedAt = ?,
+                expiresAt = ?, supersededBy = ?
+            WHERE id = ?;
+        """)
+        try stmt.bind(entry.scope.rawValue, at: 1)
+        try stmt.bind(entry.scopeRefId?.uuidString, at: 2)
+        try stmt.bind(entry.kind.rawValue, at: 3)
+        try stmt.bind(entry.stability.rawValue, at: 4)
+        try stmt.bind(entry.status.rawValue, at: 5)
+        try stmt.bind(entry.content, at: 6)
+        try stmt.bind(entry.confidence, at: 7)
+        try stmt.bind(encodeSourceNodeIds(entry.sourceNodeIds), at: 8)
+        try stmt.bind(entry.updatedAt.timeIntervalSince1970, at: 9)
+        try stmt.bind(entry.lastConfirmedAt?.timeIntervalSince1970, at: 10)
+        try stmt.bind(entry.expiresAt?.timeIntervalSince1970, at: 11)
+        try stmt.bind(entry.supersededBy?.uuidString, at: 12)
+        try stmt.bind(entry.id.uuidString, at: 13)
+        try stmt.step()
+    }
+
+    func fetchMemoryEntry(id: UUID) throws -> MemoryEntry? {
+        let stmt = try db.prepare("""
+            SELECT id, scope, scopeRefId, kind, stability, status, content, confidence,
+                   sourceNodeIds, createdAt, updatedAt, lastConfirmedAt, expiresAt, supersededBy
+            FROM memory_entries
+            WHERE id = ?
+            LIMIT 1;
+        """)
+        try stmt.bind(id.uuidString, at: 1)
+        guard try stmt.step() else { return nil }
+        return memoryEntryFrom(stmt)
+    }
+
+    func deleteMemoryEntry(id: UUID) throws {
+        let stmt = try db.prepare("""
+            DELETE FROM memory_entries
+            WHERE id = ?;
+        """)
+        try stmt.bind(id.uuidString, at: 1)
         try stmt.step()
     }
 

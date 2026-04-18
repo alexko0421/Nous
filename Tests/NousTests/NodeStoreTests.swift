@@ -119,11 +119,11 @@ final class NodeStoreTests: XCTestCase {
         XCTAssertEqual(recents.first?.id, older.id)
     }
 
-    /// Codex #4: the evidence-filtered recent feed returns only chats that
-    /// have a non-empty conversation_memory row, and returns the memory
-    /// content (Alex-only, post-extractor) rather than node.content (raw
-    /// transcript with "Alex:"/"Nous:" markers).
-    func testFetchRecentConversationMemoriesUsesConversationMemoryNotTranscript() throws {
+    /// Recent continuity feed must read the active conversation entry, not the
+    /// raw transcript and not the frozen v2.1 blob. The blob is intentionally
+    /// seeded with different content here to prove the read path now follows
+    /// `memory_entries`.
+    func testFetchRecentConversationMemoriesUsesActiveEntryNotTranscriptOrBlob() throws {
         let chatWithMemory = makeNode(
             title: "Chat with memory",
             type: .conversation,
@@ -133,12 +133,25 @@ final class NodeStoreTests: XCTestCase {
         try store.saveConversationMemory(
             ConversationMemory(
                 nodeId: chatWithMemory.id,
-                content: "- Alex wants Nous to remember evidence-only notes",
+                content: "OLD frozen blob content",
                 updatedAt: Date(timeIntervalSince1970: 1000)
             )
         )
+        try store.insertMemoryEntry(
+            MemoryEntry(
+                scope: .conversation,
+                scopeRefId: chatWithMemory.id,
+                kind: .thread,
+                stability: .temporary,
+                content: "- Alex wants Nous to remember evidence-only notes",
+                sourceNodeIds: [chatWithMemory.id],
+                createdAt: Date(timeIntervalSince1970: 1000),
+                updatedAt: Date(timeIntervalSince1970: 1000),
+                lastConfirmedAt: Date(timeIntervalSince1970: 1000)
+            )
+        )
 
-        // A chat with no conversation_memory yet — must be excluded.
+        // A chat with no active entry yet — must be excluded even if transcript exists.
         let chatWithoutMemory = makeNode(
             title: "No memory yet",
             type: .conversation,
@@ -148,10 +161,12 @@ final class NodeStoreTests: XCTestCase {
 
         let recents = try store.fetchRecentConversationMemories(limit: 5)
 
-        XCTAssertEqual(recents.count, 1, "chat without conversation_memory must be skipped")
+        XCTAssertEqual(recents.count, 1, "chat without active conversation entry must be skipped")
         XCTAssertEqual(recents.first?.title, "Chat with memory")
         XCTAssertEqual(recents.first?.memory,
                        "- Alex wants Nous to remember evidence-only notes")
+        XCTAssertFalse(recents.first?.memory.contains("OLD frozen blob content") ?? true,
+                       "recent feed must not read the stale blob")
         XCTAssertFalse(recents.first?.memory.contains("Nous:") ?? true,
                        "raw assistant marker must not reach the recent feed")
     }
@@ -159,21 +174,78 @@ final class NodeStoreTests: XCTestCase {
     func testFetchRecentConversationMemoriesExcludesCurrentNode() throws {
         let older = makeNode(title: "Older", type: .conversation)
         try store.insertNode(older)
-        try store.saveConversationMemory(
-            ConversationMemory(nodeId: older.id, content: "- older memory",
-                               updatedAt: Date(timeIntervalSince1970: 100))
+        try store.insertMemoryEntry(
+            MemoryEntry(
+                scope: .conversation,
+                scopeRefId: older.id,
+                kind: .thread,
+                stability: .temporary,
+                content: "- older memory",
+                sourceNodeIds: [older.id],
+                createdAt: Date(timeIntervalSince1970: 100),
+                updatedAt: Date(timeIntervalSince1970: 100),
+                lastConfirmedAt: Date(timeIntervalSince1970: 100)
+            )
         )
 
         let current = makeNode(title: "Current", type: .conversation)
         try store.insertNode(current)
-        try store.saveConversationMemory(
-            ConversationMemory(nodeId: current.id, content: "- current memory",
-                               updatedAt: Date(timeIntervalSince1970: 200))
+        try store.insertMemoryEntry(
+            MemoryEntry(
+                scope: .conversation,
+                scopeRefId: current.id,
+                kind: .thread,
+                stability: .temporary,
+                content: "- current memory",
+                sourceNodeIds: [current.id],
+                createdAt: Date(timeIntervalSince1970: 200),
+                updatedAt: Date(timeIntervalSince1970: 200),
+                lastConfirmedAt: Date(timeIntervalSince1970: 200)
+            )
         )
 
         let recents = try store.fetchRecentConversationMemories(limit: 5, excludingId: current.id)
         XCTAssertEqual(recents.count, 1)
         XCTAssertEqual(recents.first?.title, "Older")
+    }
+
+    func testFetchRecentConversationMemoriesSkipsSupersededEntries() throws {
+        let activeChat = makeNode(title: "Active", type: .conversation)
+        try store.insertNode(activeChat)
+        try store.insertMemoryEntry(
+            MemoryEntry(
+                scope: .conversation,
+                scopeRefId: activeChat.id,
+                kind: .thread,
+                stability: .temporary,
+                content: "- active memory",
+                sourceNodeIds: [activeChat.id],
+                createdAt: Date(timeIntervalSince1970: 200),
+                updatedAt: Date(timeIntervalSince1970: 200),
+                lastConfirmedAt: Date(timeIntervalSince1970: 200)
+            )
+        )
+
+        let staleChat = makeNode(title: "Stale", type: .conversation)
+        try store.insertNode(staleChat)
+        try store.insertMemoryEntry(
+            MemoryEntry(
+                scope: .conversation,
+                scopeRefId: staleChat.id,
+                kind: .thread,
+                stability: .temporary,
+                status: .superseded,
+                content: "- stale memory",
+                sourceNodeIds: [staleChat.id],
+                createdAt: Date(timeIntervalSince1970: 300),
+                updatedAt: Date(timeIntervalSince1970: 300),
+                lastConfirmedAt: Date(timeIntervalSince1970: 300)
+            )
+        )
+
+        let recents = try store.fetchRecentConversationMemories(limit: 5)
+        XCTAssertEqual(recents.count, 1)
+        XCTAssertEqual(recents.first?.title, "Active")
     }
 
     // MARK: - Message Tests

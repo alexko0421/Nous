@@ -60,9 +60,30 @@ final class RAGPipelineTests: XCTestCase {
         ## Identity
         - Alex is a solo founder.
         """
+        let essentialStory = """
+        - Stable backdrop: Alex is shipping under real financial pressure.
+        - Recent thread (Funding worries): Cash runway is tight.
+        """
+        let memoryEvidence = [
+            MemoryEvidenceSnippet(
+                label: "Project context",
+                sourceNodeId: UUID(),
+                sourceTitle: "Architecture tradeoffs",
+                snippet: "Project context should stay grounded in a real Alex quote."
+            )
+        ]
+        let userModel = UserModel(
+            identity: [],
+            goals: ["Ship cross-chat continuity this week"],
+            workStyle: ["Prefers direct, first-principles answers."],
+            memoryBoundary: ["Ask before storing unusually sensitive material."]
+        )
 
         let context = ChatViewModel.assembleContext(
             globalMemory: userMemory,
+            essentialStory: essentialStory,
+            userModel: userModel,
+            memoryEvidence: memoryEvidence,
             projectMemory: nil,
             conversationMemory: nil,
             recentConversations: [recentConversation],
@@ -76,8 +97,27 @@ final class RAGPipelineTests: XCTestCase {
         // Verify long-term user memory is included
         XCTAssertTrue(context.contains("Alex is a solo founder"))
 
+        // Verify essential story is included between identity and deeper recall
+        XCTAssertTrue(context.contains("BROADER SITUATION RIGHT NOW"))
+        XCTAssertTrue(context.contains("Cash runway is tight"))
+
         // Verify project goal is included
         XCTAssertTrue(context.contains(projectGoal))
+
+        // Verify bounded source evidence is included
+        XCTAssertTrue(context.contains("SHORT SOURCE EVIDENCE FOR THE ABOVE MEMORY"))
+        XCTAssertTrue(context.contains("Architecture tradeoffs"))
+
+        // Verify derived user model is included without duplicating identity when global memory already exists
+        XCTAssertTrue(context.contains("DERIVED USER MODEL"))
+        XCTAssertTrue(context.contains("Ship cross-chat continuity this week"))
+        XCTAssertTrue(context.contains("Prefers direct, first-principles answers."))
+        XCTAssertFalse(context.contains("Identity:\n-"))
+
+        // Verify hypothesis-confirm policy is present
+        XCTAssertTrue(context.contains("I might be wrong, but"))
+        XCTAssertTrue(context.contains("One hypothesis is"))
+        XCTAssertTrue(context.contains("Does this fit, or is something else more true?"))
 
         // Verify recent conversation is included
         XCTAssertTrue(context.contains("Funding worries"))
@@ -94,6 +134,48 @@ final class RAGPipelineTests: XCTestCase {
         // Verify relevance percentages
         XCTAssertTrue(context.contains("92%"))
         XCTAssertTrue(context.contains("78%"))
+        XCTAssertLessThan(
+            context.range(of: "BROADER SITUATION RIGHT NOW")!.lowerBound,
+            context.range(of: "RECENT CONVERSATIONS WITH ALEX:")!.lowerBound
+        )
+        XCTAssertLessThan(
+            context.range(of: "SHORT SOURCE EVIDENCE FOR THE ABOVE MEMORY")!.lowerBound,
+            context.range(of: "CURRENT PROJECT GOAL")!.lowerBound
+        )
+    }
+
+    func testAssembleContextDefaultsToCompanionMode() {
+        let context = ChatViewModel.assembleContext(
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        )
+
+        XCTAssertTrue(context.contains("ACTIVE CHAT MODE: Companion"))
+        XCTAssertTrue(context.contains("Stay conversational, warm, and direct."))
+        XCTAssertFalse(context.contains("Alex explicitly wants deeper reasoning"))
+    }
+
+    func testAssembleContextStrategistModeChangesPromptBehaviorWithoutDroppingContinuity() {
+        let context = ChatViewModel.assembleContext(
+            chatMode: .strategist,
+            globalMemory: "- Alex is a solo founder.",
+            essentialStory: "- Stable backdrop: Alex is shipping under pressure.",
+            projectMemory: "- Cross-chat continuity is the top requirement.",
+            conversationMemory: "- This chat is about memory architecture.",
+            recentConversations: [("Funding worries", "Cash runway is tight.")],
+            citations: [],
+            projectGoal: "Ship memory improvements"
+        )
+
+        XCTAssertTrue(context.contains("ACTIVE CHAT MODE: Strategist"))
+        XCTAssertTrue(context.contains("Alex explicitly wants deeper reasoning"))
+        XCTAssertTrue(context.contains("Make assumptions explicit"))
+        XCTAssertTrue(context.contains("BROADER SITUATION RIGHT NOW"))
+        XCTAssertTrue(context.contains("RECENT CONVERSATIONS WITH ALEX"))
     }
 
     /// Codex #4: the recent-conversations layer must be fed from
@@ -123,6 +205,106 @@ final class RAGPipelineTests: XCTestCase {
                       "evidence-filtered memory must survive into context")
         XCTAssertTrue(context.contains("\"Old chat\": \(distinctive)"),
                       "recent entry must use the (title, memory) tuple verbatim")
+    }
+
+    func testAssembleContextOmitsEvidenceSectionWhenNoSnippetsExist() {
+        let context = ChatViewModel.assembleContext(
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        )
+
+        XCTAssertFalse(context.contains("SHORT SOURCE EVIDENCE FOR THE ABOVE MEMORY"))
+    }
+
+    func testAssembleContextIncludesHypothesisLanguagePolicy() {
+        let context = ChatViewModel.assembleContext(
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        )
+
+        XCTAssertTrue(context.contains("MEMORY INTERPRETATION POLICY"))
+        XCTAssertTrue(context.contains("I might be wrong, but"))
+        XCTAssertTrue(context.contains("Do not present diagnoses or identity labels as certainty"))
+    }
+
+    func testAssembleContextInvokesHighRiskSafetyModeWhenQueryIsDangerous() {
+        let context = ChatViewModel.assembleContext(
+            currentUserInput: "I want to kill myself tonight.",
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        )
+
+        XCTAssertTrue(context.contains("HIGH-RISK SAFETY MODE"))
+        XCTAssertTrue(context.contains("Prioritize immediate safety"))
+        XCTAssertTrue(context.contains("Do not romanticize self-destruction"))
+    }
+
+    func testGovernanceTraceMarksSafetyInvocationAndPromptLayers() {
+        let trace = ChatViewModel.governanceTrace(
+            chatMode: .strategist,
+            currentUserInput: "I want to die.",
+            globalMemory: "- Alex is a solo founder.",
+            essentialStory: "- Stable backdrop: pressure is high.",
+            userModel: UserModel(
+                identity: [],
+                goals: ["Ship memory upgrades"],
+                workStyle: [],
+                memoryBoundary: []
+            ),
+            memoryEvidence: [
+                MemoryEvidenceSnippet(
+                    label: "Project context",
+                    sourceNodeId: UUID(),
+                    sourceTitle: "Old thread",
+                    snippet: "Cross-chat continuity matters."
+                )
+            ],
+            projectMemory: "- Current work is on memory governance.",
+            conversationMemory: "- This thread is about safety policy.",
+            recentConversations: [("Old chat", "He said pressure is very high.")],
+            citations: [],
+            projectGoal: "Ship trustworthy memory"
+        )
+
+        XCTAssertTrue(trace.safetyPolicyInvoked)
+        XCTAssertTrue(trace.highRiskQueryDetected)
+        XCTAssertTrue(trace.evidenceAttached)
+        XCTAssertTrue(trace.promptLayers.contains("high_risk_safety_mode"))
+        XCTAssertTrue(trace.promptLayers.contains("strategist_mode"))
+        XCTAssertTrue(trace.promptLayers.contains("essential_story"))
+        XCTAssertTrue(trace.promptLayers.contains("memory_evidence"))
+    }
+
+    func testAssembleContextIncludesIdentityFacetWhenGlobalMemoryIsEmpty() {
+        let context = ChatViewModel.assembleContext(
+            globalMemory: nil,
+            userModel: UserModel(
+                identity: ["Alex is a solo founder."],
+                goals: [],
+                workStyle: [],
+                memoryBoundary: []
+            ),
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        )
+
+        XCTAssertTrue(context.contains("DERIVED USER MODEL"))
+        XCTAssertTrue(context.contains("Identity:\n- Alex is a solo founder."))
     }
 
     func testInteractiveClarificationInstructionsAppearOnlyWhenEnabled() {

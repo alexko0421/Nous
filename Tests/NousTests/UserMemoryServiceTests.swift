@@ -212,6 +212,374 @@ final class UserMemoryServiceTests: XCTestCase {
                        "counter reset after project rollup — below threshold again")
     }
 
+    func testCurrentEssentialStoryBlendsBackdropProjectAndRecentThreads() throws {
+        let mock = MockLLMService(capture: PromptCapture(), reply: "unused")
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let project = Project(title: "Nous")
+        try store.insertProject(project)
+
+        try store.insertMemoryEntry(
+            MemoryEntry(
+                scope: .global,
+                kind: .identity,
+                stability: .stable,
+                content: "## Identity\n- Alex is a solo founder building his second brain.",
+                createdAt: Date(timeIntervalSince1970: 10),
+                updatedAt: Date(timeIntervalSince1970: 10),
+                lastConfirmedAt: Date(timeIntervalSince1970: 10)
+            )
+        )
+        try store.insertMemoryEntry(
+            MemoryEntry(
+                scope: .project,
+                scopeRefId: project.id,
+                kind: .thread,
+                stability: .stable,
+                content: "## Constraints\n- Cross-chat continuity is the top requirement.\n- Keep the architecture simple.",
+                createdAt: Date(timeIntervalSince1970: 20),
+                updatedAt: Date(timeIntervalSince1970: 20),
+                lastConfirmedAt: Date(timeIntervalSince1970: 20)
+            )
+        )
+
+        let current = NousNode(type: .conversation, title: "Current chat", projectId: project.id)
+        try store.insertNode(current)
+
+        let recent = NousNode(type: .conversation, title: "Funding worries")
+        try store.insertNode(recent)
+        try store.insertMemoryEntry(
+            MemoryEntry(
+                scope: .conversation,
+                scopeRefId: recent.id,
+                kind: .thread,
+                stability: .temporary,
+                content: "- Cash runway is tight right now.",
+                sourceNodeIds: [recent.id],
+                createdAt: Date(timeIntervalSince1970: 30),
+                updatedAt: Date(timeIntervalSince1970: 30),
+                lastConfirmedAt: Date(timeIntervalSince1970: 30)
+            )
+        )
+
+        let story = service.currentEssentialStory(
+            projectId: project.id,
+            excludingConversationId: current.id
+        )
+
+        XCTAssertTrue(story?.contains("Stable backdrop: Alex is a solo founder") == true)
+        XCTAssertTrue(story?.contains("Current project (Nous): Cross-chat continuity is the top requirement.") == true)
+        XCTAssertTrue(story?.contains("Recent thread (Funding worries): Cash runway is tight right now.") == true)
+    }
+
+    func testCurrentEssentialStoryReturnsNilWithoutDynamicContext() throws {
+        let mock = MockLLMService(capture: PromptCapture(), reply: "unused")
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        try store.insertMemoryEntry(
+            MemoryEntry(
+                scope: .global,
+                kind: .identity,
+                stability: .stable,
+                content: "## Identity\n- Alex is a solo founder.",
+                createdAt: Date(timeIntervalSince1970: 10),
+                updatedAt: Date(timeIntervalSince1970: 10),
+                lastConfirmedAt: Date(timeIntervalSince1970: 10)
+            )
+        )
+
+        XCTAssertNil(
+            service.currentEssentialStory(projectId: nil, excludingConversationId: nil),
+            "global identity alone should not create a redundant essential-story block"
+        )
+    }
+
+    func testCurrentBoundedEvidenceReturnsCompactSupportSnippets() throws {
+        let mock = MockLLMService(capture: PromptCapture(), reply: "unused")
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let project = Project(title: "Nous")
+        try store.insertProject(project)
+
+        let current = NousNode(type: .conversation, title: "Current chat", projectId: project.id)
+        let projectSupport = NousNode(
+            type: .conversation,
+            title: "Architecture tradeoffs",
+            projectId: project.id,
+            updatedAt: Date(timeIntervalSince1970: 20)
+        )
+        let recent = NousNode(
+            type: .conversation,
+            title: "Funding worries",
+            updatedAt: Date(timeIntervalSince1970: 30)
+        )
+        try store.insertNode(current)
+        try store.insertNode(projectSupport)
+        try store.insertNode(recent)
+
+        try store.insertMessage(Message(
+            nodeId: projectSupport.id,
+            role: .user,
+            content: String(repeating: "Project context should stay grounded in a real Alex quote. ", count: 6)
+        ))
+        try store.insertMessage(Message(
+            nodeId: recent.id,
+            role: .user,
+            content: "Cash runway is tight, so continuity and trust matter more than flashy features."
+        ))
+
+        try store.insertMemoryEntry(
+            MemoryEntry(
+                scope: .project,
+                scopeRefId: project.id,
+                kind: .thread,
+                stability: .stable,
+                content: "- Cross-chat continuity is the priority.",
+                sourceNodeIds: [projectSupport.id],
+                createdAt: Date(timeIntervalSince1970: 40),
+                updatedAt: Date(timeIntervalSince1970: 40),
+                lastConfirmedAt: Date(timeIntervalSince1970: 40)
+            )
+        )
+        try store.insertMemoryEntry(
+            MemoryEntry(
+                scope: .conversation,
+                scopeRefId: recent.id,
+                kind: .thread,
+                stability: .temporary,
+                content: "- Cash runway is tight right now.",
+                sourceNodeIds: [recent.id],
+                createdAt: Date(timeIntervalSince1970: 50),
+                updatedAt: Date(timeIntervalSince1970: 50),
+                lastConfirmedAt: Date(timeIntervalSince1970: 50)
+            )
+        )
+
+        let evidence = service.currentBoundedEvidence(
+            projectId: project.id,
+            excludingConversationId: current.id
+        )
+
+        XCTAssertEqual(evidence.count, 2, "project + recent thread should each contribute one bounded snippet")
+        XCTAssertEqual(Set(evidence.map(\.label)), ["Project context", "Recent thread"])
+        XCTAssertEqual(Set(evidence.map(\.sourceNodeId)), [projectSupport.id, recent.id])
+        XCTAssertTrue(evidence.allSatisfy { $0.snippet.count <= UserMemoryService.evidenceSnippetBudget })
+        XCTAssertTrue(evidence.contains { $0.snippet.contains("Cash runway is tight") })
+    }
+
+    func testCurrentBoundedEvidenceReturnsEmptyWithoutValidSources() throws {
+        let mock = MockLLMService(capture: PromptCapture(), reply: "unused")
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let project = Project(title: "No sources")
+        try store.insertProject(project)
+        try store.insertMemoryEntry(
+            MemoryEntry(
+                scope: .project,
+                scopeRefId: project.id,
+                kind: .thread,
+                stability: .stable,
+                content: "- This should not surface proof without a real source.",
+                sourceNodeIds: [UUID()],
+                createdAt: Date(),
+                updatedAt: Date(),
+                lastConfirmedAt: Date()
+            )
+        )
+
+        XCTAssertTrue(
+            service.currentBoundedEvidence(projectId: project.id).isEmpty,
+            "missing source nodes should produce no evidence block"
+        )
+    }
+
+    func testPromoteToGlobalSkipsUnconfirmedInference() async throws {
+        let capture = PromptCapture()
+        let service = UserMemoryService(
+            nodeStore: store,
+            llmServiceProvider: { MockLLMService(capture: capture, reply: "- Alex prefers direct feedback") }
+        )
+
+        let didPromote = await service.promoteToGlobal(
+            candidate: "Alex prefers direct feedback",
+            sourceNodeIds: [UUID()],
+            confirmation: .unconfirmed
+        )
+
+        XCTAssertFalse(didPromote, "unconfirmed personal inference must not be saved as stable identity memory")
+        XCTAssertNil(try store.fetchActiveMemoryEntry(scope: .global, scopeRefId: nil))
+        let capturedPrompt = await capture.prompt()
+        XCTAssertNil(capturedPrompt, "LLM should not run when the inference is still unconfirmed")
+    }
+
+    func testPromoteToGlobalPersistsConfirmedInference() async throws {
+        let capture = PromptCapture()
+        let reply = "- Alex prefers direct feedback"
+        let service = UserMemoryService(
+            nodeStore: store,
+            llmServiceProvider: { MockLLMService(capture: capture, reply: reply) }
+        )
+
+        let source = NousNode(type: .conversation, title: "Feedback chat")
+        try store.insertNode(source)
+
+        let didPromote = await service.promoteToGlobal(
+            candidate: reply,
+            sourceNodeIds: [source.id],
+            confirmation: .confirmed
+        )
+
+        XCTAssertTrue(didPromote, "explicit confirmation should allow stable identity memory")
+        let entry = try store.fetchActiveMemoryEntry(scope: .global, scopeRefId: nil)
+        XCTAssertEqual(entry?.content, reply)
+        XCTAssertEqual(entry?.sourceNodeIds, [source.id])
+        XCTAssertEqual(entry?.confidence ?? 0, 0.95, accuracy: 0.001)
+        XCTAssertNotNil(entry?.lastConfirmedAt)
+        let capturedPrompt = await capture.prompt()
+        XCTAssertTrue(capturedPrompt?.contains(reply) == true)
+    }
+
+    func testPromoteToGlobalRejectedInferenceLeavesNoActiveStableMemory() async throws {
+        let capture = PromptCapture()
+        let service = UserMemoryService(
+            nodeStore: store,
+            llmServiceProvider: { MockLLMService(capture: capture, reply: "- unused") }
+        )
+
+        try store.insertMemoryEntry(
+            MemoryEntry(
+                scope: .global,
+                kind: .identity,
+                stability: .stable,
+                content: "- Alex prefers direct feedback",
+                confidence: 0.95,
+                sourceNodeIds: [UUID()],
+                createdAt: Date(timeIntervalSince1970: 10),
+                updatedAt: Date(timeIntervalSince1970: 10),
+                lastConfirmedAt: Date(timeIntervalSince1970: 10)
+            )
+        )
+
+        let didPromote = await service.promoteToGlobal(
+            candidate: "Alex prefers direct feedback",
+            confirmation: .rejected
+        )
+
+        XCTAssertFalse(didPromote, "rejected inference must not remain an active stable identity memory")
+        XCTAssertNil(try store.fetchActiveMemoryEntry(scope: .global, scopeRefId: nil))
+        let rejected = try store.fetchMemoryEntries().first { $0.scope == .global }
+        XCTAssertEqual(rejected?.status, .conflicted)
+        XCTAssertLessThanOrEqual(rejected?.confidence ?? 1, 0.2)
+        let capturedPrompt = await capture.prompt()
+        XCTAssertNil(capturedPrompt, "LLM should not run for an explicit rejection")
+    }
+
+    func testCurrentGoalModelIncludesProjectGoalAndConfirmedGoalMemory() throws {
+        let service = UserMemoryService(
+            nodeStore: store,
+            llmServiceProvider: { MockLLMService(capture: PromptCapture(), reply: "unused") }
+        )
+
+        let project = Project(title: "Nous", goal: "Ship cross-chat continuity this week")
+        try store.insertProject(project)
+        try store.insertMemoryEntry(
+            MemoryEntry(
+                scope: .project,
+                scopeRefId: project.id,
+                kind: .thread,
+                stability: .stable,
+                content: "- The top priority is shipping the memory upgrade.\n- Keep the architecture simple.",
+                confidence: 0.9,
+                createdAt: Date(),
+                updatedAt: Date(),
+                lastConfirmedAt: Date()
+            )
+        )
+
+        let goals = service.currentGoalModel(projectId: project.id)
+
+        XCTAssertTrue(goals.contains("Ship cross-chat continuity this week"))
+        XCTAssertTrue(goals.contains { $0.contains("top priority is shipping the memory upgrade") })
+    }
+
+    func testCurrentUserModelIgnoresArchivedOrConflictedEntries() throws {
+        let service = UserMemoryService(
+            nodeStore: store,
+            llmServiceProvider: { MockLLMService(capture: PromptCapture(), reply: "unused") }
+        )
+
+        let archived = MemoryEntry(
+            scope: .conversation,
+            scopeRefId: UUID(),
+            kind: .thread,
+            stability: .temporary,
+            status: .archived,
+            content: "- Remember everything about private family conflict forever.",
+            confidence: 0.95,
+            createdAt: Date(),
+            updatedAt: Date(),
+            lastConfirmedAt: Date()
+        )
+        let conflicted = MemoryEntry(
+            scope: .global,
+            kind: .identity,
+            stability: .stable,
+            status: .conflicted,
+            content: "- Alex prefers aggressive confrontation.",
+            confidence: 0.95,
+            createdAt: Date(),
+            updatedAt: Date(),
+            lastConfirmedAt: Date()
+        )
+        try store.insertMemoryEntry(archived)
+        try store.insertMemoryEntry(conflicted)
+
+        let model = service.currentUserModel(projectId: nil, conversationId: nil)
+
+        XCTAssertNil(model, "archived/conflicted rows should not pollute the derived current user model")
+    }
+
+    func testCurrentWorkStyleModelPrefersConfirmedOrHighConfidenceEntries() throws {
+        let service = UserMemoryService(
+            nodeStore: store,
+            llmServiceProvider: { MockLLMService(capture: PromptCapture(), reply: "unused") }
+        )
+
+        try store.insertMemoryEntry(
+            MemoryEntry(
+                scope: .global,
+                kind: .identity,
+                stability: .stable,
+                content: "- Alex prefers direct, first-principles answers.",
+                confidence: 0.95,
+                createdAt: Date(),
+                updatedAt: Date(),
+                lastConfirmedAt: Date()
+            )
+        )
+
+        let project = Project(title: "Low confidence project")
+        try store.insertProject(project)
+        try store.insertMemoryEntry(
+            MemoryEntry(
+                scope: .project,
+                scopeRefId: project.id,
+                kind: .thread,
+                stability: .stable,
+                content: "- Alex prefers lots of hand-holding and padded language.",
+                confidence: 0.6,
+                createdAt: Date(),
+                updatedAt: Date(),
+                lastConfirmedAt: nil
+            )
+        )
+
+        let workStyle = service.currentWorkStyleModel(projectId: project.id)
+
+        XCTAssertTrue(workStyle.contains("Alex prefers direct, first-principles answers."))
+        XCTAssertFalse(workStyle.contains { $0.contains("hand-holding") })
+    }
+
     // MARK: - Scheduler Task-cancel serialisation (§5 / Eng Review #3)
 
     /// P1 fix: rapid back-to-back enqueues for the same nodeId previously
@@ -451,6 +819,7 @@ final class UserMemoryServiceTests: XCTestCase {
         XCTAssertNotNil(entry, "active project memory_entry must be written")
         XCTAssertEqual(entry?.content, "- Project-level rollup line")
         XCTAssertEqual(entry?.stability, .stable)
+        XCTAssertEqual(entry?.sourceNodeIds, [chat.id], "project rollup should keep source chat ids for evidence recall")
     }
 
     /// v2.2b supersede invariant: a second refresh marks the first active
@@ -618,6 +987,208 @@ final class UserMemoryServiceTests: XCTestCase {
         let read = service.currentConversation(nodeId: node.id)
         XCTAssertEqual(read, reply,
                        "write → read must round-trip — refreshConversation's content surfaces via currentConversation")
+    }
+
+    func testConfirmMemoryEntryBoostsConfidenceAndLastConfirmedAt() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+        let originalDate = Date(timeIntervalSince1970: 10)
+        let entry = MemoryEntry(
+            scope: .global,
+            kind: .identity,
+            stability: .stable,
+            content: "Alex prefers direct answers.",
+            confidence: 0.62,
+            createdAt: originalDate,
+            updatedAt: originalDate,
+            lastConfirmedAt: originalDate
+        )
+        try store.insertMemoryEntry(entry)
+
+        XCTAssertTrue(service.confirmMemoryEntry(id: entry.id))
+
+        let updated = try store.fetchMemoryEntry(id: entry.id)
+        XCTAssertNotNil(updated?.lastConfirmedAt)
+        XCTAssertGreaterThanOrEqual(updated?.confidence ?? 0, 0.95)
+        XCTAssertGreaterThan(updated?.updatedAt ?? originalDate, originalDate)
+    }
+
+    func testArchiveMemoryEntryRemovesEntryFromReadPath() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+        let project = Project(title: "Inspector")
+        try store.insertProject(project)
+
+        let entry = MemoryEntry(
+            scope: .project,
+            scopeRefId: project.id,
+            kind: .thread,
+            stability: .stable,
+            content: "Cross-window continuity is a hard requirement.",
+            createdAt: Date(),
+            updatedAt: Date(),
+            lastConfirmedAt: Date()
+        )
+        try store.insertMemoryEntry(entry)
+
+        XCTAssertEqual(service.currentProject(projectId: project.id), entry.content)
+        XCTAssertTrue(service.archiveMemoryEntry(id: entry.id))
+        XCTAssertNil(service.currentProject(projectId: project.id))
+
+        let updated = try store.fetchMemoryEntry(id: entry.id)
+        XCTAssertEqual(updated?.status, .archived)
+    }
+
+    func testDeleteMemoryEntryRemovesEntryFromReadPath() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+        let entry = MemoryEntry(
+            scope: .global,
+            kind: .identity,
+            stability: .stable,
+            content: "Alex is building Nous as a second brain.",
+            createdAt: Date(),
+            updatedAt: Date(),
+            lastConfirmedAt: Date()
+        )
+        try store.insertMemoryEntry(entry)
+
+        XCTAssertEqual(service.currentGlobal(), entry.content)
+        XCTAssertTrue(service.deleteMemoryEntry(id: entry.id))
+        XCTAssertNil(service.currentGlobal())
+        XCTAssertNil(try store.fetchMemoryEntry(id: entry.id))
+    }
+
+    func testSourceSnippetsUseLinkedSourceNodes() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+        let node = NousNode(
+            type: .note,
+            title: "Memory policy",
+            content: "We should keep raw history but archive stale interpretations."
+        )
+        try store.insertNode(node)
+
+        let entry = MemoryEntry(
+            scope: .global,
+            kind: .constraint,
+            stability: .stable,
+            content: "Keep raw history intact.",
+            sourceNodeIds: [node.id],
+            createdAt: Date(),
+            updatedAt: Date(),
+            lastConfirmedAt: Date()
+        )
+        try store.insertMemoryEntry(entry)
+
+        let snippets = service.sourceSnippets(for: entry.id, limit: 2)
+        XCTAssertEqual(snippets.count, 1)
+        XCTAssertEqual(snippets.first?.sourceNodeId, node.id)
+        XCTAssertTrue(snippets.first?.snippet.contains("raw history") == true)
+    }
+
+    func testShouldPersistMemoryReturnsFalseWhenUserOptsOut() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+        let node = NousNode(type: .conversation, title: "Boundary chat", content: "")
+        let messages = [
+            Message(
+                nodeId: node.id,
+                role: .user,
+                content: "This is off the record. Don't store this in memory.",
+                timestamp: Date()
+            )
+        ]
+
+        XCTAssertFalse(service.shouldPersistMemory(messages: messages, projectId: nil))
+    }
+
+    func testShouldPersistMemoryReturnsFalseForSensitiveContentWhenBoundaryRequiresConsent() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+
+        try store.insertMemoryEntry(
+            MemoryEntry(
+                scope: .global,
+                kind: .constraint,
+                stability: .stable,
+                content: "- Ask before storing unusually sensitive material.",
+                confidence: 0.95,
+                createdAt: Date(),
+                updatedAt: Date(),
+                lastConfirmedAt: Date()
+            )
+        )
+
+        let node = NousNode(type: .conversation, title: "Sensitive chat", content: "")
+        let messages = [
+            Message(
+                nodeId: node.id,
+                role: .user,
+                content: "I had a panic attack today and I do not want you to over-store this.",
+                timestamp: Date()
+            )
+        ]
+
+        XCTAssertFalse(service.shouldPersistMemory(messages: messages, projectId: nil))
+    }
+
+    func testRejectedInferenceIncrementsOverInferenceCounter() async throws {
+        let suiteName = "UserMemoryServiceTests.overInference.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let telemetry = GovernanceTelemetryStore(defaults: defaults)
+        let capture = PromptCapture()
+        let mock = MockLLMService(capture: capture, reply: "- Alex is naturally conflict avoidant")
+        let service = UserMemoryService(
+            nodeStore: store,
+            llmServiceProvider: { mock },
+            governanceTelemetry: telemetry
+        )
+
+        _ = await service.promoteToGlobal(
+            candidate: "Alex is conflict avoidant",
+            sourceNodeIds: [UUID()],
+            confirmation: .confirmed
+        )
+        _ = await service.promoteToGlobal(
+            candidate: "Alex is conflict avoidant",
+            sourceNodeIds: [UUID()],
+            confirmation: .rejected
+        )
+
+        XCTAssertEqual(telemetry.value(for: .overInferenceRate), 1)
+    }
+
+    func testConfirmMemoryEntryIncrementsMemoryPrecisionCounter() throws {
+        let suiteName = "UserMemoryServiceTests.memoryPrecision.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let telemetry = GovernanceTelemetryStore(defaults: defaults)
+        let service = UserMemoryService(
+            nodeStore: store,
+            llmServiceProvider: { MockLLMService(capture: PromptCapture(), reply: "") },
+            governanceTelemetry: telemetry
+        )
+        let entry = MemoryEntry(
+            scope: .global,
+            kind: .identity,
+            stability: .stable,
+            content: "Alex prefers first-principles reasoning.",
+            createdAt: Date(),
+            updatedAt: Date(),
+            lastConfirmedAt: Date()
+        )
+        try store.insertMemoryEntry(entry)
+
+        XCTAssertTrue(service.confirmMemoryEntry(id: entry.id))
+        XCTAssertEqual(telemetry.value(for: .memoryPrecision), 1)
     }
 }
 
