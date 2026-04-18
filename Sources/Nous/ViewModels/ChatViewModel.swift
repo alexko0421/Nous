@@ -898,6 +898,9 @@ final class ChatViewModel {
 
 extension ChatViewModel {
 
+    /// Returns the judge event id for a given assistant message, if one was recorded
+    /// for the turn that produced it AND the judge actually provoked.
+    /// Returns nil for messages from non-provoked or pre-feature turns.
     @MainActor
     func judgeEventId(forMessageId messageId: UUID) -> UUID? {
         let events = governanceTelemetry.recentJudgeEvents(limit: 500, filter: .none)
