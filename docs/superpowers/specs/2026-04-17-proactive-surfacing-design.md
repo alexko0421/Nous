@@ -23,31 +23,43 @@ The hard problem is not "retrieve more." It is the **annoyance threshold**: when
 | Judge's entry pool | Reuse entries already retrieved for the main call | Fail-closed on scope boundary; avoids duplicate retrieval cost |
 | Trigger taxonomy | Contradiction **and** relevant-but-unused recall | Contradiction alone misses the "surface" half of the feature; stale-claim detection deferred |
 | Behavior delivery | Two swappable `BehaviorProfile` enum cases (Swift-native v1) | Matches existing `ChatMode.contextBlock` shape; migrates to markdown-in-bundle cleanly |
-| ChatMode role | Demoted to "prior signal" for judge | Keeps user-visible tone preference without letting it gate behavior |
+| ChatMode role | Explicit input to judge; strategist lowers the provoke threshold, companion raises it | Still a real user-intent signal (not a hard gate, but not merely a "prior" either) — encoded as concrete rules in the judge prompt |
+| Orchestration location | `ChatViewModel` (or a new `ResponseOrchestrator` extracted from it), **not** `LLMService` | `LLMService` is a pure provider transport (`generate(messages:system:)`). Memory assembly, chat-mode resolution, judge invocation, and telemetry logging already live at the ViewModel layer. Pushing orchestration down into `LLMService` would make the provider layer know about memory entries, modes, and telemetry — a boundary violation. |
+| Citable entry pool | Explicit `{id, text}` pool (vectorStore citations + raw `memory_entries` fetched by id), **separate from** the summary blocks the main call consumes | Main call today consumes `currentGlobal()` / `currentEssentialStory()` / `currentBoundedEvidence()` / etc. — these are summaries without per-entry IDs. Judge's `entry_id` must resolve into a pool that the orchestrator can also look up by ID to inject the raw text into the main prompt. Without this split, the judge quotes one thing and the main model quotes another. |
+| Judge provider scope (v1) | Cloud providers only (Claude / Gemini / OpenAI). Local MLX disabled. | `LocalLLMService`'s default is `Llama-3.2-3B-Instruct-4bit`; strict JSON on a 3B 4-bit quant is not reliable. When user's active provider is local, feature degrades to supportive-only (no judge call). |
+| Telemetry substrate | New SQLite-backed event log via NodeStore, **not** `UserDefaults` counters | Current `GovernanceTelemetryStore` (55 lines, UserDefaults) stores counters + one last-prompt-trace blob. It cannot support the "last N verdicts, filter by user_state / should_provoke, correlate with thumbs-down" review loop this feature depends on. |
 | Failure default | Silent fallback to `.supportive` profile | Never block or degrade the main reply |
 
 ## Components
 
 | Component | Status | Responsibility |
 |---|---|---|
-| `ProvocationJudge` | New | Single async method: takes `(userMessage, memoryEntries, chatMode)` → `JudgeVerdict`. Wraps one small-model LLM call with structured output. |
+| `ProvocationJudge` | New | Single async method: `judge(userMessage, citablePool, chatMode, provider) -> JudgeVerdict`. Wraps one small-model LLM call with structured-JSON output. Called from the orchestration layer, not from `LLMService`. |
 | `BehaviorProfile` | New enum | `.supportive` / `.provocative` cases, each with a `contextBlock: String` property — same shape as `ChatMode.contextBlock`. |
 | `JudgeVerdict` | New struct | `{ tensionExists: Bool, userState: UserState, shouldProvoke: Bool, entryId: String?, reason: String }` |
-| `UserMemoryService` | Unchanged | Continues to assemble the memory block for each turn. |
-| `LLMService` | Extended | Before the main call, invokes `ProvocationJudge`, selects profile, composes system prompt. |
-| `GovernanceTelemetryStore` | Extended | New event type for judge verdicts + user feedback events. |
-| `ChatMode` | Unchanged structurally, semantically demoted | No longer gates behavior; passed as input to judge. |
+| `CitableEntry` | New struct | `{ id: String, text: String, scope: MemoryScope }` — the shape passed into the judge and looked up back out by `entry_id`. |
+| Response orchestration | Extended in `ChatViewModel.send()` (or extracted into `ResponseOrchestrator`) | Owns the per-turn flow: assemble summary context (today's behavior, unchanged) **and** assemble the citable entry pool, call `ProvocationJudge`, select profile, fetch the referenced entry's raw text for the main prompt, record telemetry, then call `LLMService.generate(...)`. |
+| `UserMemoryService` | Extended | New method `citableEntryPool(projectId:conversationId:query:) -> [CitableEntry]` returning `memory_entries` relevant to this turn (v1: top-K from vector search + recent per-scope entries) with IDs preserved. Existing summary methods unchanged. |
+| `LLMService` | **Unchanged** | Stays a pure transport — `generate(messages:system:)`. The judge call is a separate invocation from the orchestrator, using the same `LLMService` abstraction. |
+| `GovernanceTelemetryStore` | **Materially extended** | New SQLite-backed event log (see Telemetry Substrate below). UserDefaults counters + last-prompt-trace blob remain for existing metrics; the new judge/feedback events go into a proper table. |
+| `NodeStore` | Extended | Adds `judge_events` table migration + append/query helpers. |
+| `ChatMode` | Unchanged structurally | Passed as an explicit input signal into the judge. `strategist` → lower provoke threshold; `companion` → higher. This is encoded in the judge prompt, not in orchestration control flow. |
 
 ## Data Flow (Single Turn)
 
+Driver is `ChatViewModel.send()` (or a `ResponseOrchestrator` extracted from it). `LLMService` is **only** called as a pure transport, twice: once for the judge, once for the main reply.
+
 1. User sends a message.
-2. `UserMemoryService.assembleMemoryBlock(...)` returns the entries for this turn (unchanged from today).
-3. `ProvocationJudge.judge(userMessage, memoryEntries, chatMode)` runs. One small-model LLM call. Returns `JudgeVerdict`.
-4. `GovernanceTelemetryStore.recordJudgment(verdict)` — synchronous, non-blocking on failure.
-5. Profile selection:
-   - `verdict.shouldProvoke == false` → `BehaviorProfile.supportive`
-   - `verdict.shouldProvoke == true` → `BehaviorProfile.provocative` + inject a line into the main prompt pointing at `verdict.entryId`.
-6. `LLMService.stream(...)` runs the main call with the composed system prompt.
+2. **Summary context assembly** — unchanged from today. `ChatViewModel.assembleContext(...)` composes the summary layers (`currentGlobal`, `currentEssentialStory`, `currentUserModel`, `currentBoundedEvidence`, `currentProject`, `currentConversation`, `recentConversations`, `citations`, `projectGoal`, attachments). These feed the main prompt, not the judge.
+3. **Citable entry pool assembly** — new. Orchestrator calls `UserMemoryService.citableEntryPool(...)`, which returns `[CitableEntry]` with IDs. v1 sources: top-K `memory_entries` by vector-search relevance (the same search that populates `citations`) + explicit recent entries at each active scope. This is the **only** pool the judge may cite from.
+4. **Provider capability check** — if the active provider is `.local`, skip steps 5–6 entirely, go straight to step 7 with `.supportive`. Log a `judge_skipped_local` event.
+5. **Judge call** — `ProvocationJudge.judge(userMessage, citablePool, chatMode, provider)` issues one small-model call (Haiku or equivalent on current provider). Returns `JudgeVerdict`.
+6. **Verdict validation + telemetry** — orchestrator verifies `verdict.entryId` (when present) is actually in the pool. If not → treat as Scenario 3 failure. Record the verdict (valid or not) in the SQLite `judge_events` table.
+7. **Profile selection + main prompt composition:**
+   - `verdict.shouldProvoke == false` (or step 4/6 forced fallback) → `BehaviorProfile.supportive`.
+   - `verdict.shouldProvoke == true` → `BehaviorProfile.provocative`. Orchestrator looks up the full raw entry by `verdict.entryId` from `NodeStore` and appends a dedicated block into the system prompt: `"FOCUS ON THIS MEMORY: <text>. Surface it in your reply and name the tension with the user's current claim."`
+   - System prompt order: anchor → summary context (unchanged) → `profile.contextBlock` → (optional) focus block.
+8. **Main call** — `LLMService.generate(messages:system:)` streams the reply.
 
 ### Critical Timing
 
@@ -55,11 +67,12 @@ The hard problem is not "retrieve more." It is the **annoyance threshold**: when
 - Target latency: **p50 ≤ 500ms**, **p95 ≤ 1.5s**.
 - Timeout: **1.5s hard deadline**. On timeout → fallback to `.supportive`, log the timeout.
 
-### Why Judge Reuses Retrieved Entries
+### Why Judge Has Its Own Entry Pool (and Why It's Not the Main Call's Context)
 
-- One retrieval pass is cheaper.
-- Guarantees the judge cannot reference entries outside the current scope (v2.2 scope-boundary invariant is preserved by construction).
-- If the main retrieval missed an entry, the judge will not hallucinate one in.
+- **Main call's context is summaries**, not addressable entries. `currentGlobal()`, `currentEssentialStory()`, `currentBoundedEvidence()` all return string blocks already compressed — the judge has no stable ID to return that would make sense to the main model.
+- **Citable pool is raw `memory_entries` with IDs.** v1 pool is drawn from vector-search hits over the same `memory_entries` table the summary layers were derived from, so by construction the judge cannot cite anything the system didn't already consider relevant for this turn.
+- When the judge says "provoke via entry X," the orchestrator explicitly injects X's raw text into the main prompt. This guarantees the main model quotes the same thing the judge reasoned about — there is no gap between judge-pool and main-model-pool.
+- v2.2 scope-boundary invariant is preserved: the pool builder respects scope (global / project / conversation) the same way existing retrieval does.
 
 ## Judge Prompt Contract
 
@@ -75,11 +88,21 @@ The judge is prompted to produce strict JSON with these fields:
 }
 ```
 
+**Inputs to the judge prompt:**
+
+- `user_message` — the text of the user's latest turn.
+- `citable_pool` — a numbered list of `{id, text}` pairs.
+- `chat_mode` — `"companion"` or `"strategist"`.
+
 **Rules encoded in the prompt:**
 
-- `should_provoke == true` REQUIRES `tension_exists == true`, `user_state != "venting"`, and a non-null `entry_id` drawn from the supplied entries.
+- `should_provoke == true` REQUIRES `tension_exists == true`, `user_state != "venting"`, and a non-null `entry_id` drawn from `citable_pool`.
 - `user_state == "venting"` forces `should_provoke == false` regardless of tension. Venting is a signal to support, not to challenge.
-- `entry_id` must match the ID of an entry in the provided pool. (Enforced in code post-parse; if the judge returns an unknown ID, we treat it as a Scenario 3 failure — see below.)
+- `entry_id` must match the ID of an entry in `citable_pool`. (Enforced in code post-parse; if the judge returns an unknown ID, we treat it as a Scenario 3 failure — see below.)
+- **ChatMode-dependent threshold (explicit, not prior):**
+  - `chat_mode == "strategist"`: set `should_provoke = true` whenever `tension_exists == true` AND `user_state` is `deciding` or `exploring`. Be willing to interject even on soft tensions.
+  - `chat_mode == "companion"`: set `should_provoke = true` only when tension is strong and clearly decision-relevant. Soft tensions → use silently, don't interject.
+  - Rationale goes in the prompt verbatim so the model has the "why," not just the rule.
 
 ## BehaviorProfile Contents
 
@@ -101,11 +124,12 @@ Exact `contextBlock` wording is in scope of the implementation plan, not this sp
 
 | Scenario | Handling |
 |---|---|
-| 1. Judge API call fails or times out | Fallback to `.supportive`. Log timeout/error. Main reply proceeds normally. |
+| 1. Judge API call fails or times out | Fallback to `.supportive`. Log `judge_failed` event with error kind. Main reply proceeds normally. |
 | 2. Judge returns malformed JSON | Same as 1. Log `warning` level. Signals judge prompt needs iteration. |
 | 3. Judge returns `entry_id` not in the provided entry pool | **Do not** pass the ID to the main model. Downgrade to `.supportive`. Log at `error` level — this is a scope-boundary safety issue, not merely a quality issue. |
-| 4. User feels a provocation was wrong | Lightweight 👍 / 👎 affordance on any provoked reply. Writes `{ verdict, user_feedback }` to `GovernanceTelemetryStore`. No runtime retraining — the data is for weekly human review. |
+| 4. User feels a provocation was wrong | Lightweight 👍 / 👎 affordance on any provoked reply. Writes `{ verdict_id, user_feedback }` into the `judge_events` table, correlated to the verdict row. No runtime retraining — the data is for weekly human review. |
 | 5. User sends a new message while previous turn's judge is still running | Cancel the in-flight judge call immediately. A stale verdict must never inform a newer turn's reply. |
+| 6. Active provider is `.local` | Skip the judge call entirely. Use `.supportive`. Log `judge_skipped_local`. The feature is effectively disabled on local providers in v1 (strict JSON on small quantized models is not reliable). |
 
 ### Explicitly Out of v1
 
@@ -124,7 +148,10 @@ Exact `contextBlock` wording is in scope of the implementation plan, not this sp
 | `ProvocationFallback` | Injected failing judge → profile resolves to `.supportive`, main call proceeds, telemetry records error |
 | `ScopeBoundaryGuard` | Judge returns `entry_id` not in pool → ID is discarded, profile is `.supportive`, error log written |
 | `JudgeCancellation` | Second turn mid-first-turn judge → first judge is cancelled, its verdict is never applied |
-| `ProfileSelection` | Verdict permutations map to the expected profile |
+| `ProfileSelection` | Verdict permutations map to the expected profile; `user_state == "venting"` always maps to `.supportive` regardless of tension |
+| `LocalProviderGate` | When active provider is `.local`, judge is not invoked; `judge_skipped_local` event is recorded; main reply uses `.supportive` |
+| `CitablePoolIntegrity` | Orchestrator's main-prompt focus block, when present, contains the raw text of the entry identified by `verdict.entryId` — verified against `NodeStore.fetchMemoryEntry(id:)` |
+| `TelemetryAppendQuery` | `appendJudgeEvent` + `recentJudgeEvents` round-trip, filtered query returns correct subset |
 
 ### Layer 2 — Judgment Quality
 
@@ -142,12 +169,37 @@ Cannot be asserted in CI. Captured as:
 | Judge call p50 / p95 latency | Too slow = main reply is dragged | p95 > 1.5s triggers prompt simplification |
 | `thumbs_down / total_provocations` | False-positive feedback signal | North star for judge-prompt iteration |
 
+## Telemetry Substrate
+
+The existing `GovernanceTelemetryStore` (UserDefaults-based counters + a single last-prompt-trace blob) is inadequate for this feature. v1 adds a real event log:
+
+- **Storage:** new SQLite table `judge_events`, created via a NodeStore migration. Columns (initial draft, to be finalized in the implementation plan):
+  - `id` (PK, text)
+  - `ts` (real, unix epoch seconds)
+  - `node_id` (text, FK → conversation node)
+  - `message_id` (text, FK → assistant message this verdict led to — nullable if judge failed before a reply was produced)
+  - `chat_mode` (text)
+  - `provider` (text)
+  - `verdict_json` (text, the full `JudgeVerdict` blob)
+  - `fallback_reason` (text, nullable — one of `ok`, `timeout`, `api_error`, `bad_json`, `unknown_entry_id`, `provider_local`)
+  - `user_feedback` (text, nullable — one of `up`, `down`)
+  - `feedback_ts` (real, nullable)
+- **Access API (on `GovernanceTelemetryStore`, backed by NodeStore):**
+  - `appendJudgeEvent(...)`
+  - `recordFeedback(eventId:feedback:)`
+  - `recentJudgeEvents(limit:filter:)` where filter supports user_state / should_provoke / fallback_reason / date range
+- **Existing UserDefaults counters and `lastPromptTrace` stay as-is.** This change is additive; nothing in the current telemetry is removed.
+
+The `MemoryDebugInspector` gains a new tab backed by `recentJudgeEvents(...)`, rendering a filterable list. Internal surface only — not shipped to normal users.
+
 ## Dependencies / Preconditions
 
 - **v2.2 block-level `memory_entries`** already merged (PRs #4–#7). Without entry-level addressability, `entry_id` citation is not possible.
-- `GovernanceTelemetryStore` already exists in the branch — schema will be extended for verdict + feedback events.
-- `ChatMode` enum already exists; no schema change, only semantic demotion.
-- Existing `MemoryDebugInspector` view will gain a new tab; no new view hierarchy needed.
+- **NodeStore migration** adding the `judge_events` table (see Telemetry Substrate above).
+- **`UserMemoryService` extension** with `citableEntryPool(...)` method returning raw `[CitableEntry]` from `memory_entries` (IDs preserved). v1 implementation: reuse the vector-search path already used for `citations`, plus top-N recent per-scope entries.
+- `GovernanceTelemetryStore` gains SQLite-backed event methods; existing UserDefaults counters unchanged.
+- `ChatMode` enum unchanged structurally — passed as explicit input to judge.
+- Existing `MemoryDebugInspector` view gains a new tab; no new view hierarchy needed.
 
 ## Success Criteria
 
@@ -168,3 +220,5 @@ If any of 1, 2, or 5 fails, the feature design is re-examined before further UI 
 - Out-of-chat nudges (welcome screen, notifications) — a different surface entirely.
 - Markdown-in-bundle profile loading — v2 migration, after profiles stabilize.
 - User-editable profiles — far future.
+- Judge support on `.local` provider — revisit once small-model structured-output reliability improves or once a rule-based local fallback is warranted.
+- Full extraction of `ResponseOrchestrator` as its own type — v1 may keep orchestration inside `ChatViewModel.send()` to minimize churn; extraction is an implementation-plan decision, not a spec decision.
