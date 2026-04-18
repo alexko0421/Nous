@@ -61,7 +61,7 @@ Judge prompt gains a paragraph:
 
 > Previous turn mode: `{previousMode.rawValue}` (or `"none (first turn)"`).
 > Prefer continuity — only switch if the user's register clearly shifted (e.g. casual-emotional → structured-analytical, or vice versa).
-> Output field: `inferredMode ∈ {companion, strategist}`.
+> Output field: `inferred_mode ∈ {"companion", "strategist"}` (snake_case, matches D1 JSON contract).
 
 Behavior from earlier brainstorming (option Y):
 - Turn 1 casual → Companion
@@ -86,13 +86,13 @@ Ordered steps inside `ChatViewModel.send()`:
    - Any fallback path → `activeChatMode ?? .companion`
 4. `assembleContext(..., chatMode: effectiveMode)` — system prompt and context blocks use the freshly-decided mode.
 5. **Append `judge_events` now** (before main call) with `chatMode: effectiveMode`, `messageId: nil`. Rationale: `judge_events` is the hydration source for mode continuity (see D5), so it cannot be gated on main-call success.
-6. Main LLM call.
-7. Save assistant message to `NodeStore`; patch `judge_events.messageId` with the saved message id.
-8. `activeChatMode = effectiveMode` (persist for next turn's `previousMode`).
+6. **`activeChatMode = effectiveMode`** (persist runtime state NOW, before the main call can fail). Rationale: if the main call throws and the user retries without reloading, the next `send()` must see the freshly-judged mode as `previousMode`, not a stale one. Pairing this with step 5 keeps runtime state and the persisted `judge_events` row in sync on every path.
+7. Main LLM call.
+8. Save assistant message to `NodeStore`; patch `judge_events.messageId` with the saved message id.
 
 Failure modes:
-- If step 6 throws: steps 1–5 are durable. `activeChatMode` is unchanged (step 8 didn't run), but the next `loadConversation` hydration will pick up `effectiveMode` from `judge_events`. Telemetry and mode continuity both survive.
-- If step 2 (judge) throws or is skipped (`.local` or timeout): `effectiveMode` falls back to `activeChatMode ?? .companion`.
+- If step 7 throws: steps 1–6 are durable. `activeChatMode` already reflects `effectiveMode`, and the `judge_events` row exists (with `messageId: nil`). A subsequent send in the same session has correct `previousMode`; a later `loadConversation` also hydrates correctly from `judge_events`. Continuity survives with or without a reload.
+- If step 2 (judge) throws or is skipped (`.local` or timeout): `effectiveMode` falls back to `activeChatMode ?? .companion`; steps 5–6 still run so the row and runtime state stay consistent.
 
 ### D4. UI removal
 
@@ -158,6 +158,7 @@ This keeps the quick-action path simple (no new judge call on a prompt the user 
 - `testLocalProviderFallbackKeepsActiveMode` — `.local` path: `effectiveMode == activeChatMode`.
 - `testJudgeTimeoutFallbackKeepsActiveMode` — timeout path: `effectiveMode == activeChatMode`.
 - `testJudgeEventAppendedBeforeMainCall` — use a failing main-call stub; assert `judge_events` row exists after throw.
+- `testActiveChatModeUpdatedBeforeMainCall` — use a failing main-call stub; after the throw, assert `activeChatMode == verdict.inferredMode` (not the pre-turn value). Guards continuity on retry-without-reload.
 - `testLoadConversationHydratesFromLatestEvent` — seed `judge_events` with `.strategist` latest, load node, assert `activeChatMode == .strategist`.
 - `testLoadConversationKeepsNilWhenNoEvents` — empty `judge_events`, assert `activeChatMode == nil` (so the next send treats it as a first judged turn with `previousMode: nil`).
 - `testStartNewConversationResetsToNil` — regardless of prior state, new chat starts `activeChatMode == nil`.
