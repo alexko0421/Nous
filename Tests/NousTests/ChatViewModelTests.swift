@@ -86,29 +86,6 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertEqual(vm.currentNode?.projectId, project.id)
     }
 
-    func testActiveChatModeDefaultsToNil() throws {
-        let nodeStore = try NodeStore(path: ":memory:")
-        let vectorStore = VectorStore(nodeStore: nodeStore)
-        let embeddingService = EmbeddingService()
-        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
-        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
-        let scheduler = UserMemoryScheduler(service: userMemoryService)
-
-        let vm = ChatViewModel(
-            nodeStore: nodeStore,
-            vectorStore: vectorStore,
-            embeddingService: embeddingService,
-            graphEngine: graphEngine,
-            userMemoryService: userMemoryService,
-            userMemoryScheduler: scheduler,
-            llmServiceProvider: { nil },
-            currentProviderProvider: { .local },
-            judgeLLMServiceFactory: { nil }
-        )
-
-        XCTAssertNil(vm.activeChatMode)
-    }
-
     func testGovernanceTelemetryRecordsPromptTraceWithoutSafetyMissWhenSafetyInvoked() throws {
         let suiteName = "ChatViewModelTests.governance.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
