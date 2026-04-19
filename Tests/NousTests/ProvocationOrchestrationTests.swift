@@ -70,6 +70,38 @@ final class ProvocationOrchestrationTests: XCTestCase {
         super.tearDown()
     }
 
+    @MainActor
+    private func assertQuickModeStopsClarifying(
+        mode: QuickActionMode,
+        openingReply: String,
+        clarificationReply: String,
+        firstUserInput: String,
+        secondUserInput: String,
+        finalGuidance: String
+    ) async {
+        llm.replyOutput = openingReply
+        await viewModel.beginQuickActionConversation(mode)
+
+        llm.replyOutput = clarificationReply
+        viewModel.inputText = firstUserInput
+        await viewModel.send()
+
+        llm.replyOutput = finalGuidance
+        viewModel.inputText = secondUserInput
+        await viewModel.send()
+
+        let chatSystems = llm.receivedSystems.compactMap { $0 }.filter {
+            $0.contains("ACTIVE QUICK MODE: \(mode.label)")
+        }
+
+        XCTAssertEqual(chatSystems.count, 3)
+        XCTAssertFalse(chatSystems[0].contains("INTERACTIVE CLARIFICATION UI"))
+        XCTAssertTrue(chatSystems[1].contains("INTERACTIVE CLARIFICATION UI"))
+        XCTAssertFalse(chatSystems[2].contains("INTERACTIVE CLARIFICATION UI"))
+        XCTAssertNil(viewModel.activeQuickActionMode)
+        XCTAssertEqual(viewModel.messages.last?.content, finalGuidance)
+    }
+
     func testJudgeVerdictParsesInferredMode() throws {
         let json = """
         {
@@ -233,6 +265,75 @@ final class ProvocationOrchestrationTests: XCTestCase {
 
         let events = telemetry.recentJudgeEvents(limit: 5, filter: .none)
         XCTAssertEqual(events.first?.fallbackReason, .judgeUnavailable)
+    }
+
+    @MainActor
+    func testQuickModeStopsOfferingClarificationAfterSecondUserTurn() async throws {
+        await assertQuickModeStopsClarifying(
+            mode: .direction,
+            openingReply: """
+            <phase>understanding</phase>
+            What feels most stuck right now?
+            """,
+            clarificationReply: """
+            <phase>understanding</phase>
+            <clarify>
+            <question>Which kind of fork is this?</question>
+            <option>School</option>
+            <option>Work</option>
+            <option>Relationship</option>
+            </clarify>
+            """,
+            firstUserInput: "I'm choosing between two paths.",
+            secondUserInput: "It's mainly about school versus going all in.",
+            finalGuidance: "Given what you've shared, choose the path that preserves optionality for one more semester."
+        )
+    }
+
+    @MainActor
+    func testBrainstormModeStopsClarifyingAfterSecondUserTurn() async throws {
+        await assertQuickModeStopsClarifying(
+            mode: .brainstorm,
+            openingReply: """
+            <phase>understanding</phase>
+            What are you trying to open up right now?
+            """,
+            clarificationReply: """
+            <phase>understanding</phase>
+            <clarify>
+            <question>What kind of thing are we brainstorming?</question>
+            <option>Startup idea</option>
+            <option>Feature direction</option>
+            <option>Life direction</option>
+            </clarify>
+            """,
+            firstUserInput: "I want to explore a few possible directions.",
+            secondUserInput: "It's mainly a startup idea I might build.",
+            finalGuidance: "Three live directions: a narrow workflow tool, a premium personal assistant, or a founder ops product. Start with the narrow workflow tool because it is easiest to validate fast."
+        )
+    }
+
+    @MainActor
+    func testMentalHealthModeStopsClarifyingAfterSecondUserTurn() async throws {
+        await assertQuickModeStopsClarifying(
+            mode: .mentalHealth,
+            openingReply: """
+            <phase>understanding</phase>
+            What feels heaviest for you right now?
+            """,
+            clarificationReply: """
+            <phase>understanding</phase>
+            <clarify>
+            <question>What feels most true?</question>
+            <option>Burned out</option>
+            <option>Anxious</option>
+            <option>Numb</option>
+            </clarify>
+            """,
+            firstUserInput: "Everything has felt a bit off lately.",
+            secondUserInput: "Closest to burnout, and my head feels noisy.",
+            finalGuidance: "This sounds more like overload than confusion. Treat tonight as recovery, not analysis: step away from work, do one calming thing, and decide tomorrow with a clearer head."
+        )
     }
 
     @MainActor

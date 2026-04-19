@@ -38,7 +38,7 @@ enum QuickActionMode: String, CaseIterable {
             3. which option feels most aligned versus just easiest,
             4. the one missing question that matters most.
             Then give me a concrete next step.
-            If context is missing, ask me before you conclude.
+            If one key detail is missing, ask once before you conclude. Otherwise give me the clearest next step you can.
             """
         case .brainstorm:
             return """

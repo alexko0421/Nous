@@ -362,7 +362,10 @@ final class ChatViewModel {
         let effectiveMode: ChatMode = inferredMode ?? (activeChatMode ?? .companion)
 
         // Step D: Assemble context + governance trace using effectiveMode.
-        let shouldAllowInteractiveClarification = activeQuickActionMode != nil
+        let shouldAllowInteractiveClarification = ChatViewModel.shouldAllowInteractiveClarification(
+            activeQuickActionMode: activeQuickActionMode,
+            messages: messages
+        )
         let context = ChatViewModel.assembleContext(
             chatMode: effectiveMode,
             currentUserInput: promptQuery,
@@ -708,7 +711,8 @@ final class ChatViewModel {
                 Rules:
                 - Use this only while you are still understanding Alex's situation in the active quick mode.
                 - Keep using the hidden understanding marker while you are still gathering context, even if you ask a normal text question instead of a card.
-                - You may use more than one clarification turn if it is genuinely needed.
+                - You may ask at most one clarification follow-up after Alex's first reply in the quick mode.
+                - If you already asked one follow-up in this quick mode, stop clarifying and give the best real guidance you can with the available context.
                 - Ask for one missing distinction at a time.
                 - Use 2 to 4 options only.
                 - Keep each option short, concrete, and directly clickable.
@@ -777,6 +781,15 @@ final class ChatViewModel {
         guard let currentMode else { return nil }
         let parsed = ClarificationCardParser.parse(assistantContent)
         return parsed.keepsQuickActionMode ? currentMode : nil
+    }
+
+    static func shouldAllowInteractiveClarification(
+        activeQuickActionMode: QuickActionMode?,
+        messages: [Message]
+    ) -> Bool {
+        guard activeQuickActionMode != nil else { return false }
+        let userTurnCount = messages.lazy.filter { $0.role == .user }.count
+        return userTurnCount <= 1
     }
 
     static func quickActionOpeningPrompt(for mode: QuickActionMode) -> String {
