@@ -11,7 +11,8 @@ final class JudgeVerdictTests: XCTestCase {
           "user_state": "deciding",
           "should_provoke": true,
           "entry_id": "ABCD-1234",
-          "reason": "User is choosing pricing; prior entry explicitly rejected price competition."
+          "reason": "User is choosing pricing; prior entry explicitly rejected price competition.",
+          "inferred_mode": "strategist"
         }
         """.data(using: .utf8)!
 
@@ -22,6 +23,7 @@ final class JudgeVerdictTests: XCTestCase {
         XCTAssertTrue(verdict.shouldProvoke)
         XCTAssertEqual(verdict.entryId, "ABCD-1234")
         XCTAssertTrue(verdict.reason.contains("pricing"))
+        XCTAssertEqual(verdict.inferredMode, .strategist)
     }
 
     func testDecodesNullEntryId() throws {
@@ -31,7 +33,8 @@ final class JudgeVerdictTests: XCTestCase {
           "user_state": "venting",
           "should_provoke": false,
           "entry_id": null,
-          "reason": "Venting — no interjection."
+          "reason": "Venting — no interjection.",
+          "inferred_mode": "companion"
         }
         """.data(using: .utf8)!
 
@@ -49,6 +52,14 @@ final class JudgeVerdictTests: XCTestCase {
         XCTAssertThrowsError(try JSONDecoder().decode(JudgeVerdict.self, from: json))
     }
 
+    func testRejectsMissingInferredMode() {
+        let json = """
+        { "tension_exists": false, "user_state": "venting",
+          "should_provoke": false, "entry_id": null, "reason": "x" }
+        """.data(using: .utf8)!
+        XCTAssertThrowsError(try JSONDecoder().decode(JudgeVerdict.self, from: json))
+    }
+
     func testBehaviorProfileContextBlocksAreNonEmpty() {
         XCTAssertFalse(BehaviorProfile.supportive.contextBlock.isEmpty)
         XCTAssertFalse(BehaviorProfile.provocative.contextBlock.isEmpty)
@@ -61,13 +72,13 @@ final class JudgeVerdictTests: XCTestCase {
     func testProfileFromVerdictRespectsShouldProvoke() {
         let provokingVerdict = JudgeVerdict(
             tensionExists: true, userState: .deciding,
-            shouldProvoke: true, entryId: "x", reason: "r"
+            shouldProvoke: true, entryId: "x", reason: "r", inferredMode: .companion
         )
         XCTAssertEqual(BehaviorProfile(verdict: provokingVerdict), .provocative)
 
         let quietVerdict = JudgeVerdict(
             tensionExists: false, userState: .venting,
-            shouldProvoke: false, entryId: nil, reason: "r"
+            shouldProvoke: false, entryId: nil, reason: "r", inferredMode: .companion
         )
         XCTAssertEqual(BehaviorProfile(verdict: quietVerdict), .supportive)
     }

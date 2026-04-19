@@ -9,8 +9,10 @@ final class ProvocationOrchestrationTests: XCTestCase {
         var replyOutput: String = "ok"
         var receivedSystems: [String?] = []
         var receivedSystem: String? { receivedSystems.first(where: { $0?.contains("BEHAVIOR:") == true }) ?? receivedSystems.first ?? nil }
+        var nextError: Error?
         func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
             receivedSystems.append(system)
+            if let err = nextError { throw err }
             let out = replyOutput
             return AsyncThrowingStream { cont in
                 cont.yield(out); cont.finish()
@@ -22,9 +24,12 @@ final class ProvocationOrchestrationTests: XCTestCase {
     final class StubJudge: Judging {
         var nextVerdict: JudgeVerdict?
         var nextError: JudgeError?
-        func judge(userMessage: String, citablePool: [CitableEntry], chatMode: ChatMode, provider: LLMProvider) async throws -> JudgeVerdict {
+        var previousModeHistory: [ChatMode?] = []
+
+        func judge(userMessage: String, citablePool: [CitableEntry], previousMode: ChatMode?, provider: LLMProvider) async throws -> JudgeVerdict {
+            previousModeHistory.append(previousMode)
             if let err = nextError { throw err }
-            return nextVerdict ?? JudgeVerdict(tensionExists: false, userState: .exploring, shouldProvoke: false, entryId: nil, reason: "stub default")
+            return nextVerdict ?? JudgeVerdict(tensionExists: false, userState: .exploring, shouldProvoke: false, entryId: nil, reason: "stub default", inferredMode: .companion)
         }
     }
 
@@ -66,6 +71,57 @@ final class ProvocationOrchestrationTests: XCTestCase {
     }
 
     @MainActor
+    private func assertQuickModeStopsClarifying(
+        mode: QuickActionMode,
+        openingReply: String,
+        clarificationReply: String,
+        firstUserInput: String,
+        secondUserInput: String,
+        finalGuidance: String
+    ) async {
+        llm.replyOutput = openingReply
+        await viewModel.beginQuickActionConversation(mode)
+
+        llm.replyOutput = clarificationReply
+        viewModel.inputText = firstUserInput
+        await viewModel.send()
+
+        llm.replyOutput = finalGuidance
+        viewModel.inputText = secondUserInput
+        await viewModel.send()
+
+        let chatSystems = llm.receivedSystems.compactMap { $0 }.filter {
+            $0.contains("ACTIVE QUICK MODE: \(mode.label)")
+        }
+
+        XCTAssertEqual(chatSystems.count, 3)
+        XCTAssertFalse(chatSystems[0].contains("INTERACTIVE CLARIFICATION UI"))
+        XCTAssertTrue(chatSystems[1].contains("INTERACTIVE CLARIFICATION UI"))
+        XCTAssertFalse(chatSystems[2].contains("INTERACTIVE CLARIFICATION UI"))
+        XCTAssertNil(viewModel.activeQuickActionMode)
+        XCTAssertEqual(viewModel.messages.last?.content, finalGuidance)
+    }
+
+    func testJudgeVerdictParsesInferredMode() throws {
+        let json = """
+        {
+          "tension_exists": true,
+          "user_state": "deciding",
+          "should_provoke": true,
+          "entry_id": "E1",
+          "reason": "pricing conflict",
+          "inferred_mode": "strategist"
+        }
+        """.data(using: .utf8)!
+
+        let verdict = try JSONDecoder().decode(JudgeVerdict.self, from: json)
+
+        XCTAssertEqual(verdict.inferredMode, .strategist)
+        XCTAssertEqual(verdict.shouldProvoke, true)
+        XCTAssertEqual(verdict.userState, .deciding)
+    }
+
+    @MainActor
     func testShouldProvokeTrueInjectsFocusBlock() async throws {
         let entryId = UUID()
         let entry = MemoryEntry(
@@ -78,7 +134,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
         judge.nextVerdict = JudgeVerdict(
             tensionExists: true, userState: .deciding,
             shouldProvoke: true, entryId: entryId.uuidString,
-            reason: "pricing conflict"
+            reason: "pricing conflict", inferredMode: .companion
         )
 
         viewModel.inputText = "I'm going with the cheapest option on purpose"
@@ -101,7 +157,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
     func testShouldProvokeFalseUsesSupportiveProfile() async throws {
         judge.nextVerdict = JudgeVerdict(
             tensionExists: false, userState: .exploring,
-            shouldProvoke: false, entryId: nil, reason: "no tension"
+            shouldProvoke: false, entryId: nil, reason: "no tension", inferredMode: .companion
         )
 
         viewModel.inputText = "just thinking out loud"
@@ -118,7 +174,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
         judge.nextVerdict = JudgeVerdict(
             tensionExists: true, userState: .deciding,
             shouldProvoke: true, entryId: "not-in-pool",
-            reason: "ghost"
+            reason: "ghost", inferredMode: .companion
         )
 
         viewModel.inputText = "anything"
@@ -212,15 +268,84 @@ final class ProvocationOrchestrationTests: XCTestCase {
     }
 
     @MainActor
+    func testQuickModeStopsOfferingClarificationAfterSecondUserTurn() async throws {
+        await assertQuickModeStopsClarifying(
+            mode: .direction,
+            openingReply: """
+            <phase>understanding</phase>
+            What feels most stuck right now?
+            """,
+            clarificationReply: """
+            <phase>understanding</phase>
+            <clarify>
+            <question>Which kind of fork is this?</question>
+            <option>School</option>
+            <option>Work</option>
+            <option>Relationship</option>
+            </clarify>
+            """,
+            firstUserInput: "I'm choosing between two paths.",
+            secondUserInput: "It's mainly about school versus going all in.",
+            finalGuidance: "Given what you've shared, choose the path that preserves optionality for one more semester."
+        )
+    }
+
+    @MainActor
+    func testBrainstormModeStopsClarifyingAfterSecondUserTurn() async throws {
+        await assertQuickModeStopsClarifying(
+            mode: .brainstorm,
+            openingReply: """
+            <phase>understanding</phase>
+            What are you trying to open up right now?
+            """,
+            clarificationReply: """
+            <phase>understanding</phase>
+            <clarify>
+            <question>What kind of thing are we brainstorming?</question>
+            <option>Startup idea</option>
+            <option>Feature direction</option>
+            <option>Life direction</option>
+            </clarify>
+            """,
+            firstUserInput: "I want to explore a few possible directions.",
+            secondUserInput: "It's mainly a startup idea I might build.",
+            finalGuidance: "Three live directions: a narrow workflow tool, a premium personal assistant, or a founder ops product. Start with the narrow workflow tool because it is easiest to validate fast."
+        )
+    }
+
+    @MainActor
+    func testMentalHealthModeStopsClarifyingAfterSecondUserTurn() async throws {
+        await assertQuickModeStopsClarifying(
+            mode: .mentalHealth,
+            openingReply: """
+            <phase>understanding</phase>
+            What feels heaviest for you right now?
+            """,
+            clarificationReply: """
+            <phase>understanding</phase>
+            <clarify>
+            <question>What feels most true?</question>
+            <option>Burned out</option>
+            <option>Anxious</option>
+            <option>Numb</option>
+            </clarify>
+            """,
+            firstUserInput: "Everything has felt a bit off lately.",
+            secondUserInput: "Closest to burnout, and my head feels noisy.",
+            finalGuidance: "This sounds more like overload than confusion. Treat tonight as recovery, not analysis: step away from work, do one calming thing, and decide tomorrow with a clearer head."
+        )
+    }
+
+    @MainActor
     func testExternalCancellationShortCircuitsJudge() async throws {
         // A judge that sleeps long enough for us to fire cancelInFlightJudge() mid-call.
         final class SlowJudge: Judging {
             func judge(userMessage: String, citablePool: [CitableEntry],
-                       chatMode: ChatMode, provider: LLMProvider) async throws -> JudgeVerdict {
+                       previousMode: ChatMode?, provider: LLMProvider) async throws -> JudgeVerdict {
                 try await Task.sleep(nanoseconds: 2_000_000_000)  // 2s — long enough to cancel
                 try Task.checkCancellation()  // propagate cancel even if sleep was swallowed
                 return JudgeVerdict(tensionExists: false, userState: .exploring,
-                                    shouldProvoke: false, entryId: nil, reason: "slow")
+                                    shouldProvoke: false, entryId: nil, reason: "slow", inferredMode: .companion)
             }
         }
         let vectorStore = VectorStore(nodeStore: store)
@@ -261,7 +386,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
         final class SlowJudge: Judging {
             var wasCancelled = false
             func judge(userMessage: String, citablePool: [CitableEntry],
-                       chatMode: ChatMode, provider: LLMProvider) async throws -> JudgeVerdict {
+                       previousMode: ChatMode?, provider: LLMProvider) async throws -> JudgeVerdict {
                 do {
                     try await Task.sleep(nanoseconds: 2_000_000_000)
                 } catch {
@@ -269,7 +394,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
                     throw CancellationError()
                 }
                 return JudgeVerdict(tensionExists: false, userState: .exploring,
-                                    shouldProvoke: false, entryId: nil, reason: "slow")
+                                    shouldProvoke: false, entryId: nil, reason: "slow", inferredMode: .companion)
             }
         }
         let slowJudge = SlowJudge()
@@ -314,11 +439,11 @@ final class ProvocationOrchestrationTests: XCTestCase {
         final class SlowJudge: Judging {
             var wasCancelled = false
             func judge(userMessage: String, citablePool: [CitableEntry],
-                       chatMode: ChatMode, provider: LLMProvider) async throws -> JudgeVerdict {
+                       previousMode: ChatMode?, provider: LLMProvider) async throws -> JudgeVerdict {
                 do { try await Task.sleep(nanoseconds: 2_000_000_000) }
                 catch { wasCancelled = true; throw CancellationError() }
                 return JudgeVerdict(tensionExists: false, userState: .exploring,
-                                    shouldProvoke: false, entryId: nil, reason: "slow")
+                                    shouldProvoke: false, entryId: nil, reason: "slow", inferredMode: .companion)
             }
         }
         let slowJudge = SlowJudge()
@@ -359,7 +484,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
         ))
         judge.nextVerdict = JudgeVerdict(
             tensionExists: true, userState: .deciding,
-            shouldProvoke: true, entryId: entryId.uuidString, reason: "conflict"
+            shouldProvoke: true, entryId: entryId.uuidString, reason: "conflict", inferredMode: .companion
         )
         viewModel.inputText = "going cheap"
         await viewModel.send()
@@ -375,5 +500,253 @@ final class ProvocationOrchestrationTests: XCTestCase {
 
         let updated = try store.fetchJudgeEvent(id: eventId)
         XCTAssertEqual(updated?.userFeedback, .down)
+    }
+
+    func testLatestChatModeReturnsNewestRow() throws {
+        let nodeId = UUID()
+        let node = NousNode(id: nodeId, type: .conversation, title: "t")
+        try store.insertNode(node)
+
+        let now = Date()
+        let e1 = JudgeEvent(
+            id: UUID(), ts: now.addingTimeInterval(-10), nodeId: nodeId, messageId: nil,
+            chatMode: .companion, provider: .claude,
+            verdictJSON: "{}", fallbackReason: .ok, userFeedback: nil, feedbackTs: nil
+        )
+        let e2 = JudgeEvent(
+            id: UUID(), ts: now, nodeId: nodeId, messageId: nil,
+            chatMode: .strategist, provider: .claude,
+            verdictJSON: "{}", fallbackReason: .ok, userFeedback: nil, feedbackTs: nil
+        )
+        try store.appendJudgeEvent(e1)
+        try store.appendJudgeEvent(e2)
+
+        XCTAssertEqual(try store.latestChatMode(forNode: nodeId), .strategist)
+    }
+
+    func testLatestChatModeReturnsNilWhenNoRows() throws {
+        let nodeId = UUID()
+        XCTAssertNil(try store.latestChatMode(forNode: nodeId))
+    }
+
+    func testLatestChatModeIgnoresOtherNodes() throws {
+        let targetId = UUID()
+        let otherId = UUID()
+        let target = NousNode(id: targetId, type: .conversation, title: "target")
+        let other = NousNode(id: otherId, type: .conversation, title: "other")
+        try store.insertNode(target)
+        try store.insertNode(other)
+
+        let now = Date()
+        let unrelated = JudgeEvent(
+            id: UUID(), ts: now, nodeId: otherId, messageId: nil,
+            chatMode: .strategist, provider: .claude,
+            verdictJSON: "{}", fallbackReason: .ok, userFeedback: nil, feedbackTs: nil
+        )
+        try store.appendJudgeEvent(unrelated)
+
+        XCTAssertNil(try store.latestChatMode(forNode: targetId))
+    }
+
+    @MainActor
+    func testFirstTurnPassesNilPreviousMode() async throws {
+        XCTAssertNil(viewModel.activeChatMode)
+
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: false, userState: .exploring, shouldProvoke: false,
+            entryId: nil, reason: "first turn", inferredMode: .companion
+        )
+        viewModel.inputText = "hello"
+        await viewModel.send()
+
+        XCTAssertEqual(judge.previousModeHistory.count, 1)
+        XCTAssertNil(judge.previousModeHistory[0],
+                     "first send() must pass previousMode: nil to the judge")
+    }
+
+    @MainActor
+    func testSecondTurnPassesPriorInferredMode() async throws {
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: false, userState: .exploring, shouldProvoke: false,
+            entryId: nil, reason: "t1", inferredMode: .strategist
+        )
+        viewModel.inputText = "help me think this through"
+        await viewModel.send()
+
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: false, userState: .exploring, shouldProvoke: false,
+            entryId: nil, reason: "t2", inferredMode: .strategist
+        )
+        viewModel.inputText = "continue"
+        await viewModel.send()
+
+        XCTAssertEqual(judge.previousModeHistory.count, 2)
+        XCTAssertNil(judge.previousModeHistory[0])
+        XCTAssertEqual(judge.previousModeHistory[1], .strategist)
+    }
+
+    @MainActor
+    func testSystemPromptUsesEffectiveModeNotPriorActiveMode() async throws {
+        viewModel.activeChatMode = .companion
+
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: false, userState: .deciding, shouldProvoke: false,
+            entryId: nil, reason: "register shift", inferredMode: .strategist
+        )
+        viewModel.inputText = "break this down for me"
+        await viewModel.send()
+
+        let system = llm.receivedSystem ?? ""
+        XCTAssertTrue(system.contains("STRATEGIST MODE"),
+                      "assembleContext must have run with verdict.inferredMode (.strategist), not prior activeChatMode (.companion)")
+        XCTAssertFalse(system.contains("COMPANION MODE"),
+                       "prior mode must not leak into this turn's system prompt")
+    }
+
+    @MainActor
+    func testLocalProviderFallbackKeepsActiveMode() async throws {
+        let localLLM = CannedLLMService()
+        let localJudge = StubJudge()
+        let vectorStore = VectorStore(nodeStore: store)
+        let memoryService = UserMemoryService(nodeStore: store, llmServiceProvider: { localLLM })
+        let localVM = ChatViewModel(
+            nodeStore: store,
+            vectorStore: vectorStore,
+            embeddingService: EmbeddingService(),
+            graphEngine: GraphEngine(nodeStore: store, vectorStore: vectorStore),
+            userMemoryService: memoryService,
+            userMemoryScheduler: UserMemoryScheduler(service: memoryService),
+            llmServiceProvider: { localLLM },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { CannedLLMService() },
+            provocationJudgeFactory: { _ in localJudge },
+            governanceTelemetry: telemetry
+        )
+        let convo = NousNode(type: .conversation, title: "seed", projectId: nil)
+        try store.insertNode(convo)
+        localVM.currentNode = convo
+        localVM.activeChatMode = .strategist
+
+        localVM.inputText = "hi"
+        await localVM.send()
+
+        XCTAssertEqual(localVM.activeChatMode, .strategist)
+        let events = telemetry.recentJudgeEvents(limit: 5, filter: .none)
+        XCTAssertEqual(events.last?.chatMode, .strategist)
+        XCTAssertEqual(events.last?.fallbackReason, .providerLocal)
+        XCTAssertEqual(localJudge.previousModeHistory.count, 0,
+                       ".local should short-circuit before the judge factory is called")
+    }
+
+    @MainActor
+    func testJudgeTimeoutFallbackKeepsActiveMode() async throws {
+        let convo = NousNode(type: .conversation, title: "seed", projectId: nil)
+        try store.insertNode(convo)
+        viewModel.currentNode = convo
+        viewModel.activeChatMode = .strategist
+        judge.nextError = .timeout
+
+        viewModel.inputText = "hi"
+        await viewModel.send()
+
+        XCTAssertEqual(viewModel.activeChatMode, .strategist)
+        let events = telemetry.recentJudgeEvents(limit: 5, filter: .none)
+        XCTAssertEqual(events.last?.chatMode, .strategist)
+        XCTAssertEqual(events.last?.fallbackReason, .timeout)
+    }
+
+    @MainActor
+    func testActiveChatModeUpdatedBeforeMainCall() async throws {
+        viewModel.activeChatMode = .companion
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: false, userState: .deciding, shouldProvoke: false,
+            entryId: nil, reason: "shift", inferredMode: .strategist
+        )
+        llm.nextError = NSError(domain: "test", code: 1)
+
+        viewModel.inputText = "hi"
+        await viewModel.send()
+
+        XCTAssertEqual(viewModel.activeChatMode, .strategist,
+                       "activeChatMode must be updated before the main LLM call so retry-without-reload has correct previousMode")
+    }
+
+    @MainActor
+    func testJudgeEventAppendedBeforeMainCall() async throws {
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: false, userState: .exploring, shouldProvoke: false,
+            entryId: nil, reason: "t", inferredMode: .companion
+        )
+        llm.nextError = NSError(domain: "test", code: 1)
+
+        viewModel.inputText = "hi"
+        await viewModel.send()
+
+        let events = telemetry.recentJudgeEvents(limit: 5, filter: .none)
+        XCTAssertEqual(events.count, 1, "judge_events row must persist even when main LLM call fails")
+        XCTAssertEqual(events.first?.fallbackReason, .ok)
+    }
+
+    @MainActor
+    func testLoadConversationHydratesFromLatestEvent() throws {
+        let node = NousNode(type: .conversation, title: "t", projectId: nil)
+        try store.insertNode(node)
+
+        let event = JudgeEvent(
+            id: UUID(), ts: Date(), nodeId: node.id, messageId: nil,
+            chatMode: .strategist, provider: .claude,
+            verdictJSON: "{}", fallbackReason: .ok, userFeedback: nil, feedbackTs: nil
+        )
+        try store.appendJudgeEvent(event)
+
+        viewModel.loadConversation(node)
+
+        XCTAssertEqual(viewModel.activeChatMode, .strategist)
+    }
+
+    @MainActor
+    func testLoadConversationKeepsNilWhenNoEvents() throws {
+        let node = NousNode(type: .conversation, title: "t", projectId: nil)
+        try store.insertNode(node)
+
+        // Seed something unrelated first so we know we're testing empty-for-this-node, not empty-table
+        viewModel.activeChatMode = .strategist
+
+        viewModel.loadConversation(node)
+
+        XCTAssertNil(viewModel.activeChatMode)
+    }
+
+    @MainActor
+    func testStartNewConversationResetsToNil() throws {
+        viewModel.activeChatMode = .strategist
+        viewModel.startNewConversation(title: "new", projectId: nil)
+        XCTAssertNil(viewModel.activeChatMode)
+    }
+
+    @MainActor
+    func testQuickActionOpenerUsesCompanionAndDoesNotRunJudge() async throws {
+        XCTAssertNil(viewModel.activeChatMode)
+
+        // Seed the judge with a "loud" verdict to prove it DIDN'T run
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: true, userState: .deciding, shouldProvoke: true,
+            entryId: nil, reason: "should not run", inferredMode: .strategist
+        )
+
+        await viewModel.beginQuickActionConversation(.direction)
+
+        // (a) assembled context used .companion
+        let system = llm.receivedSystem ?? ""
+        XCTAssertTrue(system.contains("COMPANION MODE"),
+                      "quick-action opener must assemble with .companion")
+        XCTAssertFalse(system.contains("STRATEGIST MODE"))
+        // (b) no judge_events row
+        let events = telemetry.recentJudgeEvents(limit: 5, filter: .none)
+        XCTAssertTrue(events.isEmpty, "quick-action opener must not append judge_events")
+        // (c) activeChatMode still nil
+        XCTAssertNil(viewModel.activeChatMode)
+        // (d) the recording stub's history stays empty (no judge.judge(...) call)
+        XCTAssertTrue(judge.previousModeHistory.isEmpty)
     }
 }

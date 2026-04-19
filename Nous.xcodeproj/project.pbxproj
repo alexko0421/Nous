@@ -97,7 +97,6 @@
 		E2BA1CBDD071A778D65A719A /* anchor.md in Resources */ = {isa = PBXBuildFile; fileRef = 29A9E0EFFECF3C48A6B1D69F /* anchor.md */; };
 		E39C56976C2D37208591708F /* ChatMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2521A241BB593FF07230FE0 /* ChatMode.swift */; };
 		E6978899110C57909E022FFD /* ClarificationCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3154A6E7BC8B7FD38EF8B21 /* ClarificationCard.swift */; };
-		E74C19A16E2F7205FCF09C37 /* ChatModePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAEC315200148F6D4E3158DE /* ChatModePicker.swift */; };
 		E945B227EBC4479E9F43EF34 /* NousNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC28A679A68D922546206E9D /* NousNode.swift */; };
 		FB90A9F437200B44C52367F1 /* ChatViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3074D3F24DDD3F020A52F9BA /* ChatViewModelTests.swift */; };
 /* End PBXBuildFile section */
@@ -190,7 +189,6 @@
 		DE7BA25891C49772FFB4BCC0 /* TopicEmojiResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopicEmojiResolver.swift; sourceTree = "<group>"; };
 		E3AC0F0D30E0A4039BD3E7B6 /* SpriteKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SpriteKit.framework; path = System/Library/Frameworks/SpriteKit.framework; sourceTree = SDKROOT; };
 		E44B1B1D7633A20CB476845E /* MemoryV2Migrator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryV2Migrator.swift; sourceTree = "<group>"; };
-		EAEC315200148F6D4E3158DE /* ChatModePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatModePicker.swift; sourceTree = "<group>"; };
 		EB60ABA25BC0C639CCD5D469 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		F0A35FC2025E4781FA8CEBE4 /* RAGCitationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RAGCitationView.swift; sourceTree = "<group>"; };
 		F1F0851321FDD912EBEA901F /* UserMemoryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserMemoryService.swift; sourceTree = "<group>"; };
@@ -439,7 +437,6 @@
 			children = (
 				A5EF979813E783CA3666DEBE /* AttachmentChip.swift */,
 				3D5C933D2CDA967B8AAFCD32 /* ChatArea.swift */,
-				EAEC315200148F6D4E3158DE /* ChatModePicker.swift */,
 				51AD979E25093AC4D81302A6 /* ClarificationCardView.swift */,
 				54D7B196613E93EAF2C72EF8 /* GalaxyScene.swift */,
 				26B0833FF90A3381A73858CE /* GalaxyView.swift */,
@@ -609,7 +606,6 @@
 				2EE981A0F08042E56C10A017 /* BehaviorProfile.swift in Sources */,
 				30EB1D0F191710EF17D5D13C /* ChatArea.swift in Sources */,
 				7E5669DC290C28434C8F284B /* ChatMode.swift in Sources */,
-				E74C19A16E2F7205FCF09C37 /* ChatModePicker.swift in Sources */,
 				B6E2F015E856252747EE0324 /* ChatViewModel.swift in Sources */,
 				6A84B7B43C61864FEDBFDFDE /* CitableEntry.swift in Sources */,
 				E6978899110C57909E022FFD /* ClarificationCard.swift in Sources */,

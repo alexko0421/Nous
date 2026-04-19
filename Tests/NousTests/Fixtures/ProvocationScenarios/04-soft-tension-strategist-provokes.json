@@ -1,9 +1,9 @@
 {
   "name": "04-soft-tension-strategist-provokes",
   "user_message": "I'm considering adding a referral program to grow faster",
-  "chat_mode": "strategist",
+  "previous_mode": "strategist",
   "citable_pool": [
     { "id": "E1", "text": "Last month Alex was skeptical of growth-first tactics and said he wanted to focus on retention before acquisition.", "scope": "project" }
   ],
-  "expected": { "should_provoke": true, "user_state": "deciding", "entry_id": "E1" }
+  "expected": { "should_provoke": true, "user_state": "deciding", "entry_id": "E1", "inferred_mode": "strategist" }
 }

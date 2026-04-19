@@ -23,6 +23,7 @@ struct JudgeVerdict: Codable, Equatable {
     let shouldProvoke: Bool
     let entryId: String?
     let reason: String
+    let inferredMode: ChatMode
 
     enum CodingKeys: String, CodingKey {
         case tensionExists = "tension_exists"
@@ -30,5 +31,6 @@ struct JudgeVerdict: Codable, Equatable {
         case shouldProvoke = "should_provoke"
         case entryId = "entry_id"
         case reason
+        case inferredMode = "inferred_mode"
     }
 }

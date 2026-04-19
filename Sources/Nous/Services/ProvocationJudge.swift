@@ -11,7 +11,7 @@ protocol Judging {
     func judge(
         userMessage: String,
         citablePool: [CitableEntry],
-        chatMode: ChatMode,
+        previousMode: ChatMode?,
         provider: LLMProvider
     ) async throws -> JudgeVerdict
 }
@@ -30,10 +30,10 @@ final class ProvocationJudge {
     func judge(
         userMessage: String,
         citablePool: [CitableEntry],
-        chatMode: ChatMode,
+        previousMode: ChatMode?,
         provider: LLMProvider
     ) async throws -> JudgeVerdict {
-        let systemPrompt = Self.buildPrompt(pool: citablePool, chatMode: chatMode)
+        let systemPrompt = Self.buildPrompt(pool: citablePool, previousMode: previousMode)
         let llmMessages = [LLMMessage(role: "user", content: userMessage)]
 
         let rawOutput: String
@@ -63,7 +63,7 @@ final class ProvocationJudge {
 
     // MARK: Prompt
 
-    static func buildPrompt(pool: [CitableEntry], chatMode: ChatMode) -> String {
+    static func buildPrompt(pool: [CitableEntry], previousMode: ChatMode?) -> String {
         let poolText: String
         if pool.isEmpty {
             poolText = "(empty — no citable entries this turn)"
@@ -74,7 +74,7 @@ final class ProvocationJudge {
         }
 
         return """
-        You are a silent judge deciding whether Nous should interject during its next reply to the user.
+        You are a silent judge deciding (a) whether Nous should interject during its next reply, and (b) what framing mode the next reply should use.
         Do NOT address the user. Your entire output is one JSON object exactly matching the schema below — nothing before or after.
 
         SCHEMA
@@ -83,19 +83,26 @@ final class ProvocationJudge {
           "user_state": "deciding" | "exploring" | "venting",
           "should_provoke": true | false,
           "entry_id": "<id from citable entries>" | null,
-          "reason": "<short natural-language reason>"
+          "reason": "<short natural-language reason>",
+          "inferred_mode": "companion" | "strategist"
         }
+
+        MODE INFERENCE
+        Pick inferred_mode based on the user's register in the message below:
+        - companion: casual, emotional, reflective, open-ended, asking for warmth or reassurance.
+        - strategist: analytical, decomposing a problem, asking for structure, planning, tradeoff weighing.
+        Prefer CONTINUITY with the previous turn — only switch if the user's register clearly shifted (e.g. casual-emotional → structured-analytical, or vice versa). Small drift within one register is NOT a switch.
 
         RULES (must hold in your output)
         - should_provoke = true REQUIRES: tension_exists = true, user_state != "venting", and entry_id is a real id from CITABLE ENTRIES below.
         - user_state = "venting" FORCES should_provoke = false regardless of any tension. Venting is not a moment to challenge.
         - entry_id MUST be copied verbatim from the `id=` field of one CITABLE ENTRY. Do not invent.
-        - CHAT_MODE-dependent threshold:
+        - inferred_mode-dependent threshold (apply to YOUR OWN inferred_mode choice):
           * strategist → if tension_exists is true AND user_state ∈ {deciding, exploring}, set should_provoke = true. Soft tensions count.
           * companion  → only set should_provoke = true when the tension is strong AND clearly relevant to a decision the user is making. Soft tensions → false.
 
-        CHAT_MODE
-        \(chatMode.rawValue)
+        PREVIOUS TURN MODE
+        \(previousMode?.rawValue ?? "none (first turn)")
 
         CITABLE ENTRIES
         \(poolText)

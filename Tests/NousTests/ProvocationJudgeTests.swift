@@ -37,14 +37,14 @@ final class ProvocationJudgeTests: XCTestCase {
     func testParsesWellFormedJSONVerdict() async throws {
         let fake = FakeLLMService(output: """
         {"tension_exists":true,"user_state":"deciding","should_provoke":true,
-         "entry_id":"E1","reason":"pricing conflict"}
+         "entry_id":"E1","reason":"pricing conflict","inferred_mode":"strategist"}
         """)
         let judge = ProvocationJudge(llmService: fake, timeout: 1.0)
 
         let verdict = try await judge.judge(
             userMessage: "I'm going with the cheapest option",
             citablePool: pool(),
-            chatMode: .companion,
+            previousMode: .companion,
             provider: .claude
         )
 
@@ -60,7 +60,7 @@ final class ProvocationJudgeTests: XCTestCase {
         do {
             _ = try await judge.judge(
                 userMessage: "hi", citablePool: pool(),
-                chatMode: .companion, provider: .claude
+                previousMode: .companion, provider: .claude
             )
             XCTFail("Expected badJSON throw")
         } catch let error as JudgeError {
@@ -78,7 +78,7 @@ final class ProvocationJudgeTests: XCTestCase {
         do {
             _ = try await judge.judge(
                 userMessage: "hi", citablePool: pool(),
-                chatMode: .companion, provider: .claude
+                previousMode: .companion, provider: .claude
             )
             XCTFail("Expected apiError throw")
         } catch let error as JudgeError {
@@ -99,7 +99,7 @@ final class ProvocationJudgeTests: XCTestCase {
         do {
             _ = try await judge.judge(
                 userMessage: "hi", citablePool: pool(),
-                chatMode: .companion, provider: .claude
+                previousMode: .companion, provider: .claude
             )
             XCTFail("Expected timeout throw")
         } catch let error as JudgeError {
@@ -109,17 +109,17 @@ final class ProvocationJudgeTests: XCTestCase {
         }
     }
 
-    func testPromptEmbedsPoolAndChatMode() async throws {
+    func testPromptEmbedsPoolAndPreviousMode() async throws {
         let fake = FakeLLMService(output: """
         {"tension_exists":false,"user_state":"exploring","should_provoke":false,
-         "entry_id":null,"reason":"no tension"}
+         "entry_id":null,"reason":"no tension","inferred_mode":"companion"}
         """)
         let judge = ProvocationJudge(llmService: fake, timeout: 1.0)
 
         _ = try await judge.judge(
             userMessage: "so about pricing",
             citablePool: pool(),
-            chatMode: .strategist,
+            previousMode: .strategist,
             provider: .claude
         )
 
@@ -129,11 +129,30 @@ final class ProvocationJudgeTests: XCTestCase {
         XCTAssertTrue(prompt.contains("compete on price"), "judge prompt must include entry text")
     }
 
+    func testPromptEmbedsNilPreviousMode() async throws {
+        let fake = FakeLLMService(output: """
+        {"tension_exists":false,"user_state":"exploring","should_provoke":false,
+         "entry_id":null,"reason":"no tension","inferred_mode":"companion"}
+        """)
+        let judge = ProvocationJudge(llmService: fake, timeout: 1.0)
+
+        _ = try await judge.judge(
+            userMessage: "so about pricing",
+            citablePool: pool(),
+            previousMode: nil,
+            provider: .claude
+        )
+
+        let prompt = fake.receivedSystem ?? ""
+        XCTAssertTrue(prompt.contains("none (first turn)"),
+                      "Prompt must include 'none (first turn)' sentinel when previousMode is nil")
+    }
+
     func testExtractsJSONFromProseWithEscapedQuotes() async throws {
         let fake = FakeLLMService(output: """
         Sure! Here's the verdict:
 
-        {"tension_exists": true, "user_state": "deciding", "should_provoke": true, "entry_id": "E1", "reason": "say \\"hi\\" but question the framing"}
+        {"tension_exists": true, "user_state": "deciding", "should_provoke": true, "entry_id": "E1", "reason": "say \\"hi\\" but question the framing", "inferred_mode": "strategist"}
 
         Let me know if you need more.
         """)
@@ -142,7 +161,7 @@ final class ProvocationJudgeTests: XCTestCase {
         let verdict = try await judge.judge(
             userMessage: "should I proceed?",
             citablePool: pool(),
-            chatMode: .companion,
+            previousMode: .companion,
             provider: .claude
         )
 

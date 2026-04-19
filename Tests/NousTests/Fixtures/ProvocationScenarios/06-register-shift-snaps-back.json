@@ -1,0 +1,9 @@
+{
+  "name": "06-register-shift-snaps-back",
+  "user_message": "ok let me just start the outline",
+  "previous_mode": "strategist",
+  "citable_pool": [
+    { "id": "E1", "text": "Alex is preparing a product strategy presentation for Thursday.", "scope": "global" }
+  ],
+  "expected": { "should_provoke": false, "user_state": "exploring", "entry_id": null, "inferred_mode": "companion" }
+}

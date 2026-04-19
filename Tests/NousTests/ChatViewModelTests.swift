@@ -3,7 +3,7 @@ import XCTest
 
 final class ChatViewModelTests: XCTestCase {
 
-    func testChatModeDefaultsToCompanion() throws {
+    func testChatModeDefaultsToNil() throws {
         let nodeStore = try NodeStore(path: ":memory:")
         let vectorStore = VectorStore(nodeStore: nodeStore)
         let embeddingService = EmbeddingService()
@@ -23,7 +23,7 @@ final class ChatViewModelTests: XCTestCase {
             judgeLLMServiceFactory: { nil }
         )
 
-        XCTAssertEqual(vm.activeChatMode, .companion)
+        XCTAssertNil(vm.activeChatMode)
     }
 
     func testSendCreatesConversationInsideSelectedProject() async throws {
@@ -84,31 +84,6 @@ final class ChatViewModelTests: XCTestCase {
         await vm.beginQuickActionConversation(.direction)
 
         XCTAssertEqual(vm.currentNode?.projectId, project.id)
-    }
-
-    func testSetChatModeSwitchesToStrategist() throws {
-        let nodeStore = try NodeStore(path: ":memory:")
-        let vectorStore = VectorStore(nodeStore: nodeStore)
-        let embeddingService = EmbeddingService()
-        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
-        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
-        let scheduler = UserMemoryScheduler(service: userMemoryService)
-
-        let vm = ChatViewModel(
-            nodeStore: nodeStore,
-            vectorStore: vectorStore,
-            embeddingService: embeddingService,
-            graphEngine: graphEngine,
-            userMemoryService: userMemoryService,
-            userMemoryScheduler: scheduler,
-            llmServiceProvider: { nil },
-            currentProviderProvider: { .local },
-            judgeLLMServiceFactory: { nil }
-        )
-
-        vm.setChatMode(.strategist)
-
-        XCTAssertEqual(vm.activeChatMode, .strategist)
     }
 
     func testGovernanceTelemetryRecordsPromptTraceWithoutSafetyMissWhenSafetyInvoked() throws {

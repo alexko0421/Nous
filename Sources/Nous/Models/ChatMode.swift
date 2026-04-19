@@ -1,6 +1,6 @@
 import Foundation
 
-enum ChatMode: String, CaseIterable {
+enum ChatMode: String, Codable, CaseIterable {
     case companion
     case strategist
 

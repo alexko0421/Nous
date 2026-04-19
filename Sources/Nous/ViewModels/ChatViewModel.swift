@@ -13,7 +13,7 @@ final class ChatViewModel {
     var currentResponse: String = ""
     var citations: [SearchResult] = []
     var activeQuickActionMode: QuickActionMode?
-    var activeChatMode: ChatMode = .companion
+    var activeChatMode: ChatMode? = nil
     var defaultProjectId: UUID?
     var lastPromptGovernanceTrace: PromptGovernanceTrace?
 
@@ -29,6 +29,10 @@ final class ChatViewModel {
     private let currentProviderProvider: () -> LLMProvider
     private let judgeLLMServiceFactory: () -> (any LLMService)?
     private let provocationJudgeFactory: (any LLMService) -> any Judging
+    /// Stored as a typed `Task<JudgeVerdict, Error>` — not `Task<Void, …>` — so tests can
+    /// `await task.value` and inspect the verdict directly. The slot is guarded on clear:
+    /// a later `send()` may have already overwritten it with a new task ID, so only the task
+    /// that still owns the slot clears it (see `inFlightJudgeTaskId` guard in `send()`).
     private var inFlightJudgeTask: Task<JudgeVerdict, Error>?
     private var inFlightJudgeTaskId: UUID?
     private let governanceTelemetry: GovernanceTelemetryStore
@@ -85,6 +89,7 @@ final class ChatViewModel {
         citations = []
         currentResponse = ""
         activeQuickActionMode = nil
+        activeChatMode = nil  // brand-new chat has no prior judgment
         NotificationCenter.default.post(name: .nousNodesDidChange, object: nil)
     }
 
@@ -96,14 +101,11 @@ final class ChatViewModel {
         citations = []
         currentResponse = ""
         activeQuickActionMode = nil
+        activeChatMode = (try? nodeStore.latestChatMode(forNode: node.id)) ?? nil
     }
 
     func activateQuickActionMode(_ mode: QuickActionMode) {
         activeQuickActionMode = mode
-    }
-
-    func setChatMode(_ mode: ChatMode) {
-        activeChatMode = mode
     }
 
     @MainActor
@@ -128,7 +130,7 @@ final class ChatViewModel {
         }
 
         let context = ChatViewModel.assembleContext(
-            chatMode: activeChatMode,
+            chatMode: .companion,
             currentUserInput: ChatViewModel.quickActionOpeningPrompt(for: mode),
             globalMemory: userMemoryService.currentGlobal(),
             essentialStory: userMemoryService.currentEssentialStory(
@@ -152,7 +154,7 @@ final class ChatViewModel {
             allowInteractiveClarification: false
         )
         let promptTrace = ChatViewModel.governanceTrace(
-            chatMode: activeChatMode,
+            chatMode: .companion,
             currentUserInput: ChatViewModel.quickActionOpeningPrompt(for: mode),
             globalMemory: userMemoryService.currentGlobal(),
             essentialStory: userMemoryService.currentEssentialStory(
@@ -280,11 +282,92 @@ final class ChatViewModel {
             excludingId: node.id
         )) ?? []
 
-        // Step 5: Assemble context
-        let shouldAllowInteractiveClarification = activeQuickActionMode != nil
+        // --- BEGIN reordered send flow (per spec D3) ---
 
+        // Step A: Gather the citable pool (needed by the judge).
+        let nodeHits = citations.map { $0.node.id }
+        let citablePool = (try? userMemoryService.citableEntryPool(
+            projectId: node.projectId,
+            conversationId: node.id,
+            nodeHits: nodeHits
+        )) ?? []
+
+        // Step B: Run the judge (or skip on .local).
+        let currentProvider = currentProviderProvider()
+        let eventId = UUID()
+        var verdictForLog: JudgeVerdict?
+        var fallbackReason: JudgeFallbackReason = .ok
+        var profile: BehaviorProfile = .supportive
+        var focusBlock: String?
+        var inferredMode: ChatMode?
+
+        if currentProvider == .local {
+            fallbackReason = .providerLocal
+        } else if let judgeLLM = judgeLLMServiceFactory() {
+            inFlightJudgeTask?.cancel()
+
+            let judge = provocationJudgeFactory(judgeLLM)
+            let taskId = UUID()
+            let task = Task { () async throws -> JudgeVerdict in
+                try await judge.judge(
+                    userMessage: promptQuery,
+                    citablePool: citablePool,
+                    previousMode: activeChatMode,
+                    provider: currentProvider
+                )
+            }
+            inFlightJudgeTask = task
+            inFlightJudgeTaskId = taskId
+            defer {
+                if inFlightJudgeTaskId == taskId {
+                    inFlightJudgeTask = nil
+                    inFlightJudgeTaskId = nil
+                }
+            }
+
+            do {
+                let verdict = try await task.value
+                verdictForLog = verdict
+                inferredMode = verdict.inferredMode
+
+                if verdict.shouldProvoke, let entryIdStr = verdict.entryId {
+                    if let matched = citablePool.first(where: { $0.id == entryIdStr }),
+                       let uuid = UUID(uuidString: entryIdStr),
+                       let rawEntry = try? nodeStore.fetchMemoryEntry(id: uuid) {
+                        profile = .provocative
+                        focusBlock = ChatViewModel.buildFocusBlock(entryId: matched.id, rawText: rawEntry.content)
+                        fallbackReason = .ok
+                    } else {
+                        fallbackReason = .unknownEntryId
+                        profile = .supportive
+                    }
+                } else {
+                    fallbackReason = .ok
+                    profile = .supportive
+                }
+            } catch JudgeError.timeout {
+                fallbackReason = .timeout
+            } catch JudgeError.badJSON {
+                fallbackReason = .badJSON
+            } catch is CancellationError {
+                return
+            } catch {
+                fallbackReason = .apiError
+            }
+        } else {
+            fallbackReason = .judgeUnavailable
+        }
+
+        // Step C: Decide the effective mode for this turn.
+        let effectiveMode: ChatMode = inferredMode ?? (activeChatMode ?? .companion)
+
+        // Step D: Assemble context + governance trace using effectiveMode.
+        let shouldAllowInteractiveClarification = ChatViewModel.shouldAllowInteractiveClarification(
+            activeQuickActionMode: activeQuickActionMode,
+            messages: messages
+        )
         let context = ChatViewModel.assembleContext(
-            chatMode: activeChatMode,
+            chatMode: effectiveMode,
             currentUserInput: promptQuery,
             globalMemory: userMemoryService.currentGlobal(),
             essentialStory: userMemoryService.currentEssentialStory(
@@ -309,7 +392,7 @@ final class ChatViewModel {
             allowInteractiveClarification: shouldAllowInteractiveClarification
         )
         let promptTrace = ChatViewModel.governanceTrace(
-            chatMode: activeChatMode,
+            chatMode: effectiveMode,
             currentUserInput: promptQuery,
             globalMemory: userMemoryService.currentGlobal(),
             essentialStory: userMemoryService.currentEssentialStory(
@@ -336,93 +419,13 @@ final class ChatViewModel {
         lastPromptGovernanceTrace = promptTrace
         governanceTelemetry.recordPromptTrace(promptTrace)
 
-        // Step 5b: assemble citable pool for the judge
-        let nodeHits = citations.map { $0.node.id }
-        let citablePool = (try? userMemoryService.citableEntryPool(
-            projectId: node.projectId,
-            conversationId: node.id,
-            nodeHits: nodeHits
-        )) ?? []
-
-        // Step 5c: call the judge (or skip on local)
-        let currentProvider = currentProviderProvider()
-        let eventId = UUID()
-        var verdictForLog: JudgeVerdict?
-        var fallbackReason: JudgeFallbackReason = .ok
-        var profile: BehaviorProfile = .supportive
-        var focusBlock: String? = nil
-
-        if currentProvider == .local {
-            fallbackReason = .providerLocal
-        } else if let judgeLLM = judgeLLMServiceFactory() {
-            // Cancel any previous in-flight judge (e.g., from a prior conversation).
-            // In v1 this is belt-and-braces — the isGenerating gate already prevents a rapid
-            // second send on the *same* conversation. The real trigger for cancellation is
-            // cancelInFlightJudge() called externally (e.g., from a future conversation-switch hook).
-            inFlightJudgeTask?.cancel()
-
-            let judge = provocationJudgeFactory(judgeLLM)
-            // Store the INNER throwing task directly — not a Void wrapper — so cancel() propagates
-            // into the judge's async work (Task.sleep, URLSession, etc. all respect cancellation).
-            let taskId = UUID()
-            let task = Task { () async throws -> JudgeVerdict in
-                try await judge.judge(
-                    userMessage: promptQuery,
-                    citablePool: citablePool,
-                    chatMode: activeChatMode,
-                    provider: currentProvider
-                )
-            }
-            inFlightJudgeTask = task
-            inFlightJudgeTaskId = taskId
-
-            do {
-                let verdict = try await task.value
-                verdictForLog = verdict
-
-                if verdict.shouldProvoke, let entryIdStr = verdict.entryId {
-                    if let matched = citablePool.first(where: { $0.id == entryIdStr }),
-                       let uuid = UUID(uuidString: entryIdStr),
-                       let rawEntry = try? nodeStore.fetchMemoryEntry(id: uuid) {
-                        profile = .provocative
-                        focusBlock = ChatViewModel.buildFocusBlock(entryId: matched.id, rawText: rawEntry.content)
-                        fallbackReason = .ok
-                    } else {
-                        fallbackReason = .unknownEntryId
-                        profile = .supportive
-                    }
-                } else {
-                    fallbackReason = .ok
-                    profile = .supportive
-                }
-            } catch JudgeError.timeout {
-                fallbackReason = .timeout
-            } catch JudgeError.badJSON {
-                fallbackReason = .badJSON
-            } catch is CancellationError {
-                // External cancellation (conversation switch / VM teardown). Discard this turn
-                // entirely — no main-LLM call, no judge event logged, no assistant message.
-                return
-            } catch {
-                fallbackReason = .apiError
-            }
-
-            // Clear the slot only if it still points at our task. If a later send() stored its
-            // own task we must not clobber it.
-            if inFlightJudgeTaskId == taskId {
-                inFlightJudgeTask = nil
-                inFlightJudgeTaskId = nil
-            }
-        } else {
-            fallbackReason = .judgeUnavailable
-        }
-
-        // Step 5d: compose final system prompt
+        // Step E: Compose final system prompt.
         var finalSystemParts: [String] = [context, profile.contextBlock]
         if let fb = focusBlock { finalSystemParts.append(fb) }
         let finalSystem = finalSystemParts.joined(separator: "\n\n")
 
-        // Step 5e: log the judge event (do this BEFORE the main call so we have the record even if the main call fails)
+        // Step F: Append the judge_events row using effectiveMode.
+        // BEFORE the main call so the row survives main-call failure.
         let verdictJSONStr: String = {
             if let v = verdictForLog, let data = try? JSONEncoder().encode(v) {
                 return String(data: data, encoding: .utf8) ?? "{}"
@@ -431,11 +434,17 @@ final class ChatViewModel {
         }()
         let event = JudgeEvent(
             id: eventId, ts: Date(), nodeId: node.id, messageId: nil,
-            chatMode: activeChatMode, provider: currentProvider,
+            chatMode: effectiveMode, provider: currentProvider,
             verdictJSON: verdictJSONStr, fallbackReason: fallbackReason,
             userFeedback: nil, feedbackTs: nil
         )
         governanceTelemetry.appendJudgeEvent(event)
+
+        // Step G: Persist runtime activeChatMode NOW, before the main call.
+        // Retry-without-reload must see the freshly-judged mode as previousMode on the next send.
+        activeChatMode = effectiveMode
+
+        // --- END reordered send flow ---
 
         // Step 6: Build LLMMessage array from conversation history
         let llmMessages: [LLMMessage] = messages.map { msg in
@@ -702,7 +711,8 @@ final class ChatViewModel {
                 Rules:
                 - Use this only while you are still understanding Alex's situation in the active quick mode.
                 - Keep using the hidden understanding marker while you are still gathering context, even if you ask a normal text question instead of a card.
-                - You may use more than one clarification turn if it is genuinely needed.
+                - You may ask at most one clarification follow-up after Alex's first reply in the quick mode.
+                - If you already asked one follow-up in this quick mode, stop clarifying and give the best real guidance you can with the available context.
                 - Ask for one missing distinction at a time.
                 - Use 2 to 4 options only.
                 - Keep each option short, concrete, and directly clickable.
@@ -771,6 +781,15 @@ final class ChatViewModel {
         guard let currentMode else { return nil }
         let parsed = ClarificationCardParser.parse(assistantContent)
         return parsed.keepsQuickActionMode ? currentMode : nil
+    }
+
+    static func shouldAllowInteractiveClarification(
+        activeQuickActionMode: QuickActionMode?,
+        messages: [Message]
+    ) -> Bool {
+        guard activeQuickActionMode != nil else { return false }
+        let userTurnCount = messages.lazy.filter { $0.role == .user }.count
+        return userTurnCount <= 1
     }
 
     static func quickActionOpeningPrompt(for mode: QuickActionMode) -> String {

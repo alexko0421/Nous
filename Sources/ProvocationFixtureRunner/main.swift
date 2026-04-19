@@ -8,21 +8,23 @@ struct FixtureCase: Decodable {
         let shouldProvoke: Bool
         let userState: String?
         let entryId: String?
+        let inferredMode: String?
         enum CodingKeys: String, CodingKey {
             case shouldProvoke = "should_provoke"
             case userState = "user_state"
             case entryId = "entry_id"
+            case inferredMode = "inferred_mode"
         }
     }
     let name: String
     let userMessage: String
-    let chatMode: String
+    let previousMode: String?   // nil == first turn
     let citablePool: [Pool]
     let expected: Expected
     enum CodingKeys: String, CodingKey {
         case name
         case userMessage = "user_message"
-        case chatMode = "chat_mode"
+        case previousMode = "previous_mode"
         case citablePool = "citable_pool"
         case expected
     }
@@ -55,10 +57,16 @@ for file in files {
         print("💥 \(fx.name) — unknown scope '\(bad.scope)' in citable_pool")
         continue
     }
-    guard let mode = ChatMode(rawValue: fx.chatMode) else {
-        failures += 1
-        print("💥 \(fx.name) — unknown chat_mode '\(fx.chatMode)'")
-        continue
+    let previousMode: ChatMode?
+    if let raw = fx.previousMode {
+        guard let parsed = ChatMode(rawValue: raw) else {
+            failures += 1
+            print("💥 \(fx.name) — unknown previous_mode '\(raw)'")
+            continue
+        }
+        previousMode = parsed
+    } else {
+        previousMode = nil
     }
     let pool = fx.citablePool.map { CitableEntry(
         id: $0.id, text: $0.text,
@@ -69,7 +77,7 @@ for file in files {
         let verdict = try await judge.judge(
             userMessage: fx.userMessage,
             citablePool: pool,
-            chatMode: mode,
+            previousMode: previousMode,
             provider: .claude
         )
         var diffs: [String] = []
@@ -81,6 +89,9 @@ for file in files {
         }
         if let wantEntry = fx.expected.entryId, verdict.entryId != wantEntry {
             diffs.append("entry_id: got=\(verdict.entryId ?? "nil") want=\(wantEntry)")
+        }
+        if let wantMode = fx.expected.inferredMode, verdict.inferredMode.rawValue != wantMode {
+            diffs.append("inferred_mode: got=\(verdict.inferredMode.rawValue) want=\(wantMode)")
         }
         if diffs.isEmpty {
             print("✅ \(fx.name)")

@@ -331,9 +331,40 @@ final class RAGPipelineTests: XCTestCase {
 
         XCTAssertTrue(enabled.contains("INTERACTIVE CLARIFICATION UI"))
         XCTAssertTrue(enabled.contains("understanding phase"))
-        XCTAssertTrue(enabled.contains("more than one clarification turn"))
+        XCTAssertTrue(enabled.contains("at most one clarification follow-up"))
+        XCTAssertTrue(enabled.contains("stop clarifying and give the best real guidance"))
         XCTAssertFalse(disabled.contains("INTERACTIVE CLARIFICATION UI"))
         XCTAssertTrue(disabled.contains("ACTIVE QUICK MODE: Direction"))
+    }
+
+    func testInteractiveClarificationStopsAfterFirstUserReply() {
+        let firstReply = [
+            Message(nodeId: UUID(), role: .user, content: "I'm stuck between two paths.")
+        ]
+        let secondReply = [
+            Message(nodeId: UUID(), role: .user, content: "I'm stuck between two paths."),
+            Message(nodeId: UUID(), role: .assistant, content: "Which two paths?"),
+            Message(nodeId: UUID(), role: .user, content: "Staying in school or going all in.")
+        ]
+
+        XCTAssertTrue(
+            ChatViewModel.shouldAllowInteractiveClarification(
+                activeQuickActionMode: .direction,
+                messages: firstReply
+            )
+        )
+        XCTAssertFalse(
+            ChatViewModel.shouldAllowInteractiveClarification(
+                activeQuickActionMode: .direction,
+                messages: secondReply
+            )
+        )
+        XCTAssertFalse(
+            ChatViewModel.shouldAllowInteractiveClarification(
+                activeQuickActionMode: nil,
+                messages: firstReply
+            )
+        )
     }
 
     func testQuickActionModeStaysActiveOnlyWhenAssistantStillClarifies() {

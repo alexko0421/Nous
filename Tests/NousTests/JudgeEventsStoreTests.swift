@@ -26,7 +26,8 @@ final class JudgeEventsStoreTests: XCTestCase {
             userState: .exploring,
             shouldProvoke: fallback == .ok,
             entryId: fallback == .ok ? UUID().uuidString : nil,
-            reason: "test"
+            reason: "test",
+            inferredMode: .companion
         )
         let verdictJSON = String(data: try! JSONEncoder().encode(verdict), encoding: .utf8)!
         return JudgeEvent(

@@ -39,12 +39,10 @@ struct ChatArea: View {
             if isWelcomeState {
                 WelcomeView(
                     inputText: $vm.inputText,
-                    selectedChatMode: vm.activeChatMode,
                     attachments: attachments,
                     onPickAttachment: { isAttachmentMenuPresented = true },
                     onRemoveAttachment: removeAttachment,
                     onSend: sendCurrentInput,
-                    onChatModeSelected: { mode in vm.setChatMode(mode) },
                     onQuickActionSelected: { mode in
                         Task {
                             await vm.beginQuickActionConversation(mode)
@@ -62,12 +60,16 @@ struct ChatArea: View {
                                     MessageBubble(text: msg.content, isUser: msg.role == .user)
                                     if msg.role == .assistant,
                                        let eventId = vm.judgeEventId(forMessageId: msg.id) {
-                                        HStack(spacing: 8) {
+                                        HStack(spacing: 4) {
                                             Button(action: { vm.recordFeedback(forMessageId: msg.id, feedback: .up) }) {
                                                 Image(systemName: "hand.thumbsup")
+                                                    .frame(width: 24, height: 24)
+                                                    .contentShape(Rectangle())
                                             }.buttonStyle(.plain)
                                             Button(action: { vm.recordFeedback(forMessageId: msg.id, feedback: .down) }) {
                                                 Image(systemName: "hand.thumbsdown")
+                                                    .frame(width: 24, height: 24)
+                                                    .contentShape(Rectangle())
                                             }.buttonStyle(.plain)
                                         }
                                         .font(.footnote)
@@ -123,10 +125,6 @@ struct ChatArea: View {
                             ClarificationCardView(card: clarificationCard) { option in
                                 sendClarificationOption(option)
                             }
-                        }
-
-                        ChatModePicker(selectedMode: vm.activeChatMode) { mode in
-                            vm.setChatMode(mode)
                         }
 
                         if !attachments.isEmpty {
