@@ -1,342 +1,798 @@
 # Memory Retrieval vNext — Implementation Plan
 
-> **For agentic workers:** Execute this as a narrow `C-lite` plan. Do not expand into a general retrieval rewrite. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship the minimum retrieval changes that improve contradiction recall and thinking spark for proactive surfacing.
+**Goal:** Close the only remaining Phase 1 gap — add a `provocation_kind: contradiction | spark | neutral` discriminator to `JudgeVerdict` so contradiction-oriented interjections can be reviewed separately, and reconcile a small spec/code mismatch around the annotation helper signature.
 
-**Specs:**
-- [2026-04-18-memory-retrieval-vnext.md](/Users/kochunlong/conductor/workspaces/Nous/new-york/docs/superpowers/specs/2026-04-18-memory-retrieval-vnext.md)
-- [2026-04-17-proactive-surfacing-design.md](/Users/kochunlong/conductor/workspaces/Nous/new-york/docs/superpowers/specs/2026-04-17-proactive-surfacing-design.md)
+**Architecture:** `provocationKind` is **derived** in `ChatViewModel` from the verdict + the in-pool `contradictionCandidateIds` set, then stamped onto `verdictForLog` before encoding to `verdictJSON`. No `judge_events` schema migration — `verdictJSON` is already a TEXT blob (`Sources/Nous/Services/NodeStore.swift:172-173`). The LLM prompt is **not** asked to emit this field, keeping the judge contract small and deterministic. A `JudgeEventFilter.provocationKind(...)` query path uses the existing `json_extract(verdictJSON, '$.field')` pattern for the debug inspector picker.
 
-## Preconditions
+**Tech Stack:** Swift 5.x, Xcode project (`Nous.xcodeproj`), in-memory SQLite for tests (`:memory:`), XCTest. Test command: `xcodebuild test -project Nous.xcodeproj -scheme NousTests -destination 'platform=macOS'`.
 
-This plan assumes the proactive-surfacing substrate exists, either on `alexko0421/proactive-surfacing` or after that branch merges:
+**Spec:** [2026-04-18-memory-retrieval-vnext.md](/Users/kochunlong/conductor/workspaces/Nous/new-york/docs/superpowers/specs/2026-04-18-memory-retrieval-vnext.md)
 
-- `ProvocationJudge`
-- `JudgeVerdict`
-- `judge_events`
-- `UserMemoryService.citableEntryPool(...)`
-- `MemoryDebugInspector` judge review UI
+---
 
-If those pieces are not yet landed, stack this plan on that branch rather than implementing directly on current `main`.
+## Status of Phase 1 Substrate (already shipped on `alexko0421/proactive-surfacing`, commit `1598b00`)
 
-## Critical Architecture Note
+This plan is **not** greenfield. The bulk of the spec has already landed. Do not re-implement these:
 
-Current `memory_entries` has an important invariant: **at most one active entry per `(scope, scopeRefId)`**. Existing reads and tests depend on that invariant:
+| Spec item | Where it lives today |
+|---|---|
+| `MemoryKind.decision` / `.boundary` | `Sources/Nous/Models/MemoryEntry.swift:9` |
+| `MemoryFactEntry` model + `memory_fact_entries` table + indexes | `Sources/Nous/Models/MemoryFactEntry.swift`, `Sources/Nous/Services/NodeStore.swift:155-198` |
+| `contradictionRecallFacts(projectId:conversationId:)` | `Sources/Nous/Services/UserMemoryService.swift:381-401` |
+| `annotateContradictionCandidates(currentMessage:facts:maxCandidates:)` | `Sources/Nous/Services/UserMemoryService.swift:406-441` |
+| `citableEntryPool(...)` 3-lane assembly with graceful degradation | `Sources/Nous/Services/UserMemoryService.swift:1372-1438` |
+| `[contradiction-candidate]` prompt marker | `Sources/Nous/Models/CitableEntry.swift:12`, `Sources/Nous/Services/ProvocationJudge.swift:72,102` |
+| Wiring in send flow | `Sources/Nous/ViewModels/ChatViewModel.swift:280-340` |
+| Backwards-compat for unknown `MemoryKind` rows | `Tests/NousTests/MemoryFactStoreTests.swift:164-200` |
+| Governance refresh prompt limited to `decision/boundary/constraint` | `Sources/Nous/Services/UserMemoryService.swift:1030-1048` |
 
-- `NodeStore.fetchActiveMemoryEntry(...)`
-- `UserMemoryService.currentGlobal/currentProject/currentConversation(...)`
-- tests asserting exactly one active row per scope+ref
+The **only** spec items still outstanding:
+1. `provocation_kind` discriminator on `JudgeVerdict` + telemetry plumbing (§Success Metrics in spec)
+2. Spec/code mismatch: spec says annotation helper returns `Set<String>`, code returns `[AnnotatedContradictionFact]` (§Provocation Hooks > A in spec)
 
-Because of that, Phase 1 must **not** try to store sibling active `decision` / `boundary` rows in `memory_entries` alongside the canonical `thread` / `identity` summary row.
+Everything below addresses **only** those two items.
 
-### Phase 1 implementation choice
-
-Keep canonical `memory_entries` unchanged, and introduce a **sidecar fact table** for contradiction-oriented typed memory.
-
-This preserves:
-
-- the current read path
-- the current one-active-entry invariant
-- the existing context assembly logic
-
-while still giving retrieval and the judge typed facts to work with.
-
-## Scope
-
-Phase 1 includes:
-
-- add `decision` and `boundary` to `MemoryKind`
-- add a sidecar typed fact substrate for contradiction recall
-- hard recall active in-scope `decision` / `boundary` / `constraint` facts
-- annotate top contradiction candidates before judge prompt assembly
-- add a lightweight `provocation_kind` discriminator for contradiction review
-
-Phase 1 excludes:
-
-- entry-level vector indexing over all `memory_entries`
-- full mixed-score reranking
-- broad memory taxonomy expansion
-- ask-back UX
-- local-provider heuristics
+---
 
 ## File Map
-
-### New files
-
-| Path | Responsibility |
-|---|---|
-| `Sources/Nous/Models/MemoryFactEntry.swift` | Sidecar typed fact model for contradiction recall |
-| `Tests/NousTests/MemoryFactStoreTests.swift` | Round-trip tests for the fact table + helpers |
-| `Tests/NousTests/ContradictionRecallTests.swift` | Retrieval + annotation tests for contradiction candidates |
 
 ### Modified files
 
 | Path | Responsibility |
 |---|---|
-| `Sources/Nous/Models/MemoryEntry.swift` | Add `decision` / `boundary` cases to `MemoryKind` |
-| `Sources/Nous/Services/NodeStore.swift` | Add `memory_fact_entries` table + CRUD/query helpers |
-| `Sources/Nous/Services/UserMemoryService.swift` | Extract and retrieve contradiction facts; annotate candidates |
-| `Sources/Nous/Services/GovernanceTelemetryStore.swift` | Add `provocation_kind` write/read support if `judge_events` already exists in branch |
-| `Sources/Nous/Services/ProvocationJudge.swift` | Accept contradiction-candidate prompt hints; verdict schema unchanged |
-| `Sources/Nous/ViewModels/ChatViewModel.swift` | Feed annotated contradiction candidates into judge flow |
-| `Tests/NousTests/UserMemoryServiceTests.swift` | Add extraction and backwards-compat coverage |
-| `Tests/NousTests/ProvocationOrchestrationTests.swift` | Add contradiction-oriented orchestration assertions |
+| `Sources/Nous/Models/JudgeVerdict.swift` | Add `ProvocationKind` enum + `provocationKind` field (default `.neutral`, decoded with fallback for old rows) |
+| `Sources/Nous/ViewModels/ChatViewModel.swift` | Add `deriveProvocationKind(...)` static helper; stamp it onto `verdictForLog` before encoding |
+| `Sources/Nous/Services/NodeStore.swift` | Add `JudgeEventFilter.provocationKind(ProvocationKind)` query branch |
+| `Sources/Nous/Views/MemoryDebugInspector.swift` | Add three picker entries (Contradiction / Spark / Neutral) to the existing `JudgeEventsTab` filter menu |
+| `docs/superpowers/specs/2026-04-18-memory-retrieval-vnext.md` | Update §Provocation Hooks > A to match the actual annotation signature |
+
+### New tests
+
+| Path | Responsibility |
+|---|---|
+| `Tests/NousTests/JudgeVerdictProvocationKindTests.swift` | Decode/encode + backwards-compat tests for `provocationKind` |
+| `Tests/NousTests/ProvocationKindDerivationTests.swift` | Unit tests for `ChatViewModel.deriveProvocationKind(...)` |
+
+### Modified tests
+
+| Path | Responsibility |
+|---|---|
+| `Tests/NousTests/JudgeEventsStoreTests.swift` | Add `provocationKind` filter test against `recentJudgeEvents` |
+| `Tests/NousTests/ProvocationOrchestrationTests.swift` | Add one orchestration test asserting the persisted `verdictJSON` carries the derived kind |
+
+### Untouched-but-existing call sites that must keep compiling
+
+These construct `JudgeVerdict(...)` today. Adding the new field with a **default `provocationKind: ProvocationKind = .neutral`** in the memberwise init means none of them need edits — but verify they still compile after Task 1:
+
+- `Tests/NousTests/JudgeEventsStoreTests.swift:24`
+- `Tests/NousTests/ProvocationOrchestrationTests.swift:32, 134, 158, 192, 212, 385, 434, 483, 523, 593, 607, 614, 630, 699, 714, 770`
+
+---
 
 ## PR Structure
 
-Ship this as 4 stacked PRs.
+Single PR. Roughly ~250 lines including tests. Stack on top of the current `alexko0421/proactive-surfacing` branch.
 
-1. **PR 1 — Fact Substrate**
-   Add `decision` / `boundary` to `MemoryKind`, introduce `memory_fact_entries`, and keep canonical `memory_entries` untouched.
-2. **PR 2 — Fact Extraction**
-   Teach `UserMemoryService` to extract contradiction facts into the sidecar table.
-3. **PR 3 — Contradiction Recall + Annotation**
-   Build hard-recall + annotation helpers for the judge pool.
-4. **PR 4 — Judge Integration + Telemetry**
-   Pass contradiction candidates into `ProvocationJudge` and review tooling.
+---
 
-## PR 1 — Fact Substrate
-
-### Task 1.1: Extend `MemoryKind`
+## Task 1: Add `ProvocationKind` enum + `provocationKind` field on `JudgeVerdict`
 
 **Files:**
-- Modify: `Sources/Nous/Models/MemoryEntry.swift`
-- Test: `Tests/NousTests/UserMemoryServiceTests.swift`
+- Modify: `Sources/Nous/Models/JudgeVerdict.swift`
+- Create: `Tests/NousTests/JudgeVerdictProvocationKindTests.swift`
 
-- [ ] Add:
-  - `case decision`
-  - `case boundary`
-- [ ] Keep existing cases unchanged.
-- [ ] Add serialization tests proving:
-  - new kinds encode/decode correctly
-  - old rows still decode safely
+- [ ] **Step 1: Write the failing tests**
 
-### Task 1.2: Add `MemoryFactEntry`
-
-**Files:**
-- Create: `Sources/Nous/Models/MemoryFactEntry.swift`
-
-Suggested shape:
+Create `Tests/NousTests/JudgeVerdictProvocationKindTests.swift`:
 
 ```swift
-struct MemoryFactEntry: Identifiable, Codable, Equatable {
-    let id: UUID
-    var scope: MemoryScope
-    var scopeRefId: UUID?
-    var kind: MemoryKind          // Phase 1 only: decision / boundary / constraint
-    var content: String
-    var confidence: Double
-    var status: MemoryStatus
-    var stability: MemoryStability
-    var sourceNodeIds: [UUID]
-    let createdAt: Date
-    var updatedAt: Date
+import XCTest
+@testable import Nous
+
+final class JudgeVerdictProvocationKindTests: XCTestCase {
+
+    func testDefaultProvocationKindIsNeutralWhenConstructedWithoutField() {
+        let verdict = JudgeVerdict(
+            tensionExists: false,
+            userState: .exploring,
+            shouldProvoke: false,
+            entryId: nil,
+            reason: "no tension",
+            inferredMode: .companion
+        )
+        XCTAssertEqual(verdict.provocationKind, .neutral)
+    }
+
+    func testEncodeIncludesProvocationKindKey() throws {
+        var verdict = JudgeVerdict(
+            tensionExists: true,
+            userState: .deciding,
+            shouldProvoke: true,
+            entryId: "E1",
+            reason: "pricing conflict",
+            inferredMode: .strategist
+        )
+        verdict.provocationKind = .contradiction
+
+        let data = try JSONEncoder().encode(verdict)
+        let json = String(data: data, encoding: .utf8) ?? ""
+        XCTAssertTrue(json.contains("\"provocation_kind\":\"contradiction\""),
+                      "encoded verdict must carry provocation_kind under snake_case key, got: \(json)")
+    }
+
+    func testDecodeOldVerdictWithoutProvocationKindFallsBackToNeutral() throws {
+        // verdictJSON shape from before this field existed.
+        let legacyJSON = """
+        {"tension_exists":true,"user_state":"deciding","should_provoke":true,
+         "entry_id":"E1","reason":"old row","inferred_mode":"strategist"}
+        """
+        let data = legacyJSON.data(using: .utf8)!
+        let verdict = try JSONDecoder().decode(JudgeVerdict.self, from: data)
+        XCTAssertEqual(verdict.provocationKind, .neutral,
+                       "old judge_events rows missing provocation_kind must decode safely as neutral")
+    }
+
+    func testDecodeRoundTripPreservesProvocationKind() throws {
+        var original = JudgeVerdict(
+            tensionExists: true,
+            userState: .deciding,
+            shouldProvoke: true,
+            entryId: "E1",
+            reason: "spark",
+            inferredMode: .companion
+        )
+        original.provocationKind = .spark
+
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(JudgeVerdict.self, from: data)
+        XCTAssertEqual(decoded, original)
+    }
 }
 ```
 
-### Task 1.3: Add `memory_fact_entries` table
+- [ ] **Step 2: Run tests to verify they fail**
 
-**Files:**
-- Modify: `Sources/Nous/Services/NodeStore.swift`
-- Test: `Tests/NousTests/MemoryFactStoreTests.swift`
-
-- [ ] Add a new SQLite table:
-  - `id`
-  - `scope`
-  - `scopeRefId`
-  - `kind`
-  - `content`
-  - `confidence`
-  - `status`
-  - `stability`
-  - `sourceNodeIds`
-  - `createdAt`
-  - `updatedAt`
-- [ ] Add indexes for:
-  - `(scope, scopeRefId, status)`
-  - `kind`
-  - `updatedAt`
-- [ ] Add helper methods:
-  - `insertMemoryFactEntry(_:)`
-  - `updateMemoryFactEntry(_:)`
-  - `fetchMemoryFactEntries(...)`
-  - `fetchActiveMemoryFactEntries(scope:scopeRefId:kinds:)`
-- [ ] Keep `memory_entries` invariant unchanged.
-
-### Task 1.4: PR 1 check
-
-- [ ] Full test suite green
-- [ ] Open stacked PR with no behavior change claim
-
-## PR 2 — Fact Extraction
-
-### Task 2.1: Conversation fact extraction
-
-**Files:**
-- Modify: `Sources/Nous/Services/UserMemoryService.swift`
-- Test: `Tests/NousTests/UserMemoryServiceTests.swift`
-
-- [ ] Add a new extraction path that runs after `refreshConversation(...)` writes the canonical thread row.
-- [ ] Input source remains **Alex-only** message evidence.
-- [ ] Extraction target is the sidecar fact table, not canonical `memory_entries`.
-- [ ] Phase 1 fact kinds allowed here:
-  - `decision`
-  - `boundary`
-  - `constraint`
-- [ ] Do not emit `identity`, `preference`, `relationship`, or `thread` facts through this path.
-
-Recommended implementation:
-
-- one small LLM call returning strict JSON array of facts
-- each fact includes:
-  - `kind`
-  - `content`
-  - `confidence`
-
-### Task 2.2: Project fact roll-up
-
-**Files:**
-- Modify: `Sources/Nous/Services/UserMemoryService.swift`
-- Test: `Tests/NousTests/UserMemoryServiceTests.swift`
-
-- [ ] When project memory refreshes, optionally roll up durable `decision` / `boundary` / `constraint` facts from child conversation facts into project-scoped fact rows.
-- [ ] Keep global identity path unchanged in Phase 1.
-- [ ] Do not add a second generic project summary system.
-
-### Task 2.3: Migration fixtures
-
-**Files:**
-- Modify: relevant tests / fixtures
-
-- [ ] Add sample fact extraction fixtures for:
-  - one `decision`
-  - one `boundary`
-  - one `constraint`
-- [ ] Add backwards-compat test that old data with no fact rows still works.
-
-### Task 2.4: PR 2 check
-
-- [ ] Full suite green
-- [ ] Open stacked PR with extraction-only behavior change
-
-## PR 3 — Contradiction Recall + Annotation
-
-### Task 3.1: Hard recall helper
-
-**Files:**
-- Modify: `Sources/Nous/Services/UserMemoryService.swift`
-- Create: `Tests/NousTests/ContradictionRecallTests.swift`
-
-- [ ] Add a helper that fetches active in-scope fact rows for:
-  - `decision`
-  - `boundary`
-  - `constraint`
-- [ ] `stable` vs `temporary` is **not** a recall gate in Phase 1.
-- [ ] Enforce scope and active-status filtering.
-
-Suggested helper:
-
-```swift
-func contradictionRecallFacts(
-    projectId: UUID?,
-    conversationId: UUID
-) throws -> [MemoryFactEntry]
+```bash
+xcodebuild test -project Nous.xcodeproj -scheme NousTests -destination 'platform=macOS' \
+  -only-testing:NousTests/JudgeVerdictProvocationKindTests
 ```
+Expected: build error — `JudgeVerdict has no member 'provocationKind'`.
 
-### Task 3.2: Annotation helper
+- [ ] **Step 3: Add the enum + field with backwards-compatible decode**
 
-**Files:**
-- Modify: `Sources/Nous/Services/UserMemoryService.swift`
-- Test: `Tests/NousTests/ContradictionRecallTests.swift`
-
-- [ ] Add a testable helper that runs **after pool construction** and **before judge prompt assembly**.
-- [ ] Preferred home:
-  `UserMemoryService.annotateContradictionCandidates(...)`
-- [ ] Mark the top 1-3 most relevant contradiction facts in the current pool.
-- [ ] Use **relative ranking in-pool**, not a fixed global similarity threshold.
-
-Suggested return shape:
+Replace the contents of `Sources/Nous/Models/JudgeVerdict.swift` with:
 
 ```swift
-struct AnnotatedCitableEntry {
-    let entry: CitableEntry
-    let isContradictionCandidate: Bool
+// Sources/Nous/Models/JudgeVerdict.swift
+import Foundation
+
+enum UserState: String, Codable {
+    case deciding
+    case exploring
+    case venting
+}
+
+enum JudgeFallbackReason: String, Codable {
+    case ok
+    case timeout
+    case apiError = "api_error"
+    case badJSON = "bad_json"
+    case unknownEntryId = "unknown_entry_id"
+    case providerLocal = "provider_local"
+    case judgeUnavailable = "judge_unavailable"  // judge LLM factory returned nil (missing API key, etc.)
+}
+
+/// Review discriminator stamped onto a verdict by `ChatViewModel` before it is
+/// persisted into `judge_events.verdictJSON`. Not emitted by the LLM judge —
+/// derived deterministically from `shouldProvoke` and whether the cited entry
+/// was a contradiction candidate this turn.
+enum ProvocationKind: String, Codable, CaseIterable {
+    case contradiction
+    case spark
+    case neutral
+}
+
+struct JudgeVerdict: Codable, Equatable {
+    let tensionExists: Bool
+    let userState: UserState
+    let shouldProvoke: Bool
+    let entryId: String?
+    let reason: String
+    let inferredMode: ChatMode
+    var provocationKind: ProvocationKind
+
+    init(
+        tensionExists: Bool,
+        userState: UserState,
+        shouldProvoke: Bool,
+        entryId: String?,
+        reason: String,
+        inferredMode: ChatMode,
+        provocationKind: ProvocationKind = .neutral
+    ) {
+        self.tensionExists = tensionExists
+        self.userState = userState
+        self.shouldProvoke = shouldProvoke
+        self.entryId = entryId
+        self.reason = reason
+        self.inferredMode = inferredMode
+        self.provocationKind = provocationKind
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case tensionExists = "tension_exists"
+        case userState = "user_state"
+        case shouldProvoke = "should_provoke"
+        case entryId = "entry_id"
+        case reason
+        case inferredMode = "inferred_mode"
+        case provocationKind = "provocation_kind"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.tensionExists = try c.decode(Bool.self, forKey: .tensionExists)
+        self.userState = try c.decode(UserState.self, forKey: .userState)
+        self.shouldProvoke = try c.decode(Bool.self, forKey: .shouldProvoke)
+        self.entryId = try c.decodeIfPresent(String.self, forKey: .entryId)
+        self.reason = try c.decode(String.self, forKey: .reason)
+        self.inferredMode = try c.decode(ChatMode.self, forKey: .inferredMode)
+        self.provocationKind = try c.decodeIfPresent(ProvocationKind.self, forKey: .provocationKind) ?? .neutral
+    }
 }
 ```
 
-### Task 3.3: Merge into judge pool assembly
+- [ ] **Step 4: Run the new tests**
+
+```bash
+xcodebuild test -project Nous.xcodeproj -scheme NousTests -destination 'platform=macOS' \
+  -only-testing:NousTests/JudgeVerdictProvocationKindTests
+```
+Expected: PASS, 4/4.
+
+- [ ] **Step 5: Run the full suite to confirm no existing call site broke**
+
+```bash
+xcodebuild test -project Nous.xcodeproj -scheme NousTests -destination 'platform=macOS'
+```
+Expected: PASS — every existing `JudgeVerdict(...)` constructor still compiles because `provocationKind` defaults to `.neutral`. If anything fails, the call site in question was using a non-memberwise init somehow; fix by appending `, provocationKind: .neutral` rather than removing the default.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add Sources/Nous/Models/JudgeVerdict.swift Tests/NousTests/JudgeVerdictProvocationKindTests.swift
+git commit -m "feat(judge): add ProvocationKind discriminator on JudgeVerdict"
+```
+
+---
+
+## Task 2: Add `deriveProvocationKind(...)` static helper on `ChatViewModel`
 
 **Files:**
-- Modify: `Sources/Nous/Services/UserMemoryService.swift`
 - Modify: `Sources/Nous/ViewModels/ChatViewModel.swift`
+- Create: `Tests/NousTests/ProvocationKindDerivationTests.swift`
 
-- [ ] Update pool assembly so judge inputs include:
-  - 2-4 contradiction hard-recall facts
-  - 4-6 vector-recall items
-  - 1-2 recency seeds
-- [ ] Do **not** duplicate scope-based context assembly already feeding the main prompt.
+The derivation rule is:
+- `shouldProvoke == false` → `.neutral`
+- `shouldProvoke == true` AND `entryId` is present AND `entryId ∈ contradictionCandidateIds` → `.contradiction`
+- `shouldProvoke == true` otherwise → `.spark`
 
-### Task 3.4: PR 3 check
+- [ ] **Step 1: Write the failing tests**
 
-- [ ] Full suite green
-- [ ] Open stacked PR with retrieval-layer behavior change
+Create `Tests/NousTests/ProvocationKindDerivationTests.swift`:
 
-## PR 4 — Judge Integration + Telemetry
+```swift
+import XCTest
+@testable import Nous
 
-### Task 4.1: Prompt-input annotation only
+final class ProvocationKindDerivationTests: XCTestCase {
+
+    func testNeutralWhenShouldProvokeFalse() {
+        let verdict = JudgeVerdict(
+            tensionExists: true, userState: .deciding,
+            shouldProvoke: false, entryId: "E1",
+            reason: "tension but venting elsewhere", inferredMode: .companion
+        )
+        XCTAssertEqual(
+            ChatViewModel.deriveProvocationKind(verdict: verdict, contradictionCandidateIds: ["E1"]),
+            .neutral
+        )
+    }
+
+    func testContradictionWhenCitedEntryWasFlaggedCandidate() {
+        let verdict = JudgeVerdict(
+            tensionExists: true, userState: .deciding,
+            shouldProvoke: true, entryId: "E1",
+            reason: "cuts against earlier decision", inferredMode: .strategist
+        )
+        XCTAssertEqual(
+            ChatViewModel.deriveProvocationKind(verdict: verdict, contradictionCandidateIds: ["E1", "E2"]),
+            .contradiction
+        )
+    }
+
+    func testSparkWhenProvokingButCitedEntryWasNotFlagged() {
+        let verdict = JudgeVerdict(
+            tensionExists: true, userState: .exploring,
+            shouldProvoke: true, entryId: "E9",
+            reason: "latent connection worth surfacing", inferredMode: .strategist
+        )
+        XCTAssertEqual(
+            ChatViewModel.deriveProvocationKind(verdict: verdict, contradictionCandidateIds: ["E1", "E2"]),
+            .spark
+        )
+    }
+
+    func testSparkWhenProvokingWithoutEntryId() {
+        let verdict = JudgeVerdict(
+            tensionExists: true, userState: .deciding,
+            shouldProvoke: true, entryId: nil,
+            reason: "schema violation but flagged anyway", inferredMode: .strategist
+        )
+        XCTAssertEqual(
+            ChatViewModel.deriveProvocationKind(verdict: verdict, contradictionCandidateIds: []),
+            .spark
+        )
+    }
+}
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+```bash
+xcodebuild test -project Nous.xcodeproj -scheme NousTests -destination 'platform=macOS' \
+  -only-testing:NousTests/ProvocationKindDerivationTests
+```
+Expected: build error — `ChatViewModel has no member 'deriveProvocationKind'`.
+
+- [ ] **Step 3: Add the static helper**
+
+In `Sources/Nous/ViewModels/ChatViewModel.swift`, add this static helper near the other `static func` helpers in the type (e.g., next to `shouldAllowInteractiveClarification`, `assembleContext`, `governanceTrace`). Pick whichever location keeps the file's existing grouping convention:
+
+```swift
+/// Derives the review discriminator stamped onto verdictJSON. Pure function;
+/// kept static so it is independently testable without spinning up the full
+/// view model.
+static func deriveProvocationKind(
+    verdict: JudgeVerdict,
+    contradictionCandidateIds: Set<String>
+) -> ProvocationKind {
+    guard verdict.shouldProvoke else { return .neutral }
+    if let id = verdict.entryId, contradictionCandidateIds.contains(id) {
+        return .contradiction
+    }
+    return .spark
+}
+```
+
+- [ ] **Step 4: Run the new tests**
+
+```bash
+xcodebuild test -project Nous.xcodeproj -scheme NousTests -destination 'platform=macOS' \
+  -only-testing:NousTests/ProvocationKindDerivationTests
+```
+Expected: PASS, 4/4.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add Sources/Nous/ViewModels/ChatViewModel.swift Tests/NousTests/ProvocationKindDerivationTests.swift
+git commit -m "feat(judge): derive provocation kind from verdict + candidate set"
+```
+
+---
+
+## Task 3: Wire derivation into the send flow + orchestration test
 
 **Files:**
-- Modify: `Sources/Nous/Services/ProvocationJudge.swift`
-- Test: `Tests/NousTests/ProvocationOrchestrationTests.swift`
-
-- [ ] Pass contradiction-candidate hints into the judge prompt.
-- [ ] Keep `JudgeVerdict` schema unchanged in Phase 1.
-- [ ] Example prompt hint:
-  `` `[contradiction-candidate] id=<entry-id>` ``
-
-### Task 4.2: Telemetry discriminator
-
-**Files:**
-- Modify: `Sources/Nous/Services/GovernanceTelemetryStore.swift`
-- Modify: NodeStore judge-event helpers if present on stacked branch
-
-- [ ] Add lightweight `provocation_kind` support:
-  - `contradiction`
-  - `spark`
-  - `neutral`
-- [ ] This is review tooling, not a large telemetry redesign.
-
-### Task 4.3: Orchestration tests
-
-**Files:**
+- Modify: `Sources/Nous/ViewModels/ChatViewModel.swift` (around lines 313–455)
 - Modify: `Tests/NousTests/ProvocationOrchestrationTests.swift`
 
-- [ ] Add tests proving:
-  - contradiction candidates reach the judge prompt
-  - verdict schema does not change
-  - contradiction provocation can be separated in review data
+The mutation point is **before** `verdictJSONStr` is encoded at `Sources/Nous/ViewModels/ChatViewModel.swift:443-448`. The set already exists in scope as `contradictionCandidateIds` (declared at line ~295). Mutate `verdictForLog` once, then let the existing encoder run.
 
-### Task 4.4: PR 4 check
+- [ ] **Step 1: Write the failing orchestration test**
 
-- [ ] Full suite green
-- [ ] Open stacked PR with contradiction-oriented judge improvement
+In `Tests/NousTests/ProvocationOrchestrationTests.swift`, add a new test method (place it next to existing tests that already construct `JudgeVerdict(...)` and inspect `judge_events`). Reuse the existing test scaffolding — do not invent a new harness:
+
+```swift
+func testProvocationKindStampedOntoVerdictJSONForContradictionMatch() async throws {
+    // ARRANGE: a memory_fact_entry whose id will be the cited entry, AND an in-pool
+    // contradiction-candidate id set covering it (the existing test scaffolding builds
+    // both via citableEntryPool / contradictionCandidateIds — match the pattern used
+    // by the surrounding "judge selects entryId X" tests in this file).
+    let cited = makeFactEntry(content: "Do not compete on price.", kind: .decision)
+    try store.insertMemoryFactEntry(cited)
+
+    // The orchestration test stub feeds nextVerdict back unchanged — wire it to provoke
+    // and cite the seeded entry id.
+    judge.nextVerdict = JudgeVerdict(
+        tensionExists: true, userState: .deciding,
+        shouldProvoke: true, entryId: cited.id.uuidString,
+        reason: "cuts against earlier decision", inferredMode: .strategist
+    )
+
+    // ACT
+    try await sendUserMessage("Maybe we should compete on price after all.")
+
+    // ASSERT: persisted verdictJSON carries provocation_kind = contradiction.
+    let events = try store.recentJudgeEvents(limit: 1, filter: .none)
+    XCTAssertEqual(events.count, 1)
+    let json = events[0].verdictJSON
+    XCTAssertTrue(json.contains("\"provocation_kind\":\"contradiction\""),
+                  "verdictJSON should be stamped with derived provocation_kind, got: \(json)")
+}
+```
+
+> **Note for the implementer:** the helper names (`makeFactEntry`, `sendUserMessage`, `store`, `judge`) above mirror the surrounding tests in this file. If the existing test class uses different names, **rename to match** rather than introducing new helpers. The only new behavior asserted is the `provocation_kind` substring in the persisted blob.
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+```bash
+xcodebuild test -project Nous.xcodeproj -scheme NousTests -destination 'platform=macOS' \
+  -only-testing:NousTests/ProvocationOrchestrationTests/testProvocationKindStampedOntoVerdictJSONForContradictionMatch
+```
+Expected: FAIL — verdictJSON does not contain `provocation_kind`.
+
+- [ ] **Step 3: Wire the derivation into the send flow**
+
+In `Sources/Nous/ViewModels/ChatViewModel.swift`, locate the block at lines 442-448:
+
+```swift
+        // Step F: Append the judge_events row using effectiveMode.
+        // BEFORE the main call so the row survives main-call failure.
+        let verdictJSONStr: String = {
+            if let v = verdictForLog, let data = try? JSONEncoder().encode(v) {
+                return String(data: data, encoding: .utf8) ?? "{}"
+            }
+            return "{}"
+        }()
+```
+
+Insert the derivation immediately before that closure, so the encoded payload picks it up:
+
+```swift
+        // Step F: Append the judge_events row using effectiveMode.
+        // BEFORE the main call so the row survives main-call failure.
+        if verdictForLog != nil {
+            verdictForLog?.provocationKind = ChatViewModel.deriveProvocationKind(
+                verdict: verdictForLog!,
+                contradictionCandidateIds: contradictionCandidateIds
+            )
+        }
+        let verdictJSONStr: String = {
+            if let v = verdictForLog, let data = try? JSONEncoder().encode(v) {
+                return String(data: data, encoding: .utf8) ?? "{}"
+            }
+            return "{}"
+        }()
+```
+
+> **Why mutate before encode rather than re-derive at read time:** the derivation depends on `contradictionCandidateIds` which is per-turn state. Stamping at write time freezes the discriminator with the row, so review tooling reading old `judge_events` rows back gets the correct value without recomputing pool composition retroactively.
+
+- [ ] **Step 4: Run the new test**
+
+```bash
+xcodebuild test -project Nous.xcodeproj -scheme NousTests -destination 'platform=macOS' \
+  -only-testing:NousTests/ProvocationOrchestrationTests/testProvocationKindStampedOntoVerdictJSONForContradictionMatch
+```
+Expected: PASS.
+
+- [ ] **Step 5: Run the full ProvocationOrchestrationTests class to catch regressions**
+
+```bash
+xcodebuild test -project Nous.xcodeproj -scheme NousTests -destination 'platform=macOS' \
+  -only-testing:NousTests/ProvocationOrchestrationTests
+```
+Expected: PASS for every test in the class. The default `provocationKind: .neutral` keeps existing assertions about `verdictJSON` content stable as long as those assertions are not exact-string equality on the full blob; if any test does compare the full JSON exactly, update its expectation to include `"provocation_kind":"<derived value>"`.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add Sources/Nous/ViewModels/ChatViewModel.swift Tests/NousTests/ProvocationOrchestrationTests.swift
+git commit -m "feat(judge): stamp derived provocation_kind onto verdictJSON before persist"
+```
+
+---
+
+## Task 4: Add `JudgeEventFilter.provocationKind(...)` query branch
+
+**Files:**
+- Modify: `Sources/Nous/Services/NodeStore.swift` (lines 1117–1197)
+- Modify: `Tests/NousTests/JudgeEventsStoreTests.swift`
+
+- [ ] **Step 1: Write the failing test**
+
+In `Tests/NousTests/JudgeEventsStoreTests.swift`, add this test method:
+
+```swift
+func testRecentJudgeEventsFiltersByProvocationKind() throws {
+    // Insert three events: one contradiction, one spark, one neutral.
+    let nodeId = UUID()
+    func encoded(_ kind: ProvocationKind, shouldProvoke: Bool, entryId: String?) -> String {
+        var v = JudgeVerdict(
+            tensionExists: shouldProvoke,
+            userState: shouldProvoke ? .deciding : .exploring,
+            shouldProvoke: shouldProvoke,
+            entryId: entryId,
+            reason: "fixture",
+            inferredMode: .strategist
+        )
+        v.provocationKind = kind
+        let data = try! JSONEncoder().encode(v)
+        return String(data: data, encoding: .utf8)!
+    }
+
+    try store.appendJudgeEvent(JudgeEvent(
+        id: UUID(), ts: Date(timeIntervalSince1970: 10),
+        nodeId: nodeId, messageId: nil,
+        chatMode: .strategist, provider: .openai,
+        verdictJSON: encoded(.contradiction, shouldProvoke: true, entryId: "E1"),
+        fallbackReason: .ok, userFeedback: nil, feedbackTs: nil
+    ))
+    try store.appendJudgeEvent(JudgeEvent(
+        id: UUID(), ts: Date(timeIntervalSince1970: 20),
+        nodeId: nodeId, messageId: nil,
+        chatMode: .strategist, provider: .openai,
+        verdictJSON: encoded(.spark, shouldProvoke: true, entryId: "E2"),
+        fallbackReason: .ok, userFeedback: nil, feedbackTs: nil
+    ))
+    try store.appendJudgeEvent(JudgeEvent(
+        id: UUID(), ts: Date(timeIntervalSince1970: 30),
+        nodeId: nodeId, messageId: nil,
+        chatMode: .companion, provider: .openai,
+        verdictJSON: encoded(.neutral, shouldProvoke: false, entryId: nil),
+        fallbackReason: .ok, userFeedback: nil, feedbackTs: nil
+    ))
+
+    let contradictionOnly = try store.recentJudgeEvents(
+        limit: 50,
+        filter: .provocationKind(.contradiction)
+    )
+    XCTAssertEqual(contradictionOnly.count, 1)
+    XCTAssertTrue(contradictionOnly[0].verdictJSON.contains("\"provocation_kind\":\"contradiction\""))
+
+    let sparkOnly = try store.recentJudgeEvents(
+        limit: 50,
+        filter: .provocationKind(.spark)
+    )
+    XCTAssertEqual(sparkOnly.count, 1)
+}
+```
+
+> **Note:** if `JudgeEventsStoreTests.swift` constructs the test `store` differently from this snippet (different ivar name, setUp pattern, available `LLMProvider` cases), match the surrounding conventions — only the `recentJudgeEvents(filter: .provocationKind(...))` assertions are new.
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+```bash
+xcodebuild test -project Nous.xcodeproj -scheme NousTests -destination 'platform=macOS' \
+  -only-testing:NousTests/JudgeEventsStoreTests/testRecentJudgeEventsFiltersByProvocationKind
+```
+Expected: build error — `JudgeEventFilter has no case 'provocationKind'`.
+
+- [ ] **Step 3: Add the new filter case + query branch**
+
+In `Sources/Nous/Services/NodeStore.swift`, update the enum declaration around line 1117:
+
+```swift
+enum JudgeEventFilter: Equatable, Hashable {
+    case none
+    case fallback(JudgeFallbackReason)
+    case shouldProvoke(Bool)
+    case userState(UserState)
+    case provocationKind(ProvocationKind)
+}
+```
+
+In the same file, update `recentJudgeEvents(limit:filter:)` (around lines 1159–1197). Add the where-clause branch and the bind branch alongside the existing cases:
+
+```swift
+    func recentJudgeEvents(limit: Int, filter: JudgeEventFilter) throws -> [JudgeEvent] {
+        let whereClause: String
+        switch filter {
+        case .none:
+            whereClause = ""
+        case .fallback:
+            whereClause = "WHERE fallbackReason = ?"
+        case .shouldProvoke:
+            whereClause = "WHERE json_extract(verdictJSON, '$.should_provoke') = ?"
+        case .userState:
+            whereClause = "WHERE json_extract(verdictJSON, '$.user_state') = ?"
+        case .provocationKind:
+            whereClause = "WHERE json_extract(verdictJSON, '$.provocation_kind') = ?"
+        }
+        let stmt = try db.prepare("""
+            SELECT id, ts, nodeId, messageId, chatMode, provider,
+                   verdictJSON, fallbackReason, userFeedback, feedbackTs
+            FROM judge_events
+            \(whereClause)
+            ORDER BY ts DESC
+            LIMIT ?;
+        """)
+        switch filter {
+        case .none:
+            try stmt.bind(limit, at: 1)
+        case .fallback(let reason):
+            try stmt.bind(reason.rawValue, at: 1)
+            try stmt.bind(limit, at: 2)
+        case .shouldProvoke(let flag):
+            try stmt.bind(flag ? 1 : 0, at: 1)
+            try stmt.bind(limit, at: 2)
+        case .userState(let state):
+            try stmt.bind(state.rawValue, at: 1)
+            try stmt.bind(limit, at: 2)
+        case .provocationKind(let kind):
+            try stmt.bind(kind.rawValue, at: 1)
+            try stmt.bind(limit, at: 2)
+        }
+        var out: [JudgeEvent] = []
+        while try stmt.step() {
+            if let ev = judgeEventFrom(stmt) { out.append(ev) }
+        }
+        return out
+    }
+```
+
+- [ ] **Step 4: Run the new test**
+
+```bash
+xcodebuild test -project Nous.xcodeproj -scheme NousTests -destination 'platform=macOS' \
+  -only-testing:NousTests/JudgeEventsStoreTests/testRecentJudgeEventsFiltersByProvocationKind
+```
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add Sources/Nous/Services/NodeStore.swift Tests/NousTests/JudgeEventsStoreTests.swift
+git commit -m "feat(judge): filter judge_events by provocation_kind"
+```
+
+---
+
+## Task 5: Surface the new filter in `MemoryDebugInspector`
+
+**Files:**
+- Modify: `Sources/Nous/Views/MemoryDebugInspector.swift` (around lines 678–691)
+
+This is a UI-only change. No new test — the picker is exercised by hand from the debug menu, and the filter logic itself is covered by Task 4.
+
+- [ ] **Step 1: Add three picker entries**
+
+In `Sources/Nous/Views/MemoryDebugInspector.swift`, the existing `Picker("Filter", selection: $filter) { ... }` block (lines 681–688) lists six options today. Append three more so the contradiction/spark/neutral split is one click away during review:
+
+```swift
+                Picker("Filter", selection: $filter) {
+                    Text("All").tag(JudgeEventFilter.none)
+                    Text("Provoked").tag(JudgeEventFilter.shouldProvoke(true))
+                    Text("Not provoked").tag(JudgeEventFilter.shouldProvoke(false))
+                    Text("Contradiction").tag(JudgeEventFilter.provocationKind(.contradiction))
+                    Text("Spark").tag(JudgeEventFilter.provocationKind(.spark))
+                    Text("Neutral").tag(JudgeEventFilter.provocationKind(.neutral))
+                    Text("Failures").tag(JudgeEventFilter.fallback(.timeout))
+                    Text("Bad JSON").tag(JudgeEventFilter.fallback(.badJSON))
+                    Text("Scope breach").tag(JudgeEventFilter.fallback(.unknownEntryId))
+                }
+```
+
+- [ ] **Step 2: Build and confirm the inspector compiles**
+
+```bash
+xcodebuild -project Nous.xcodeproj -scheme Nous -destination 'platform=macOS' build
+```
+Expected: BUILD SUCCEEDED.
+
+- [ ] **Step 3: Manual smoke check (skip if dogfood time is short)**
+
+Open Nous, send a few messages until at least one judge event is produced, open the Memory Debug Inspector → Judge Events tab, switch the picker to "Contradiction" / "Spark" / "Neutral" in turn, and confirm the list filters as expected.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add Sources/Nous/Views/MemoryDebugInspector.swift
+git commit -m "feat(inspector): add provocation_kind filter to judge events tab"
+```
+
+---
+
+## Task 6: Reconcile spec ↔ code mismatch on `annotateContradictionCandidates`
+
+**Files:**
+- Modify: `docs/superpowers/specs/2026-04-18-memory-retrieval-vnext.md` (line 210)
+
+The spec currently claims:
+
+```
+preferred home: `UserMemoryService.annotateContradictionCandidates(pool: [CitableEntry], userMessage: String) -> Set<String>` (or an equivalent retrieval-layer helper) — returns the IDs of up to 3 entries flagged as contradiction candidates by relative ranking within the pool. Prompt builder consumes the set when emitting `[contradiction-candidate] id=<entry-id>` markers. Keeps annotation logic out of prompt formatting code.
+```
+
+The actual signature in `Sources/Nous/Services/UserMemoryService.swift:406-410` is:
+
+```swift
+func annotateContradictionCandidates(
+    currentMessage: String,
+    facts: [MemoryFactEntry],
+    maxCandidates: Int = 3
+) -> [AnnotatedContradictionFact]
+```
+
+…and `ChatViewModel` then derives the `Set<String>` of IDs at the call site (`Sources/Nous/ViewModels/ChatViewModel.swift:295-300`) for `citableEntryPool`. The wrapper return type (carrying `relevanceScore`) is the better shape because the inspector and future ask-back work both want the score, not just the IDs.
+
+- [ ] **Step 1: Replace the bullet on line 210 of the spec**
+
+Open `docs/superpowers/specs/2026-04-18-memory-retrieval-vnext.md` and replace the `- preferred home:` bullet under §Provocation Hooks > A with this exact text:
+
+```markdown
+- preferred home: `UserMemoryService.annotateContradictionCandidates(currentMessage: String, facts: [MemoryFactEntry], maxCandidates: Int = 3) -> [AnnotatedContradictionFact]`. Returns each in-pool fact wrapped with an `isContradictionCandidate` flag and a relative `relevanceScore` so the debug inspector and any future ask-back surface can both read scores back. The call site (today: `ChatViewModel`) collects flagged IDs into a `Set<String>` and feeds them to `citableEntryPool(...)` via `contradictionCandidateIds:`, which is what becomes the `[contradiction-candidate] id=<entry-id>` prompt marker. Keeps annotation ranking out of prompt formatting code.
+```
+
+- [ ] **Step 2: Verify the update**
+
+```bash
+grep -n "annotateContradictionCandidates" docs/superpowers/specs/2026-04-18-memory-retrieval-vnext.md
+```
+Expected: one line matching the new signature; no leftover `Set<String>` claim.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add docs/superpowers/specs/2026-04-18-memory-retrieval-vnext.md
+git commit -m "docs(spec): reconcile annotateContradictionCandidates signature with code"
+```
+
+---
+
+## Task 7: Final whole-suite check + push
+
+**Files:** none (verification only).
+
+- [ ] **Step 1: Run the full test suite**
+
+```bash
+xcodebuild test -project Nous.xcodeproj -scheme NousTests -destination 'platform=macOS'
+```
+Expected: every test passes. Pay particular attention to:
+
+- `JudgeVerdictProvocationKindTests` (Task 1)
+- `ProvocationKindDerivationTests` (Task 2)
+- `ProvocationOrchestrationTests` (Task 3 + regression coverage)
+- `JudgeEventsStoreTests` (Task 4)
+- `ContradictionRecallTests` and `MemoryFactStoreTests` (no changes — must still pass)
+
+- [ ] **Step 2: Run the build for the app target**
+
+```bash
+xcodebuild -project Nous.xcodeproj -scheme Nous -destination 'platform=macOS' build
+```
+Expected: BUILD SUCCEEDED. Confirms the inspector picker compiles in app context, not just test context.
+
+- [ ] **Step 3: Confirm `git status` is clean and stack is shippable**
+
+```bash
+git status
+git log --oneline alexko0421/proactive-surfacing..HEAD
+```
+Expected: 6 commits on top of `alexko0421/proactive-surfacing`, working tree clean.
+
+---
 
 ## Success Criteria
 
-Phase 1 is successful if it produces:
+This plan is complete when:
 
-- fewer missed contradiction opportunities in review
-- fewer wrong-memory contradiction attempts
-- lower thumbs-down rate on contradiction-oriented interjections
-- a judge pool that is easier to explain when reviewed by hand
+- `JudgeVerdict` carries `provocationKind: ProvocationKind` and decodes pre-existing `judge_events` rows safely as `.neutral`.
+- Every persisted `verdictJSON` blob from a new turn includes a `provocation_kind` key whose value is derived deterministically from the verdict + contradiction-candidate set.
+- The Memory Debug Inspector can filter judge events by Contradiction / Spark / Neutral with one picker change.
+- The spec section on `annotateContradictionCandidates` matches the signature actually in source.
+- All existing tests (governance, fact store, contradiction recall, orchestration, judge events) still pass.
 
 ## Do Not Expand
 
-If implementation starts drifting into any of the following, stop and open a follow-up plan instead:
+If implementation drifts into any of the following, stop and open a follow-up plan:
 
-- full retrieval reranker
-- entry-level vector index for all memory rows
-- broad memory taxonomy redesign
-- ask-back UX
-- local heuristics
+- Asking the LLM judge to emit `provocation_kind` in its output JSON (the whole point is keeping the judge contract small and the discriminator deterministic).
+- Adding a dedicated `provocationKind` SQLite column on `judge_events` (the blob comment at `NodeStore.swift:172-173` is a deliberate design choice — `json_extract` is enough).
+- Re-deriving `provocationKind` at read time (then old rows would lose their stamp when pool composition changes upstream).
+- Touching `ProvocationJudge.swift` prompt text — Phase 1 keeps the LLM contract unchanged.
+- Backfilling old `judge_events` rows. They decode as `.neutral`; that is correct because we cannot reconstruct the historical contradiction-candidate set after the fact.
