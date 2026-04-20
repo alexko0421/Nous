@@ -109,4 +109,64 @@ final class JudgeEventsStoreTests: XCTestCase {
         let events = telemetry.recentJudgeEvents(limit: 10, filter: .none)
         XCTAssertEqual(events.count, 2)
     }
+
+    func testRecentJudgeEventsFiltersByProvocationKind() throws {
+        let nodeId = UUID()
+        func encoded(_ kind: ProvocationKind, shouldProvoke: Bool, entryId: String?) -> String {
+            let v = JudgeVerdict(
+                tensionExists: shouldProvoke,
+                userState: shouldProvoke ? .deciding : .exploring,
+                shouldProvoke: shouldProvoke,
+                entryId: entryId,
+                reason: "fixture",
+                inferredMode: .strategist,
+                provocationKind: kind
+            )
+            let data = try! JSONEncoder().encode(v)
+            return String(data: data, encoding: .utf8)!
+        }
+
+        try store.appendJudgeEvent(JudgeEvent(
+            id: UUID(), ts: Date(timeIntervalSince1970: 10),
+            nodeId: nodeId, messageId: nil,
+            chatMode: .strategist, provider: .openai,
+            verdictJSON: encoded(.contradiction, shouldProvoke: true, entryId: "E1"),
+            fallbackReason: .ok, userFeedback: nil, feedbackTs: nil
+        ))
+        try store.appendJudgeEvent(JudgeEvent(
+            id: UUID(), ts: Date(timeIntervalSince1970: 20),
+            nodeId: nodeId, messageId: nil,
+            chatMode: .strategist, provider: .openai,
+            verdictJSON: encoded(.spark, shouldProvoke: true, entryId: "E2"),
+            fallbackReason: .ok, userFeedback: nil, feedbackTs: nil
+        ))
+        try store.appendJudgeEvent(JudgeEvent(
+            id: UUID(), ts: Date(timeIntervalSince1970: 30),
+            nodeId: nodeId, messageId: nil,
+            chatMode: .companion, provider: .openai,
+            verdictJSON: encoded(.neutral, shouldProvoke: false, entryId: nil),
+            fallbackReason: .ok, userFeedback: nil, feedbackTs: nil
+        ))
+
+        let contradictionOnly = try store.recentJudgeEvents(
+            limit: 50,
+            filter: .provocationKind(.contradiction)
+        )
+        XCTAssertEqual(contradictionOnly.count, 1)
+        XCTAssertTrue(contradictionOnly[0].verdictJSON.contains("\"provocation_kind\":\"contradiction\""))
+
+        let sparkOnly = try store.recentJudgeEvents(
+            limit: 50,
+            filter: .provocationKind(.spark)
+        )
+        XCTAssertEqual(sparkOnly.count, 1)
+        XCTAssertTrue(sparkOnly[0].verdictJSON.contains("\"provocation_kind\":\"spark\""))
+
+        let neutralOnly = try store.recentJudgeEvents(
+            limit: 50,
+            filter: .provocationKind(.neutral)
+        )
+        XCTAssertEqual(neutralOnly.count, 1)
+        XCTAssertTrue(neutralOnly[0].verdictJSON.contains("\"provocation_kind\":\"neutral\""))
+    }
 }

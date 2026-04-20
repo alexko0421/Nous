@@ -1119,6 +1119,7 @@ enum JudgeEventFilter: Equatable, Hashable {
     case fallback(JudgeFallbackReason)
     case shouldProvoke(Bool)
     case userState(UserState)
+    case provocationKind(ProvocationKind)
 }
 
 extension NodeStore {
@@ -1167,6 +1168,8 @@ extension NodeStore {
             whereClause = "WHERE json_extract(verdictJSON, '$.should_provoke') = ?"
         case .userState:
             whereClause = "WHERE json_extract(verdictJSON, '$.user_state') = ?"
+        case .provocationKind:
+            whereClause = "WHERE json_extract(verdictJSON, '$.provocation_kind') = ?"
         }
         let stmt = try db.prepare("""
             SELECT id, ts, nodeId, messageId, chatMode, provider,
@@ -1187,6 +1190,9 @@ extension NodeStore {
             try stmt.bind(limit, at: 2)
         case .userState(let state):
             try stmt.bind(state.rawValue, at: 1)
+            try stmt.bind(limit, at: 2)
+        case .provocationKind(let kind):
+            try stmt.bind(kind.rawValue, at: 1)
             try stmt.bind(limit, at: 2)
         }
         var out: [JudgeEvent] = []

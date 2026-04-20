@@ -440,6 +440,14 @@ final class ChatViewModel {
 
         // Step F: Append the judge_events row using effectiveMode.
         // BEFORE the main call so the row survives main-call failure.
+        // SINGLE stamp site for provocationKind — do not add another call to deriveProvocationKind.
+        if var v = verdictForLog {
+            v.provocationKind = ChatViewModel.deriveProvocationKind(
+                verdict: v,
+                contradictionCandidateIds: contradictionCandidateIds
+            )
+            verdictForLog = v
+        }
         let verdictJSONStr: String = {
             if let v = verdictForLog, let data = try? JSONEncoder().encode(v) {
                 return String(data: data, encoding: .utf8) ?? "{}"
@@ -804,6 +812,21 @@ final class ChatViewModel {
         guard activeQuickActionMode != nil else { return false }
         let userTurnCount = messages.lazy.filter { $0.role == .user }.count
         return userTurnCount <= 1
+    }
+
+    /// Static so it can be unit-tested without spinning up the full view model.
+    /// Stamped onto verdictJSON by the send flow before the verdict is encoded;
+    /// do not call from additional sites or persisted verdictJSON content
+    /// becomes non-deterministic.
+    static func deriveProvocationKind(
+        verdict: JudgeVerdict,
+        contradictionCandidateIds: Set<String>
+    ) -> ProvocationKind {
+        guard verdict.shouldProvoke else { return .neutral }
+        if let id = verdict.entryId, contradictionCandidateIds.contains(id) {
+            return .contradiction
+        }
+        return .spark
     }
 
     static func quickActionOpeningPrompt(for mode: QuickActionMode) -> String {
