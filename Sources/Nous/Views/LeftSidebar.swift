@@ -383,12 +383,8 @@ struct LeftSidebar: View {
     @ViewBuilder
     private func sidebarNodeRow(_ node: NousNode) -> some View {
         let isSelected = selectedNodeId == node.id
-        let emoji = TopicEmojiResolver.emoji(for: node)
 
         HStack(spacing: 10) {
-            Text(emoji)
-                .font(.system(size: 15))
-
             Text(node.title)
                 .font(.system(size: 11, weight: .medium, design: .rounded))
                 .foregroundColor(isSelected ? AppColor.colaOrange : AppColor.secondaryText)
@@ -397,7 +393,7 @@ struct LeftSidebar: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.leading, 6)
+        .padding(.leading, 10)
         .padding(.trailing, 8)
         .padding(.vertical, 5)
         .background(

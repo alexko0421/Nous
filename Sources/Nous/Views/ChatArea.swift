@@ -88,10 +88,16 @@ struct ChatArea: View {
                                 }
                             }
                             if vm.isGenerating && !vm.currentThinking.isEmpty && vm.currentResponse.isEmpty {
-                                ThinkingAccordion(
-                                    content: vm.currentThinking,
-                                    isStreaming: true
-                                )
+                                // HStack + trailing Spacer so the streaming pill left-aligns
+                                // like assistant MessageBubbles. Without this wrap, the outer
+                                // VStack centers the intrinsic-width pill.
+                                HStack {
+                                    ThinkingAccordion(
+                                        content: vm.currentThinking,
+                                        isStreaming: true
+                                    )
+                                    Spacer()
+                                }
                             }
                             if !vm.currentResponse.isEmpty {
                                 MessageBubble(
