@@ -194,7 +194,8 @@ final class ProvocationOrchestrationTests: XCTestCase {
             userState: .deciding,
             shouldProvoke: true,
             entryId: fact.id.uuidString,
-            reason: "pricing contradiction"
+            reason: "pricing contradiction",
+            inferredMode: .companion
         )
 
         viewModel.inputText = "Maybe we should compete on price this time."
