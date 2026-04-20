@@ -440,6 +440,7 @@ final class ChatViewModel {
 
         // Step F: Append the judge_events row using effectiveMode.
         // BEFORE the main call so the row survives main-call failure.
+        // SINGLE stamp site for provocationKind — do not add another call to deriveProvocationKind.
         if var v = verdictForLog {
             v.provocationKind = ChatViewModel.deriveProvocationKind(
                 verdict: v,
