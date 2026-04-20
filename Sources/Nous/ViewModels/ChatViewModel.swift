@@ -806,6 +806,20 @@ final class ChatViewModel {
         return userTurnCount <= 1
     }
 
+    /// Derives the review discriminator stamped onto verdictJSON. Pure function;
+    /// kept static so it is independently testable without spinning up the full
+    /// view model.
+    static func deriveProvocationKind(
+        verdict: JudgeVerdict,
+        contradictionCandidateIds: Set<String>
+    ) -> ProvocationKind {
+        guard verdict.shouldProvoke else { return .neutral }
+        if let id = verdict.entryId, contradictionCandidateIds.contains(id) {
+            return .contradiction
+        }
+        return .spark
+    }
+
     static func quickActionOpeningPrompt(for mode: QuickActionMode) -> String {
         """
         Alex just entered the \(mode.label) mode from the welcome screen.
