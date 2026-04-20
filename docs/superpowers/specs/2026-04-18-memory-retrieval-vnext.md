@@ -175,6 +175,8 @@ Suggested composition:
 - 4-6 vector-recall entries
 - 1-2 recency-seed entries
 
+**Graceful degradation:** Hard Recall returning 0 entries is the common case early on (before the user has accumulated `decision` / `boundary` history). When that happens, vector and recency expand to fill up to `citableEntryPool` capacity (15). Phase 1 must not ship a half-empty judge pool just because contradiction substrate is sparse.
+
 The goal is not maximum coverage. The goal is making sure the judge can see:
 
 - what Alex decided
@@ -205,7 +207,7 @@ Implementation shape:
 
 - keep pool construction and prompt-building separate
 - add a testable helper after pool construction and before judge prompt assembly
-- preferred home: `UserMemoryService.annotateContradictionCandidates(...)` (or an equivalent retrieval-layer helper), so contradiction annotation does not get buried inside prompt formatting code
+- preferred home: `UserMemoryService.annotateContradictionCandidates(pool: [CitableEntry], userMessage: String) -> Set<String>` (or an equivalent retrieval-layer helper) — returns the IDs of up to 3 entries flagged as contradiction candidates by relative ranking within the pool. Prompt builder consumes the set when emitting `[contradiction-candidate] id=<entry-id>` markers. Keeps annotation logic out of prompt formatting code.
 
 Example prompt hint:
 
