@@ -64,7 +64,7 @@ struct WelcomeView: View {
                         }
 
                         composerRow
-                        
+
                         HStack(spacing: 10) {
                             ForEach(quickActions, id: \.rawValue) { action in
                                 Button(action: {

@@ -1,0 +1,9 @@
+{
+  "name": "05-soft-tension-companion-quiet",
+  "user_message": "I'm considering adding a referral program to grow faster",
+  "previous_mode": "companion",
+  "citable_pool": [
+    { "id": "E1", "text": "Last month Alex was skeptical of growth-first tactics and said he wanted to focus on retention before acquisition.", "scope": "project" }
+  ],
+  "expected": { "should_provoke": false, "inferred_mode": "companion" }
+}

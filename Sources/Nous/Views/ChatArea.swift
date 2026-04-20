@@ -56,7 +56,27 @@ struct ChatArea: View {
                     ScrollView {
                         VStack(spacing: 24) {
                             ForEach(vm.messages) { msg in
-                                MessageBubble(text: msg.content, isUser: msg.role == .user)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    MessageBubble(text: msg.content, isUser: msg.role == .user)
+                                    if msg.role == .assistant,
+                                       let eventId = vm.judgeEventId(forMessageId: msg.id) {
+                                        HStack(spacing: 4) {
+                                            Button(action: { vm.recordFeedback(forMessageId: msg.id, feedback: .up) }) {
+                                                Image(systemName: "hand.thumbsup")
+                                                    .frame(width: 24, height: 24)
+                                                    .contentShape(Rectangle())
+                                            }.buttonStyle(.plain)
+                                            Button(action: { vm.recordFeedback(forMessageId: msg.id, feedback: .down) }) {
+                                                Image(systemName: "hand.thumbsdown")
+                                                    .frame(width: 24, height: 24)
+                                                    .contentShape(Rectangle())
+                                            }.buttonStyle(.plain)
+                                        }
+                                        .font(.footnote)
+                                        .foregroundStyle(AppColor.colaDarkText.opacity(0.5))
+                                        .help("Was this interjection useful? (event \(eventId.uuidString.prefix(8)))")
+                                    }
+                                }
                             }
                             if vm.isGenerating && !vm.currentResponse.isEmpty {
                                 MessageBubble(text: vm.currentResponse, isUser: false)

@@ -17,6 +17,7 @@ struct ContentView: View {
     @State private var localLLM = LocalLLMService()
     @State private var graphEngine: GraphEngine
     @State private var userMemoryService: UserMemoryService
+    @State private var governanceTelemetry: GovernanceTelemetryStore
     @State private var settingsVM: SettingsViewModel
     @State private var chatVM: ChatViewModel
     @State private var noteVM: NoteViewModel
@@ -48,7 +49,12 @@ struct ContentView: View {
         let llm = LocalLLMService()
         let ge = GraphEngine(nodeStore: ns, vectorStore: vs)
         let svm = SettingsViewModel(embeddingService: es, localLLM: llm, nodeStore: ns)
-        let ums = UserMemoryService(nodeStore: ns, llmServiceProvider: { svm.makeLLMService() })
+        let governanceTelemetry = GovernanceTelemetryStore(nodeStore: ns)
+        let ums = UserMemoryService(
+            nodeStore: ns,
+            llmServiceProvider: { svm.makeLLMService() },
+            governanceTelemetry: governanceTelemetry
+        )
         let scheduler = UserMemoryScheduler(service: ums)
 
         _nodeStore = State(initialValue: ns)
@@ -57,12 +63,16 @@ struct ContentView: View {
         _localLLM = State(initialValue: llm)
         _graphEngine = State(initialValue: ge)
         _userMemoryService = State(initialValue: ums)
+        _governanceTelemetry = State(initialValue: governanceTelemetry)
         _settingsVM = State(initialValue: svm)
         _chatVM = State(initialValue: ChatViewModel(
             nodeStore: ns, vectorStore: vs, embeddingService: es, graphEngine: ge,
             userMemoryService: ums,
             userMemoryScheduler: scheduler,
-            llmServiceProvider: { svm.makeLLMService() }
+            llmServiceProvider: { svm.makeLLMService() },
+            currentProviderProvider: { svm.selectedProvider },
+            judgeLLMServiceFactory: { svm.makeJudgeLLMService() },
+            governanceTelemetry: governanceTelemetry
         ))
         _noteVM = State(initialValue: NoteViewModel(nodeStore: ns, vectorStore: vs, embeddingService: es, graphEngine: ge))
         _galaxyVM = State(initialValue: GalaxyViewModel(nodeStore: ns, graphEngine: ge))
@@ -91,6 +101,7 @@ struct ContentView: View {
                     selectedNodeId: currentSidebarNodeId,
                     onNodeSelected: { node in navigateToNode(node) },
                     onNewChat: {
+                        chatVM.cancelInFlightJudge()
                         chatVM.currentNode = nil
                         chatVM.messages = []
                         chatVM.citations = []
@@ -114,7 +125,7 @@ struct ContentView: View {
                 case .galaxy:
                     GalaxyView(vm: galaxyVM, onNodeSelected: { node in navigateToNode(node) })
                 case .settings:
-                    SettingsView(vm: settingsVM)
+                    SettingsView(vm: settingsVM, userMemoryService: userMemoryService, telemetry: governanceTelemetry)
                 }
 
                 // Tab navigation is handled via sidebar icons (Galaxy, Project)

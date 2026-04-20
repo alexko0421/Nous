@@ -10,6 +10,8 @@ enum MemoryKind: String, Codable, CaseIterable {
     case identity
     case preference
     case constraint
+    case decision
+    case boundary
     case relationship
     case thread
     case temporaryContext = "temporary_context"

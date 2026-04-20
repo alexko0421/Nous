@@ -1,0 +1,9 @@
+{
+  "name": "02-venting-no-interject",
+  "user_message": "everything is falling apart today, nothing works, i'm exhausted",
+  "previous_mode": "companion",
+  "citable_pool": [
+    { "id": "E1", "text": "Alex has worried about burning out before and said he wants to build at a sustainable pace.", "scope": "global" }
+  ],
+  "expected": { "should_provoke": false, "user_state": "venting", "inferred_mode": "companion" }
+}
