@@ -17,6 +17,16 @@ enum JudgeFallbackReason: String, Codable {
     case judgeUnavailable = "judge_unavailable"  // judge LLM factory returned nil (missing API key, etc.)
 }
 
+/// Review discriminator stamped onto a verdict by `ChatViewModel` before it is
+/// persisted into `judge_events.verdictJSON`. Not emitted by the LLM judge —
+/// derived deterministically from `shouldProvoke` and whether the cited entry
+/// was a contradiction candidate this turn.
+enum ProvocationKind: String, Codable, CaseIterable {
+    case contradiction
+    case spark
+    case neutral
+}
+
 struct JudgeVerdict: Codable, Equatable {
     let tensionExists: Bool
     let userState: UserState
@@ -24,6 +34,25 @@ struct JudgeVerdict: Codable, Equatable {
     let entryId: String?
     let reason: String
     let inferredMode: ChatMode
+    var provocationKind: ProvocationKind
+
+    init(
+        tensionExists: Bool,
+        userState: UserState,
+        shouldProvoke: Bool,
+        entryId: String?,
+        reason: String,
+        inferredMode: ChatMode,
+        provocationKind: ProvocationKind = .neutral
+    ) {
+        self.tensionExists = tensionExists
+        self.userState = userState
+        self.shouldProvoke = shouldProvoke
+        self.entryId = entryId
+        self.reason = reason
+        self.inferredMode = inferredMode
+        self.provocationKind = provocationKind
+    }
 
     enum CodingKeys: String, CodingKey {
         case tensionExists = "tension_exists"
@@ -32,5 +61,17 @@ struct JudgeVerdict: Codable, Equatable {
         case entryId = "entry_id"
         case reason
         case inferredMode = "inferred_mode"
+        case provocationKind = "provocation_kind"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.tensionExists = try c.decode(Bool.self, forKey: .tensionExists)
+        self.userState = try c.decode(UserState.self, forKey: .userState)
+        self.shouldProvoke = try c.decode(Bool.self, forKey: .shouldProvoke)
+        self.entryId = try c.decodeIfPresent(String.self, forKey: .entryId)
+        self.reason = try c.decode(String.self, forKey: .reason)
+        self.inferredMode = try c.decode(ChatMode.self, forKey: .inferredMode)
+        self.provocationKind = try c.decodeIfPresent(ProvocationKind.self, forKey: .provocationKind) ?? .neutral
     }
 }
