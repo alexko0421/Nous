@@ -11,6 +11,8 @@ final class ChatViewModel {
     var inputText: String = ""
     var isGenerating: Bool = false
     var currentResponse: String = ""
+    var currentThinking: String = ""
+    var didHitBudgetExhaustion: Bool = false
     var citations: [SearchResult] = []
     var activeQuickActionMode: QuickActionMode?
     var activeChatMode: ChatMode? = nil
@@ -35,6 +37,8 @@ final class ChatViewModel {
     /// that still owns the slot clears it (see `inFlightJudgeTaskId` guard in `send()`).
     private var inFlightJudgeTask: Task<JudgeVerdict, Error>?
     private var inFlightJudgeTaskId: UUID?
+    private var inFlightResponseTask: Task<Void, Never>?
+    private var inFlightResponseTaskId: UUID?
     private let governanceTelemetry: GovernanceTelemetryStore
 
     // MARK: - Init
@@ -70,14 +74,23 @@ final class ChatViewModel {
     deinit {
         // VM teardown — make sure no judge task outlives us.
         inFlightJudgeTask?.cancel()
+        inFlightResponseTask?.cancel()
         inFlightJudgeTaskId = nil
+        inFlightResponseTaskId = nil
     }
 
     // MARK: - Conversation Management
 
     @MainActor
-    func startNewConversation(title: String = "New Conversation", projectId: UUID? = nil) {
-        cancelInFlightJudge()  // any in-flight judge belonged to the old conversation
+    func startNewConversation(
+        title: String = "New Conversation",
+        projectId: UUID? = nil,
+        cancelInFlightWork: Bool = true
+    ) {
+        if cancelInFlightWork {
+            cancelInFlightResponse(clearDraft: true)
+            cancelInFlightJudge()  // any in-flight judge belonged to the old conversation
+        }
         let node = NousNode(
             type: .conversation,
             title: title,
@@ -88,18 +101,25 @@ final class ChatViewModel {
         messages = []
         citations = []
         currentResponse = ""
+        currentThinking = ""
+        didHitBudgetExhaustion = false
         activeQuickActionMode = nil
         activeChatMode = nil  // brand-new chat has no prior judgment
         NotificationCenter.default.post(name: .nousNodesDidChange, object: nil)
     }
 
     @MainActor
-    func loadConversation(_ node: NousNode) {
-        cancelInFlightJudge()  // switching conversations invalidates any pending verdict
+    func loadConversation(_ node: NousNode, cancelInFlightWork: Bool = true) {
+        if cancelInFlightWork {
+            cancelInFlightResponse(clearDraft: true)
+            cancelInFlightJudge()  // switching conversations invalidates any pending verdict
+        }
         currentNode = node
         messages = (try? nodeStore.fetchMessages(nodeId: node.id)) ?? []
         citations = []
         currentResponse = ""
+        currentThinking = ""
+        didHitBudgetExhaustion = false
         activeQuickActionMode = nil
         activeChatMode = (try? nodeStore.latestChatMode(forNode: node.id)) ?? nil
     }
@@ -112,7 +132,22 @@ final class ChatViewModel {
     func beginQuickActionConversation(_ mode: QuickActionMode) async {
         guard !isGenerating else { return }
 
-        startNewConversation(title: mode.label, projectId: defaultProjectId)
+        let responseTaskId = UUID()
+        let responseTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.runQuickActionConversation(mode, responseTaskId: responseTaskId)
+        }
+        inFlightResponseTask = responseTask
+        inFlightResponseTaskId = responseTaskId
+        await responseTask.value
+        clearInFlightResponseTaskIfOwned(responseTaskId)
+    }
+
+    @MainActor
+    private func runQuickActionConversation(_ mode: QuickActionMode, responseTaskId: UUID) async {
+        guard isActiveResponseTask(responseTaskId) else { return }
+
+        startNewConversation(title: mode.label, projectId: defaultProjectId, cancelInFlightWork: false)
         activeQuickActionMode = mode
         inputText = ""
 
@@ -120,7 +155,11 @@ final class ChatViewModel {
 
         isGenerating = true
         currentResponse = ""
-        defer { isGenerating = false }
+        defer {
+            if isActiveResponseTask(responseTaskId) {
+                isGenerating = false
+            }
+        }
 
         var projectGoal: String? = nil
         if let projectId = node.projectId,
@@ -182,6 +221,7 @@ final class ChatViewModel {
         governanceTelemetry.recordPromptTrace(promptTrace)
 
         guard let llm = llmServiceProvider() else {
+            guard isActiveResponseTask(responseTaskId) else { return }
             let errorContent = "Please configure an LLM in Settings."
             let errorMessage = Message(nodeId: node.id, role: .assistant, content: errorContent)
             try? nodeStore.insertMessage(errorMessage)
@@ -191,6 +231,7 @@ final class ChatViewModel {
                 currentMode: activeQuickActionMode,
                 assistantContent: errorContent
             )
+            currentResponse = ""
             return
         }
 
@@ -205,12 +246,19 @@ final class ChatViewModel {
                 system: context
             )
             for try await chunk in stream {
+                try Task.checkCancellation()
+                guard isActiveResponseTask(responseTaskId) else { return }
                 currentResponse += chunk
             }
+            guard isActiveResponseTask(responseTaskId) else { return }
+        } catch is CancellationError {
+            return
         } catch {
+            guard isActiveResponseTask(responseTaskId) else { return }
             currentResponse = "Error: \(error.localizedDescription)"
         }
 
+        guard isActiveResponseTask(responseTaskId) else { return }
         let assistantContent = currentResponse
         let assistantMessage = Message(nodeId: node.id, role: .assistant, content: assistantContent)
         try? nodeStore.insertMessage(assistantMessage)
@@ -221,14 +269,30 @@ final class ChatViewModel {
             assistantContent: assistantContent
         )
         scheduleUserMemoryRefresh(for: node, messages: messages)
+        currentResponse = ""
     }
 
     // MARK: - Send (RAG Pipeline)
 
     @MainActor
     func send(attachments: [AttachedFileContext] = []) async {
+        guard (!inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty), !isGenerating else { return }
+
+        let responseTaskId = UUID()
+        let responseTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.runSend(attachments: attachments, responseTaskId: responseTaskId)
+        }
+        inFlightResponseTask = responseTask
+        inFlightResponseTaskId = responseTaskId
+        await responseTask.value
+        clearInFlightResponseTaskIfOwned(responseTaskId)
+    }
+
+    @MainActor
+    private func runSend(attachments: [AttachedFileContext], responseTaskId: UUID) async {
         let query = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard (!query.isEmpty || !attachments.isEmpty), !isGenerating else { return }
+        guard (!query.isEmpty || !attachments.isEmpty), isActiveResponseTask(responseTaskId) else { return }
 
         let attachmentNames = attachments.map(\.name)
         let promptQuery = query.isEmpty ? "Please review the attached files." : query
@@ -241,12 +305,16 @@ final class ChatViewModel {
         inputText = ""
         isGenerating = true
         currentResponse = ""
-        defer { isGenerating = false }
+        defer {
+            if isActiveResponseTask(responseTaskId) {
+                isGenerating = false
+            }
+        }
 
         // Step 1: Create conversation node if nil
         if currentNode == nil {
             let title = String(promptQuery.prefix(40))
-            startNewConversation(title: title, projectId: defaultProjectId)
+            startNewConversation(title: title, projectId: defaultProjectId, cancelInFlightWork: false)
         }
 
         guard let node = currentNode else { return }
@@ -258,6 +326,7 @@ final class ChatViewModel {
         persistConversationSnapshot(for: node.id, messages: messages)
 
         // Step 3: Embed query and search for citations
+        citations = []
         if embeddingService.isLoaded {
             if let queryEmbedding = try? embeddingService.embed(retrievalQuery) {
                 let results = (try? vectorStore.search(
@@ -372,6 +441,10 @@ final class ChatViewModel {
             fallbackReason = .judgeUnavailable
         }
 
+        // Guard after judge await: if the turn was canceled (chat switch, stop, new send)
+        // while we were waiting on the judge, bail before mutating any downstream state.
+        guard isActiveResponseTask(responseTaskId) else { return }
+
         // Step C: Decide the effective mode for this turn.
         let effectiveMode: ChatMode = inferredMode ?? (activeChatMode ?? .companion)
 
@@ -479,30 +552,73 @@ final class ChatViewModel {
 
         // Step 7: Get LLM from provider
         guard let llm = llmServiceProvider() else {
+            guard isActiveResponseTask(responseTaskId) else { return }
             let errorContent = "Please configure an LLM in Settings."
             let errorMessage = Message(nodeId: node.id, role: .assistant, content: errorContent)
             try? nodeStore.insertMessage(errorMessage)
             messages.append(errorMessage)
+            try? nodeStore.updateJudgeEventMessageId(eventId: eventId, messageId: errorMessage.id)
+            persistConversationSnapshot(for: node.id, messages: messages, shouldRefreshEmoji: true)
             activeQuickActionMode = ChatViewModel.updatedQuickActionMode(
                 currentMode: activeQuickActionMode,
                 assistantContent: errorContent
             )
+            currentResponse = ""
             return
         }
 
         // Step 8: Stream response
+        currentThinking = ""
+        didHitBudgetExhaustion = false
+        let streamingService: any LLMService = {
+            guard var gemini = llm as? GeminiLLMService else { return llm }
+            gemini.thinkingBudgetTokens = 2000
+            // @MainActor closures: the producer `await`s these, so writes land in
+            // parse order and are visible to the post-stream budget-exhaust check below.
+            gemini.onThinkingDelta = { [weak self] delta in
+                guard let self, self.isActiveResponseTask(responseTaskId) else { return }
+                self.currentThinking.append(delta)
+            }
+            gemini.onBudgetExhausted = { [weak self] in
+                guard let self, self.isActiveResponseTask(responseTaskId) else { return }
+                self.didHitBudgetExhaustion = true
+            }
+            return gemini
+        }()
         do {
-            let stream = try await llm.generate(messages: llmMessages, system: finalSystem)
+            let stream = try await streamingService.generate(messages: llmMessages, system: finalSystem)
+            // Guard after the generate() await: same window as the judge guard above.
+            guard isActiveResponseTask(responseTaskId) else { return }
             for try await chunk in stream {
+                try Task.checkCancellation()
+                guard isActiveResponseTask(responseTaskId) else { return }
                 currentResponse += chunk
             }
+            guard isActiveResponseTask(responseTaskId) else { return }
+        } catch is CancellationError {
+            return
         } catch {
+            guard isActiveResponseTask(responseTaskId) else { return }
             currentResponse = "Error: \(error.localizedDescription)"
         }
 
         // Step 9: Save assistant message
+        guard isActiveResponseTask(responseTaskId) else { return }
+        // Budget-exhausted path: Gemini burned the whole thinking budget on thoughts
+        // and emitted no user-facing text. Surface it as a real assistant message so
+        // Alex sees the turn failed and has an obvious retry path (type again). We
+        // persist it as a normal message so it roundtrips through reload.
+        if didHitBudgetExhaustion && currentResponse.isEmpty {
+            currentResponse = "(I ran out of thinking budget on that one. Try asking again, maybe a touch simpler.)"
+        }
         let assistantContent = currentResponse
-        let assistantMessage = Message(nodeId: node.id, role: .assistant, content: assistantContent)
+        let persistedThinking = currentThinking.isEmpty ? nil : currentThinking
+        let assistantMessage = Message(
+            nodeId: node.id,
+            role: .assistant,
+            content: assistantContent,
+            thinkingContent: persistedThinking
+        )
         try? nodeStore.insertMessage(assistantMessage)
         messages.append(assistantMessage)
 
@@ -514,6 +630,8 @@ final class ChatViewModel {
             assistantContent: assistantContent
         )
         scheduleUserMemoryRefresh(for: node, messages: messages)
+        currentResponse = ""
+        currentThinking = ""
 
         // Step 10: Async task — update node embedding + regenerate edges
         let nodeId = node.id
@@ -541,6 +659,37 @@ final class ChatViewModel {
         inFlightJudgeTask?.cancel()
         inFlightJudgeTask = nil
         inFlightJudgeTaskId = nil
+    }
+
+    @MainActor
+    func stopGenerating() {
+        cancelInFlightJudge()
+        cancelInFlightResponse(clearDraft: false)
+    }
+
+    @MainActor
+    private func cancelInFlightResponse(clearDraft: Bool) {
+        inFlightResponseTask?.cancel()
+        inFlightResponseTask = nil
+        inFlightResponseTaskId = nil
+        isGenerating = false
+        if clearDraft {
+            currentResponse = ""
+            currentThinking = ""
+            didHitBudgetExhaustion = false
+        }
+    }
+
+    @MainActor
+    private func isActiveResponseTask(_ taskId: UUID) -> Bool {
+        inFlightResponseTaskId == taskId
+    }
+
+    @MainActor
+    private func clearInFlightResponseTaskIfOwned(_ taskId: UUID) {
+        guard inFlightResponseTaskId == taskId else { return }
+        inFlightResponseTask = nil
+        inFlightResponseTaskId = nil
     }
 
     // MARK: - Focus Block
@@ -867,8 +1016,6 @@ final class ChatViewModel {
                     guard let self else { return }
                     let emoji = await resolveConversationEmoji(for: node, messages: messages)
                     guard var refreshedNode = try? nodeStore.fetchNode(id: nodeId) else { return }
-                    refreshedNode.content = transcript
-                    refreshedNode.updatedAt = Date()
                     refreshedNode.emoji = emoji
                     try? nodeStore.updateNode(refreshedNode)
                     let finalNode = refreshedNode
@@ -885,7 +1032,9 @@ final class ChatViewModel {
         }
 
         try? nodeStore.updateNode(node)
-        currentNode = node
+        if currentNode?.id == node.id {
+            currentNode = node
+        }
         NotificationCenter.default.post(name: .nousNodesDidChange, object: nil)
     }
 

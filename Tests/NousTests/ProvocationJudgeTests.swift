@@ -6,20 +6,45 @@ final class ProvocationJudgeTests: XCTestCase {
     // MARK: Fake LLM Service
 
     final class FakeLLMService: LLMService {
-        var output: String
-        var shouldThrow: Error?
-        var delay: TimeInterval = 0
-        var receivedSystem: String?
-        var receivedUserMessage: String?
+        private let lock = NSLock()
+        private var storedReceivedSystem: String?
+        private var storedReceivedUserMessage: String?
+        private var storedOutput: String
+        private var storedShouldThrow: Error?
+        private var storedDelay: TimeInterval = 0
 
-        init(output: String) { self.output = output }
+        var output: String {
+            get { lock.withLock { storedOutput } }
+            set { lock.withLock { storedOutput = newValue } }
+        }
+        var shouldThrow: Error? {
+            get { lock.withLock { storedShouldThrow } }
+            set { lock.withLock { storedShouldThrow = newValue } }
+        }
+        var delay: TimeInterval {
+            get { lock.withLock { storedDelay } }
+            set { lock.withLock { storedDelay = newValue } }
+        }
+        var receivedSystem: String? {
+            lock.withLock { storedReceivedSystem }
+        }
+        var receivedUserMessage: String? {
+            lock.withLock { storedReceivedUserMessage }
+        }
+
+        init(output: String) {
+            self.storedOutput = output
+        }
 
         func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
-            receivedSystem = system
-            receivedUserMessage = messages.last?.content
-            if let err = shouldThrow { throw err }
-            let output = self.output
-            let delay = self.delay
+            let snapshot = lock.withLock { () -> (String, String?, Error?, TimeInterval) in
+                storedReceivedSystem = system
+                storedReceivedUserMessage = messages.last?.content
+                return (storedOutput, storedReceivedUserMessage, storedShouldThrow, storedDelay)
+            }
+            if let err = snapshot.2 { throw err }
+            let output = snapshot.0
+            let delay = snapshot.3
             return AsyncThrowingStream { cont in
                 Task {
                     if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }

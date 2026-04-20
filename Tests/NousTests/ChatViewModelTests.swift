@@ -1,6 +1,34 @@
 import XCTest
 @testable import Nous
 
+final class SlowStreamingLLMService: LLMService {
+    private(set) var wasCancelled = false
+
+    func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            let producer = Task {
+                continuation.yield("first ")
+                do {
+                    try await Task.sleep(nanoseconds: 2_000_000_000)
+                    try Task.checkCancellation()
+                    continuation.yield("second")
+                    continuation.finish()
+                } catch is CancellationError {
+                    await MainActor.run {
+                        self.wasCancelled = true
+                    }
+                    continuation.finish(throwing: CancellationError())
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in
+                producer.cancel()
+            }
+        }
+    }
+}
+
 final class ChatViewModelTests: XCTestCase {
 
     func testChatModeDefaultsToNil() throws {
@@ -84,6 +112,128 @@ final class ChatViewModelTests: XCTestCase {
         await vm.beginQuickActionConversation(.direction)
 
         XCTAssertEqual(vm.currentNode?.projectId, project.id)
+    }
+
+    @MainActor
+    func testStopGeneratingCancelsMainResponseWithoutPersistingAssistant() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let slowLLM = SlowStreamingLLMService()
+
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { slowLLM },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil }
+        )
+
+        vm.inputText = "Help me think"
+        let sendTask = Task { await vm.send() }
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let nodeId = try XCTUnwrap(vm.currentNode?.id)
+        XCTAssertTrue(vm.isGenerating)
+
+        vm.stopGenerating()
+        await sendTask.value
+
+        let storedMessages = try nodeStore.fetchMessages(nodeId: nodeId)
+        XCTAssertTrue(slowLLM.wasCancelled)
+        XCTAssertFalse(vm.isGenerating)
+        XCTAssertTrue(storedMessages.contains { $0.role == .user })
+        XCTAssertFalse(storedMessages.contains { $0.role == .assistant })
+        XCTAssertFalse(vm.currentResponse.isEmpty)
+    }
+
+    @MainActor
+    func testLoadConversationCancelsMainResponseWithoutCrossChatLeak() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let slowLLM = SlowStreamingLLMService()
+
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { slowLLM },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil }
+        )
+
+        vm.inputText = "first"
+        let sendTask = Task { await vm.send() }
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let originalNodeId = try XCTUnwrap(vm.currentNode?.id)
+        let otherNode = NousNode(type: .conversation, title: "Other conversation")
+        try nodeStore.insertNode(otherNode)
+
+        vm.loadConversation(otherNode)
+        await sendTask.value
+
+        let originalMessages = try nodeStore.fetchMessages(nodeId: originalNodeId)
+        XCTAssertFalse(vm.isGenerating)
+        XCTAssertEqual(vm.currentNode?.id, otherNode.id)
+        XCTAssertTrue(vm.messages.isEmpty)
+        XCTAssertEqual(originalMessages.filter { $0.role == .assistant }.count, 0)
+        XCTAssertEqual(originalMessages.filter { $0.role == .user }.count, 1)
+    }
+
+    @MainActor
+    func testNoProviderErrorPersistsSnapshotAndJudgeEventMessageLink() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let suiteName = "ChatViewModelTests.no-provider.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let telemetry = GovernanceTelemetryStore(defaults: defaults, nodeStore: nodeStore)
+
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { nil },
+            currentProviderProvider: { .claude },
+            judgeLLMServiceFactory: { nil },
+            governanceTelemetry: telemetry
+        )
+
+        vm.inputText = "Need help"
+        await vm.send()
+
+        let nodeId = try XCTUnwrap(vm.currentNode?.id)
+        let assistantMessage = try XCTUnwrap(vm.messages.last)
+        let storedNode = try XCTUnwrap(nodeStore.fetchNode(id: nodeId))
+        let events = telemetry.recentJudgeEvents(limit: 5, filter: .none)
+
+        XCTAssertEqual(assistantMessage.role, .assistant)
+        XCTAssertEqual(assistantMessage.content, "Please configure an LLM in Settings.")
+        XCTAssertTrue(storedNode.content.contains(assistantMessage.content))
+        XCTAssertEqual(events.count, 1)
+        XCTAssertEqual(events.first?.messageId, assistantMessage.id)
     }
 
     func testGovernanceTelemetryRecordsPromptTraceWithoutSafetyMissWhenSafetyInvoked() throws {

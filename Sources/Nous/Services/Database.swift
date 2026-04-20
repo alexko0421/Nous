@@ -1,6 +1,8 @@
 import Foundation
 import SQLite3
 
+private let sqliteTransientDestructor = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
 // MARK: - Errors
 
 enum DatabaseError: Error, LocalizedError {
@@ -33,6 +35,7 @@ final class Database {
             let msg = db.flatMap { String(cString: sqlite3_errmsg($0)) } ?? "unknown error"
             throw DatabaseError.openFailed(msg)
         }
+        sqlite3_busy_timeout(db, 5_000)
         // Enable WAL mode for better concurrent read performance
         try exec("PRAGMA journal_mode=WAL;")
         // Enforce foreign key constraints
@@ -99,8 +102,16 @@ final class Statement {
     func bind(_ value: String?, at index: Int32) throws -> Statement {
         let rc: Int32
         if let value {
-            // SQLITE_TRANSIENT = -1 cast to sqlite3_destructor_type — SQLite copies the data
-            rc = sqlite3_bind_text(stmt, index, value, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            var utf8 = Array(value.utf8CString)
+            rc = utf8.withUnsafeMutableBufferPointer { buffer in
+                sqlite3_bind_text(
+                    stmt,
+                    index,
+                    buffer.baseAddress,
+                    Int32(buffer.count - 1),
+                    sqliteTransientDestructor
+                )
+            }
         } else {
             rc = sqlite3_bind_null(stmt, index)
         }
@@ -157,7 +168,7 @@ final class Statement {
         if let value {
             rc = value.withUnsafeBytes { ptr in
                 sqlite3_bind_blob(stmt, index, ptr.baseAddress, Int32(value.count),
-                                  unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+                                  sqliteTransientDestructor)
             }
         } else {
             rc = sqlite3_bind_null(stmt, index)
@@ -190,8 +201,12 @@ final class Statement {
     // MARK: - Reading columns
 
     func text(at column: Int32) -> String? {
-        guard let ptr = sqlite3_column_text(stmt, column) else { return nil }
-        return String(cString: ptr)
+        guard sqlite3_column_type(stmt, column) != SQLITE_NULL else { return nil }
+        let count = Int(sqlite3_column_bytes(stmt, column))
+        guard count > 0 else { return "" }
+        guard let ptr = sqlite3_column_text(stmt, column) else { return "" }
+        let buffer = UnsafeBufferPointer(start: ptr, count: count)
+        return String(decoding: buffer, as: UTF8.self)
     }
 
     func int(at column: Int32) -> Int {

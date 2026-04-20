@@ -22,6 +22,10 @@ struct ChatArea: View {
         ) && !vm.isGenerating
     }
 
+    private var canPrimaryAction: Bool {
+        vm.isGenerating || canSend
+    }
+
     private var activeClarificationCard: ClarificationCard? {
         if vm.isGenerating, !vm.currentResponse.isEmpty {
             return ClarificationCardParser.parse(vm.currentResponse).card
@@ -57,7 +61,12 @@ struct ChatArea: View {
                         VStack(spacing: 24) {
                             ForEach(vm.messages) { msg in
                                 VStack(alignment: .leading, spacing: 4) {
-                                    MessageBubble(text: msg.content, isUser: msg.role == .user)
+                                    MessageBubble(
+                                        text: msg.content,
+                                        thinkingContent: msg.thinkingContent,
+                                        isThinkingStreaming: false,
+                                        isUser: msg.role == .user
+                                    )
                                     if msg.role == .assistant,
                                        let eventId = vm.judgeEventId(forMessageId: msg.id) {
                                         HStack(spacing: 4) {
@@ -78,8 +87,19 @@ struct ChatArea: View {
                                     }
                                 }
                             }
-                            if vm.isGenerating && !vm.currentResponse.isEmpty {
-                                MessageBubble(text: vm.currentResponse, isUser: false)
+                            if vm.isGenerating && !vm.currentThinking.isEmpty && vm.currentResponse.isEmpty {
+                                ThinkingAccordion(
+                                    content: vm.currentThinking,
+                                    isStreaming: true
+                                )
+                            }
+                            if !vm.currentResponse.isEmpty {
+                                MessageBubble(
+                                    text: vm.currentResponse,
+                                    thinkingContent: vm.currentThinking.isEmpty ? nil : vm.currentThinking,
+                                    isThinkingStreaming: vm.isGenerating && !vm.currentThinking.isEmpty,
+                                    isUser: false
+                                )
                             }
                             if !vm.citations.isEmpty {
                                 RAGCitationView(citations: vm.citations, onTap: { _ in })
@@ -176,7 +196,7 @@ struct ChatArea: View {
                                 .shadow(color: .black.opacity(0.04), radius: 6, x: 0, y: 2)
                                 .onSubmit(sendCurrentInput)
 
-                            Button(action: sendCurrentInput) {
+                            Button(action: handlePrimaryAction) {
                                 Image(systemName: vm.isGenerating ? "stop.fill" : "arrow.up")
                                     .font(.system(size: 13, weight: .bold))
                                     .foregroundColor(.white)
@@ -186,16 +206,16 @@ struct ChatArea: View {
                             .background(
                                 NativeGlassPanel(
                                     cornerRadius: 17,
-                                    tintColor: canSend 
+                                    tintColor: canPrimaryAction
                                         ? NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.88)
                                         : NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.18)
                                 ) { EmptyView() }
                             )
                             .overlay(
                                 Circle()
-                                    .stroke(canSend ? Color.white.opacity(0.18) : AppColor.panelStroke, lineWidth: 1)
+                                    .stroke(canPrimaryAction ? Color.white.opacity(0.18) : AppColor.panelStroke, lineWidth: 1)
                             )
-                            .disabled(!canSend)
+                            .disabled(!canPrimaryAction)
                         }
                     }
                     .padding(.horizontal, 36)
@@ -288,6 +308,14 @@ struct ChatArea: View {
         Task { await vm.send(attachments: pendingAttachments) }
     }
 
+    private func handlePrimaryAction() {
+        if vm.isGenerating {
+            vm.stopGenerating()
+            return
+        }
+        sendCurrentInput()
+    }
+
     private func sendClarificationOption(_ option: String) {
         vm.inputText = option
         sendCurrentInput()
@@ -316,6 +344,8 @@ struct ChatArea: View {
 
 struct MessageBubble: View {
     let text: String
+    let thinkingContent: String?
+    let isThinkingStreaming: Bool
     let isUser: Bool
 
     var body: some View {
@@ -323,18 +353,23 @@ struct MessageBubble: View {
             ? ClarificationContent(displayText: text, card: nil, keepsQuickActionMode: false)
             : ClarificationCardParser.parse(text)
 
-        if !parsed.displayText.isEmpty {
-            HStack {
-                if isUser { Spacer() }
-                Text(parsed.displayText)
-                    .font(.system(size: 13, weight: .regular))
-                    .foregroundColor(AppColor.colaDarkText)
-                    .lineSpacing(4)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .background(isUser ? AppColor.colaBubble : AppColor.colaOrange.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                if !isUser { Spacer() }
+        VStack(alignment: .leading, spacing: 6) {
+            if let thinkingContent, !thinkingContent.isEmpty {
+                ThinkingAccordion(content: thinkingContent, isStreaming: isThinkingStreaming)
+            }
+            if !parsed.displayText.isEmpty {
+                HStack {
+                    if isUser { Spacer() }
+                    Text(parsed.displayText)
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundColor(AppColor.colaDarkText)
+                        .lineSpacing(4)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .background(isUser ? AppColor.colaBubble : AppColor.colaOrange.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                    if !isUser { Spacer() }
+                }
             }
         }
     }

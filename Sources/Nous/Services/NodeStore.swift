@@ -58,13 +58,20 @@ final class NodeStore {
 
         try db.exec("""
             CREATE TABLE IF NOT EXISTS messages (
-                id        TEXT PRIMARY KEY,
-                nodeId    TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-                role      TEXT NOT NULL,
-                content   TEXT NOT NULL,
-                timestamp REAL NOT NULL
+                id               TEXT PRIMARY KEY,
+                nodeId           TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+                role             TEXT NOT NULL,
+                content          TEXT NOT NULL,
+                timestamp        REAL NOT NULL,
+                thinking_content TEXT
             );
         """)
+
+        try ensureColumnExists(
+            table: "messages",
+            column: "thinking_content",
+            alterSQL: "ALTER TABLE messages ADD COLUMN thinking_content TEXT;"
+        )
 
         try db.exec("""
             CREATE TABLE IF NOT EXISTS edges (
@@ -268,9 +275,12 @@ final class NodeStore {
     }
 
     func deleteNode(id: UUID) throws {
-        let stmt = try db.prepare("DELETE FROM nodes WHERE id=?;")
-        try stmt.bind(id.uuidString, at: 1)
-        try stmt.step()
+        try inTransaction {
+            try deleteCanonicalMemory(scope: .conversation, scopeRefId: id)
+            let stmt = try db.prepare("DELETE FROM nodes WHERE id=?;")
+            try stmt.bind(id.uuidString, at: 1)
+            try stmt.step()
+        }
     }
 
     func fetchNode(id: UUID) throws -> NousNode? {
@@ -470,20 +480,21 @@ final class NodeStore {
 
     func insertMessage(_ message: Message) throws {
         let stmt = try db.prepare("""
-            INSERT INTO messages (id, nodeId, role, content, timestamp)
-            VALUES (?, ?, ?, ?, ?);
+            INSERT INTO messages (id, nodeId, role, content, timestamp, thinking_content)
+            VALUES (?, ?, ?, ?, ?, ?);
         """)
         try stmt.bind(message.id.uuidString, at: 1)
         try stmt.bind(message.nodeId.uuidString, at: 2)
         try stmt.bind(message.role.rawValue, at: 3)
         try stmt.bind(message.content, at: 4)
         try stmt.bind(message.timestamp.timeIntervalSince1970, at: 5)
+        try stmt.bind(message.thinkingContent, at: 6)
         try stmt.step()
     }
 
     func fetchMessages(nodeId: UUID) throws -> [Message] {
         let stmt = try db.prepare("""
-            SELECT id, nodeId, role, content, timestamp
+            SELECT id, nodeId, role, content, timestamp, thinking_content
             FROM messages WHERE nodeId=? ORDER BY timestamp ASC;
         """)
         try stmt.bind(nodeId.uuidString, at: 1)
@@ -494,7 +505,15 @@ final class NodeStore {
             let role = MessageRole(rawValue: stmt.text(at: 2) ?? "") ?? .user
             let content = stmt.text(at: 3) ?? ""
             let timestamp = Date(timeIntervalSince1970: stmt.double(at: 4))
-            results.append(Message(id: id, nodeId: nId, role: role, content: content, timestamp: timestamp))
+            let thinkingContent = stmt.text(at: 5)
+            results.append(Message(
+                id: id,
+                nodeId: nId,
+                role: role,
+                content: content,
+                timestamp: timestamp,
+                thinkingContent: thinkingContent
+            ))
         }
         return results
     }
@@ -942,6 +961,24 @@ final class NodeStore {
         return arr.compactMap { UUID(uuidString: $0) }
     }
 
+    private func deleteCanonicalMemory(scope: MemoryScope, scopeRefId: UUID) throws {
+        let deleteEntries = try db.prepare("""
+            DELETE FROM memory_entries
+            WHERE scope = ? AND scopeRefId = ?;
+        """)
+        try deleteEntries.bind(scope.rawValue, at: 1)
+        try deleteEntries.bind(scopeRefId.uuidString, at: 2)
+        try deleteEntries.step()
+
+        let deleteFactEntries = try db.prepare("""
+            DELETE FROM memory_fact_entries
+            WHERE scope = ? AND scopeRefId = ?;
+        """)
+        try deleteFactEntries.bind(scope.rawValue, at: 1)
+        try deleteFactEntries.bind(scopeRefId.uuidString, at: 2)
+        try deleteFactEntries.step()
+    }
+
     private func memoryEntryFrom(_ stmt: Statement) -> MemoryEntry? {
         guard let idText = stmt.text(at: 0), let id = UUID(uuidString: idText) else { return nil }
         guard let scopeText = stmt.text(at: 1), let scope = MemoryScope(rawValue: scopeText) else { return nil }
@@ -1038,9 +1075,12 @@ final class NodeStore {
     }
 
     func deleteProject(id: UUID) throws {
-        let stmt = try db.prepare("DELETE FROM projects WHERE id=?;")
-        try stmt.bind(id.uuidString, at: 1)
-        try stmt.step()
+        try inTransaction {
+            try deleteCanonicalMemory(scope: .project, scopeRefId: id)
+            let stmt = try db.prepare("DELETE FROM projects WHERE id=?;")
+            try stmt.bind(id.uuidString, at: 1)
+            try stmt.step()
+        }
     }
 
     private func projectFrom(_ stmt: Statement) -> Project {

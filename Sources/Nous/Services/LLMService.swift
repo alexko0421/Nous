@@ -43,7 +43,7 @@ struct ClaudeLLMService: LLMService {
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         return AsyncThrowingStream { continuation in
-            Task {
+            let producer = Task {
                 do {
                     let (bytes, response) = try await URLSession.shared.bytes(for: request)
                     guard let httpResponse = response as? HTTPURLResponse else {
@@ -74,9 +74,14 @@ struct ClaudeLLMService: LLMService {
                         continuation.yield(text)
                     }
                     continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish(throwing: CancellationError())
                 } catch {
                     continuation.finish(throwing: error)
                 }
+            }
+            continuation.onTermination = { _ in
+                producer.cancel()
             }
         }
     }
@@ -110,7 +115,7 @@ struct OpenAILLMService: LLMService {
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         return AsyncThrowingStream { continuation in
-            Task {
+            let producer = Task {
                 do {
                     let (bytes, response) = try await URLSession.shared.bytes(for: request)
                     guard let httpResponse = response as? HTTPURLResponse else {
@@ -139,9 +144,14 @@ struct OpenAILLMService: LLMService {
                         continuation.yield(text)
                     }
                     continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish(throwing: CancellationError())
                 } catch {
                     continuation.finish(throwing: error)
                 }
+            }
+            continuation.onTermination = { _ in
+                producer.cancel()
             }
         }
     }
@@ -149,9 +159,68 @@ struct OpenAILLMService: LLMService {
 
 // MARK: - Gemini API
 
+enum GeminiSSEEvent: Equatable {
+    case thoughtDelta(String)
+    case textDelta(String)
+    case budgetExhausted
+    case finish(reason: String)
+}
+
+struct GeminiSSEParseState {
+    var didYieldNonThoughtText: Bool = false
+    var didFireBudgetExhausted: Bool = false
+}
+
+enum GeminiSSEParser {
+    static func parseLine(_ line: String, state: inout GeminiSSEParseState) -> [GeminiSSEEvent] {
+        guard line.hasPrefix("data: ") else { return [] }
+        let data = String(line.dropFirst(6))
+        guard
+            let jsonData = data.data(using: .utf8),
+            let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+            let candidates = json["candidates"] as? [[String: Any]],
+            let first = candidates.first
+        else { return [] }
+
+        var events: [GeminiSSEEvent] = []
+
+        if let content = first["content"] as? [String: Any],
+           let parts = content["parts"] as? [[String: Any]] {
+            for part in parts {
+                guard let text = part["text"] as? String, !text.isEmpty else { continue }
+                if (part["thought"] as? Bool) == true {
+                    events.append(.thoughtDelta(text))
+                } else {
+                    state.didYieldNonThoughtText = true
+                    events.append(.textDelta(text))
+                }
+            }
+        }
+
+        if let finishReason = first["finishReason"] as? String {
+            if finishReason == "MAX_TOKENS"
+                && !state.didYieldNonThoughtText
+                && !state.didFireBudgetExhausted {
+                state.didFireBudgetExhausted = true
+                events.append(.budgetExhausted)
+            }
+            events.append(.finish(reason: finishReason))
+        }
+
+        return events
+    }
+}
+
 struct GeminiLLMService: LLMService {
     let apiKey: String
     var model: String = "gemini-2.5-flash"
+    var thinkingBudgetTokens: Int? = nil
+    // Callbacks are @MainActor so the producer task `await`s them. That serializes
+    // state updates with the SSE parse loop and guarantees the final budget-exhausted
+    // signal has landed on MainActor before `continuation.finish()` is called, so
+    // any consumer reading the flag after the stream ends sees the final value.
+    var onThinkingDelta: (@MainActor (String) -> Void)? = nil
+    var onBudgetExhausted: (@MainActor () -> Void)? = nil
 
     func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
         let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):streamGenerateContent?alt=sse&key=\(apiKey)")!
@@ -173,15 +242,25 @@ struct GeminiLLMService: LLMService {
                 "parts": [["text": system]]
             ]
         }
-        body["generationConfig"] = [
+        var generationConfig: [String: Any] = [
             "temperature": 0.7,
             "maxOutputTokens": 8192
         ]
+        if let thinkingBudgetTokens {
+            generationConfig["thinkingConfig"] = [
+                "includeThoughts": true,
+                "thinkingBudget": thinkingBudgetTokens
+            ]
+        }
+        body["generationConfig"] = generationConfig
 
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
+        let capturedOnThinkingDelta = onThinkingDelta
+        let capturedOnBudgetExhausted = onBudgetExhausted
+
         return AsyncThrowingStream { continuation in
-            Task {
+            let producer = Task {
                 do {
                     let (bytes, response) = try await URLSession.shared.bytes(for: request)
                     guard let httpResponse = response as? HTTPURLResponse else {
@@ -193,26 +272,31 @@ struct GeminiLLMService: LLMService {
                         return
                     }
 
+                    var state = GeminiSSEParseState()
                     for try await line in bytes.lines {
-                        guard line.hasPrefix("data: ") else { continue }
-                        let data = String(line.dropFirst(6))
-
-                        guard
-                            let jsonData = data.data(using: .utf8),
-                            let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
-                            let candidates = json["candidates"] as? [[String: Any]],
-                            let first = candidates.first,
-                            let content = first["content"] as? [String: Any],
-                            let parts = content["parts"] as? [[String: Any]],
-                            let text = parts.first?["text"] as? String
-                        else { continue }
-
-                        continuation.yield(text)
+                        let events = GeminiSSEParser.parseLine(line, state: &state)
+                        for event in events {
+                            switch event {
+                            case .thoughtDelta(let text):
+                                if let cb = capturedOnThinkingDelta { await cb(text) }
+                            case .textDelta(let text):
+                                continuation.yield(text)
+                            case .budgetExhausted:
+                                if let cb = capturedOnBudgetExhausted { await cb() }
+                            case .finish:
+                                break
+                            }
+                        }
                     }
                     continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish(throwing: CancellationError())
                 } catch {
                     continuation.finish(throwing: error)
                 }
+            }
+            continuation.onTermination = { _ in
+                producer.cancel()
             }
         }
     }

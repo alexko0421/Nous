@@ -6,14 +6,33 @@ final class ProvocationOrchestrationTests: XCTestCase {
 
     // A fake LLM service that returns a canned stream.
     final class CannedLLMService: LLMService {
-        var replyOutput: String = "ok"
-        var receivedSystems: [String?] = []
-        var receivedSystem: String? { receivedSystems.first(where: { $0?.contains("BEHAVIOR:") == true }) ?? receivedSystems.first ?? nil }
-        var nextError: Error?
+        private let lock = NSLock()
+        private var storedReceivedSystems: [String?] = []
+        private var storedReplyOutput: String = "ok"
+        private var storedNextError: Error?
+
+        var replyOutput: String {
+            get { lock.withLock { storedReplyOutput } }
+            set { lock.withLock { storedReplyOutput = newValue } }
+        }
+        var receivedSystems: [String?] {
+            lock.withLock { storedReceivedSystems }
+        }
+        var receivedSystem: String? {
+            let systems = receivedSystems
+            return systems.first(where: { $0?.contains("BEHAVIOR:") == true }) ?? systems.first ?? nil
+        }
+        var nextError: Error? {
+            get { lock.withLock { storedNextError } }
+            set { lock.withLock { storedNextError = newValue } }
+        }
         func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
-            receivedSystems.append(system)
-            if let err = nextError { throw err }
-            let out = replyOutput
+            let snapshot = lock.withLock { () -> (String, Error?) in
+                storedReceivedSystems.append(system)
+                return (storedReplyOutput, storedNextError)
+            }
+            if let err = snapshot.1 { throw err }
+            let out = snapshot.0
             return AsyncThrowingStream { cont in
                 cont.yield(out); cont.finish()
             }
