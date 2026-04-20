@@ -207,7 +207,7 @@ Implementation shape:
 
 - keep pool construction and prompt-building separate
 - add a testable helper after pool construction and before judge prompt assembly
-- preferred home: `UserMemoryService.annotateContradictionCandidates(pool: [CitableEntry], userMessage: String) -> Set<String>` (or an equivalent retrieval-layer helper) — returns the IDs of up to 3 entries flagged as contradiction candidates by relative ranking within the pool. Prompt builder consumes the set when emitting `[contradiction-candidate] id=<entry-id>` markers. Keeps annotation logic out of prompt formatting code.
+- preferred home: `UserMemoryService.annotateContradictionCandidates(currentMessage: String, facts: [MemoryFactEntry], maxCandidates: Int = 3) -> [AnnotatedContradictionFact]`. Returns each in-pool fact wrapped with an `isContradictionCandidate` flag and a relative `relevanceScore` so the debug inspector and any future ask-back surface can both read scores back. The call site (today: `ChatViewModel`) collects flagged IDs into a `Set<String>` and feeds them to `citableEntryPool(...)` via `contradictionCandidateIds:`, which is what becomes the `[contradiction-candidate] id=<entry-id>` prompt marker. Keeps annotation ranking out of prompt formatting code.
 
 Example prompt hint:
 
