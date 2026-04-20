@@ -113,15 +113,15 @@ final class JudgeEventsStoreTests: XCTestCase {
     func testRecentJudgeEventsFiltersByProvocationKind() throws {
         let nodeId = UUID()
         func encoded(_ kind: ProvocationKind, shouldProvoke: Bool, entryId: String?) -> String {
-            var v = JudgeVerdict(
+            let v = JudgeVerdict(
                 tensionExists: shouldProvoke,
                 userState: shouldProvoke ? .deciding : .exploring,
                 shouldProvoke: shouldProvoke,
                 entryId: entryId,
                 reason: "fixture",
-                inferredMode: .strategist
+                inferredMode: .strategist,
+                provocationKind: kind
             )
-            v.provocationKind = kind
             let data = try! JSONEncoder().encode(v)
             return String(data: data, encoding: .utf8)!
         }
@@ -160,5 +160,13 @@ final class JudgeEventsStoreTests: XCTestCase {
             filter: .provocationKind(.spark)
         )
         XCTAssertEqual(sparkOnly.count, 1)
+        XCTAssertTrue(sparkOnly[0].verdictJSON.contains("\"provocation_kind\":\"spark\""))
+
+        let neutralOnly = try store.recentJudgeEvents(
+            limit: 50,
+            filter: .provocationKind(.neutral)
+        )
+        XCTAssertEqual(neutralOnly.count, 1)
+        XCTAssertTrue(neutralOnly[0].verdictJSON.contains("\"provocation_kind\":\"neutral\""))
     }
 }
