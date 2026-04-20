@@ -680,7 +680,8 @@ final class UserMemoryServiceTests: XCTestCase {
         await scheduler.waitUntilIdle()
 
         let callCount = await capture.callCount()
-        XCTAssertEqual(callCount, 2, "both nodes must have been refreshed — scheduler over-serialised")
+        XCTAssertEqual(callCount, 4,
+                       "each node should run one summary call plus one fact-extraction call — scheduler over-serialised or skipped work")
 
         let n1InFlight = await scheduler.isInFlight(nodeId: n1.id)
         let n2InFlight = await scheduler.isInFlight(nodeId: n2.id)
@@ -782,6 +783,149 @@ final class UserMemoryServiceTests: XCTestCase {
         XCTAssertEqual(entry?.sourceNodeIds, [node.id])
     }
 
+    func testRefreshConversationExtractsContradictionFactsIntoSidecarTable() async throws {
+        let capture = PromptSequenceCapture()
+        let mock = QueueMockLLMService(
+            capture: capture,
+            replies: [
+                "- Alex is aligning retrieval work to contradiction recall",
+                """
+                [
+                  {"kind":"decision","content":"Do not turn this into a full retrieval rewrite.","confidence":0.91},
+                  {"kind":"boundary","content":"Do not auto-commit code without approval.","confidence":0.88},
+                  {"kind":"constraint","content":"Cash runway is tight.","confidence":0.77},
+                  {"kind":"identity","content":"Alex is a solo founder.","confidence":0.99}
+                ]
+                """
+            ]
+        )
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let node = NousNode(type: .conversation, title: "Fact extraction chat", content: "")
+        try store.insertNode(node)
+
+        let assistantTurn = "You should just rewrite the whole retrieval stack."
+        let userTurn = "No. Do not turn this into a full retrieval rewrite. Cash runway is tight, and do not auto-commit code without approval."
+        let messages: [Message] = [
+            Message(nodeId: node.id, role: .assistant, content: assistantTurn,
+                    timestamp: Date(timeIntervalSince1970: 1)),
+            Message(nodeId: node.id, role: .user, content: userTurn,
+                    timestamp: Date(timeIntervalSince1970: 2))
+        ]
+
+        await service.refreshConversation(nodeId: node.id, projectId: nil, messages: messages)
+
+        let facts = try store.fetchActiveMemoryFactEntries(
+            scope: .conversation,
+            scopeRefId: node.id,
+            kinds: [.decision, .boundary, .constraint]
+        ).sorted { $0.kind.rawValue < $1.kind.rawValue }
+
+        XCTAssertEqual(facts.count, 3, "only contradiction-oriented fact kinds should be persisted")
+        XCTAssertEqual(facts.map(\.kind), [.boundary, .constraint, .decision])
+        XCTAssertEqual(Set(facts.map(\.content)), Set([
+            "Do not turn this into a full retrieval rewrite.",
+            "Do not auto-commit code without approval.",
+            "Cash runway is tight."
+        ]))
+        XCTAssertTrue(facts.allSatisfy { $0.scope == .conversation && $0.scopeRefId == node.id })
+        XCTAssertTrue(facts.allSatisfy { $0.stability == .stable })
+        XCTAssertTrue(facts.allSatisfy { $0.sourceNodeIds == [node.id] })
+
+        let prompts = await capture.prompts()
+        XCTAssertEqual(prompts.count, 2, "conversation refresh should make one summary call and one fact-extraction call")
+        XCTAssertFalse(prompts[1].contains(assistantTurn),
+                       "fact extraction must keep using Alex-only evidence")
+        XCTAssertTrue(prompts[1].contains("ALEX ONLY"))
+        XCTAssertTrue(prompts[1].contains(userTurn))
+    }
+
+    func testRefreshConversationInvalidFactJSONFailsClosed() async throws {
+        let capture = PromptSequenceCapture()
+        let mock = QueueMockLLMService(
+            capture: capture,
+            replies: [
+                "- Alex is narrowing scope to contradiction substrate",
+                "```json\nnot actually valid json\n```"
+            ]
+        )
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let node = NousNode(type: .conversation, title: "Invalid fact JSON", content: "")
+        try store.insertNode(node)
+
+        let messages: [Message] = [
+            Message(nodeId: node.id, role: .user,
+                    content: "Keep this tight and contradiction-oriented.",
+                    timestamp: Date(timeIntervalSince1970: 1))
+        ]
+
+        await service.refreshConversation(nodeId: node.id, projectId: nil, messages: messages)
+
+        let entry = try store.fetchActiveMemoryEntry(scope: .conversation, scopeRefId: node.id)
+        XCTAssertEqual(entry?.content, "- Alex is narrowing scope to contradiction substrate",
+                       "canonical thread memory must still write even if fact extraction fails")
+        XCTAssertTrue(try store.fetchMemoryFactEntries().isEmpty,
+                      "invalid fact JSON must fail closed and leave sidecar facts untouched")
+    }
+
+    func testRefreshConversationSecondFactExtractionArchivesPriorActiveFacts() async throws {
+        let capture = PromptSequenceCapture()
+        let mock = QueueMockLLMService(
+            capture: capture,
+            replies: [
+                "- first thread summary",
+                """
+                [
+                  {"kind":"decision","content":"Do not compete on price.","confidence":0.80}
+                ]
+                """,
+                "- second thread summary",
+                """
+                [
+                  {"kind":"boundary","content":"Do not auto-commit code without approval.","confidence":0.92}
+                ]
+                """
+            ]
+        )
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let node = NousNode(type: .conversation, title: "Archive old facts", content: "")
+        try store.insertNode(node)
+
+        await service.refreshConversation(
+            nodeId: node.id,
+            projectId: nil,
+            messages: [
+                Message(nodeId: node.id, role: .user,
+                        content: "We should not compete on price.",
+                        timestamp: Date(timeIntervalSince1970: 1))
+            ]
+        )
+
+        await service.refreshConversation(
+            nodeId: node.id,
+            projectId: nil,
+            messages: [
+                Message(nodeId: node.id, role: .user,
+                        content: "Also, do not auto-commit code without approval.",
+                        timestamp: Date(timeIntervalSince1970: 2))
+            ]
+        )
+
+        let allFacts = try store.fetchMemoryFactEntries()
+            .filter { $0.scope == .conversation && $0.scopeRefId == node.id }
+        XCTAssertEqual(allFacts.count, 2, "history should keep old fact rows instead of mutating in place")
+
+        let active = allFacts.filter { $0.status == .active }
+        XCTAssertEqual(active.count, 1)
+        XCTAssertEqual(active.first?.kind, .boundary)
+
+        let archived = allFacts.filter { $0.status == .archived }
+        XCTAssertEqual(archived.count, 1)
+        XCTAssertEqual(archived.first?.kind, .decision)
+    }
+
     /// v2.2d: `refreshProject` aggregates child conversation ENTRIES (not the
     /// frozen v2.1 blobs) and writes the rollup ONLY to memory_entries. Seed
     /// a conversation entry so the aggregator has something to roll up.
@@ -820,6 +964,106 @@ final class UserMemoryServiceTests: XCTestCase {
         XCTAssertEqual(entry?.content, "- Project-level rollup line")
         XCTAssertEqual(entry?.stability, .stable)
         XCTAssertEqual(entry?.sourceNodeIds, [chat.id], "project rollup should keep source chat ids for evidence recall")
+    }
+
+    func testRefreshProjectRollsUpConversationFactsIntoProjectFacts() async throws {
+        let mock = MockLLMService(capture: PromptCapture(), reply: "- Project-level summary")
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let project = Project(title: "Project fact roll-up")
+        try store.insertProject(project)
+        let chatA = NousNode(type: .conversation, title: "chat-a", content: "", projectId: project.id)
+        let chatB = NousNode(type: .conversation, title: "chat-b", content: "", projectId: project.id)
+        try store.insertNode(chatA)
+        try store.insertNode(chatB)
+
+        try store.insertMemoryEntry(
+            MemoryEntry(
+                scope: .conversation,
+                scopeRefId: chatA.id,
+                kind: .thread,
+                stability: .temporary,
+                content: "- chat a summary",
+                sourceNodeIds: [chatA.id],
+                createdAt: Date(timeIntervalSince1970: 1),
+                updatedAt: Date(timeIntervalSince1970: 1),
+                lastConfirmedAt: Date(timeIntervalSince1970: 1)
+            )
+        )
+        try store.insertMemoryEntry(
+            MemoryEntry(
+                scope: .conversation,
+                scopeRefId: chatB.id,
+                kind: .thread,
+                stability: .temporary,
+                content: "- chat b summary",
+                sourceNodeIds: [chatB.id],
+                createdAt: Date(timeIntervalSince1970: 2),
+                updatedAt: Date(timeIntervalSince1970: 2),
+                lastConfirmedAt: Date(timeIntervalSince1970: 2)
+            )
+        )
+
+        try store.insertMemoryFactEntry(
+            MemoryFactEntry(
+                scope: .conversation,
+                scopeRefId: chatA.id,
+                kind: .decision,
+                content: "Do not compete on price.",
+                confidence: 0.6,
+                status: .active,
+                stability: .stable,
+                sourceNodeIds: [chatA.id],
+                createdAt: Date(timeIntervalSince1970: 10),
+                updatedAt: Date(timeIntervalSince1970: 10)
+            )
+        )
+        try store.insertMemoryFactEntry(
+            MemoryFactEntry(
+                scope: .conversation,
+                scopeRefId: chatB.id,
+                kind: .decision,
+                content: "Do not compete on price.",
+                confidence: 0.9,
+                status: .active,
+                stability: .stable,
+                sourceNodeIds: [chatB.id],
+                createdAt: Date(timeIntervalSince1970: 11),
+                updatedAt: Date(timeIntervalSince1970: 11)
+            )
+        )
+        try store.insertMemoryFactEntry(
+            MemoryFactEntry(
+                scope: .conversation,
+                scopeRefId: chatB.id,
+                kind: .boundary,
+                content: "Do not auto-commit code without approval.",
+                confidence: 0.8,
+                status: .active,
+                stability: .stable,
+                sourceNodeIds: [chatB.id],
+                createdAt: Date(timeIntervalSince1970: 12),
+                updatedAt: Date(timeIntervalSince1970: 12)
+            )
+        )
+
+        await service.refreshProject(projectId: project.id)
+
+        let projectFacts = try store.fetchActiveMemoryFactEntries(
+            scope: .project,
+            scopeRefId: project.id,
+            kinds: [.decision, .boundary, .constraint]
+        )
+        XCTAssertEqual(projectFacts.count, 2, "project roll-up should dedupe identical conversation facts")
+
+        let decision = try XCTUnwrap(projectFacts.first(where: { $0.kind == .decision }))
+        XCTAssertEqual(decision.content, "Do not compete on price.")
+        XCTAssertEqual(decision.confidence, 0.9, accuracy: 0.0001)
+        XCTAssertEqual(Set(decision.sourceNodeIds), Set([chatA.id, chatB.id]))
+
+        let boundary = try XCTUnwrap(projectFacts.first(where: { $0.kind == .boundary }))
+        XCTAssertEqual(boundary.content, "Do not auto-commit code without approval.")
+        XCTAssertEqual(boundary.sourceNodeIds, [chatB.id])
     }
 
     /// v2.2b supersede invariant: a second refresh marks the first active
@@ -1201,6 +1445,13 @@ private actor PromptCapture {
     func prompt() -> String? { captured }
 }
 
+private actor PromptSequenceCapture {
+    private var captured: [String] = []
+
+    func record(_ prompt: String) { captured.append(prompt) }
+    func prompts() -> [String] { captured }
+}
+
 private struct MockLLMService: LLMService {
     let capture: PromptCapture
     let reply: String
@@ -1215,6 +1466,43 @@ private struct MockLLMService: LLMService {
         await capture.record(userPrompt)
 
         let reply = self.reply
+        return AsyncThrowingStream { continuation in
+            continuation.yield(reply)
+            continuation.finish()
+        }
+    }
+}
+
+private actor ReplyQueue {
+    private var replies: [String]
+
+    init(replies: [String]) {
+        self.replies = replies
+    }
+
+    func next() -> String {
+        guard !replies.isEmpty else { return "" }
+        return replies.removeFirst()
+    }
+}
+
+private struct QueueMockLLMService: LLMService {
+    let capture: PromptSequenceCapture
+    let replies: ReplyQueue
+
+    init(capture: PromptSequenceCapture, replies: [String]) {
+        self.capture = capture
+        self.replies = ReplyQueue(replies: replies)
+    }
+
+    func generate(
+        messages: [LLMMessage],
+        system: String?
+    ) async throws -> AsyncThrowingStream<String, Error> {
+        let userPrompt = messages.first(where: { $0.role == "user" })?.content ?? ""
+        await capture.record(userPrompt)
+
+        let reply = await replies.next()
         return AsyncThrowingStream { continuation in
             continuation.yield(reply)
             continuation.finish()

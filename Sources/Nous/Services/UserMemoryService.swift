@@ -20,10 +20,17 @@ final class UserMemoryService {
     static let conversationBudget = 200
     static let evidenceSnippetBudget = 180
     static let userModelFacetLimit = 3
+    static let contradictionFactKinds: [MemoryKind] = [.decision, .boundary, .constraint]
 
     private let nodeStore: NodeStore
     private let llmServiceProvider: () -> (any LLMService)?
     private let governanceTelemetry: GovernanceTelemetryStore?
+
+    struct AnnotatedContradictionFact: Equatable {
+        let fact: MemoryFactEntry
+        let isContradictionCandidate: Bool
+        let relevanceScore: Double
+    }
 
     init(
         nodeStore: NodeStore,
@@ -367,6 +374,72 @@ final class UserMemoryService {
         return count >= threshold
     }
 
+    /// Returns active contradiction-oriented facts that are currently in scope
+    /// for this conversation. Scope priority is conversation -> project ->
+    /// global so narrower facts win if identical content exists at multiple
+    /// scopes. `temporary` stability is not filtered out in Phase 1.
+    func contradictionRecallFacts(projectId: UUID?, conversationId: UUID) throws -> [MemoryFactEntry] {
+        var facts: [MemoryFactEntry] = []
+        facts.append(contentsOf: try nodeStore.fetchActiveMemoryFactEntries(
+            scope: .conversation,
+            scopeRefId: conversationId,
+            kinds: Self.contradictionFactKinds
+        ))
+        if let projectId {
+            facts.append(contentsOf: try nodeStore.fetchActiveMemoryFactEntries(
+                scope: .project,
+                scopeRefId: projectId,
+                kinds: Self.contradictionFactKinds
+            ))
+        }
+        facts.append(contentsOf: try nodeStore.fetchActiveMemoryFactEntries(
+            scope: .global,
+            scopeRefId: nil,
+            kinds: Self.contradictionFactKinds
+        ))
+        return Self.dedupedFactEntries(facts)
+    }
+
+    /// Marks the top in-pool contradiction candidates for a future judge
+    /// prompt. Uses relative ranking only; if nothing has any lexical overlap
+    /// with the current message, nothing is marked.
+    func annotateContradictionCandidates(
+        currentMessage: String,
+        facts: [MemoryFactEntry],
+        maxCandidates: Int = 3
+    ) -> [AnnotatedContradictionFact] {
+        guard maxCandidates > 0, !facts.isEmpty else {
+            return facts.map {
+                AnnotatedContradictionFact(fact: $0, isContradictionCandidate: false, relevanceScore: 0)
+            }
+        }
+
+        let scored: [(index: Int, score: Double)] = facts.enumerated().map { offset, fact in
+            (index: offset, score: Self.tokenJaccard(currentMessage, fact.content))
+        }
+
+        let candidateIndexes = Set(
+            scored
+                .filter { $0.score > 0 }
+                .sorted { lhs, rhs in
+                    if lhs.score == rhs.score {
+                        return facts[lhs.index].updatedAt > facts[rhs.index].updatedAt
+                    }
+                    return lhs.score > rhs.score
+                }
+                .prefix(maxCandidates)
+                .map(\.index)
+        )
+
+        return facts.enumerated().map { offset, fact in
+            AnnotatedContradictionFact(
+                fact: fact,
+                isContradictionCandidate: candidateIndexes.contains(offset),
+                relevanceScore: scored[offset].score
+            )
+        }
+    }
+
     // MARK: - Write
 
     /// Called after each completed send. Summarises **only** Alex's user-role
@@ -459,6 +532,11 @@ final class UserMemoryService {
                 sourceNodeIds: [nodeId],
                 now: now
             )
+            await refreshConversationFacts(
+                nodeId: nodeId,
+                userTurns: userTurns,
+                now: now
+            )
             if let projectId = projectId {
                 Self.logPersistenceErrors("incrementProjectRefreshCounter") {
                     try nodeStore.incrementProjectRefreshCounter(projectId: projectId)
@@ -546,6 +624,7 @@ final class UserMemoryService {
                 sourceNodeIds: projectSourceNodeIds,
                 now: now
             )
+            refreshProjectFacts(projectId: projectId, nodes: nodes, now: now)
             Self.logPersistenceErrors("resetProjectRefreshCounter") {
                 try nodeStore.resetProjectRefreshCounter(projectId: projectId)
             }
@@ -919,6 +998,159 @@ final class UserMemoryService {
         return ids.filter { seen.insert($0).inserted }
     }
 
+    private struct ExtractedFactPayload: Decodable {
+        let kind: String
+        let content: String
+        let confidence: Double?
+    }
+
+    private struct ExtractedFactEnvelope: Decodable {
+        let facts: [ExtractedFactPayload]
+    }
+
+    private func refreshConversationFacts(
+        nodeId: UUID,
+        userTurns: String,
+        now: Date
+    ) async {
+        guard let llm = llmServiceProvider() else { return }
+
+        let existingBlock = activeFactBlock(scope: .conversation, scopeRefId: nodeId)
+        let prompt = """
+        Existing contradiction-oriented facts for this chat:
+        \(existingBlock)
+
+        Recent things Alex said (ALEX ONLY — Nous's replies are intentionally omitted to avoid self-confirmation loops):
+        \(userTurns)
+
+        Return a JSON array of the currently active contradiction-oriented facts for this chat.
+        Each item must be:
+        {"kind":"decision|boundary|constraint","content":"...","confidence":0.0-1.0}
+
+        Rules:
+        - decision = an explicit choice Alex made
+        - boundary = a red line, do-not-cross rule, or operating principle
+        - constraint = a real limitation or non-negotiable condition
+        - Only keep facts Alex himself said or clearly implied
+        - Only keep facts that still seem active for this chat
+        - If there are none, return []
+        - JSON only. No Markdown, no commentary
+        """
+
+        do {
+            let stream = try await llm.generate(
+                messages: [LLMMessage(role: "user", content: prompt)],
+                system: """
+                You extract contradiction-oriented memory facts for Nous.
+                Allowed kinds: decision, boundary, constraint.
+                Never emit identity, preference, relationship, or thread summaries.
+                Return strict JSON only.
+                """
+            )
+
+            var raw = ""
+            for try await chunk in stream {
+                if Task.isCancelled { return }
+                raw += chunk
+            }
+
+            if Task.isCancelled { return }
+
+            let facts = try Self.decodeFactPayloads(raw).map {
+                MemoryFactEntry(
+                    scope: .conversation,
+                    scopeRefId: nodeId,
+                    kind: $0.kind,
+                    content: $0.content,
+                    confidence: $0.confidence,
+                    status: .active,
+                    stability: .stable,
+                    sourceNodeIds: [nodeId],
+                    createdAt: now,
+                    updatedAt: now
+                )
+            }
+            replaceActiveFacts(
+                scope: .conversation,
+                scopeRefId: nodeId,
+                with: facts,
+                now: now
+            )
+        } catch {
+            return
+        }
+    }
+
+    private func refreshProjectFacts(
+        projectId: UUID,
+        nodes: [NousNode],
+        now: Date
+    ) {
+        var conversationFacts: [MemoryFactEntry] = []
+        for node in nodes where node.type == .conversation {
+            guard let facts = try? nodeStore.fetchActiveMemoryFactEntries(
+                scope: .conversation,
+                scopeRefId: node.id,
+                kinds: Self.contradictionFactKinds
+            ) else {
+                continue
+            }
+            conversationFacts.append(contentsOf: facts)
+        }
+
+        let projectFacts = Self.rollUpProjectFacts(
+            projectId: projectId,
+            conversationFacts: conversationFacts,
+            now: now
+        )
+        replaceActiveFacts(
+            scope: .project,
+            scopeRefId: projectId,
+            with: projectFacts,
+            now: now
+        )
+    }
+
+    private func replaceActiveFacts(
+        scope: MemoryScope,
+        scopeRefId: UUID?,
+        with entries: [MemoryFactEntry],
+        now: Date
+    ) {
+        Self.logPersistenceErrors("replaceActiveFacts(\(scope.rawValue))") {
+            try nodeStore.inTransaction {
+                let existing = try nodeStore.fetchActiveMemoryFactEntries(
+                    scope: scope,
+                    scopeRefId: scopeRefId,
+                    kinds: Self.contradictionFactKinds
+                )
+                for var fact in existing {
+                    fact.status = .archived
+                    fact.updatedAt = now
+                    try nodeStore.updateMemoryFactEntry(fact)
+                }
+                for entry in Self.dedupedFactEntries(entries) {
+                    try nodeStore.insertMemoryFactEntry(entry)
+                }
+            }
+        }
+    }
+
+    private func activeFactBlock(scope: MemoryScope, scopeRefId: UUID?) -> String {
+        guard let facts = try? nodeStore.fetchActiveMemoryFactEntries(
+            scope: scope,
+            scopeRefId: scopeRefId,
+            kinds: Self.contradictionFactKinds
+        ), !facts.isEmpty else {
+            return "[]"
+        }
+
+        let lines = facts.map { fact in
+            "- [\(fact.kind.rawValue)] \(fact.content) (confidence: \(String(format: "%.2f", fact.confidence)))"
+        }
+        return lines.joined(separator: "\n")
+    }
+
     // MARK: - Helpers
 
     /// Removes markdown blockquote lines (`> …` or `>> …`) from content.
@@ -1015,42 +1247,172 @@ final class UserMemoryService {
             .filter { !$0.isEmpty }
             .joined(separator: " ")
     }
+
+    private static func decodeFactPayloads(_ raw: String) throws -> [(kind: MemoryKind, content: String, confidence: Double)] {
+        let decoder = JSONDecoder()
+        let cleaned = stripJSONCodeFence(raw)
+        guard let data = cleaned.data(using: .utf8) else {
+            throw LLMError.invalidResponse
+        }
+
+        let payloads: [ExtractedFactPayload]
+        if let direct = try? decoder.decode([ExtractedFactPayload].self, from: data) {
+            payloads = direct
+        } else if let wrapped = try? decoder.decode(ExtractedFactEnvelope.self, from: data) {
+            payloads = wrapped.facts
+        } else {
+            throw LLMError.invalidResponse
+        }
+
+        return payloads.compactMap { payload in
+            guard let kind = contradictionFactKind(from: payload.kind) else { return nil }
+            let content = payload.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !content.isEmpty else { return nil }
+            return (
+                kind: kind,
+                content: content,
+                confidence: clampConfidence(payload.confidence ?? 0.8)
+            )
+        }
+    }
+
+    private static func contradictionFactKind(from raw: String) -> MemoryKind? {
+        guard let kind = MemoryKind(rawValue: raw.lowercased()) else { return nil }
+        guard contradictionFactKinds.contains(kind) else { return nil }
+        return kind
+    }
+
+    private static func clampConfidence(_ value: Double) -> Double {
+        min(max(value, 0.0), 1.0)
+    }
+
+    private static func stripJSONCodeFence(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("```") else { return trimmed }
+
+        var lines = trimmed.components(separatedBy: .newlines)
+        guard lines.count >= 2 else { return trimmed }
+        lines.removeFirst()
+        if lines.last?.trimmingCharacters(in: .whitespacesAndNewlines) == "```" {
+            lines.removeLast()
+        }
+        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func rollUpProjectFacts(
+        projectId: UUID,
+        conversationFacts: [MemoryFactEntry],
+        now: Date
+    ) -> [MemoryFactEntry] {
+        var merged: [String: MemoryFactEntry] = [:]
+        var order: [String] = []
+
+        for fact in conversationFacts where contradictionFactKinds.contains(fact.kind) {
+            let key = factKey(kind: fact.kind, content: fact.content)
+            if var existing = merged[key] {
+                existing.confidence = max(existing.confidence, fact.confidence)
+                existing.sourceNodeIds = Array(Set(existing.sourceNodeIds).union(fact.sourceNodeIds))
+                existing.updatedAt = now
+                merged[key] = existing
+                continue
+            }
+
+            merged[key] = MemoryFactEntry(
+                scope: .project,
+                scopeRefId: projectId,
+                kind: fact.kind,
+                content: fact.content,
+                confidence: fact.confidence,
+                status: .active,
+                stability: .stable,
+                sourceNodeIds: fact.sourceNodeIds,
+                createdAt: now,
+                updatedAt: now
+            )
+            order.append(key)
+        }
+
+        return order.compactMap { merged[$0] }
+    }
+
+    private static func dedupedFactEntries(_ entries: [MemoryFactEntry]) -> [MemoryFactEntry] {
+        var merged: [String: MemoryFactEntry] = [:]
+        var order: [String] = []
+
+        for entry in entries where contradictionFactKinds.contains(entry.kind) {
+            let key = factKey(kind: entry.kind, content: entry.content)
+            if var existing = merged[key] {
+                existing.confidence = max(existing.confidence, entry.confidence)
+                existing.sourceNodeIds = Array(Set(existing.sourceNodeIds).union(entry.sourceNodeIds))
+                existing.updatedAt = max(existing.updatedAt, entry.updatedAt)
+                merged[key] = existing
+                continue
+            }
+            merged[key] = entry
+            order.append(key)
+        }
+
+        return order.compactMap { merged[$0] }
+    }
+
+    private static func factKey(kind: MemoryKind, content: String) -> String {
+        let normalized = content
+            .lowercased()
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+        return "\(kind.rawValue)|\(normalized)"
+    }
 }
 
 extension UserMemoryService {
 
-    /// Returns the entries the judge may cite this turn. Built by node-hit bridging:
-    /// for each node the main retrieval flagged relevant, collect the memory_entries
-    /// whose sourceNodeIds reference that node, deduplicate, then backfill with per-scope
-    /// recency seeds so the pool isn't blind to recent entries that happen not to
-    /// embed-match this turn. Scope-boundary invariant is enforced here.
-    ///
-    /// v1 does NOT run its own retrieval — `nodeHits` comes from the caller (ChatViewModel),
-    /// which already ran `VectorStore.search(...)` for `citations`.
+    /// Returns the entries the judge may cite this turn. Phase 1 prepends
+    /// contradiction-oriented hard-recall facts, then falls back to the existing
+    /// node-hit bridging + recency seed path for raw `memory_entries`.
     func citableEntryPool(
         projectId: UUID?,
         conversationId: UUID,
         nodeHits: [UUID],
+        hardRecallFacts: [MemoryFactEntry] = [],
+        contradictionCandidateIds: Set<String> = [],
         capacity: Int = 15,
         recencySeedPerScope: Int = 3
     ) throws -> [CitableEntry] {
-        var seen = Set<UUID>()
+        var seen = Set<String>()
         var out: [CitableEntry] = []
 
+        func admit(_ entry: CitableEntry) {
+            guard out.count < capacity else { return }
+            guard seen.insert(entry.id).inserted else { return }
+            out.append(entry)
+        }
+
         func admit(_ entry: MemoryEntry) {
-            guard !seen.contains(entry.id) else { return }
             guard isInScope(entry, projectId: projectId, conversationId: conversationId) else { return }
-            seen.insert(entry.id)
-            out.append(CitableEntry(
+            admit(CitableEntry(
                 id: entry.id.uuidString,
                 text: entry.content,
-                scope: entry.scope
+                scope: entry.scope,
+                kind: entry.kind
             ))
         }
 
-        // Pass 1 — node-hit bridging (highest priority, first into the cap).
-        for hit in nodeHits {
-            guard out.count < capacity else { break }
+        func admit(_ fact: MemoryFactEntry) {
+            guard isInScope(fact, projectId: projectId, conversationId: conversationId) else { return }
+            admit(CitableEntry(
+                id: fact.id.uuidString,
+                text: fact.content,
+                scope: fact.scope,
+                kind: fact.kind,
+                promptAnnotation: contradictionCandidateIds.contains(fact.id.uuidString) ? "contradiction-candidate" : nil
+            ))
+        }
+
+        // Pass 1 — hard recall facts the judge must always see if they are in scope.
+        hardRecallFacts.forEach(admit)
+
+        // Pass 2 — node-hit bridging from the main vector retrieval.
+        for hit in nodeHits where out.count < capacity {
             let bridged = (try? nodeStore.fetchMemoryEntries(withSourceNodeId: hit)) ?? []
             for entry in bridged {
                 admit(entry)
@@ -1058,7 +1420,7 @@ extension UserMemoryService {
             }
         }
 
-        // Pass 2 — recency seed per active scope.
+        // Pass 3 — recency seed per active scope.
         let globalRecent = (try? fetchRecentEntries(scope: .global, scopeRefId: nil, limit: recencySeedPerScope)) ?? []
         globalRecent.forEach(admit)
 
@@ -1083,6 +1445,17 @@ extension UserMemoryService {
             return entry.scopeRefId == projectId
         case .conversation:
             return entry.scopeRefId == conversationId
+        }
+    }
+
+    private func isInScope(_ fact: MemoryFactEntry, projectId: UUID?, conversationId: UUID) -> Bool {
+        switch fact.scope {
+        case .global:
+            return true
+        case .project:
+            return fact.scopeRefId == projectId
+        case .conversation:
+            return fact.scopeRefId == conversationId
         }
     }
 

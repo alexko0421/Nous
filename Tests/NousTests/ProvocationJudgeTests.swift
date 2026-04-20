@@ -115,10 +115,19 @@ final class ProvocationJudgeTests: XCTestCase {
          "entry_id":null,"reason":"no tension","inferred_mode":"companion"}
         """)
         let judge = ProvocationJudge(llmService: fake, timeout: 1.0)
+        let annotatedPool = [
+            CitableEntry(
+                id: "E1",
+                text: "Do not compete on price.",
+                scope: .global,
+                kind: .decision,
+                promptAnnotation: "contradiction-candidate"
+            )
+        ]
 
         _ = try await judge.judge(
             userMessage: "so about pricing",
-            citablePool: pool(),
+            citablePool: annotatedPool,
             previousMode: .strategist,
             provider: .claude
         )
@@ -127,6 +136,10 @@ final class ProvocationJudgeTests: XCTestCase {
         XCTAssertTrue(prompt.contains("E1"), "judge prompt must include citable entry ids")
         XCTAssertTrue(prompt.contains("strategist"), "judge prompt must include chat mode")
         XCTAssertTrue(prompt.contains("compete on price"), "judge prompt must include entry text")
+        XCTAssertTrue(prompt.contains("[contradiction-candidate] id=E1"),
+                      "judge prompt must surface contradiction-candidate hints as prompt input only")
+        XCTAssertTrue(prompt.contains("kind=decision"),
+                      "judge prompt should include entry kind metadata for contradiction-oriented facts")
     }
 
     func testPromptEmbedsNilPreviousMode() async throws {

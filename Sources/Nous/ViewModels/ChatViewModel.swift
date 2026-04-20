@@ -284,12 +284,27 @@ final class ChatViewModel {
 
         // --- BEGIN reordered send flow (per spec D3) ---
 
-        // Step A: Gather the citable pool (needed by the judge).
+        // Step A: Gather contradiction-oriented hard recall and the citable pool (needed by the judge).
         let nodeHits = citations.map { $0.node.id }
+        let hardRecallFacts = (try? userMemoryService.contradictionRecallFacts(
+            projectId: node.projectId,
+            conversationId: node.id
+        )) ?? []
+        let contradictionCandidateIds = Set(
+            userMemoryService
+                .annotateContradictionCandidates(
+                    currentMessage: promptQuery,
+                    facts: hardRecallFacts
+                )
+                .filter(\.isContradictionCandidate)
+                .map { $0.fact.id.uuidString }
+        )
         let citablePool = (try? userMemoryService.citableEntryPool(
             projectId: node.projectId,
             conversationId: node.id,
-            nodeHits: nodeHits
+            nodeHits: nodeHits,
+            hardRecallFacts: hardRecallFacts,
+            contradictionCandidateIds: contradictionCandidateIds
         )) ?? []
 
         // Step B: Run the judge (or skip on .local).
@@ -332,10 +347,9 @@ final class ChatViewModel {
 
                 if verdict.shouldProvoke, let entryIdStr = verdict.entryId {
                     if let matched = citablePool.first(where: { $0.id == entryIdStr }),
-                       let uuid = UUID(uuidString: entryIdStr),
-                       let rawEntry = try? nodeStore.fetchMemoryEntry(id: uuid) {
+                       !matched.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         profile = .provocative
-                        focusBlock = ChatViewModel.buildFocusBlock(entryId: matched.id, rawText: rawEntry.content)
+                        focusBlock = ChatViewModel.buildFocusBlock(entryId: matched.id, rawText: matched.text)
                         fallbackReason = .ok
                     } else {
                         fallbackReason = .unknownEntryId

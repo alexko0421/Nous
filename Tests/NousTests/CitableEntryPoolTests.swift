@@ -110,4 +110,41 @@ final class CitableEntryPoolTests: XCTestCase {
         XCTAssertTrue(pool.contains { $0.id == inProject.id.uuidString })
         XCTAssertFalse(pool.contains { $0.id == otherProject.id.uuidString })
     }
+
+    func testPoolPrependsHardRecallFactsAndCarriesPromptAnnotation() throws {
+        let conversationId = UUID()
+        let globalEntry = MemoryEntry(
+            scope: .global, kind: .preference, stability: .stable,
+            content: "Recent global", sourceNodeIds: []
+        )
+        try store.insertMemoryEntry(globalEntry)
+
+        let fact = MemoryFactEntry(
+            scope: .conversation,
+            scopeRefId: conversationId,
+            kind: .decision,
+            content: "Do not compete on price.",
+            confidence: 0.9,
+            status: .active,
+            stability: .stable,
+            sourceNodeIds: [conversationId],
+            createdAt: Date(timeIntervalSince1970: 10),
+            updatedAt: Date(timeIntervalSince1970: 10)
+        )
+
+        let pool = try service.citableEntryPool(
+            projectId: nil,
+            conversationId: conversationId,
+            nodeHits: [],
+            hardRecallFacts: [fact],
+            contradictionCandidateIds: Set([fact.id.uuidString]),
+            capacity: 10
+        )
+
+        XCTAssertEqual(pool.first?.id, fact.id.uuidString)
+        XCTAssertEqual(pool.first?.kind, .decision)
+        XCTAssertEqual(pool.first?.promptAnnotation, "contradiction-candidate")
+        XCTAssertTrue(pool.contains { $0.id == globalEntry.id.uuidString },
+                      "hard recall should prepend contradiction facts without removing the normal recency seed path")
+    }
 }

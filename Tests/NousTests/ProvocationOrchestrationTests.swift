@@ -170,6 +170,43 @@ final class ProvocationOrchestrationTests: XCTestCase {
     }
 
     @MainActor
+    func testHardRecallFactEntryCanDriveFocusBlock() async throws {
+        let node = NousNode(type: .conversation, title: "Contradiction chat", content: "")
+        try store.insertNode(node)
+        viewModel.loadConversation(node)
+
+        let fact = MemoryFactEntry(
+            scope: .conversation,
+            scopeRefId: node.id,
+            kind: .decision,
+            content: "Do not compete on price.",
+            confidence: 0.92,
+            status: .active,
+            stability: .stable,
+            sourceNodeIds: [node.id],
+            createdAt: Date(timeIntervalSince1970: 10),
+            updatedAt: Date(timeIntervalSince1970: 10)
+        )
+        try store.insertMemoryFactEntry(fact)
+
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: true,
+            userState: .deciding,
+            shouldProvoke: true,
+            entryId: fact.id.uuidString,
+            reason: "pricing contradiction"
+        )
+
+        viewModel.inputText = "Maybe we should compete on price this time."
+        await viewModel.send()
+
+        let system = llm.receivedSystem ?? ""
+        XCTAssertTrue(system.contains("RELEVANT PRIOR MEMORY"))
+        XCTAssertTrue(system.contains("Do not compete on price."),
+                      "hard-recall fact text should be usable as the focus block source")
+    }
+
+    @MainActor
     func testUnknownEntryIdForcesSupportiveAndLogsError() async throws {
         judge.nextVerdict = JudgeVerdict(
             tensionExists: true, userState: .deciding,

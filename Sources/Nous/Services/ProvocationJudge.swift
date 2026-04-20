@@ -69,7 +69,9 @@ final class ProvocationJudge {
             poolText = "(empty — no citable entries this turn)"
         } else {
             poolText = pool.enumerated().map { idx, e in
-                "[\(idx + 1)] id=\(e.id) scope=\(e.scope.rawValue)\n\(e.text)"
+                let annotation = e.promptAnnotation.map { "[\($0)] " } ?? ""
+                let kind = e.kind.map { " kind=\($0.rawValue)" } ?? ""
+                return "[\(idx + 1)] \(annotation)id=\(e.id) scope=\(e.scope.rawValue)\(kind)\n\(e.text)"
             }.joined(separator: "\n---\n")
         }
 
@@ -97,6 +99,7 @@ final class ProvocationJudge {
         - should_provoke = true REQUIRES: tension_exists = true, user_state != "venting", and entry_id is a real id from CITABLE ENTRIES below.
         - user_state = "venting" FORCES should_provoke = false regardless of any tension. Venting is not a moment to challenge.
         - entry_id MUST be copied verbatim from the `id=` field of one CITABLE ENTRY. Do not invent.
+        - Entries tagged `[contradiction-candidate]` are retrieval hints only. They often mark earlier decisions, boundaries, or constraints that may be in tension with the user's current message, but they are not proof by themselves.
         - inferred_mode-dependent threshold (apply to YOUR OWN inferred_mode choice):
           * strategist → if tension_exists is true AND user_state ∈ {deciding, exploring}, set should_provoke = true. Soft tensions count.
           * companion  → only set should_provoke = true when the tension is strong AND clearly relevant to a decision the user is making. Soft tensions → false.

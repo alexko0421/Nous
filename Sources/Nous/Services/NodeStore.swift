@@ -149,6 +149,25 @@ final class NodeStore {
             );
         """)
 
+        // Contradiction-oriented sidecar facts. Unlike `memory_entries`, this
+        // table does not participate in the one-active-summary-per-scope
+        // invariant; it stores sibling typed facts for retrieval/judging.
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS memory_fact_entries (
+                id            TEXT PRIMARY KEY,
+                scope         TEXT NOT NULL,
+                scopeRefId    TEXT,
+                kind          TEXT NOT NULL,
+                content       TEXT NOT NULL,
+                confidence    REAL NOT NULL DEFAULT 0.8,
+                status        TEXT NOT NULL,
+                stability     TEXT NOT NULL,
+                sourceNodeIds TEXT NOT NULL DEFAULT '[]',
+                createdAt     REAL NOT NULL,
+                updatedAt     REAL NOT NULL
+            );
+        """)
+
         // judge_events — append-only per-turn verdict log. Feedback columns patched
         // after the fact. verdict_json kept as a blob so adding fields to
         // JudgeVerdict doesn't require a schema migration.
@@ -174,6 +193,9 @@ final class NodeStore {
         try db.exec("CREATE INDEX IF NOT EXISTS idx_edges_targetId   ON edges(targetId);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_conversation_memory_updatedAt ON conversation_memory(updatedAt);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_entries_scope_ref_status ON memory_entries(scope, scopeRefId, status);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_fact_entries_scope_ref_status ON memory_fact_entries(scope, scopeRefId, status);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_fact_entries_kind ON memory_fact_entries(kind);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_fact_entries_updatedAt ON memory_fact_entries(updatedAt);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_judge_events_ts ON judge_events(ts);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_judge_events_fallback ON judge_events(fallbackReason);")
     }
@@ -668,6 +690,47 @@ final class NodeStore {
         try stmt.step()
     }
 
+    func insertMemoryFactEntry(_ entry: MemoryFactEntry) throws {
+        let stmt = try db.prepare("""
+            INSERT INTO memory_fact_entries
+              (id, scope, scopeRefId, kind, content, confidence, status, stability,
+               sourceNodeIds, createdAt, updatedAt)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """)
+        try stmt.bind(entry.id.uuidString, at: 1)
+        try stmt.bind(entry.scope.rawValue, at: 2)
+        try stmt.bind(entry.scopeRefId?.uuidString, at: 3)
+        try stmt.bind(entry.kind.rawValue, at: 4)
+        try stmt.bind(entry.content, at: 5)
+        try stmt.bind(entry.confidence, at: 6)
+        try stmt.bind(entry.status.rawValue, at: 7)
+        try stmt.bind(entry.stability.rawValue, at: 8)
+        try stmt.bind(encodeSourceNodeIds(entry.sourceNodeIds), at: 9)
+        try stmt.bind(entry.createdAt.timeIntervalSince1970, at: 10)
+        try stmt.bind(entry.updatedAt.timeIntervalSince1970, at: 11)
+        try stmt.step()
+    }
+
+    func updateMemoryFactEntry(_ entry: MemoryFactEntry) throws {
+        let stmt = try db.prepare("""
+            UPDATE memory_fact_entries
+            SET scope = ?, scopeRefId = ?, kind = ?, content = ?, confidence = ?,
+                status = ?, stability = ?, sourceNodeIds = ?, updatedAt = ?
+            WHERE id = ?;
+        """)
+        try stmt.bind(entry.scope.rawValue, at: 1)
+        try stmt.bind(entry.scopeRefId?.uuidString, at: 2)
+        try stmt.bind(entry.kind.rawValue, at: 3)
+        try stmt.bind(entry.content, at: 4)
+        try stmt.bind(entry.confidence, at: 5)
+        try stmt.bind(entry.status.rawValue, at: 6)
+        try stmt.bind(entry.stability.rawValue, at: 7)
+        try stmt.bind(encodeSourceNodeIds(entry.sourceNodeIds), at: 8)
+        try stmt.bind(entry.updatedAt.timeIntervalSince1970, at: 9)
+        try stmt.bind(entry.id.uuidString, at: 10)
+        try stmt.step()
+    }
+
     func fetchMemoryEntry(id: UUID) throws -> MemoryEntry? {
         let stmt = try db.prepare("""
             SELECT id, scope, scopeRefId, kind, stability, status, content, confidence,
@@ -760,6 +823,71 @@ final class NodeStore {
         return memoryEntryFrom(stmt)
     }
 
+    /// Returns every sidecar fact entry (any status). Useful for retrieval
+    /// tests and future inspector work. Invalid rows are skipped.
+    func fetchMemoryFactEntries() throws -> [MemoryFactEntry] {
+        let stmt = try db.prepare("""
+            SELECT id, scope, scopeRefId, kind, content, confidence, status, stability,
+                   sourceNodeIds, createdAt, updatedAt
+            FROM memory_fact_entries
+            ORDER BY updatedAt DESC;
+        """)
+        var results: [MemoryFactEntry] = []
+        while try stmt.step() {
+            if let entry = memoryFactEntryFrom(stmt) { results.append(entry) }
+        }
+        return results
+    }
+
+    func fetchActiveMemoryFactEntries(
+        scope: MemoryScope,
+        scopeRefId: UUID?,
+        kinds: [MemoryKind]
+    ) throws -> [MemoryFactEntry] {
+        let kindFilter = if kinds.isEmpty {
+            ""
+        } else {
+            " AND kind IN (\(Array(repeating: "?", count: kinds.count).joined(separator: ", ")))"
+        }
+
+        let sql: String
+        let stmt: Statement
+        if let scopeRefId {
+            sql = """
+                SELECT id, scope, scopeRefId, kind, content, confidence, status, stability,
+                       sourceNodeIds, createdAt, updatedAt
+                FROM memory_fact_entries
+                WHERE scope = ? AND scopeRefId = ? AND status = 'active'\(kindFilter)
+                ORDER BY updatedAt DESC;
+            """
+            stmt = try db.prepare(sql)
+            try stmt.bind(scope.rawValue, at: 1)
+            try stmt.bind(scopeRefId.uuidString, at: 2)
+            for (offset, kind) in kinds.enumerated() {
+                try stmt.bind(kind.rawValue, at: Int32(3 + offset))
+            }
+        } else {
+            sql = """
+                SELECT id, scope, scopeRefId, kind, content, confidence, status, stability,
+                       sourceNodeIds, createdAt, updatedAt
+                FROM memory_fact_entries
+                WHERE scope = ? AND scopeRefId IS NULL AND status = 'active'\(kindFilter)
+                ORDER BY updatedAt DESC;
+            """
+            stmt = try db.prepare(sql)
+            try stmt.bind(scope.rawValue, at: 1)
+            for (offset, kind) in kinds.enumerated() {
+                try stmt.bind(kind.rawValue, at: Int32(2 + offset))
+            }
+        }
+
+        var results: [MemoryFactEntry] = []
+        while try stmt.step() {
+            if let entry = memoryFactEntryFrom(stmt) { results.append(entry) }
+        }
+        return results
+    }
+
     /// Marks every currently-`active` entry in (scope, scopeRefId) as
     /// `superseded`, linking them to the replacement via `supersededBy`. Called
     /// atomically in the same transaction as the replacement insert so there is
@@ -844,6 +972,33 @@ final class NodeStore {
             lastConfirmedAt: lastConfirmedAt,
             expiresAt: expiresAt,
             supersededBy: supersededBy
+        )
+    }
+
+    private func memoryFactEntryFrom(_ stmt: Statement) -> MemoryFactEntry? {
+        guard let idText = stmt.text(at: 0), let id = UUID(uuidString: idText) else { return nil }
+        guard let scopeText = stmt.text(at: 1), let scope = MemoryScope(rawValue: scopeText) else { return nil }
+        let scopeRefId: UUID? = stmt.text(at: 2).flatMap { UUID(uuidString: $0) }
+        guard let kindText = stmt.text(at: 3), let kind = MemoryKind(rawValue: kindText) else { return nil }
+        let content = stmt.text(at: 4) ?? ""
+        let confidence = stmt.double(at: 5)
+        guard let statusText = stmt.text(at: 6), let status = MemoryStatus(rawValue: statusText) else { return nil }
+        guard let stabilityText = stmt.text(at: 7), let stability = MemoryStability(rawValue: stabilityText) else { return nil }
+        let sourceNodeIds = decodeSourceNodeIds(stmt.text(at: 8) ?? "[]")
+        let createdAt = Date(timeIntervalSince1970: stmt.double(at: 9))
+        let updatedAt = Date(timeIntervalSince1970: stmt.double(at: 10))
+        return MemoryFactEntry(
+            id: id,
+            scope: scope,
+            scopeRefId: scopeRefId,
+            kind: kind,
+            content: content,
+            confidence: confidence,
+            status: status,
+            stability: stability,
+            sourceNodeIds: sourceNodeIds,
+            createdAt: createdAt,
+            updatedAt: updatedAt
         )
     }
 
