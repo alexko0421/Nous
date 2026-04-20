@@ -440,6 +440,13 @@ final class ChatViewModel {
 
         // Step F: Append the judge_events row using effectiveMode.
         // BEFORE the main call so the row survives main-call failure.
+        if var v = verdictForLog {
+            v.provocationKind = ChatViewModel.deriveProvocationKind(
+                verdict: v,
+                contradictionCandidateIds: contradictionCandidateIds
+            )
+            verdictForLog = v
+        }
         let verdictJSONStr: String = {
             if let v = verdictForLog, let data = try? JSONEncoder().encode(v) {
                 return String(data: data, encoding: .utf8) ?? "{}"

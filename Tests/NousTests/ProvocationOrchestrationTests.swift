@@ -763,6 +763,52 @@ final class ProvocationOrchestrationTests: XCTestCase {
     }
 
     @MainActor
+    func testProvocationKindStampedOntoVerdictJSONForContradictionMatch() async throws {
+        // ARRANGE: seed a MemoryFactEntry whose content overlaps the user message
+        // so that annotateContradictionCandidates marks it as a contradiction candidate.
+        let node = NousNode(type: .conversation, title: "Contradiction chat", content: "")
+        try store.insertNode(node)
+        viewModel.loadConversation(node)
+
+        let fact = MemoryFactEntry(
+            scope: .conversation,
+            scopeRefId: node.id,
+            kind: .decision,
+            content: "Do not compete on price.",
+            confidence: 0.92,
+            status: .active,
+            stability: .stable,
+            sourceNodeIds: [node.id],
+            createdAt: Date(timeIntervalSince1970: 10),
+            updatedAt: Date(timeIntervalSince1970: 10)
+        )
+        try store.insertMemoryFactEntry(fact)
+
+        // The stub judge returns shouldProvoke=true with entryId pointing at the seeded fact.
+        // After Step 3 wiring, deriveProvocationKind will see the fact id is in
+        // contradictionCandidateIds and stamp .contradiction onto verdictForLog before encoding.
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: true,
+            userState: .deciding,
+            shouldProvoke: true,
+            entryId: fact.id.uuidString,
+            reason: "pricing contradiction",
+            inferredMode: .companion
+        )
+
+        // ACT: send a message that shares tokens with the fact so Jaccard > 0.
+        viewModel.inputText = "Maybe we should compete on price this time."
+        await viewModel.send()
+
+        // ASSERT: the persisted verdictJSON must contain the derived provocation_kind.
+        let events = telemetry.recentJudgeEvents(limit: 1, filter: .none)
+        XCTAssertEqual(events.count, 1)
+        let json = events[0].verdictJSON
+        XCTAssertTrue(json.contains("\"provocation_kind\":\"contradiction\""),
+                      "verdictJSON should be stamped with derived provocation_kind, got: \(json)")
+    }
+
+    @MainActor
     func testQuickActionOpenerUsesCompanionAndDoesNotRunJudge() async throws {
         XCTAssertNil(viewModel.activeChatMode)
 
