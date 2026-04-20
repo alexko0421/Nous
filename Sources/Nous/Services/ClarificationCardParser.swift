@@ -5,9 +5,16 @@ enum ClarificationCardParser {
     private static let optionPattern = #"<option>(.*?)</option>"#
     private static let understandingPhasePattern = #"<phase>\s*understanding\s*</phase>"#
 
+    private static let internalReasoningPatterns: [String] = [
+        #"<thinking>[\s\S]*?</thinking>"#,
+        #"<phase>\s*\w+\s*</phase>"#,
+        #"<thinking>[\s\S]*$"#,
+        #"<phase>[^<]*$"#,
+    ]
+
     static func parse(_ text: String) -> ClarificationContent {
         let phaseKept = containsUnderstandingPhaseMarker(in: text)
-        let sanitizedText = removingUnderstandingPhaseMarkers(from: text)
+        let sanitizedText = removingInternalReasoningMarkers(from: text)
 
         guard
             let blockRegex = try? NSRegularExpression(
@@ -93,17 +100,26 @@ enum ClarificationCardParser {
         return regex.firstMatch(in: text, options: [], range: range) != nil
     }
 
-    private static func removingUnderstandingPhaseMarkers(from text: String) -> String {
-        guard
-            let regex = try? NSRegularExpression(
-                pattern: understandingPhasePattern,
-                options: [.caseInsensitive]
-            ),
-            let range = nsRange(for: text)
-        else {
-            return text
-        }
+    private static func removingInternalReasoningMarkers(from text: String) -> String {
+        var result = text
+        for pattern in internalReasoningPatterns {
+            guard
+                let regex = try? NSRegularExpression(
+                    pattern: pattern,
+                    options: [.caseInsensitive, .dotMatchesLineSeparators]
+                ),
+                let range = nsRange(for: result)
+            else {
+                continue
+            }
 
-        return regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "")
+            result = regex.stringByReplacingMatches(
+                in: result,
+                options: [],
+                range: range,
+                withTemplate: ""
+            )
+        }
+        return result
     }
 }
