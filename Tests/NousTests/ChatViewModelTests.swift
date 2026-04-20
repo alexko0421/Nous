@@ -255,4 +255,42 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertEqual(telemetry.value(for: .safetyMissRate), 0)
         XCTAssertEqual(telemetry.lastPromptTrace?.safetyPolicyInvoked, true)
     }
+
+    func testGovernanceTelemetryAggregatesGeminiCacheUsage() throws {
+        let suiteName = "ChatViewModelTests.gemini-cache.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let telemetry = GovernanceTelemetryStore(defaults: defaults)
+
+        telemetry.recordGeminiUsage(
+            GeminiUsageMetadata(
+                promptTokenCount: 2000,
+                cachedContentTokenCount: 1500,
+                candidatesTokenCount: 200,
+                thoughtsTokenCount: 40,
+                totalTokenCount: 2200
+            ),
+            at: Date(timeIntervalSince1970: 100)
+        )
+        telemetry.recordGeminiUsage(
+            GeminiUsageMetadata(
+                promptTokenCount: 1200,
+                cachedContentTokenCount: 600,
+                candidatesTokenCount: 150,
+                thoughtsTokenCount: nil,
+                totalTokenCount: 1350
+            ),
+            at: Date(timeIntervalSince1970: 200)
+        )
+
+        let summary = try XCTUnwrap(telemetry.geminiCacheSummary)
+        let last = try XCTUnwrap(summary.lastSnapshot)
+
+        XCTAssertEqual(summary.requestCount, 2)
+        XCTAssertEqual(summary.totalPromptTokens, 3200)
+        XCTAssertEqual(summary.totalCachedTokens, 2100)
+        XCTAssertEqual(last.usage.promptTokenCount, 1200)
+        XCTAssertEqual(last.usage.cachedContentTokenCount, 600)
+        XCTAssertEqual(Int((summary.cacheHitRate! * 100).rounded()), 66)
+    }
 }

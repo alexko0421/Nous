@@ -89,7 +89,7 @@ final class RAGPipelineTests: XCTestCase {
             recentConversations: [recentConversation],
             citations: citations,
             projectGoal: projectGoal
-        )
+        ).combined
 
         // Verify anchor prompt is present without depending on one exact language variant
         XCTAssertTrue(context.contains("Nous"))
@@ -135,12 +135,15 @@ final class RAGPipelineTests: XCTestCase {
         XCTAssertTrue(context.contains("92%"))
         XCTAssertTrue(context.contains("78%"))
         XCTAssertLessThan(
-            context.range(of: "BROADER SITUATION RIGHT NOW")!.lowerBound,
-            context.range(of: "RECENT CONVERSATIONS WITH ALEX:")!.lowerBound
+            context.range(of: "MEMORY INTERPRETATION POLICY")!.lowerBound,
+            context.range(of: "LONG-TERM MEMORY ABOUT ALEX")!.lowerBound
         )
+        // Chat mode moved into the volatile slice (judge flips it per turn), so it
+        // now lands after the stable memory layers in combined form. Verify the new
+        // invariant: memory comes before the chat-mode directive.
         XCTAssertLessThan(
-            context.range(of: "SHORT SOURCE EVIDENCE FOR THE ABOVE MEMORY")!.lowerBound,
-            context.range(of: "CURRENT PROJECT GOAL")!.lowerBound
+            context.range(of: "BROADER SITUATION RIGHT NOW")!.lowerBound,
+            context.range(of: "ACTIVE CHAT MODE: Companion")!.lowerBound
         )
     }
 
@@ -152,7 +155,7 @@ final class RAGPipelineTests: XCTestCase {
             recentConversations: [],
             citations: [],
             projectGoal: nil
-        )
+        ).combined
 
         XCTAssertTrue(context.contains("ACTIVE CHAT MODE: Companion"))
         XCTAssertTrue(context.contains("Stay conversational, warm, and direct."))
@@ -169,13 +172,68 @@ final class RAGPipelineTests: XCTestCase {
             recentConversations: [("Funding worries", "Cash runway is tight.")],
             citations: [],
             projectGoal: "Ship memory improvements"
-        )
+        ).combined
 
         XCTAssertTrue(context.contains("ACTIVE CHAT MODE: Strategist"))
         XCTAssertTrue(context.contains("Alex explicitly wants deeper reasoning"))
         XCTAssertTrue(context.contains("Make assumptions explicit"))
         XCTAssertTrue(context.contains("BROADER SITUATION RIGHT NOW"))
         XCTAssertTrue(context.contains("RECENT CONVERSATIONS WITH ALEX"))
+    }
+
+    func testAssembleContextAddsStrategistLongGapBridgeGuidanceForStrongOldHit() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let oldNode = NousNode(
+            type: .note,
+            title: "Fear of failure",
+            content: "I keep hesitating because I am scared of failing in public.",
+            createdAt: now.addingTimeInterval(-60 * 86_400),
+            updatedAt: now.addingTimeInterval(-60 * 86_400)
+        )
+
+        let context = ChatViewModel.assembleContext(
+            chatMode: .strategist,
+            currentUserInput: "I am thinking about applying to YC now.",
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [SearchResult(node: oldNode, similarity: 0.72, lane: .longGap)],
+            projectGoal: nil,
+            now: now
+        ).combined
+
+        XCTAssertTrue(context.contains("older cross-time connection"))
+        XCTAssertTrue(context.contains("LONG-GAP CONNECTION CUE"))
+        XCTAssertTrue(context.contains("Name the line directly and clearly"))
+        XCTAssertTrue(context.contains("Do not mention retrieval, citations"))
+    }
+
+    func testAssembleContextUsesGentlerLongGapGuidanceInCompanionMode() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let oldNode = NousNode(
+            type: .note,
+            title: "Fear of failure",
+            content: "I keep hesitating because I am scared of failing in public.",
+            createdAt: now.addingTimeInterval(-60 * 86_400),
+            updatedAt: now.addingTimeInterval(-60 * 86_400)
+        )
+
+        let context = ChatViewModel.assembleContext(
+            chatMode: .companion,
+            currentUserInput: "I think I might finally do it.",
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [SearchResult(node: oldNode, similarity: 0.72, lane: .longGap)],
+            projectGoal: nil,
+            now: now
+        ).combined
+
+        XCTAssertTrue(context.contains("LONG-GAP CONNECTION CUE"))
+        XCTAssertTrue(context.contains("Keep it gentle and hypothesis-led"))
+        XCTAssertFalse(context.contains("Name the line directly and clearly"))
     }
 
     /// Codex #4: the recent-conversations layer must be fed from
@@ -197,7 +255,7 @@ final class RAGPipelineTests: XCTestCase {
             recentConversations: [recent],
             citations: [],
             projectGoal: nil
-        )
+        ).combined
 
         XCTAssertTrue(context.contains("RECENT CONVERSATIONS WITH ALEX:"),
                       "recent-conversations heading should appear")
@@ -215,9 +273,34 @@ final class RAGPipelineTests: XCTestCase {
             recentConversations: [],
             citations: [],
             projectGoal: nil
-        )
+        ).combined
 
         XCTAssertFalse(context.contains("SHORT SOURCE EVIDENCE FOR THE ABOVE MEMORY"))
+    }
+
+    func testAssembleContextOmitsLongGapGuidanceForWeakOldHit() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let oldNode = NousNode(
+            type: .note,
+            title: "Weak old thread",
+            content: "This should stay silent because relevance is too low.",
+            createdAt: now.addingTimeInterval(-80 * 86_400),
+            updatedAt: now.addingTimeInterval(-80 * 86_400)
+        )
+
+        let context = ChatViewModel.assembleContext(
+            chatMode: .strategist,
+            currentUserInput: "I am thinking out loud.",
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [SearchResult(node: oldNode, similarity: 0.58, lane: .longGap)],
+            projectGoal: nil,
+            now: now
+        ).combined
+
+        XCTAssertFalse(context.contains("LONG-GAP CONNECTION CUE"))
     }
 
     func testAssembleContextIncludesHypothesisLanguagePolicy() {
@@ -228,7 +311,7 @@ final class RAGPipelineTests: XCTestCase {
             recentConversations: [],
             citations: [],
             projectGoal: nil
-        )
+        ).combined
 
         XCTAssertTrue(context.contains("MEMORY INTERPRETATION POLICY"))
         XCTAssertTrue(context.contains("I might be wrong, but"))
@@ -244,7 +327,7 @@ final class RAGPipelineTests: XCTestCase {
             recentConversations: [],
             citations: [],
             projectGoal: nil
-        )
+        ).combined
 
         XCTAssertTrue(context.contains("HIGH-RISK SAFETY MODE"))
         XCTAssertTrue(context.contains("Prioritize immediate safety"))
@@ -287,6 +370,32 @@ final class RAGPipelineTests: XCTestCase {
         XCTAssertTrue(trace.promptLayers.contains("memory_evidence"))
     }
 
+    func testGovernanceTraceMarksLongGapBridgeGuidanceWhenEligible() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let oldNode = NousNode(
+            type: .note,
+            title: "Fear of failure",
+            content: "I keep hesitating because I am scared of failing in public.",
+            createdAt: now.addingTimeInterval(-60 * 86_400),
+            updatedAt: now.addingTimeInterval(-60 * 86_400)
+        )
+
+        let trace = ChatViewModel.governanceTrace(
+            chatMode: .strategist,
+            currentUserInput: "I am thinking about applying to YC now.",
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [SearchResult(node: oldNode, similarity: 0.72, lane: .longGap)],
+            projectGoal: nil,
+            now: now
+        )
+
+        XCTAssertTrue(trace.promptLayers.contains("citations"))
+        XCTAssertTrue(trace.promptLayers.contains("long_gap_bridge_guidance"))
+    }
+
     func testAssembleContextIncludesIdentityFacetWhenGlobalMemoryIsEmpty() {
         let context = ChatViewModel.assembleContext(
             globalMemory: nil,
@@ -301,7 +410,7 @@ final class RAGPipelineTests: XCTestCase {
             recentConversations: [],
             citations: [],
             projectGoal: nil
-        )
+        ).combined
 
         XCTAssertTrue(context.contains("DERIVED USER MODEL"))
         XCTAssertTrue(context.contains("Identity:\n- Alex is a solo founder."))
@@ -317,7 +426,7 @@ final class RAGPipelineTests: XCTestCase {
             projectGoal: nil,
             activeQuickActionMode: .direction,
             allowInteractiveClarification: true
-        )
+        ).combined
         let disabled = ChatViewModel.assembleContext(
             globalMemory: nil,
             projectMemory: nil,
@@ -327,7 +436,7 @@ final class RAGPipelineTests: XCTestCase {
             projectGoal: nil,
             activeQuickActionMode: .direction,
             allowInteractiveClarification: false
-        )
+        ).combined
 
         XCTAssertTrue(enabled.contains("INTERACTIVE CLARIFICATION UI"))
         XCTAssertTrue(enabled.contains("understanding phase"))

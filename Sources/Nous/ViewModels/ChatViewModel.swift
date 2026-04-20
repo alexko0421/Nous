@@ -40,6 +40,12 @@ final class ChatViewModel {
     private var inFlightResponseTask: Task<Void, Never>?
     private var inFlightResponseTaskId: UUID?
     private let governanceTelemetry: GovernanceTelemetryStore
+    private let geminiPromptCache: GeminiPromptCacheService
+    /// In-flight cache-refresh bookkeeping, keyed by conversation id. The token map
+    /// lets a late-arriving worker detect that it has been superseded and clean up its
+    /// orphaned server-side handle instead of overwriting a newer entry.
+    private var geminiCacheRefreshTasks: [UUID: Task<Void, Never>] = [:]
+    private var geminiCacheRefreshTokens: [UUID: UUID] = [:]
 
     // MARK: - Init
 
@@ -55,6 +61,7 @@ final class ChatViewModel {
         judgeLLMServiceFactory: @escaping () -> (any LLMService)?,
         provocationJudgeFactory: @escaping (any LLMService) -> any Judging = { ProvocationJudge(llmService: $0) },
         governanceTelemetry: GovernanceTelemetryStore = GovernanceTelemetryStore(),
+        geminiPromptCache: GeminiPromptCacheService = GeminiPromptCacheService(),
         defaultProjectId: UUID? = nil
     ) {
         self.nodeStore = nodeStore
@@ -68,6 +75,7 @@ final class ChatViewModel {
         self.judgeLLMServiceFactory = judgeLLMServiceFactory
         self.provocationJudgeFactory = provocationJudgeFactory
         self.governanceTelemetry = governanceTelemetry
+        self.geminiPromptCache = geminiPromptCache
         self.defaultProjectId = defaultProjectId
     }
 
@@ -77,6 +85,9 @@ final class ChatViewModel {
         inFlightResponseTask?.cancel()
         inFlightJudgeTaskId = nil
         inFlightResponseTaskId = nil
+        for task in geminiCacheRefreshTasks.values { task.cancel() }
+        geminiCacheRefreshTasks.removeAll()
+        geminiCacheRefreshTokens.removeAll()
     }
 
     // MARK: - Conversation Management
@@ -168,7 +179,7 @@ final class ChatViewModel {
             projectGoal = project.goal
         }
 
-        let context = ChatViewModel.assembleContext(
+        let contextSlice = ChatViewModel.assembleContext(
             chatMode: .companion,
             currentUserInput: ChatViewModel.quickActionOpeningPrompt(for: mode),
             globalMemory: userMemoryService.currentGlobal(),
@@ -235,15 +246,34 @@ final class ChatViewModel {
             return
         }
 
+        let quickActionUserText = ChatViewModel.quickActionOpeningPrompt(for: mode)
+        let transcriptForCache = [LLMMessage(role: "user", content: quickActionUserText)]
+        let resolvedCacheEntry = activeGeminiHistoryCache(
+            nodeId: node.id,
+            llm: llm,
+            stableSystem: contextSlice.stable,
+            transcriptMessages: transcriptForCache
+        )
+        let streamingService = configuredStreamingService(
+            from: configuredGeminiService(from: llm, cacheEntry: resolvedCacheEntry),
+            responseTaskId: responseTaskId,
+            captureThinking: false
+        )
+
+        let requestMessages = requestMessages(
+            forSlice: contextSlice,
+            transcriptMessages: transcriptForCache,
+            cacheEntry: resolvedCacheEntry
+        )
+        let requestSystem = requestSystem(
+            forSlice: contextSlice,
+            cacheEntry: resolvedCacheEntry
+        )
+
         do {
-            let stream = try await llm.generate(
-                messages: [
-                    LLMMessage(
-                        role: "user",
-                        content: ChatViewModel.quickActionOpeningPrompt(for: mode)
-                    )
-                ],
-                system: context
+            let stream = try await streamingService.generate(
+                messages: requestMessages,
+                system: requestSystem
             )
             for try await chunk in stream {
                 try Task.checkCancellation()
@@ -255,6 +285,12 @@ final class ChatViewModel {
             return
         } catch {
             guard isActiveResponseTask(responseTaskId) else { return }
+            // If a cached-content handle was attached, the server may have evicted the
+            // cache before our local TTL. Drop the stale entry so the next turn rebuilds
+            // instead of repeatedly failing against a dead handle.
+            if resolvedCacheEntry != nil {
+                geminiPromptCache.removeEntry(for: node.id)
+            }
             currentResponse = "Error: \(error.localizedDescription)"
         }
 
@@ -269,6 +305,12 @@ final class ChatViewModel {
             assistantContent: assistantContent
         )
         scheduleUserMemoryRefresh(for: node, messages: messages)
+        refreshGeminiConversationCacheIfNeeded(
+            nodeId: node.id,
+            llm: llm,
+            stableSystem: contextSlice.stable,
+            persistedMessages: messages
+        )
         currentResponse = ""
     }
 
@@ -329,7 +371,7 @@ final class ChatViewModel {
         citations = []
         if embeddingService.isLoaded {
             if let queryEmbedding = try? embeddingService.embed(retrievalQuery) {
-                let results = (try? vectorStore.search(
+                let results = (try? vectorStore.searchForChatCitations(
                     query: queryEmbedding,
                     topK: 5,
                     excludeIds: [node.id]
@@ -453,7 +495,7 @@ final class ChatViewModel {
             activeQuickActionMode: activeQuickActionMode,
             messages: messages
         )
-        let context = ChatViewModel.assembleContext(
+        let contextSlice = ChatViewModel.assembleContext(
             chatMode: effectiveMode,
             currentUserInput: promptQuery,
             globalMemory: userMemoryService.currentGlobal(),
@@ -506,10 +548,14 @@ final class ChatViewModel {
         lastPromptGovernanceTrace = promptTrace
         governanceTelemetry.recordPromptTrace(promptTrace)
 
-        // Step E: Compose final system prompt.
-        var finalSystemParts: [String] = [context, profile.contextBlock]
-        if let fb = focusBlock { finalSystemParts.append(fb) }
-        let finalSystem = finalSystemParts.joined(separator: "\n\n")
+        // Step E: Compose the per-turn slice. `stableSystem` rides the Gemini cache;
+        // `volatileSystem` also absorbs the judge's per-turn profile block and any
+        // focus directive so the cache hash survives judge-driven churn.
+        let stableSystem = contextSlice.stable
+        var volatilePartsForTurn: [String] = [contextSlice.volatile, profile.contextBlock]
+        if let fb = focusBlock { volatilePartsForTurn.append(fb) }
+        let volatileSystem = volatilePartsForTurn.filter { !$0.isEmpty }.joined(separator: "\n\n")
+        let turnSlice = TurnSystemSlice(stable: stableSystem, volatile: volatileSystem)
 
         // Step F: Append the judge_events row using effectiveMode.
         // BEFORE the main call so the row survives main-call failure.
@@ -567,26 +613,35 @@ final class ChatViewModel {
             return
         }
 
+        // Resolve the cache entry exactly once per turn. Previously this was recomputed
+        // three times (once per helper) — each recompute ran a full SHA256 over system
+        // + transcript. Thread the resolved entry through the helpers instead.
+        let resolvedCacheEntry = activeGeminiHistoryCache(
+            nodeId: node.id,
+            llm: llm,
+            stableSystem: stableSystem,
+            transcriptMessages: llmMessages
+        )
+        let requestMessages = requestMessages(
+            forSlice: turnSlice,
+            transcriptMessages: llmMessages,
+            cacheEntry: resolvedCacheEntry
+        )
+        let requestSystem = requestSystem(
+            forSlice: turnSlice,
+            cacheEntry: resolvedCacheEntry
+        )
+
         // Step 8: Stream response
         currentThinking = ""
         didHitBudgetExhaustion = false
-        let streamingService: any LLMService = {
-            guard var gemini = llm as? GeminiLLMService else { return llm }
-            gemini.thinkingBudgetTokens = 2000
-            // @MainActor closures: the producer `await`s these, so writes land in
-            // parse order and are visible to the post-stream budget-exhaust check below.
-            gemini.onThinkingDelta = { [weak self] delta in
-                guard let self, self.isActiveResponseTask(responseTaskId) else { return }
-                self.currentThinking.append(delta)
-            }
-            gemini.onBudgetExhausted = { [weak self] in
-                guard let self, self.isActiveResponseTask(responseTaskId) else { return }
-                self.didHitBudgetExhaustion = true
-            }
-            return gemini
-        }()
+        let streamingService = configuredStreamingService(
+            from: configuredGeminiService(from: llm, cacheEntry: resolvedCacheEntry),
+            responseTaskId: responseTaskId,
+            captureThinking: true
+        )
         do {
-            let stream = try await streamingService.generate(messages: llmMessages, system: finalSystem)
+            let stream = try await streamingService.generate(messages: requestMessages, system: requestSystem)
             // Guard after the generate() await: same window as the judge guard above.
             guard isActiveResponseTask(responseTaskId) else { return }
             for try await chunk in stream {
@@ -599,6 +654,12 @@ final class ChatViewModel {
             return
         } catch {
             guard isActiveResponseTask(responseTaskId) else { return }
+            // Cached handle may have been evicted server-side before our local TTL ran
+            // out. Drop the stale entry so the next turn rebuilds against a live cache
+            // instead of repeatedly hitting 400/404 on the same dead handle.
+            if resolvedCacheEntry != nil {
+                geminiPromptCache.removeEntry(for: node.id)
+            }
             currentResponse = "Error: \(error.localizedDescription)"
         }
 
@@ -630,6 +691,12 @@ final class ChatViewModel {
             assistantContent: assistantContent
         )
         scheduleUserMemoryRefresh(for: node, messages: messages)
+        refreshGeminiConversationCacheIfNeeded(
+            nodeId: node.id,
+            llm: llm,
+            stableSystem: stableSystem,
+            persistedMessages: messages
+        )
         currentResponse = ""
         currentThinking = ""
 
@@ -719,7 +786,52 @@ final class ChatViewModel {
         return content
     }()
 
+    private static let memoryInterpretationPolicy = """
+    ---
+
+    MEMORY INTERPRETATION POLICY:
+    If you notice a personal pattern, state it as a hypothesis unless Alex clearly confirmed it or it is strongly supported across multiple moments.
+    Prefer wording like: "I might be wrong, but...", "One hypothesis is...", "Does this fit, or is something else more true?"
+    Do not present diagnoses or identity labels as certainty.
+    """
+
+    private static let coreSafetyPolicy = """
+    ---
+
+    CORE SAFETY POLICY:
+    Do not encourage Alex to become emotionally dependent on Nous.
+    Do not present medical, psychological, or legal certainty when the situation is ambiguous.
+    Respect memory boundaries: if Alex asks not to store something, or asked for consent before sensitive storage, do not silently turn that into durable memory.
+    """
+
+    private static let highRiskSafetyModeBlock = """
+    ---
+
+    HIGH-RISK SAFETY MODE:
+    Alex may be describing imminent danger, self-harm, abuse, or another acute safety issue.
+    Prioritize immediate safety, grounding, and real-world human support over abstract analysis.
+    Be calm, direct, and practical.
+    If he may be in immediate danger, encourage contacting local emergency services or a trusted nearby person right now.
+    Do not romanticize self-destruction, isolation, or dependency.
+    """
+
+    private static func activeChatModeBlock(_ chatMode: ChatMode) -> String {
+        "---\n\nACTIVE CHAT MODE: \(chatMode.label)\n\(chatMode.contextBlock)"
+    }
+
     // MARK: - Context Assembly
+
+    /// Output of prompt assembly, split into the slow-changing prefix that can ride the
+    /// Gemini prompt cache and the per-turn block that must refresh every request.
+    /// `combined` reconstructs the original single-string layout for non-cache callers.
+    struct TurnSystemSlice: Equatable {
+        let stable: String
+        let volatile: String
+
+        var combined: String {
+            [stable, volatile].filter { !$0.isEmpty }.joined(separator: "\n\n")
+        }
+    }
 
     static func assembleContext(
         chatMode: ChatMode = .companion,
@@ -735,133 +847,105 @@ final class ChatViewModel {
         projectGoal: String?,
         attachments: [AttachedFileContext] = [],
         activeQuickActionMode: QuickActionMode? = nil,
-        allowInteractiveClarification: Bool = false
-    ) -> String {
-        var parts: [String] = []
-        let highRiskSafetyMode = SafetyGuardrails.isHighRiskQuery(currentUserInput)
+        allowInteractiveClarification: Bool = false,
+        now: Date = Date()
+    ) -> TurnSystemSlice {
+        var stable: [String] = []
+        var volatilePieces: [String] = []
 
-        // Layer 1: Anchor — who Nous is (immutable)
-        parts.append(anchor)
+        // Stable prefix: identity + policies + slow-changing memory layers. This is what
+        // gets frozen into cachedContents.systemInstruction; any per-turn additions here
+        // would invalidate the cache hash every request and defeat the whole point.
+        stable.append(anchor)
+        stable.append(memoryInterpretationPolicy)
+        stable.append(coreSafetyPolicy)
 
-        // Layer 2a: Global identity memory (across all chats)
         if let globalMemory, !globalMemory.isEmpty {
-            parts.append("---\n\nLONG-TERM MEMORY ABOUT ALEX:\n\(globalMemory)")
+            stable.append("---\n\nLONG-TERM MEMORY ABOUT ALEX:\n\(globalMemory)")
         }
 
-        // Layer 2b: bounded wake-up layer bridging identity and scoped recall.
         if let essentialStory, !essentialStory.isEmpty {
-            parts.append("---\n\nBROADER SITUATION RIGHT NOW:\n\(essentialStory)")
+            stable.append("---\n\nBROADER SITUATION RIGHT NOW:\n\(essentialStory)")
         }
 
-        // Layer 2c: Project memory (only when this chat has a projectId)
         if let projectMemory, !projectMemory.isEmpty {
-            parts.append("---\n\nTHIS PROJECT'S CONTEXT:\n\(projectMemory)")
+            stable.append("---\n\nTHIS PROJECT'S CONTEXT:\n\(projectMemory)")
         }
 
-        // Layer 2d: This chat's own thread memory
         if let conversationMemory, !conversationMemory.isEmpty {
-            parts.append("---\n\nTHIS CHAT'S THREAD SO FAR:\n\(conversationMemory)")
+            stable.append("---\n\nTHIS CHAT'S THREAD SO FAR:\n\(conversationMemory)")
         }
 
-        // Layer 2e: bounded evidence backing the higher-priority memory layers.
         if !memoryEvidence.isEmpty {
-            parts.append("---\n\nSHORT SOURCE EVIDENCE FOR THE ABOVE MEMORY:")
+            stable.append("---\n\nSHORT SOURCE EVIDENCE FOR THE ABOVE MEMORY:")
             for evidence in memoryEvidence {
-                parts.append("- \(evidence.label) · \"\(evidence.sourceTitle)\": \(evidence.snippet)")
+                stable.append("- \(evidence.label) · \"\(evidence.sourceTitle)\": \(evidence.snippet)")
             }
-        }
-
-        parts.append(
-            """
-            ---
-
-            MEMORY INTERPRETATION POLICY:
-            If you notice a personal pattern, state it as a hypothesis unless Alex clearly confirmed it or it is strongly supported across multiple moments.
-            Prefer wording like: "I might be wrong, but...", "One hypothesis is...", "Does this fit, or is something else more true?"
-            Do not present diagnoses or identity labels as certainty.
-            """
-        )
-
-        parts.append(
-            """
-            ---
-
-            CORE SAFETY POLICY:
-            Do not encourage Alex to become emotionally dependent on Nous.
-            Do not present medical, psychological, or legal certainty when the situation is ambiguous.
-            Respect memory boundaries: if Alex asks not to store something, or asked for consent before sensitive storage, do not silently turn that into durable memory.
-            """
-        )
-
-        if highRiskSafetyMode {
-            parts.append(
-                """
-                ---
-
-                HIGH-RISK SAFETY MODE:
-                Alex may be describing imminent danger, self-harm, abuse, or another acute safety issue.
-                Prioritize immediate safety, grounding, and real-world human support over abstract analysis.
-                Be calm, direct, and practical.
-                If he may be in immediate danger, encourage contacting local emergency services or a trusted nearby person right now.
-                Do not romanticize self-destruction, isolation, or dependency.
-                """
-            )
         }
 
         if let userModel,
            let promptBlock = userModel.promptBlock(includeIdentity: globalMemory?.isEmpty ?? true) {
-            parts.append("---\n\nDERIVED USER MODEL:\n\(promptBlock)")
+            stable.append("---\n\nDERIVED USER MODEL:\n\(promptBlock)")
         }
 
-        parts.append("---\n\nACTIVE CHAT MODE: \(chatMode.label)\n\(chatMode.contextBlock)")
-
-        // Layer 3: Project context (if active)
         if let goal = projectGoal, !goal.isEmpty {
-            parts.append("---\n\nCURRENT PROJECT GOAL: \(goal)")
+            stable.append("---\n\nCURRENT PROJECT GOAL: \(goal)")
         }
 
-        // Layer 4: Recent conversations for cross-window continuity.
-        // Uses active conversation memory entries (Alex-only,
-        // evidence-filtered), NOT the raw transcript — raw content includes
-        // Nous's own replies and would reintroduce self-confirmation across
-        // chats. See Codex #4.
         if !recentConversations.isEmpty {
-            parts.append("---\n\nRECENT CONVERSATIONS WITH ALEX:")
+            stable.append("---\n\nRECENT CONVERSATIONS WITH ALEX:")
             for conversation in recentConversations {
                 let snippet = String(conversation.memory.prefix(280))
-                parts.append("\"\(conversation.title)\": \(snippet)")
+                stable.append("\"\(conversation.title)\": \(snippet)")
             }
         }
 
-        // Layer 5: Attached files (if any)
+        // Volatile: per-turn signals. The judge re-infers chat mode each turn, citations
+        // come from fresh RAG, attachments are turn-specific, etc. Keeping these out of
+        // the cache costs ~300 tokens/turn in re-send but keeps hit rate near 100%.
+        volatilePieces.append(activeChatModeBlock(chatMode))
+
+        if SafetyGuardrails.isHighRiskQuery(currentUserInput) {
+            volatilePieces.append(highRiskSafetyModeBlock)
+        }
+
         if !attachments.isEmpty {
-            parts.append("---\n\nATTACHED FILES:")
+            volatilePieces.append("---\n\nATTACHED FILES:")
             for attachment in attachments {
                 if let extractedText = attachment.extractedText, !extractedText.isEmpty {
-                    parts.append("FILE: \(attachment.name)\n\(extractedText)")
+                    volatilePieces.append("FILE: \(attachment.name)\n\(extractedText)")
                 } else {
-                    parts.append("FILE: \(attachment.name)\nContent preview unavailable. Ask Alex for the relevant excerpt if more detail is needed.")
+                    volatilePieces.append("FILE: \(attachment.name)\nContent preview unavailable. Ask Alex for the relevant excerpt if more detail is needed.")
                 }
             }
         }
 
-        // Layer 6: Retrieved knowledge (RAG)
         if !citations.isEmpty {
-            parts.append("---\n\nRELEVANT KNOWLEDGE FROM ALEX'S NOTES AND CONVERSATIONS:")
+            volatilePieces.append("---\n\nRELEVANT KNOWLEDGE FROM ALEX'S NOTES AND CONVERSATIONS:")
             for (index, result) in citations.enumerated() {
                 let percent = Int(result.similarity * 100)
                 let snippet = String(result.node.content.prefix(300))
-                parts.append("[\(index + 1)] \"\(result.node.title)\" (\(percent)% relevance): \(snippet)")
+                let laneNote = result.lane == .longGap ? ", older cross-time connection" : ""
+                volatilePieces.append("[\(index + 1)] \"\(result.node.title)\" (\(percent)% relevance\(laneNote)): \(snippet)")
             }
-            parts.append("Reference the above when relevant. Cite by title. If knowledge contradicts something Alex said before, surface the tension.")
+            volatilePieces.append("Reference the above when relevant. Cite by title. If knowledge contradicts something Alex said before, surface the tension.")
+        }
+
+        if let longGapGuidance = longGapConnectionGuidance(
+            chatMode: chatMode,
+            currentUserInput: currentUserInput,
+            citations: citations,
+            now: now
+        ) {
+            volatilePieces.append(longGapGuidance)
         }
 
         if let activeQuickActionMode {
-            parts.append("ACTIVE QUICK MODE: \(activeQuickActionMode.label)")
+            volatilePieces.append("ACTIVE QUICK MODE: \(activeQuickActionMode.label)")
         }
 
         if allowInteractiveClarification {
-            parts.append(
+            volatilePieces.append(
                 """
                 ---
 
@@ -895,7 +979,10 @@ final class ChatViewModel {
             )
         }
 
-        return parts.joined(separator: "\n\n")
+        return TurnSystemSlice(
+            stable: stable.joined(separator: "\n\n"),
+            volatile: volatilePieces.joined(separator: "\n\n")
+        )
     }
 
     static func governanceTrace(
@@ -912,7 +999,8 @@ final class ChatViewModel {
         projectGoal: String?,
         attachments: [AttachedFileContext] = [],
         activeQuickActionMode: QuickActionMode? = nil,
-        allowInteractiveClarification: Bool = false
+        allowInteractiveClarification: Bool = false,
+        now: Date = Date()
     ) -> PromptGovernanceTrace {
         var layers = ["anchor", "memory_interpretation_policy", "core_safety_policy", "chat_mode"]
         let highRiskQueryDetected = SafetyGuardrails.isHighRiskQuery(currentUserInput)
@@ -927,6 +1015,14 @@ final class ChatViewModel {
         if !recentConversations.isEmpty { layers.append("recent_conversations") }
         if !attachments.isEmpty { layers.append("attachments") }
         if !citations.isEmpty { layers.append("citations") }
+        if longGapConnectionGuidance(
+            chatMode: chatMode,
+            currentUserInput: currentUserInput,
+            citations: citations,
+            now: now
+        ) != nil {
+            layers.append("long_gap_bridge_guidance")
+        }
         if activeQuickActionMode != nil { layers.append("quick_action_mode") }
         if allowInteractiveClarification { layers.append("interactive_clarification") }
         if chatMode == .strategist { layers.append("strategist_mode") }
@@ -938,6 +1034,60 @@ final class ChatViewModel {
             safetyPolicyInvoked: highRiskQueryDetected,
             highRiskQueryDetected: highRiskQueryDetected
         )
+    }
+
+    private static func longGapConnectionGuidance(
+        chatMode: ChatMode,
+        currentUserInput: String?,
+        citations: [SearchResult],
+        now: Date
+    ) -> String? {
+        guard !SafetyGuardrails.isHighRiskQuery(currentUserInput) else { return nil }
+        guard let candidate = preferredLongGapBridgeCitation(citations: citations, now: now) else { return nil }
+
+        let snippet = String(candidate.node.content.prefix(220))
+        let modeSpecificRule: String
+
+        switch chatMode {
+        case .companion:
+            modeSpecificRule = "- Keep it gentle and hypothesis-led. Use language like \"might\", \"seems\", or \"could be\"."
+        case .strategist:
+            modeSpecificRule = "- Name the line directly and clearly. Prioritize precision over cushioning, but do not sound prosecutorial or therapeutic."
+        }
+
+        return """
+        ---
+
+        LONG-GAP CONNECTION CUE:
+        One retrieved source may matter here as an older cross-time connection:
+        "\(candidate.node.title)": \(snippet)
+
+        Use this only if it deepens the answer.
+        If you use it:
+        - Add at most one short bridge sentence.
+        - Explain why that earlier moment matters now.
+        - Focus on movement, tension, or progression across time, not on catching Alex being inconsistent.
+        - Do not mention retrieval, citations, similarity scores, dates, percentages, or the phrase "long-gap".
+        - If the answer already works without this connection, leave it out.
+        - Do not stack multiple older threads in one reply.
+        \(modeSpecificRule)
+        """
+    }
+
+    private static func preferredLongGapBridgeCitation(
+        citations: [SearchResult],
+        now: Date
+    ) -> SearchResult? {
+        citations.first {
+            $0.lane == .longGap &&
+            $0.similarity >= 0.62 &&
+            ageDays(since: $0.node.createdAt, now: now) >= 45
+        }
+    }
+
+    private static func ageDays(since createdAt: Date, now: Date) -> Int {
+        let elapsed = max(0, now.timeIntervalSince(createdAt))
+        return Int(elapsed / 86_400)
     }
 
     private static func userMessageContent(query: String, attachmentNames: [String]) -> String {
@@ -1076,6 +1226,233 @@ final class ChatViewModel {
         }
 
         return fallback
+    }
+
+    /// Attaches the resolved cache handle to the Gemini service. When the handle is
+    /// `nil`, returns the service unchanged so the full system + transcript goes through
+    /// the normal request path.
+    @MainActor
+    private func configuredGeminiService(
+        from llm: any LLMService,
+        cacheEntry: GeminiConversationCacheEntry?
+    ) -> any LLMService {
+        guard var gemini = llm as? GeminiLLMService, let entry = cacheEntry else { return llm }
+        gemini.cachedContentName = entry.name
+        return gemini
+    }
+
+    /// Builds the `contents` array for a single turn. With an active cache the server
+    /// already has the transcript prefix + stable system, so we send just the current
+    /// user message — with the volatile block prepended so per-turn signals (chat mode,
+    /// citations, quick-action label, etc.) still reach the model.
+    @MainActor
+    private func requestMessages(
+        forSlice slice: TurnSystemSlice,
+        transcriptMessages: [LLMMessage],
+        cacheEntry: GeminiConversationCacheEntry?
+    ) -> [LLMMessage] {
+        guard cacheEntry != nil,
+              let latestMessage = transcriptMessages.last,
+              latestMessage.role == "user" else {
+            return transcriptMessages
+        }
+
+        let prefixedContent = ChatViewModel.prefixedUserMessageContent(
+            volatile: slice.volatile,
+            userContent: latestMessage.content
+        )
+        return [LLMMessage(role: "user", content: prefixedContent)]
+    }
+
+    /// When the cache is active, Gemini rejects a request that also supplies a
+    /// `systemInstruction` (it's locked into the cache). Return nil in that case; the
+    /// volatile block is carried via the prepended user message content instead.
+    @MainActor
+    private func requestSystem(
+        forSlice slice: TurnSystemSlice,
+        cacheEntry: GeminiConversationCacheEntry?
+    ) -> String? {
+        if cacheEntry != nil { return nil }
+        return slice.combined
+    }
+
+    /// Looks up a valid cache entry for this conversation by hashing the stable system
+    /// and the transcript prefix (everything except the current user turn). Separated
+    /// from `configuredGeminiService` + `requestMessages` + `requestSystem` so callers
+    /// resolve the entry exactly once per turn and thread it through — the previous
+    /// implementation recomputed the SHA256 three times per send.
+    @MainActor
+    private func activeGeminiHistoryCache(
+        nodeId: UUID,
+        llm: any LLMService,
+        stableSystem: String,
+        transcriptMessages: [LLMMessage]
+    ) -> GeminiConversationCacheEntry? {
+        guard let gemini = llm as? GeminiLLMService else { return nil }
+        guard transcriptMessages.count >= 2 else { return nil }
+        let prefixHash = GeminiPromptCacheService.promptHash(
+            system: stableSystem,
+            messages: Array(transcriptMessages.dropLast())
+        )
+        return geminiPromptCache.activeCache(for: nodeId, model: gemini.model, promptHash: prefixHash)
+    }
+
+    static func prefixedUserMessageContent(volatile: String, userContent: String) -> String {
+        guard !volatile.isEmpty else { return userContent }
+        return """
+        <turn-context>
+        \(volatile)
+        </turn-context>
+
+        \(userContent)
+        """
+    }
+
+    @MainActor
+    private func configuredStreamingService(
+        from llm: any LLMService,
+        responseTaskId: UUID,
+        captureThinking: Bool
+    ) -> any LLMService {
+        guard var gemini = llm as? GeminiLLMService else { return llm }
+
+        gemini.onUsageMetadata = { [weak self] usage in
+            guard let self, self.isActiveResponseTask(responseTaskId) else { return }
+            self.governanceTelemetry.recordGeminiUsage(usage)
+        }
+
+        guard captureThinking else { return gemini }
+
+        gemini.thinkingBudgetTokens = 2000
+        // @MainActor closures: the producer `await`s these, so writes land in
+        // parse order and are visible to the post-stream budget-exhaust check below.
+        gemini.onThinkingDelta = { [weak self] delta in
+            guard let self, self.isActiveResponseTask(responseTaskId) else { return }
+            self.currentThinking.append(delta)
+        }
+        gemini.onBudgetExhausted = { [weak self] in
+            guard let self, self.isActiveResponseTask(responseTaskId) else { return }
+            self.didHitBudgetExhaustion = true
+        }
+        return gemini
+    }
+
+    @MainActor
+    private func refreshGeminiConversationCacheIfNeeded(
+        nodeId: UUID,
+        llm: any LLMService,
+        stableSystem: String,
+        persistedMessages: [Message]
+    ) {
+        guard let gemini = llm as? GeminiLLMService else {
+            geminiPromptCache.removeEntry(for: nodeId)
+            cancelInFlightCacheRefresh(for: nodeId)
+            return
+        }
+
+        let transcriptMessages = persistedMessages.map {
+            LLMMessage(role: $0.role == .user ? "user" : "assistant", content: $0.content)
+        }
+        let existingEntry = geminiPromptCache.entry(for: nodeId)
+
+        guard Self.shouldCreateGeminiHistoryCache(for: transcriptMessages) else {
+            geminiPromptCache.removeEntry(for: nodeId)
+            cancelInFlightCacheRefresh(for: nodeId)
+            guard let existingEntry else { return }
+            Task {
+                try? await gemini.deleteCachedContent(name: existingEntry.name)
+            }
+            return
+        }
+
+        let promptHash = GeminiPromptCacheService.promptHash(
+            system: stableSystem,
+            messages: transcriptMessages
+        )
+        if let existingEntry,
+           existingEntry.model == gemini.model,
+           existingEntry.promptHash == promptHash,
+           existingEntry.expireTime.map({ $0 > Date() }) ?? true {
+            return
+        }
+
+        let oldCacheName = existingEntry?.name
+        let displayName = "nous-\(nodeId.uuidString.prefix(8))"
+
+        // Cancel any prior in-flight refresh for this conversation. Without this, a
+        // slow earlier refresh completing after a newer one would overwrite the newer
+        // entry and leak the newer server-side cache (oldCacheName captures from
+        // `existingEntry` at spawn time, so the stale delete is correct either way).
+        cancelInFlightCacheRefresh(for: nodeId)
+
+        // Generation token: the worker only commits its result if this conversation's
+        // token still matches at store time. If a newer refresh started and bumped the
+        // token, this worker's cache handle is orphaned server-side and must be cleaned
+        // up to avoid storage billing for a cache nobody will ever reference.
+        let token = UUID()
+        geminiCacheRefreshTokens[nodeId] = token
+
+        let task = Task { [weak self] in
+            do {
+                let created = try await gemini.createCachedContent(
+                    messages: transcriptMessages,
+                    system: stableSystem,
+                    ttlSeconds: 300,
+                    displayName: displayName
+                )
+                try Task.checkCancellation()
+                let committed = await MainActor.run { () -> Bool in
+                    guard let self else { return false }
+                    guard self.geminiCacheRefreshTokens[nodeId] == token else { return false }
+                    self.geminiPromptCache.store(
+                        GeminiConversationCacheEntry(
+                            name: created.name,
+                            model: created.model,
+                            promptHash: promptHash,
+                            expireTime: created.expireTime
+                        ),
+                        for: nodeId
+                    )
+                    return true
+                }
+                if committed {
+                    if let oldCacheName, oldCacheName != created.name {
+                        try? await gemini.deleteCachedContent(name: oldCacheName)
+                    }
+                } else {
+                    // Superseded by a newer refresh. Drop our orphaned handle server-side
+                    // so it isn't billed for the full TTL with nobody to reference it.
+                    try? await gemini.deleteCachedContent(name: created.name)
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                print("[gemini-cache] failed to refresh cached content: \(error)")
+            }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                if self.geminiCacheRefreshTokens[nodeId] == token {
+                    self.geminiCacheRefreshTokens.removeValue(forKey: nodeId)
+                    self.geminiCacheRefreshTasks.removeValue(forKey: nodeId)
+                }
+            }
+        }
+        geminiCacheRefreshTasks[nodeId] = task
+    }
+
+    @MainActor
+    private func cancelInFlightCacheRefresh(for nodeId: UUID) {
+        geminiCacheRefreshTasks[nodeId]?.cancel()
+        geminiCacheRefreshTasks.removeValue(forKey: nodeId)
+        geminiCacheRefreshTokens.removeValue(forKey: nodeId)
+    }
+
+    private static func shouldCreateGeminiHistoryCache(for messages: [LLMMessage]) -> Bool {
+        guard messages.count >= 4 else { return false }
+        let characterCount = messages.reduce(into: 0) { $0 += $1.content.count }
+        // Gemini 2.5 Flash implicit caching starts at 1024 prompt tokens; use a
+        // conservative char-count gate before paying an explicit cache-create call.
+        return characterCount >= 4096
     }
 
     /// Routes refresh work through the scheduler actor so it serialises after

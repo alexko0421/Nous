@@ -1,9 +1,21 @@
 import Foundation
 import Accelerate
 
+enum RetrievalLane: Equatable {
+    case semantic
+    case longGap
+}
+
 struct SearchResult {
     let node: NousNode
     let similarity: Float
+    let lane: RetrievalLane
+
+    init(node: NousNode, similarity: Float, lane: RetrievalLane = .semantic) {
+        self.node = node
+        self.similarity = similarity
+        self.lane = lane
+    }
 }
 
 final class VectorStore {
@@ -40,6 +52,69 @@ final class VectorStore {
         return Array(results.prefix(topK))
     }
 
+    /// Chat-only retrieval keeps semantic matches dominant while reserving one
+    /// slot for an older-but-still-relevant spark.
+    func searchForChatCitations(
+        query: [Float],
+        topK: Int = 5,
+        excludeIds: Set<UUID> = [],
+        now: Date = Date(),
+        candidatePoolSize: Int = 40,
+        semanticSlots: Int = 3,
+        minSimilarityForLongGap: Float = 0.55,
+        minAgeDaysForLongGap: Int = 30,
+        ageBoostAlpha: Float = 0.15
+    ) throws -> [SearchResult] {
+        guard topK > 0 else { return [] }
+
+        let semanticQuota = min(semanticSlots, topK)
+        let candidates = try search(
+            query: query,
+            topK: max(candidatePoolSize, topK, semanticQuota + 1),
+            excludeIds: excludeIds
+        )
+
+        guard candidates.count > semanticQuota else {
+            return Array(candidates.prefix(topK))
+        }
+
+        var selected: [SearchResult] = []
+        var seen = Set<UUID>()
+
+        func admit(_ result: SearchResult) {
+            guard selected.count < topK else { return }
+            guard seen.insert(result.node.id).inserted else { return }
+            selected.append(result)
+        }
+
+        candidates.prefix(semanticQuota).forEach(admit)
+
+        let longGapCandidate = candidates
+            .dropFirst(semanticQuota)
+            .filter {
+                $0.similarity >= minSimilarityForLongGap &&
+                ageDays(since: $0.node.createdAt, now: now) >= minAgeDaysForLongGap
+            }
+            .max {
+                longGapInsightScore(for: $0, now: now, alpha: ageBoostAlpha) <
+                longGapInsightScore(for: $1, now: now, alpha: ageBoostAlpha)
+            }
+
+        if let longGapCandidate {
+            admit(SearchResult(
+                node: longGapCandidate.node,
+                similarity: longGapCandidate.similarity,
+                lane: .longGap
+            ))
+        }
+
+        for result in candidates where selected.count < topK {
+            admit(result)
+        }
+
+        return selected
+    }
+
     /// Find all nodes semantically similar to a given node above a threshold.
     func findSemanticNeighbors(for node: NousNode, threshold: Float = 0.75) throws -> [SearchResult] {
         guard let embedding = node.embedding else { return [] }
@@ -52,5 +127,15 @@ final class VectorStore {
         guard var node = try nodeStore.fetchNode(id: nodeId) else { return }
         node.embedding = embedding
         try nodeStore.updateNode(node)
+    }
+
+    private func ageDays(since createdAt: Date, now: Date) -> Int {
+        let elapsed = max(0, now.timeIntervalSince(createdAt))
+        return Int(elapsed / 86_400)
+    }
+
+    private func longGapInsightScore(for result: SearchResult, now: Date, alpha: Float) -> Float {
+        let age = Float(ageDays(since: result.node.createdAt, now: now))
+        return result.similarity * (1 + alpha * Float(log1p(Double(age))))
     }
 }

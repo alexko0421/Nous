@@ -663,7 +663,7 @@ struct MemoryDebugInspector: View {
         }
     }
 
-    private static func relative(_ date: Date) -> String {
+    static func relative(_ date: Date) -> String {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .short
         return formatter.localizedString(for: date, relativeTo: Date())
@@ -677,6 +677,9 @@ struct JudgeEventsTab: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if let summary = telemetry.geminiCacheSummary {
+                geminiCacheSummaryCard(summary)
+            }
             HStack {
                 Picker("Filter", selection: $filter) {
                     Text("All").tag(JudgeEventFilter.none)
@@ -722,6 +725,56 @@ struct JudgeEventsTab: View {
         .padding()
         .onAppear(perform: reload)
         .onChange(of: filter) { _, _ in reload() }
+    }
+
+    private func geminiCacheSummaryCard(_ summary: GeminiCacheSummary) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Gemini Cache")
+                .font(.headline)
+
+            HStack(spacing: 12) {
+                cacheStat(title: "Requests", value: "\(summary.requestCount)")
+                cacheStat(title: "Overall Hit", value: percentage(summary.cacheHitRate))
+                cacheStat(title: "Cached Tokens", value: "\(summary.totalCachedTokens)")
+            }
+
+            if let last = summary.lastSnapshot {
+                Text(
+                    "Last request: \(last.usage.cachedContentTokenCount)/\(last.usage.promptTokenCount) prompt tokens reused (\(percentage(last.cacheHitRate))) \(MemoryDebugInspector.relative(last.recordedAt))."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+        .padding()
+        .background(Color.secondary.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private func cacheStat(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.headline.monospacedDigit())
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 8)
+        .padding(.horizontal, 10)
+        .background(Color.white.opacity(0.6))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private func percentage(_ value: Double?) -> String {
+        guard let value else { return "n/a" }
+        return "\(Int((value * 100).rounded()))%"
+    }
+
+    private static func relative(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return formatter.localizedString(for: date, relativeTo: Date())
     }
 
     private func reload() {

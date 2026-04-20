@@ -6,6 +6,7 @@ struct ChatArea: View {
     @Binding var isSidebarVisible: Bool
 
     @State private var attachments: [AttachedFileContext] = []
+    @State private var isRelevantChatsExpanded = false
     @State private var isAttachmentMenuPresented = false
     @State private var isFileImporterPresented = false
     @State private var isPhotosPickerPresented = false
@@ -38,6 +39,14 @@ struct ChatArea: View {
         return ClarificationCardParser.parse(lastMessage.content).card
     }
 
+    private var latestUserMessageId: UUID? {
+        vm.messages.last(where: { $0.role == .user })?.id
+    }
+
+    private var citationNodeIDs: [UUID] {
+        vm.citations.map(\.node.id)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if isWelcomeState {
@@ -67,6 +76,14 @@ struct ChatArea: View {
                                         isThinkingStreaming: false,
                                         isUser: msg.role == .user
                                     )
+                                    if shouldShowRelevantChats(after: msg) {
+                                        RAGCitationView(
+                                            citations: vm.citations,
+                                            isExpanded: $isRelevantChatsExpanded,
+                                            onTap: { _ in }
+                                        )
+                                        .padding(.top, 8)
+                                    }
                                     if msg.role == .assistant,
                                        let eventId = vm.judgeEventId(forMessageId: msg.id) {
                                         HStack(spacing: 4) {
@@ -106,10 +123,6 @@ struct ChatArea: View {
                                     isThinkingStreaming: vm.isGenerating && !vm.currentThinking.isEmpty,
                                     isUser: false
                                 )
-                            }
-                            if !vm.citations.isEmpty {
-                                RAGCitationView(citations: vm.citations, onTap: { _ in })
-                                    .padding(.horizontal, 36)
                             }
                         }
                         .padding(.horizontal, 36)
@@ -247,6 +260,9 @@ struct ChatArea: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(AppColor.colaBeige)
         .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
+        .onChange(of: citationNodeIDs) { _, _ in
+            isRelevantChatsExpanded = false
+        }
         .overlay(alignment: .topLeading) {
             Button(action: {
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
@@ -345,6 +361,12 @@ struct ChatArea: View {
                 attachments.append(attachment)
             }
         }
+    }
+
+    private func shouldShowRelevantChats(after message: Message) -> Bool {
+        message.role == .user &&
+        message.id == latestUserMessageId &&
+        !vm.citations.isEmpty
     }
 }
 

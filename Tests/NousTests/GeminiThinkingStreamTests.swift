@@ -105,4 +105,27 @@ final class GeminiThinkingStreamTests: XCTestCase {
         XCTAssertTrue(events.isEmpty)
         XCTAssertFalse(state.didYieldNonThoughtText)
     }
+
+    func testParserEmitsUsageMetadataWithoutCandidatePayload() {
+        let line = #"data: {"usageMetadata":{"promptTokenCount":2006,"cachedContentTokenCount":1920,"candidatesTokenCount":300,"thoughtsTokenCount":31,"totalTokenCount":2306}}"#
+
+        let (events, _) = parseAll([line])
+        let usageEvents = events.compactMap {
+            if case .usageMetadata(let usage) = $0 { return usage }
+            return nil
+        }
+
+        XCTAssertEqual(
+            usageEvents,
+            [
+                GeminiUsageMetadata(
+                    promptTokenCount: 2006,
+                    cachedContentTokenCount: 1920,
+                    candidatesTokenCount: 300,
+                    thoughtsTokenCount: 31,
+                    totalTokenCount: 2306
+                )
+            ]
+        )
+    }
 }
