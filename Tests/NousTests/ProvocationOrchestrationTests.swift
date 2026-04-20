@@ -785,7 +785,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
         try store.insertMemoryFactEntry(fact)
 
         // The stub judge returns shouldProvoke=true with entryId pointing at the seeded fact.
-        // After Step 3 wiring, deriveProvocationKind will see the fact id is in
+        // After Step F wiring, deriveProvocationKind will see the fact id is in
         // contradictionCandidateIds and stamp .contradiction onto verdictForLog before encoding.
         judge.nextVerdict = JudgeVerdict(
             tensionExists: true,
@@ -797,6 +797,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
         )
 
         // ACT: send a message that shares tokens with the fact so Jaccard > 0.
+        // tokenJaccard requires >= 3 tokens in BOTH strings; both inputs satisfy this.
         viewModel.inputText = "Maybe we should compete on price this time."
         await viewModel.send()
 
