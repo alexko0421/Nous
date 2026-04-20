@@ -806,9 +806,10 @@ final class ChatViewModel {
         return userTurnCount <= 1
     }
 
-    /// Derives the review discriminator stamped onto verdictJSON. Pure function;
-    /// kept static so it is independently testable without spinning up the full
-    /// view model.
+    /// Static so it can be unit-tested without spinning up the full view model.
+    /// Stamped onto verdictJSON by the send flow before the verdict is encoded;
+    /// do not call from additional sites or persisted verdictJSON content
+    /// becomes non-deterministic.
     static func deriveProvocationKind(
         verdict: JudgeVerdict,
         contradictionCandidateIds: Set<String>
