@@ -95,7 +95,7 @@ Every long conversation ends with a durable artifact in the Project. The chat be
 
 - **Phase 1** (ship first, ~2 hours): Approach A's prompt changes only. Deploy, test manually, observe whether "Land a take, stop" changes response shape noticeably without any other machinery. This answers: is the prompt rewrite sufficient, or does AI need the judge to force its hand?
 - **Phase 2** (day 1-2): Add `ConversationMarkdownService` + user-initiated "save as markdown" button (Approach B). Validates markdown's usefulness independently before AI proposes it. Obsidian export confirmed.
-- **Phase 3** (day 2-3): Extend `JudgeVerdict` with `arcStage` per the unified schema delta at `docs/superpowers/specs/2026-04-18-judge-verdict-v2-schema.md`. Add arcStage to fixture bank. When landing detected → AI proposes markdown. User-decline sticky within conversation.
+- **Phase 3** (day 2-3): Extend `JudgeVerdict` with `arcStage` once the closure-detection schema is finalized. Add arcStage to fixture bank. When landing detected → AI proposes markdown. User-decline sticky within conversation.
 
 **Why phased:** each phase is independently useful. Alex gets value after Phase 1 even if we never ship Phase 3. Phase 2's button is a safety net if arc detection in Phase 3 misfires.
 
