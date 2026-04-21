@@ -4,6 +4,7 @@ import SwiftUI
 struct ChatArea: View {
     @Bindable var vm: ChatViewModel
     @Binding var isSidebarVisible: Bool
+    var onNavigateToNode: (NousNode) -> Void = { _ in }
 
     @State private var attachments: [AttachedFileContext] = []
     @State private var isRelevantChatsExpanded = false
@@ -80,7 +81,7 @@ struct ChatArea: View {
                                         RAGCitationView(
                                             citations: vm.citations,
                                             isExpanded: $isRelevantChatsExpanded,
-                                            onTap: { _ in }
+                                            onOpenSource: onNavigateToNode
                                         )
                                         .padding(.top, 8)
                                     }
@@ -105,24 +106,41 @@ struct ChatArea: View {
                                 }
                             }
                             if vm.isGenerating && !vm.currentThinking.isEmpty && vm.currentResponse.isEmpty {
-                                // HStack + trailing Spacer so the streaming pill left-aligns
-                                // like assistant MessageBubbles. Without this wrap, the outer
-                                // VStack centers the intrinsic-width pill.
-                                HStack {
-                                    ThinkingAccordion(
-                                        content: vm.currentThinking,
-                                        isStreaming: true
-                                    )
-                                    Spacer()
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack {
+                                        ThinkingAccordion(
+                                            content: vm.currentThinking,
+                                            isStreaming: true
+                                        )
+                                        Spacer()
+                                    }
+                                    if !vm.citations.isEmpty {
+                                        RAGCitationView(
+                                            citations: vm.citations,
+                                            isExpanded: $isRelevantChatsExpanded,
+                                            onOpenSource: onNavigateToNode
+                                        )
+                                        .padding(.top, 4)
+                                    }
                                 }
                             }
                             if !vm.currentResponse.isEmpty {
-                                MessageBubble(
-                                    text: vm.currentResponse,
-                                    thinkingContent: vm.currentThinking.isEmpty ? nil : vm.currentThinking,
-                                    isThinkingStreaming: vm.isGenerating && !vm.currentThinking.isEmpty,
-                                    isUser: false
-                                )
+                                VStack(alignment: .leading, spacing: 4) {
+                                    MessageBubble(
+                                        text: vm.currentResponse,
+                                        thinkingContent: vm.currentThinking.isEmpty ? nil : vm.currentThinking,
+                                        isThinkingStreaming: vm.isGenerating && !vm.currentThinking.isEmpty,
+                                        isUser: false
+                                    )
+                                    if !vm.citations.isEmpty && vm.isGenerating {
+                                        RAGCitationView(
+                                            citations: vm.citations,
+                                            isExpanded: $isRelevantChatsExpanded,
+                                            onOpenSource: onNavigateToNode
+                                        )
+                                        .padding(.top, 4)
+                                    }
+                                }
                             }
                         }
                         .padding(.horizontal, 36)
@@ -364,9 +382,10 @@ struct ChatArea: View {
     }
 
     private func shouldShowRelevantChats(after message: Message) -> Bool {
-        message.role == .user &&
-        message.id == latestUserMessageId &&
-        !vm.citations.isEmpty
+        message.role == .assistant &&
+        message.id == vm.messages.last(where: { $0.role == .assistant })?.id &&
+        !vm.citations.isEmpty &&
+        !vm.isGenerating
     }
 }
 
@@ -386,17 +405,30 @@ struct MessageBubble: View {
                 ThinkingAccordion(content: thinkingContent, isStreaming: isThinkingStreaming)
             }
             if !parsed.displayText.isEmpty {
-                HStack {
-                    if isUser { Spacer() }
-                    Text(parsed.displayText)
-                        .font(.system(size: 13, weight: .regular))
-                        .foregroundColor(AppColor.colaDarkText)
-                        .lineSpacing(4)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                        .background(isUser ? AppColor.colaBubble : AppColor.colaOrange.opacity(0.12))
-                        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                    if !isUser { Spacer() }
+                if isUser {
+                    HStack {
+                        Spacer(minLength: 0)
+                        Text(parsed.displayText)
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundColor(AppColor.colaDarkText)
+                            .lineSpacing(4)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 12)
+                            .background(AppColor.colaBubble)
+                            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                            .textSelection(.enabled)
+                    }
+                } else {
+                    HStack {
+                        Text(parsed.displayText)
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundColor(AppColor.colaDarkText)
+                            .lineSpacing(6)
+                            .padding(.top, 4)
+                            .padding(.bottom, 8)
+                            .textSelection(.enabled)
+                        Spacer(minLength: 0)
+                    }
                 }
             }
         }

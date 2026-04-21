@@ -220,6 +220,10 @@ final class NodeStore {
         try db.exec(alterSQL)
     }
 
+    private func notifyNodesDidChange() {
+        NotificationCenter.default.post(name: .nousNodesDidChange, object: nil)
+    }
+
     // MARK: - Binary helpers
 
     private func encodeFloats(_ floats: [Float]) -> Data {
@@ -253,6 +257,7 @@ final class NodeStore {
         try stmt.bind(node.createdAt.timeIntervalSince1970, at: 9)
         try stmt.bind(node.updatedAt.timeIntervalSince1970, at: 10)
         try stmt.step()
+        notifyNodesDidChange()
     }
 
     func updateNode(_ node: NousNode) throws {
@@ -272,6 +277,7 @@ final class NodeStore {
         try stmt.bind(node.updatedAt.timeIntervalSince1970, at: 8)
         try stmt.bind(node.id.uuidString, at: 9)
         try stmt.step()
+        notifyNodesDidChange()
     }
 
     func deleteNode(id: UUID) throws {
@@ -281,6 +287,7 @@ final class NodeStore {
             try stmt.bind(id.uuidString, at: 1)
             try stmt.step()
         }
+        notifyNodesDidChange()
     }
 
     func fetchNode(id: UUID) throws -> NousNode? {
@@ -301,6 +308,24 @@ final class NodeStore {
         var results: [NousNode] = []
         while try stmt.step() {
             results.append(nodeFrom(stmt))
+        }
+        return results
+    }
+
+    /// Lightweight title lookup for inspector/debug UIs that should not decode
+    /// full node bodies or embedding blobs just to render labels.
+    func fetchAllNodeTitles() throws -> [UUID: String] {
+        let stmt = try db.prepare("""
+            SELECT id, title
+            FROM nodes
+            ORDER BY updatedAt DESC;
+        """)
+        var results: [UUID: String] = [:]
+        while try stmt.step() {
+            guard let rawId = stmt.text(at: 0),
+                  let id = UUID(uuidString: rawId) else { continue }
+            let title = stmt.text(at: 1) ?? ""
+            results[id] = title.isEmpty ? "Untitled" : title
         }
         return results
     }
@@ -490,6 +515,7 @@ final class NodeStore {
         try stmt.bind(message.timestamp.timeIntervalSince1970, at: 5)
         try stmt.bind(message.thinkingContent, at: 6)
         try stmt.step()
+        notifyNodesDidChange()
     }
 
     func fetchMessages(nodeId: UUID) throws -> [Message] {
@@ -1052,6 +1078,7 @@ final class NodeStore {
         try stmt.bind(project.emoji, at: 4)
         try stmt.bind(project.createdAt.timeIntervalSince1970, at: 5)
         try stmt.step()
+        notifyNodesDidChange()
     }
 
     func fetchProject(id: UUID) throws -> Project? {
@@ -1081,6 +1108,7 @@ final class NodeStore {
             try stmt.bind(id.uuidString, at: 1)
             try stmt.step()
         }
+        notifyNodesDidChange()
     }
 
     private func projectFrom(_ stmt: Statement) -> Project {

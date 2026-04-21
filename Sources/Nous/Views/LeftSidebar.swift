@@ -232,6 +232,8 @@ struct LeftSidebar: View {
     var onNodeSelected: ((NousNode) -> Void)?
     var onNewChat: (() -> Void)?
 
+    @AppStorage("nous.username") private var username = "ALEX"
+
     @State private var favorites: [NousNode] = []
     @State private var recents: [NousNode] = []
     @State private var showProjectList = false
@@ -346,25 +348,30 @@ struct LeftSidebar: View {
                     .padding(.bottom, 12)
 
                 HStack(spacing: 12) {
-                    Button(action: { selectedTab = .settings }) {
-                        Circle()
-                            .fill(AppColor.colaOrange.opacity(0.15))
-                            .frame(width: 30, height: 30)
-                            .overlay(
-                                Text("A")
-                                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                                    .foregroundColor(AppColor.colaOrange)
-                            )
-                    }
-                    .buttonStyle(.plain)
+                    Circle()
+                        .fill(selectedTab == .settings ? AppColor.colaOrange : AppColor.colaOrange.opacity(0.15))
+                        .frame(width: 30, height: 30)
+                        .overlay(
+                            Text(username.first.map(String.init)?.uppercased() ?? "A")
+                                .font(.system(size: 13, weight: .bold, design: .rounded))
+                                .foregroundColor(selectedTab == .settings ? .white : AppColor.colaOrange)
+                        )
 
-                    Text("ALEX")
+                    Text(username.uppercased())
                         .font(.system(size: 11, weight: .bold, design: .rounded))
                         .foregroundColor(AppColor.colaDarkText)
 
                     Spacer(minLength: 0)
                 }
-                .padding(.leading, 20)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    selectedTab = .settings
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 8)
+                .background(selectedTab == .settings ? AppColor.colaOrange.opacity(0.08) : Color.clear)
+                .cornerRadius(12)
+                .padding(.horizontal, 8)
                 .padding(.bottom, 16)
             }
         }

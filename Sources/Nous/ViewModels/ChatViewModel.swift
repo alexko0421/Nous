@@ -373,6 +373,7 @@ final class ChatViewModel {
             if let queryEmbedding = try? embeddingService.embed(retrievalQuery) {
                 let results = (try? vectorStore.searchForChatCitations(
                     query: queryEmbedding,
+                    queryText: retrievalQuery,
                     topK: 5,
                     excludeIds: [node.id]
                 )) ?? []
@@ -924,7 +925,7 @@ final class ChatViewModel {
             volatilePieces.append("---\n\nRELEVANT KNOWLEDGE FROM ALEX'S NOTES AND CONVERSATIONS:")
             for (index, result) in citations.enumerated() {
                 let percent = Int(result.similarity * 100)
-                let snippet = String(result.node.content.prefix(300))
+                let snippet = result.surfacedSnippet
                 let laneNote = result.lane == .longGap ? ", older cross-time connection" : ""
                 volatilePieces.append("[\(index + 1)] \"\(result.node.title)\" (\(percent)% relevance\(laneNote)): \(snippet)")
             }
@@ -1045,7 +1046,7 @@ final class ChatViewModel {
         guard !SafetyGuardrails.isHighRiskQuery(currentUserInput) else { return nil }
         guard let candidate = preferredLongGapBridgeCitation(citations: citations, now: now) else { return nil }
 
-        let snippet = String(candidate.node.content.prefix(220))
+        let snippet = String(candidate.surfacedSnippet.prefix(220))
         let modeSpecificRule: String
 
         switch chatMode {

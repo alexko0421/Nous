@@ -4,270 +4,216 @@ struct SettingsView: View {
     @Bindable var vm: SettingsViewModel
     let userMemoryService: UserMemoryService
     let telemetry: GovernanceTelemetryStore
-    @State private var showMemoryInspector = false
+    
+    enum SettingsTab: String, CaseIterable {
+        case profile = "Profile"
+        case general = "General"
+        case models = "Models"
+        case memory = "Memory"
+        
+        var icon: String {
+            switch self {
+            case .profile: return "person.crop.circle"
+            case .general: return "gearshape"
+            case .models: return "cpu"
+            case .memory: return "brain.head.profile"
+            }
+        }
+    }
+    
+    @State private var selectedTab: SettingsTab = .profile
+    @AppStorage("nous.username") private var username = "ALEX"
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-
-                // ── Title ──
+        HStack(spacing: 0) {
+            // Custom sidebar
+            VStack(alignment: .leading, spacing: 4) {
                 Text("Settings")
-                    .font(.system(size: 28, weight: .semibold, design: .rounded))
-                    .foregroundColor(AppColor.colaDarkText)
-                    .padding(.top, 4)
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundColor(AppColor.secondaryText)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 24)
+                    .padding(.bottom, 8)
 
-                // ── LLM Provider ──
-                settingsCard {
-                    VStack(alignment: .leading, spacing: 12) {
-                        sectionLabel("LLM Provider")
-
-                        HStack(spacing: 10) {
-                            ForEach(LLMProvider.allCases, id: \.self) { provider in
-                                providerButton(provider)
-                            }
+                ForEach(SettingsTab.allCases, id: \.self) { tab in
+                    Button(action: {
+                        selectedTab = tab
+                    }) {
+                        HStack(spacing: 12) {
+                            Image(systemName: tab.icon)
+                                .font(.system(size: 13, weight: .medium))
+                                .frame(width: 16)
+                            Text(tab.rawValue)
+                                .font(.system(size: 13, weight: selectedTab == tab ? .semibold : .medium, design: .rounded))
+                            Spacer(minLength: 0)
                         }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .foregroundColor(selectedTab == tab ? .white : AppColor.colaDarkText.opacity(0.85))
+                        .background(selectedTab == tab ? AppColor.colaOrange : Color.clear)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 12)
                 }
 
-                // ── Provider-specific config ──
-                settingsCard {
-                    VStack(alignment: .leading, spacing: 12) {
-                        switch vm.selectedProvider {
-                        case .local:
-                            localModelSection
-                        case .gemini:
-                            apiKeySection(
-                                label: "Gemini API Key",
-                                placeholder: "AIza…",
-                                binding: $vm.geminiApiKey
-                            )
-                        case .claude:
-                            apiKeySection(
-                                label: "Claude API Key",
-                                placeholder: "sk-ant-…",
-                                binding: $vm.claudeApiKey
-                            )
-                        case .openai:
-                            apiKeySection(
-                                label: "OpenAI API Key",
-                                placeholder: "sk-…",
-                                binding: $vm.openaiApiKey
-                            )
-                        }
-                    }
-                }
-
-                // ── Embedding model ──
-                settingsCard {
-                    VStack(alignment: .leading, spacing: 12) {
-                        sectionLabel("Embedding Model")
-                        modelRow(
-                            name: vm.embeddingModelId,
-                            isLoaded: vm.isEmbeddingLoaded,
-                            progress: vm.embeddingDownloadProgress,
-                            onLoad: {
-                                Task { await vm.loadEmbeddingModel() }
-                            }
-                        )
-                    }
-                }
-
-                // ── Vector DB stats ──
-                settingsCard {
-                    VStack(alignment: .leading, spacing: 12) {
-                        sectionLabel("Vector Database")
-                        HStack {
-                            Image(systemName: "cylinder.split.1x2")
-                                .foregroundColor(AppColor.colaOrange)
-                            Text("\(vm.vectorCount) vectors indexed")
-                                .font(.system(size: 14, design: .rounded))
-                                .foregroundColor(AppColor.colaDarkText.opacity(0.75))
-                            Spacer()
-                            Text(vm.databaseSize)
-                                .font(.system(size: 13))
-                                .foregroundColor(AppColor.colaDarkText.opacity(0.45))
-                        }
-                    }
-                }
-
-                // ── Memory ──
-                settingsCard {
-                    VStack(alignment: .leading, spacing: 12) {
-                        sectionLabel("Memory")
-                        HStack {
-                            Text("Inspect, confirm, archive, or delete what Nous remembers.")
-                                .font(.system(size: 13, design: .rounded))
-                                .foregroundColor(AppColor.colaDarkText.opacity(0.7))
-                            Spacer()
-                            Button("Open") { showMemoryInspector = true }
-                                .buttonStyle(.plain)
-                                .font(.system(size: 12, weight: .medium, design: .rounded))
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(AppColor.colaOrange)
-                                .clipShape(Capsule())
-                        }
-                    }
-                }
-
-                Spacer(minLength: 20)
+                Spacer()
             }
-            .padding(24)
+            .frame(width: 180)
+            .background(AppColor.surfaceSecondary.opacity(0.3))
+            
+            Divider()
+                .opacity(0.5)
+
+            // Content area
+            Group {
+                switch selectedTab {
+                case .profile:
+                    profileTab
+                case .general:
+                    generalTab
+                case .models:
+                    modelsTab
+                case .memory:
+                    memoryTab
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(AppColor.colaBeige)
         }
-        .background(AppColor.colaBeige)
-        .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
         .onAppear {
             vm.updateStats()
         }
-        .sheet(isPresented: $showMemoryInspector) {
-            MemoryDebugInspector(nodeStore: vm.nodeStore, userMemoryService: userMemoryService, telemetry: telemetry)
-        }
     }
-
-    // MARK: - Provider button
-
-    @ViewBuilder
-    private func providerButton(_ provider: LLMProvider) -> some View {
-        let selected = vm.selectedProvider == provider
-        Button {
-            vm.selectedProvider = provider
-            vm.savePreferences()
-        } label: {
-            Text(providerShortName(provider))
-                .font(.system(size: 13, weight: selected ? .semibold : .regular, design: .rounded))
-                .foregroundColor(selected ? .white : AppColor.colaDarkText.opacity(0.7))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(selected ? AppColor.colaOrange : Color.white.opacity(0.6))
-                .clipShape(Capsule())
-                .overlay(
-                    Capsule()
-                        .stroke(
-                            selected ? AppColor.colaOrange : AppColor.colaDarkText.opacity(0.1),
-                            lineWidth: 1
-                        )
-                )
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func providerShortName(_ provider: LLMProvider) -> String {
-        switch provider {
-        case .local:  return "Local"
-        case .gemini: return "Gemini"
-        case .claude: return "Claude"
-        case .openai: return "OpenAI"
-        }
-    }
-
-    // MARK: - Local model section
-
-    @ViewBuilder
-    private var localModelSection: some View {
-        sectionLabel("Local Model")
-        modelRow(
-            name: vm.localModelId,
-            isLoaded: vm.isLLMLoaded,
-            progress: vm.llmDownloadProgress,
-            onLoad: {
-                Task { await vm.loadLocalLLM() }
+    
+    private var profileTab: some View {
+        Form {
+            Section {
+                TextField("Display Name", text: $username)
+                    .textFieldStyle(.roundedBorder)
+            } footer: {
+                Text("This name is used in the sidebar and as your primary identity when Nous stores personal memories about you.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-        )
+        }
+        .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
+        .background(AppColor.colaBeige)
+    }
+    
+    private var generalTab: some View {
+        Form {
+            Section {
+                Picker("LLM Provider:", selection: $vm.selectedProvider) {
+                    Text("Local MLX").tag(LLMProvider.local)
+                    Text("Google Gemini").tag(LLMProvider.gemini)
+                    Text("Anthropic Claude").tag(LLMProvider.claude)
+                    Text("OpenAI").tag(LLMProvider.openai)
+                }
+                .pickerStyle(.menu)
+                .onChange(of: vm.selectedProvider) { _, _ in
+                    vm.savePreferences()
+                }
+            }
+            
+            if vm.selectedProvider != .local {
+                Section {
+                    switch vm.selectedProvider {
+                    case .gemini:
+                        SecureField("Gemini API Key", text: $vm.geminiApiKey)
+                            .onSubmit { vm.savePreferences() }
+                    case .claude:
+                        SecureField("Claude API Key", text: $vm.claudeApiKey)
+                            .onSubmit { vm.savePreferences() }
+                    case .openai:
+                        SecureField("OpenAI API Key", text: $vm.openaiApiKey)
+                            .onSubmit { vm.savePreferences() }
+                    case .local:
+                        EmptyView()
+                    }
+                } footer: {
+                    Text("Your API key is stored securely in macOS Keychain.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
+        .background(AppColor.colaBeige)
+    }
+    
+    private var modelsTab: some View {
+        Form {
+            Section {
+                modelRow(
+                    label: "Local LLM:",
+                    name: vm.localModelId,
+                    isLoaded: vm.isLLMLoaded,
+                    progress: vm.llmDownloadProgress,
+                    onLoad: { Task { await vm.loadLocalLLM() } }
+                )
+                
+                modelRow(
+                    label: "Embedder:",
+                    name: vm.embeddingModelId,
+                    isLoaded: vm.isEmbeddingLoaded,
+                    progress: vm.embeddingDownloadProgress,
+                    onLoad: { Task { await vm.loadEmbeddingModel() } }
+                )
+            } footer: {
+                Text("Models run entirely on-device. Data never leaves your Mac.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            
+            Section {
+                LabeledContent("Vector Database:") {
+                    Text("\(vm.vectorCount) vectors, \(vm.databaseSize)")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
+        .background(AppColor.colaBeige)
     }
 
-    // MARK: - API key section
-
-    @ViewBuilder
-    private func apiKeySection(label: String, placeholder: String, binding: Binding<String>) -> some View {
-        sectionLabel(label)
-        SecureField(placeholder, text: binding)
-            .textFieldStyle(.plain)
-            .font(.system(size: 14, design: .monospaced))
-            .foregroundColor(AppColor.colaDarkText)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(Color.white.opacity(0.55))
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(AppColor.colaDarkText.opacity(0.08), lineWidth: 1)
-            )
-            .onSubmit { vm.savePreferences() }
+    private var memoryTab: some View {
+        MemoryDebugInspector(nodeStore: vm.nodeStore, userMemoryService: userMemoryService, telemetry: telemetry)
+            .background(AppColor.colaBeige)
     }
-
-    // MARK: - Model row
-
+    
     @ViewBuilder
     private func modelRow(
+        label: String,
         name: String,
         isLoaded: Bool,
         progress: Double,
         onLoad: @escaping () -> Void
     ) -> some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 4) {
+        LabeledContent(label) {
+            HStack(spacing: 8) {
                 Text(name)
-                    .font(.system(size: 13, design: .monospaced))
-                    .foregroundColor(AppColor.colaDarkText.opacity(0.8))
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-
+                    .frame(maxWidth: 140, alignment: .leading)
+                
                 if !isLoaded && progress > 0 {
                     ProgressView(value: progress)
-                        .tint(AppColor.colaOrange)
-                        .frame(maxWidth: .infinity)
+                        .progressViewStyle(.circular)
+                        .controlSize(.small)
+                } else if isLoaded {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                        .help("Model is loaded in memory")
+                } else {
+                    Button("Download", action: onLoad)
                 }
             }
-
-            Spacer()
-
-            if isLoaded {
-                Label("Loaded", systemImage: "checkmark.circle.fill")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.green)
-                    .labelStyle(.iconOnly)
-            } else {
-                Button(action: onLoad) {
-                    Text(progress > 0 ? "Downloading…" : "Download")
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(AppColor.colaOrange)
-                        .clipShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .disabled(progress > 0)
-            }
         }
-    }
-
-    // MARK: - Reusable card
-
-    @ViewBuilder
-    private func settingsCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            content()
-        }
-        .padding(16)
-        .background(Color.white.opacity(0.65))
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(AppColor.colaDarkText.opacity(0.06), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.03), radius: 6, x: 0, y: 2)
-    }
-
-    // MARK: - Section label
-
-    @ViewBuilder
-    private func sectionLabel(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 11, weight: .semibold, design: .rounded))
-            .foregroundColor(AppColor.colaDarkText.opacity(0.45))
-            .textCase(.uppercase)
-            .tracking(0.6)
     }
 }

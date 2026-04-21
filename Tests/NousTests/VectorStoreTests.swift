@@ -239,6 +239,68 @@ final class VectorStoreTests: XCTestCase {
         XCTAssertEqual(chatResults.map(\.node.title), semanticOnly.map(\.node.title))
     }
 
+    func testSearchForChatCitationsReturnsEmptyWhenMatchesAreTooWeakToSurface() throws {
+        let now = Date()
+        try insertNode(
+            title: "Weak one",
+            embedding: [0.44, 0.90, 0.0],
+            createdAt: now.addingTimeInterval(-86_400)
+        )
+        try insertNode(
+            title: "Weak two",
+            embedding: [0.43, 0.91, 0.0],
+            createdAt: now.addingTimeInterval(-2 * 86_400)
+        )
+        try insertNode(
+            title: "Weak three",
+            embedding: [0.41, 0.92, 0.0],
+            createdAt: now.addingTimeInterval(-3 * 86_400)
+        )
+
+        let results = try vectorStore.searchForChatCitations(
+            query: [1.0, 0.0, 0.0],
+            queryText: "Should this even find anything?",
+            topK: 4,
+            now: now
+        )
+
+        XCTAssertTrue(results.isEmpty)
+    }
+
+    func testSearchForChatCitationsBuildsQueryAnchoredConversationPreview() throws {
+        let now = Date()
+        let transcript = """
+        Alex: We were talking about coffee beans and morning routines.
+
+        Nous: That was mostly about daily habits.
+
+        Alex: I am scared of failing if I apply to YC this year.
+
+        Nous: The fear of failure is still sitting under the YC decision.
+        """
+
+        var node = NousNode(
+            type: .conversation,
+            title: "YC fear thread",
+            content: transcript,
+            createdAt: now.addingTimeInterval(-90 * 86_400),
+            updatedAt: now.addingTimeInterval(-90 * 86_400)
+        )
+        node.embedding = [1.0, 0.0, 0.0]
+        try nodeStore.insertNode(node)
+
+        let results = try vectorStore.searchForChatCitations(
+            query: [1.0, 0.0, 0.0],
+            queryText: "failure yc",
+            topK: 3,
+            now: now
+        )
+
+        XCTAssertEqual(results.count, 1)
+        XCTAssertTrue(results[0].surfacedSnippet.contains("fear of failure"))
+        XCTAssertFalse(results[0].surfacedSnippet.contains("coffee beans"))
+    }
+
     private func insertNode(title: String, embedding: [Float], createdAt: Date) throws {
         let node = NousNode(
             type: .note,

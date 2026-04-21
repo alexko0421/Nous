@@ -303,6 +303,65 @@ final class RAGPipelineTests: XCTestCase {
         XCTAssertFalse(context.contains("LONG-GAP CONNECTION CUE"))
     }
 
+    func testAssembleContextUsesCitationPreviewSnippetWhenAvailable() {
+        let node = NousNode(
+            type: .conversation,
+            title: "YC fear thread",
+            content: "Alex: Coffee chat.\n\nNous: Also coffee chat."
+        )
+
+        let context = ChatViewModel.assembleContext(
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [
+                SearchResult(
+                    node: node,
+                    similarity: 0.74,
+                    previewSnippet: "Alex: I am scared of failing if I apply to YC.\n\nNous: The fear is underneath the decision."
+                )
+            ],
+            projectGoal: nil
+        ).combined
+
+        XCTAssertTrue(context.contains("I am scared of failing if I apply to YC"))
+        XCTAssertFalse(context.contains("Coffee chat"))
+    }
+
+    func testAssembleContextUsesPreviewSnippetForLongGapCue() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let oldNode = NousNode(
+            type: .conversation,
+            title: "YC fear thread",
+            content: "Alex: Coffee chat.\n\nNous: Also coffee chat.",
+            createdAt: now.addingTimeInterval(-60 * 86_400),
+            updatedAt: now.addingTimeInterval(-60 * 86_400)
+        )
+
+        let context = ChatViewModel.assembleContext(
+            chatMode: .strategist,
+            currentUserInput: "I am thinking about applying to YC now.",
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [
+                SearchResult(
+                    node: oldNode,
+                    similarity: 0.72,
+                    lane: .longGap,
+                    previewSnippet: "Alex: I am scared of failing if I apply to YC.\n\nNous: The fear is underneath the decision."
+                )
+            ],
+            projectGoal: nil,
+            now: now
+        ).combined
+
+        XCTAssertTrue(context.contains("I am scared of failing if I apply to YC"))
+        XCTAssertFalse(context.contains("Coffee chat"))
+    }
+
     func testAssembleContextIncludesHypothesisLanguagePolicy() {
         let context = ChatViewModel.assembleContext(
             globalMemory: nil,

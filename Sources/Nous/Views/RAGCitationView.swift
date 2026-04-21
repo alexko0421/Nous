@@ -3,47 +3,40 @@ import SwiftUI
 struct RAGCitationView: View {
     let citations: [SearchResult]
     @Binding var isExpanded: Bool
-    var onTap: (NousNode) -> Void = { _ in }
+    var onOpenSource: (NousNode) -> Void = { _ in }
     @State private var previewNodeId: UUID?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 10) {
             Button {
                 withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
                     isExpanded.toggle()
                 }
             } label: {
-                HStack(spacing: 12) {
+                HStack(spacing: 8) {
                     Image(systemName: "arrow.triangle.2.circlepath")
-                        .font(.system(size: 15, weight: .medium))
+                        .font(.system(size: 11))
                         .foregroundStyle(AppColor.secondaryText)
-
-                    Text("Relevant chats")
-                        .font(.system(size: 15, weight: .medium, design: .rounded))
-                        .foregroundStyle(AppColor.colaDarkText)
-
-                    Spacer()
 
                     Text(resultCountLabel)
-                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .font(.system(size: 11))
                         .foregroundStyle(AppColor.secondaryText)
 
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 11, weight: .semibold))
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .medium))
                         .foregroundStyle(AppColor.secondaryText)
-                        .rotationEffect(.degrees(isExpanded ? 180 : 0))
                 }
-                .padding(.horizontal, 18)
-                .padding(.vertical, 16)
-                .contentShape(Rectangle())
+                .padding(.horizontal, 10)
+                .frame(height: 28)
+                .background(
+                    RoundedRectangle(cornerRadius: 14)
+                        .fill(AppColor.subtleFill)
+                )
             }
             .buttonStyle(.plain)
 
             if isExpanded {
                 VStack(alignment: .leading, spacing: 0) {
-                    Divider()
-                        .overlay(AppColor.panelStroke)
-
                     ForEach(Array(citations.enumerated()), id: \.element.node.id) { index, result in
                         Button {
                             withAnimation(.spring(response: 0.26, dampingFraction: 0.82)) {
@@ -70,8 +63,9 @@ struct RAGCitationView: View {
                                     }
                                 }
 
-                                if !result.node.content.isEmpty {
-                                    Text(String(result.node.content.prefix(140)))
+                                let collapsedSnippet = String(result.surfacedSnippet.prefix(140))
+                                if !collapsedSnippet.isEmpty {
+                                    Text(collapsedSnippet)
                                         .font(.system(size: 12, weight: .regular))
                                         .foregroundStyle(AppColor.secondaryText)
                                         .lineLimit(2)
@@ -99,17 +93,17 @@ struct RAGCitationView: View {
                         }
                     }
                 }
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(AppColor.surfaceSecondary)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(AppColor.panelStroke, lineWidth: 1)
+                )
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(AppColor.surfaceSecondary)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(AppColor.panelStroke, lineWidth: 1)
-        )
         .onChange(of: isExpanded) { _, expanded in
             if !expanded {
                 previewNodeId = nil
@@ -173,12 +167,31 @@ struct RAGCitationView: View {
                 }
             }
 
-            Text(previewText(for: result.node))
+            Text(result.surfacedSnippet)
                 .font(.system(size: 12, weight: .regular))
                 .foregroundStyle(AppColor.colaDarkText.opacity(0.84))
                 .lineSpacing(3)
                 .lineLimit(6)
                 .multilineTextAlignment(.leading)
+
+            Button {
+                onOpenSource(result.node)
+            } label: {
+                HStack(spacing: 6) {
+                    Text("Open source")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    Image(systemName: "arrow.up.right")
+                        .font(.system(size: 10, weight: .bold))
+                }
+                .foregroundStyle(AppColor.colaOrange)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(
+                    Capsule()
+                        .fill(AppColor.colaOrange.opacity(0.12))
+                )
+            }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
@@ -191,16 +204,6 @@ struct RAGCitationView: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(AppColor.panelStroke, lineWidth: 1)
         )
-    }
-
-    private func previewText(for node: NousNode) -> String {
-        let trimmed = node.content.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            return node.type == .conversation
-                ? "This chat does not have a usable preview yet."
-                : "This note does not have a usable preview yet."
-        }
-        return String(trimmed.prefix(320))
     }
 
     private func relative(_ date: Date) -> String {
