@@ -54,9 +54,14 @@ struct ScratchPadPanel: View {
         HStack(alignment: .center, spacing: 10) {
             HStack(spacing: 6) {
                 Image(systemName: "note.text")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(AppColor.colaOrange)
-                Text("白纸")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(width: 20, height: 20)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(AppColor.colaOrange)
+                    )
+                Text("Markdown")
                     .font(.system(size: 14, weight: .bold, design: .rounded))
                     .foregroundColor(AppColor.colaDarkText)
             }
@@ -158,7 +163,7 @@ struct ScratchPadPanel: View {
             } else {
                 TextEditor(text: editorBinding)
                     .font(.system(size: 14, design: .rounded))
-                    .foregroundColor(Color(NSColor.black))
+                    .foregroundColor(AppColor.colaDarkText)
                     .scrollContentBackground(.hidden)
                     .background(Color.clear)
                     .lineSpacing(6)
@@ -174,12 +179,11 @@ struct ScratchPadPanel: View {
             .padding(.horizontal, 32)
             .padding(.vertical, 40)
             .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color(red: 254/255, green: 252/255, blue: 248/255))
+                NativeGlassPanel(cornerRadius: 12, tintColor: AppColor.glassTint) { EmptyView() }
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Color.black.opacity(0.04), lineWidth: 1)
+                    .stroke(AppColor.panelStroke, lineWidth: 1)
             )
             .shadow(color: .black.opacity(0.08), radius: 12, y: 4)
     }
@@ -189,7 +193,7 @@ struct ScratchPadPanel: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("想开始？")
                 .font(.system(size: 16, weight: .semibold, design: .rounded))
-                .foregroundColor(Color(NSColor.black))
+                .foregroundColor(AppColor.colaDarkText)
             Text("喺左边同 Nous 倾一阵，叫佢「总结一下」。生成嘅 summary 会自动出喺呢度，之后你仲可以手动改同下载。")
                 .font(.system(size: 13, design: .rounded))
                 .foregroundColor(AppColor.secondaryText)
@@ -197,7 +201,7 @@ struct ScratchPadPanel: View {
 
             TextEditor(text: editorBinding)
                 .font(.system(size: 13, design: .rounded))
-                .foregroundColor(Color(NSColor.black))
+                .foregroundColor(AppColor.colaDarkText)
                 .scrollContentBackground(.hidden)
                 .background(Color.clear)
                 .frame(minHeight: 120)
@@ -344,7 +348,7 @@ private enum MarkdownBlock {
         case .heading(let level, let text):
             Text(text)
                 .font(headingFont(level: level))
-                .foregroundColor(Color(NSColor.black))
+                .foregroundColor(AppColor.colaDarkText)
                 .padding(.top, level == 1 ? 16 : 10)
                 .padding(.bottom, 4)
 
@@ -355,14 +359,14 @@ private enum MarkdownBlock {
                     .foregroundColor(AppColor.colaOrange)
                 inlineText(text)
                     .font(.system(size: 14, weight: .regular, design: .rounded))
-                    .foregroundColor(Color(NSColor.black))
+                    .foregroundColor(AppColor.colaDarkText)
             }
             .padding(.vertical, 2)
 
         case .paragraph(let text):
             inlineText(text)
                 .font(.system(size: 14, weight: .regular, design: .rounded))
-                .foregroundColor(Color(NSColor.black))
+                .foregroundColor(AppColor.colaDarkText)
                 .lineSpacing(6)
                 .padding(.vertical, 1)
 

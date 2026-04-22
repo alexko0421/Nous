@@ -71,7 +71,7 @@ struct AppColor {
         dark: NSColor(white: 1, alpha: 0.08)
     )
     static let glassTint = dynamicNSColor(
-        light: NSColor(red: 253/255, green: 251/255, blue: 247/255, alpha: 0.16),
+        light: NSColor(white: 0, alpha: 0.06),
         dark: NSColor(red: 34/255, green: 34/255, blue: 37/255, alpha: 0.20)
     )
     

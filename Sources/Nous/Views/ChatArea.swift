@@ -307,34 +307,36 @@ struct ChatArea: View {
             .padding(.leading, 24)
         }
         .overlay(alignment: .topTrailing) {
-            Button(action: {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                    isScratchPadVisible.toggle()
+            if !isWelcomeState {
+                Button(action: {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        isScratchPadVisible.toggle()
+                    }
+                }) {
+                    ZStack {
+                        NativeGlassPanel(
+                            cornerRadius: 16,
+                            tintColor: isScratchPadVisible
+                                ? NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.22)
+                                : AppColor.glassTint
+                        ) { EmptyView() }
+                        .frame(width: 32, height: 32)
+                        .overlay(
+                            Circle()
+                                .stroke(
+                                    isScratchPadVisible ? AppColor.colaOrange.opacity(0.4) : AppColor.panelStroke,
+                                    lineWidth: 1
+                                )
+                        )
+                        Image(systemName: "note.text")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(isScratchPadVisible ? AppColor.colaOrange : AppColor.secondaryText)
+                    }
                 }
-            }) {
-                ZStack {
-                    NativeGlassPanel(
-                        cornerRadius: 16,
-                        tintColor: isScratchPadVisible
-                            ? NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.22)
-                            : AppColor.glassTint
-                    ) { EmptyView() }
-                    .frame(width: 32, height: 32)
-                    .overlay(
-                        Circle()
-                            .stroke(
-                                isScratchPadVisible ? AppColor.colaOrange.opacity(0.4) : AppColor.panelStroke,
-                                lineWidth: 1
-                            )
-                    )
-                    Image(systemName: "note.text")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(isScratchPadVisible ? AppColor.colaOrange : AppColor.secondaryText)
-                }
+                .buttonStyle(.plain)
+                .padding(.top, 16)
+                .padding(.trailing, 24)
             }
-            .buttonStyle(.plain)
-            .padding(.top, isWelcomeState ? 24 : 16)
-            .padding(.trailing, 24)
         }
         .confirmationDialog("Add Attachment", isPresented: $isAttachmentMenuPresented, titleVisibility: .visible) {
             Button("File") {
