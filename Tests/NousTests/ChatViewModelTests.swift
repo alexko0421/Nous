@@ -363,8 +363,14 @@ final class ChatViewModelTests: XCTestCase {
         - 观察三个月
         </summary>
         """
-        let msg = Message(nodeId: UUID(), role: .assistant, content: raw)
-        store.ingestAssistantMessage(content: msg.content, sourceMessageId: msg.id)
+        let conversationId = UUID()
+        store.activate(conversationId: conversationId)
+        let msg = Message(nodeId: conversationId, role: .assistant, content: raw)
+        store.ingestAssistantMessage(
+            content: msg.content,
+            sourceMessageId: msg.id,
+            conversationId: conversationId
+        )
 
         XCTAssertNotNil(store.latestSummary)
         XCTAssertTrue(store.latestSummary!.markdown.hasPrefix("# 今次倾咗乜"))

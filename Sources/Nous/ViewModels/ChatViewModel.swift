@@ -112,6 +112,7 @@ final class ChatViewModel {
         )
         try? nodeStore.insertNode(node)
         currentNode = node
+        scratchPadStore.activate(conversationId: node.id)
         messages = []
         citations = []
         currentResponse = ""
@@ -129,6 +130,7 @@ final class ChatViewModel {
             cancelInFlightJudge()  // switching conversations invalidates any pending verdict
         }
         currentNode = node
+        scratchPadStore.activate(conversationId: node.id)
         messages = (try? nodeStore.fetchMessages(nodeId: node.id)) ?? []
         citations = []
         currentResponse = ""
@@ -309,7 +311,8 @@ final class ChatViewModel {
         )
         scratchPadStore.ingestAssistantMessage(
             content: assistantContent,
-            sourceMessageId: assistantMessage.id
+            sourceMessageId: assistantMessage.id,
+            conversationId: node.id
         )
         scheduleUserMemoryRefresh(for: node, messages: messages)
         refreshGeminiConversationCacheIfNeeded(
@@ -692,7 +695,8 @@ final class ChatViewModel {
         messages.append(assistantMessage)
         scratchPadStore.ingestAssistantMessage(
             content: assistantContent,
-            sourceMessageId: assistantMessage.id
+            sourceMessageId: assistantMessage.id,
+            conversationId: node.id
         )
 
         // Step 9b: patch the judge event with the message it produced

@@ -68,6 +68,7 @@ struct ContentView: View {
                         dependencies.chatVM.citations = []
                         dependencies.chatVM.currentResponse = ""
                         dependencies.chatVM.inputText = ""
+                        dependencies.scratchPadStore.activate(conversationId: nil)
                         selectedTab = .chat
                     }
                 )
