@@ -19,6 +19,16 @@ enum ClarificationCardParser {
     /// chat bubble and the panel renders the same content in document style.
     private static let summaryTagMarkerPattern = #"</?summary>"#
 
+    private static let summaryRegex = try? NSRegularExpression(
+        pattern: summaryPattern,
+        options: [.caseInsensitive, .dotMatchesLineSeparators]
+    )
+
+    private static let summaryTagMarkerRegex = try? NSRegularExpression(
+        pattern: summaryTagMarkerPattern,
+        options: [.caseInsensitive]
+    )
+
     static func parse(_ text: String) -> ClarificationContent {
         let phaseKept = containsUnderstandingPhaseMarker(in: text)
         let sanitizedText = removingSummaryTagMarkers(
@@ -67,10 +77,7 @@ enum ClarificationCardParser {
 
     static func extractSummary(from text: String) -> String? {
         guard
-            let regex = try? NSRegularExpression(
-                pattern: summaryPattern,
-                options: [.caseInsensitive]
-            ),
+            let regex = summaryRegex,
             let range = nsRange(for: text),
             let match = regex.firstMatch(in: text, options: [], range: range),
             let innerRange = Range(match.range(at: 1), in: text)
@@ -84,10 +91,7 @@ enum ClarificationCardParser {
 
     private static func removingSummaryTagMarkers(from text: String) -> String {
         guard
-            let regex = try? NSRegularExpression(
-                pattern: summaryTagMarkerPattern,
-                options: [.caseInsensitive]
-            ),
+            let regex = summaryTagMarkerRegex,
             let range = nsRange(for: text)
         else {
             return text

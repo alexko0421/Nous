@@ -161,6 +161,26 @@ final class ClarificationCardParserTests: XCTestCase {
         XCTAssertEqual(extracted, "# First")
     }
 
+    func testParseStripsOpenSummaryTagEvenWhenNotYetClosed() {
+        // During streaming, the model may emit <summary> and partial body before the
+        // </summary> arrives. `extractSummary` must return nil (no valid summary yet),
+        // but `parse(_:)` should still strip the lone <summary> marker from displayText
+        // so users don't see raw tag markup during streaming.
+        let raw = """
+        整好了。
+        <summary>
+        # Hello
+        (still streaming…
+        """
+
+        XCTAssertNil(ClarificationCardParser.extractSummary(from: raw))
+
+        let parsed = ClarificationCardParser.parse(raw)
+        XCTAssertFalse(parsed.displayText.contains("<summary>"))
+        XCTAssertTrue(parsed.displayText.contains("# Hello"))
+        XCTAssertTrue(parsed.displayText.contains("整好了"))
+    }
+
     func testParseStripsSummaryTagsButPreservesInnerContentInDisplayText() {
         let raw = """
         整好了。
