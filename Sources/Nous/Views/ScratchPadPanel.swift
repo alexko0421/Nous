@@ -1,4 +1,6 @@
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 
 // MARK: - ScratchPadPanel
 
@@ -98,9 +100,51 @@ struct ScratchPadPanel: View {
         .padding(.bottom, 12)
     }
 
-    // Placeholder — real impl lands in Task 8.
     @ViewBuilder
-    private var downloadButton: some View { EmptyView() }
+    private var downloadButton: some View {
+        Button(action: handleDownload) {
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.down.doc")
+                    .font(.system(size: 10, weight: .semibold))
+                Text("下载")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+            }
+            .foregroundColor(.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(AppColor.colaOrange)
+            .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(store.currentContent.isEmpty)
+    }
+
+    private func handleDownload() {
+        let content = store.currentContent
+        guard !content.isEmpty else { return }
+
+        let panel = NSSavePanel()
+        panel.title = "下载白纸"
+        panel.nameFieldStringValue = filenameSlug(fromMarkdown: content)
+        panel.canCreateDirectories = true
+        if let mdType = UTType(filenameExtension: "md") {
+            panel.allowedContentTypes = [mdType]
+        }
+
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                try content.data(using: .utf8)?.write(to: url, options: .atomic)
+                store.markDownloaded()
+            } catch {
+                let alert = NSAlert()
+                alert.messageText = "保存失败"
+                alert.informativeText = error.localizedDescription
+                alert.addButton(withTitle: "好")
+                alert.runModal()
+            }
+        }
+    }
 
     @ViewBuilder
     private var divider: some View {

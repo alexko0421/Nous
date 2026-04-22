@@ -56,6 +56,7 @@
 		4FB3D851A8F92F23D6D91EA4 /* 04-soft-tension-strategist-provokes.json in Resources */ = {isa = PBXBuildFile; fileRef = 9767256444564BD36BC3ADB1 /* 04-soft-tension-strategist-provokes.json */; };
 		50A4AA8235B11B57FE48B623 /* ScratchPadPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0BE8EE7ABA8E574963ADEA /* ScratchPadPanel.swift */; };
 		5349054161F93EEA5E6D20D3 /* FinderProjectSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FABA17DD9995DE339580B39D /* FinderProjectSyncService.swift */; };
+		57200A59136EE481659FFDAD /* FilenameSlugTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D99308E5424D9534EEC53E3B /* FilenameSlugTests.swift */; };
 		57CA97DF7C66876FEF077B9C /* Message.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55859ED677DFDB237447B2EC /* Message.swift */; };
 		58CDED90A7C15858ACDADAC0 /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = A0FC8786751C66E9D130220C /* MLX */; };
 		5E272E29C29FC5E62496799A /* NoteEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 783585E09595EF502C060F91 /* NoteEditor.swift */; };
@@ -78,6 +79,7 @@
 		9A2C526409C14357AFB82080 /* JudgeVerdict.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC7040454DB1276F244FDDCF /* JudgeVerdict.swift */; };
 		9CA12F6A78C6C54FA3535947 /* VectorStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B93C993AA118825C12F999B /* VectorStore.swift */; };
 		9DE0D671078EE3A3FAD93A63 /* ProvocationJudgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85551858035454B81C02665B /* ProvocationJudgeTests.swift */; };
+		9DF0B7981415723F2B61E384 /* FilenameSlug.swift in Sources */ = {isa = PBXBuildFile; fileRef = 023F16C8415E3503883F39FB /* FilenameSlug.swift */; };
 		A316A39D1CD4B7CBE01C03A9 /* ScratchPadStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E283B562C0F0CC0E5DED2286 /* ScratchPadStore.swift */; };
 		A38C4867F670608CCC852F9E /* UserMemoryScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF7B960A5DC5E42823F1CB9F /* UserMemoryScheduler.swift */; };
 		A4F8BF40DB46264E58283D1E /* 01-clear-contradiction-deciding.json in Resources */ = {isa = PBXBuildFile; fileRef = C113788985B1F48CB9BF81D8 /* 01-clear-contradiction-deciding.json */; };
@@ -131,6 +133,7 @@
 
 /* Begin PBXFileReference section */
 		01EFE4D1B289FCB7FAB63B08 /* ThinkingAccordion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThinkingAccordion.swift; sourceTree = "<group>"; };
+		023F16C8415E3503883F39FB /* FilenameSlug.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilenameSlug.swift; sourceTree = "<group>"; };
 		038E40893C80F43772E1FD12 /* ClarificationCardParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClarificationCardParser.swift; sourceTree = "<group>"; };
 		065102465F744BEAC0593D67 /* QuickActionMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickActionMode.swift; sourceTree = "<group>"; };
 		08F9F1F71CFCDC24C78B9092 /* ScratchPadStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchPadStoreTests.swift; sourceTree = "<group>"; };
@@ -216,6 +219,7 @@
 		CE5485D2A957CBBB28E2D627 /* RAGPipelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RAGPipelineTests.swift; sourceTree = "<group>"; };
 		CF7B960A5DC5E42823F1CB9F /* UserMemoryScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserMemoryScheduler.swift; sourceTree = "<group>"; };
 		D0F8F7C94A828A4010E29DF6 /* MemoryEntriesMigrator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryEntriesMigrator.swift; sourceTree = "<group>"; };
+		D99308E5424D9534EEC53E3B /* FilenameSlugTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilenameSlugTests.swift; sourceTree = "<group>"; };
 		DAB54FD11A8E0406F1C4D09D /* EmbeddingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbeddingService.swift; sourceTree = "<group>"; };
 		DBD5F346B63EBE504887EAB0 /* FredokaOne-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "FredokaOne-Regular.ttf"; sourceTree = "<group>"; };
 		DE7BA25891C49772FFB4BCC0 /* TopicEmojiResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopicEmojiResolver.swift; sourceTree = "<group>"; };
@@ -436,6 +440,7 @@
 				475D19B8C6EA339A5D31688A /* CitableEntryPoolTests.swift */,
 				69184F11E49CB01A84551833 /* ClarificationCardParserTests.swift */,
 				49868B5B3F579875A70F507A /* ContradictionRecallTests.swift */,
+				D99308E5424D9534EEC53E3B /* FilenameSlugTests.swift */,
 				65BFE96BBB3B4F647460E8BE /* FinderProjectSyncServiceTests.swift */,
 				596976551651E43571FAEADA /* GeminiPromptCacheServiceTests.swift */,
 				EDCA67D53C80EB489CA1D825 /* GeminiThinkingStreamTests.swift */,
@@ -467,6 +472,7 @@
 				A5EF979813E783CA3666DEBE /* AttachmentChip.swift */,
 				3D5C933D2CDA967B8AAFCD32 /* ChatArea.swift */,
 				51AD979E25093AC4D81302A6 /* ClarificationCardView.swift */,
+				023F16C8415E3503883F39FB /* FilenameSlug.swift */,
 				8E30FF68C5FA2AB210A95E1B /* FrameSpinner.swift */,
 				54D7B196613E93EAF2C72EF8 /* GalaxyScene.swift */,
 				26B0833FF90A3381A73858CE /* GalaxyView.swift */,
@@ -648,6 +654,7 @@
 				2FA85CB0FB6256D80D30DE6F /* ContentView.swift in Sources */,
 				1643CB90A6F5400A1BD1441E /* Database.swift in Sources */,
 				079AE6E6B7AD8B7C00E9061B /* EmbeddingService.swift in Sources */,
+				9DF0B7981415723F2B61E384 /* FilenameSlug.swift in Sources */,
 				5349054161F93EEA5E6D20D3 /* FinderProjectSyncService.swift in Sources */,
 				89040DAEEDD81F863522427C /* FrameSpinner.swift in Sources */,
 				0A543A16EE7B4C96E7893DD2 /* GalaxyScene.swift in Sources */,
@@ -708,6 +715,7 @@
 				604A96BBB87BD5E9B4FA5EBE /* CitableEntryPoolTests.swift in Sources */,
 				ACC542F83437ECF80EF63CDD /* ClarificationCardParserTests.swift in Sources */,
 				41F9C688FE7526FC0AD43239 /* ContradictionRecallTests.swift in Sources */,
+				57200A59136EE481659FFDAD /* FilenameSlugTests.swift in Sources */,
 				88295655EB89E93DAEFAD256 /* FinderProjectSyncServiceTests.swift in Sources */,
 				A6B3EA77213487F07EDF8854 /* GeminiPromptCacheServiceTests.swift in Sources */,
 				B2FD14E2A2396CFA0B03CA52 /* GeminiThinkingStreamTests.swift in Sources */,
