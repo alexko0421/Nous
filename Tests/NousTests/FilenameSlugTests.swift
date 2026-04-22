@@ -3,9 +3,9 @@ import XCTest
 
 final class FilenameSlugTests: XCTestCase {
 
-    // 2024-04-20 12:00:00 UTC — noon UTC so every timezone from UTC-12 to UTC+11 resolves
-    // to 2024-04-20 local. UTC+12..+14 (rare, e.g. Line Islands/Kiribati) would see 2024-04-21;
-    // fallbackDateString is derived from the same fixture so the assertions are always correct.
+    // 2024-04-19 12:00:00 UTC (fixed instant). fallbackDateString below re-formats this
+    // with the same formatter filenameSlug uses so assertions stay correct regardless of
+    // the runner's local timezone.
     private let fallbackDate = Date(timeIntervalSince1970: 1_713_614_400)
 
     // Compute the expected date string using the same formatter as filenameSlug, so the
