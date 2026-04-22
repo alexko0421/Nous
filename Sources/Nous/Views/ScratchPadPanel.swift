@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 struct ScratchPadPanel: View {
     @Binding var isVisible: Bool
     @Bindable var store: ScratchPadStore
-    @State private var isPreviewMode = false
+    @State private var isPreviewMode = true
 
     var body: some View {
         NativeGlassPanel(cornerRadius: 32, tintColor: AppColor.glassTint) {
@@ -52,12 +52,12 @@ struct ScratchPadPanel: View {
     @ViewBuilder
     private var header: some View {
         HStack(alignment: .center, spacing: 10) {
-            HStack(spacing: 4) {
+            HStack(spacing: 6) {
                 Image(systemName: "note.text")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(AppColor.colaOrange)
-                Text("Markdown")
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                Text("白纸")
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
                     .foregroundColor(AppColor.colaDarkText)
             }
             .frame(height: 32)
@@ -93,11 +93,11 @@ struct ScratchPadPanel: View {
                 )
 
                 HStack(spacing: 2) {
-                    modeButton(label: "Write", icon: "pencil", active: !isPreviewMode) {
-                        withAnimation(.easeInOut(duration: 0.15)) { isPreviewMode = false }
-                    }
                     modeButton(label: "Preview", icon: "eye", active: isPreviewMode) {
                         withAnimation(.easeInOut(duration: 0.15)) { isPreviewMode = true }
+                    }
+                    modeButton(label: "Write", icon: "pencil", active: !isPreviewMode) {
+                        withAnimation(.easeInOut(duration: 0.15)) { isPreviewMode = false }
                     }
                 }
                 .padding(3)
