@@ -134,7 +134,7 @@ struct ScratchPadPanel: View {
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
             do {
-                try content.data(using: .utf8)?.write(to: url, options: .atomic)
+                try Data(content.utf8).write(to: url, options: .atomic)
                 store.markDownloaded()
             } catch {
                 let alert = NSAlert()

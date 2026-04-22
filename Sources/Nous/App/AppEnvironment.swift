@@ -53,6 +53,7 @@ final class AppEnvironment {
         self.state = Self.bootstrap()
     }
 
+    @MainActor
     static func bootstrap() -> AppBootstrapState {
         do {
             return .ready(try makeDependencies())
@@ -61,6 +62,7 @@ final class AppEnvironment {
         }
     }
 
+    @MainActor
     private static func makeDependencies() throws -> AppDependencies {
         bootstrapLock.lock()
         defer { bootstrapLock.unlock() }
@@ -96,7 +98,7 @@ final class AppEnvironment {
             nodeStore: nodeStore
         )
         let governanceTelemetry = GovernanceTelemetryStore(nodeStore: nodeStore)
-        let scratchPadStore = MainActor.assumeIsolated { ScratchPadStore() }
+        let scratchPadStore = ScratchPadStore()
         let userMemoryService = UserMemoryService(
             nodeStore: nodeStore,
             llmServiceProvider: { settingsVM.makeLLMService() },
