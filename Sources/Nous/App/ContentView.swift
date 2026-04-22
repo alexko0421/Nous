@@ -67,6 +67,7 @@ struct ContentView: View {
                     ChatArea(
                         vm: dependencies.chatVM,
                         isSidebarVisible: $isSidebarVisible,
+                        isScratchPadVisible: $isScratchPadVisible,
                         onNavigateToNode: { node in navigateToNode(node, dependencies: dependencies) }
                     )
                 case .notes:

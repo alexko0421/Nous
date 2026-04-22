@@ -2,91 +2,162 @@ import SwiftUI
 
 // MARK: - ScratchPadPanel
 
-/// A lightweight right-side scratchpad that supports raw Markdown editing
-/// and a simple live preview. Lives in ContentView as a slide-in panel,
-/// persists its content in @AppStorage so it survives restarts.
 struct ScratchPadPanel: View {
     @Binding var isVisible: Bool
-    // Task 6 will drive content off this store; the @AppStorage path below is about to be replaced.
-    var store: ScratchPadStore
-    @AppStorage("nous.scratchpad.content") private var content = ""
+    @Bindable var store: ScratchPadStore
     @State private var isPreviewMode = false
 
     var body: some View {
         NativeGlassPanel(cornerRadius: 32, tintColor: AppColor.glassTint) {
             VStack(alignment: .leading, spacing: 0) {
-                // ── Header ────────────────────────────────────────────────
-                HStack(spacing: 10) {
-                    Image(systemName: "note.text")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(AppColor.colaOrange)
-
-                    Text("Scratch Pad")
-                        .font(.system(size: 14, weight: .bold, design: .rounded))
-                        .foregroundColor(AppColor.colaDarkText)
-
-                    Spacer(minLength: 0)
-
-                    // Write / Preview toggle
-                    HStack(spacing: 2) {
-                        modeButton(label: "Write", icon: "pencil",  active: !isPreviewMode) {
-                            withAnimation(.easeInOut(duration: 0.15)) { isPreviewMode = false }
-                        }
-                        modeButton(label: "Preview", icon: "eye",   active: isPreviewMode) {
-                            withAnimation(.easeInOut(duration: 0.15)) { isPreviewMode = true }
-                        }
-                    }
-                    .padding(3)
-                    .background(AppColor.subtleFill)
-                    .clipShape(Capsule())
-
-                    // Close button
-                    Button(action: {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                            isVisible = false
-                        }
-                    }) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundColor(AppColor.secondaryText)
-                            .frame(width: 22, height: 22)
-                            .background(AppColor.subtleFill)
-                            .clipShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(.horizontal, 18)
-                .padding(.top, 18)
-                .padding(.bottom, 12)
-
-                // Thin divider
-                Rectangle()
-                    .fill(AppColor.panelStroke)
-                    .frame(height: 0.5)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 12)
-
-                // ── Body ──────────────────────────────────────────────────
-                if isPreviewMode {
-                    MarkdownPreview(markdown: content)
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 16)
-                } else {
-                    TextEditor(text: $content)
-                        .font(.system(size: 13, design: .monospaced))
-                        .foregroundColor(AppColor.colaDarkText)
-                        .scrollContentBackground(.hidden)
-                        .background(Color.clear)
-                        .padding(.horizontal, 12)
-                        .padding(.bottom, 12)
-                }
+                header
+                divider
+                paperSurface
             }
+            .padding(.bottom, 12)
         }
         .overlay(
             RoundedRectangle(cornerRadius: 32, style: .continuous)
                 .stroke(AppColor.panelStroke, lineWidth: 1)
         )
-        .frame(width: 300)
+        .frame(width: 420)
+        .onAppear { store.onPanelOpened() }
+        .onChange(of: store.latestSummary) { _, _ in
+            if isVisible { store.onPanelOpened() }
+        }
+    }
+
+    // MARK: - Header
+
+    @ViewBuilder
+    private var header: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "note.text")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(AppColor.colaOrange)
+
+            Text("白纸")
+                .font(.system(size: 15, weight: .bold, design: .serif))
+                .foregroundColor(AppColor.colaDarkText)
+
+            if store.isDirty {
+                Text("• 未保存")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(AppColor.secondaryText)
+            }
+
+            Spacer(minLength: 0)
+
+            downloadButton
+
+            HStack(spacing: 2) {
+                modeButton(label: "Write", icon: "pencil", active: !isPreviewMode) {
+                    withAnimation(.easeInOut(duration: 0.15)) { isPreviewMode = false }
+                }
+                modeButton(label: "Preview", icon: "eye", active: isPreviewMode) {
+                    withAnimation(.easeInOut(duration: 0.15)) { isPreviewMode = true }
+                }
+            }
+            .padding(3)
+            .background(AppColor.subtleFill)
+            .clipShape(Capsule())
+
+            Button(action: {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                    isVisible = false
+                }
+            }) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(AppColor.secondaryText)
+                    .frame(width: 22, height: 22)
+                    .background(AppColor.subtleFill)
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 18)
+        .padding(.bottom, 12)
+    }
+
+    // Placeholder — real impl lands in Task 8.
+    @ViewBuilder
+    private var downloadButton: some View { EmptyView() }
+
+    @ViewBuilder
+    private var divider: some View {
+        Rectangle()
+            .fill(AppColor.panelStroke)
+            .frame(height: 0.5)
+            .padding(.horizontal, 12)
+            .padding(.bottom, 12)
+    }
+
+    // MARK: - Paper surface
+
+    @ViewBuilder
+    private var paperSurface: some View {
+        paperContainer {
+            if store.latestSummary == nil && store.currentContent.isEmpty {
+                emptyState
+            } else if isPreviewMode {
+                MarkdownPreview(markdown: store.currentContent)
+            } else {
+                TextEditor(text: editorBinding)
+                    .font(.system(size: 14, design: .serif))
+                    .foregroundColor(AppColor.colaDarkText)
+                    .scrollContentBackground(.hidden)
+                    .background(Color.clear)
+                    .lineSpacing(6)
+            }
+        }
+        .padding(.horizontal, 12)
+    }
+
+    @ViewBuilder
+    private func paperContainer<Content: View>(@ViewBuilder _ inner: () -> Content) -> some View {
+        inner()
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .padding(.horizontal, 32)
+            .padding(.vertical, 40)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color(red: 254/255, green: 252/255, blue: 248/255))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.black.opacity(0.04), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.08), radius: 12, y: 4)
+    }
+
+    @ViewBuilder
+    private var emptyState: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("想开始？")
+                .font(.system(size: 16, weight: .semibold, design: .serif))
+                .foregroundColor(AppColor.colaDarkText)
+            Text("喺左边同 Nous 倾一阵，叫佢「总结一下」。生成嘅 summary 会自动出喺呢度，之后你仲可以手动改同下载。")
+                .font(.system(size: 13, design: .serif))
+                .foregroundColor(AppColor.secondaryText)
+                .lineSpacing(6)
+
+            TextEditor(text: editorBinding)
+                .font(.system(size: 13, design: .serif))
+                .foregroundColor(AppColor.colaDarkText)
+                .scrollContentBackground(.hidden)
+                .background(Color.clear)
+                .frame(minHeight: 120)
+                .padding(.top, 8)
+        }
+    }
+
+    private var editorBinding: Binding<String> {
+        Binding(
+            get: { store.currentContent },
+            set: { store.updateContent($0) }
+        )
     }
 
     // MARK: Helpers

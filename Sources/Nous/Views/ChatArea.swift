@@ -4,6 +4,7 @@ import SwiftUI
 struct ChatArea: View {
     @Bindable var vm: ChatViewModel
     @Binding var isSidebarVisible: Bool
+    @Binding var isScratchPadVisible: Bool
     var onNavigateToNode: (NousNode) -> Void = { _ in }
 
     @State private var attachments: [AttachedFileContext] = []
@@ -303,6 +304,29 @@ struct ChatArea: View {
             .buttonStyle(.plain)
             .padding(.top, isWelcomeState ? 24 : 16)
             .padding(.leading, 24)
+        }
+        .overlay(alignment: .topTrailing) {
+            Button(action: {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                    isScratchPadVisible.toggle()
+                }
+            }) {
+                ZStack {
+                    Circle()
+                        .fill(AppColor.subtleFill)
+                        .overlay(
+                            Circle()
+                                .stroke(AppColor.panelStroke, lineWidth: 1)
+                        )
+                        .frame(width: isWelcomeState ? 32 : 28, height: isWelcomeState ? 32 : 28)
+                    Image(systemName: "note.text")
+                        .font(.system(size: isWelcomeState ? 12 : 11, weight: .medium))
+                        .foregroundColor(AppColor.secondaryText)
+                }
+            }
+            .buttonStyle(.plain)
+            .padding(.top, isWelcomeState ? 24 : 16)
+            .padding(.trailing, 24)
         }
         .confirmationDialog("Add Attachment", isPresented: $isAttachmentMenuPresented, titleVisibility: .visible) {
             Button("File") {
