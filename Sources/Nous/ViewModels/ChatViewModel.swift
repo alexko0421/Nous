@@ -41,6 +41,7 @@ final class ChatViewModel {
     private var inFlightResponseTaskId: UUID?
     private let governanceTelemetry: GovernanceTelemetryStore
     private let geminiPromptCache: GeminiPromptCacheService
+    private let scratchPadStore: ScratchPadStore?
     /// In-flight cache-refresh bookkeeping, keyed by conversation id. The token map
     /// lets a late-arriving worker detect that it has been superseded and clean up its
     /// orphaned server-side handle instead of overwriting a newer entry.
@@ -62,6 +63,7 @@ final class ChatViewModel {
         provocationJudgeFactory: @escaping (any LLMService) -> any Judging = { ProvocationJudge(llmService: $0) },
         governanceTelemetry: GovernanceTelemetryStore = GovernanceTelemetryStore(),
         geminiPromptCache: GeminiPromptCacheService = GeminiPromptCacheService(),
+        scratchPadStore: ScratchPadStore? = nil,
         defaultProjectId: UUID? = nil
     ) {
         self.nodeStore = nodeStore
@@ -76,6 +78,7 @@ final class ChatViewModel {
         self.provocationJudgeFactory = provocationJudgeFactory
         self.governanceTelemetry = governanceTelemetry
         self.geminiPromptCache = geminiPromptCache
+        self.scratchPadStore = scratchPadStore
         self.defaultProjectId = defaultProjectId
     }
 
@@ -303,6 +306,10 @@ final class ChatViewModel {
         activeQuickActionMode = ChatViewModel.updatedQuickActionMode(
             currentMode: activeQuickActionMode,
             assistantContent: assistantContent
+        )
+        scratchPadStore?.ingestAssistantMessage(
+            content: assistantContent,
+            sourceMessageId: assistantMessage.id
         )
         scheduleUserMemoryRefresh(for: node, messages: messages)
         refreshGeminiConversationCacheIfNeeded(
@@ -683,6 +690,10 @@ final class ChatViewModel {
         )
         try? nodeStore.insertMessage(assistantMessage)
         messages.append(assistantMessage)
+        scratchPadStore?.ingestAssistantMessage(
+            content: assistantContent,
+            sourceMessageId: assistantMessage.id
+        )
 
         // Step 9b: patch the judge event with the message it produced
         try? nodeStore.updateJudgeEventMessageId(eventId: eventId, messageId: assistantMessage.id)

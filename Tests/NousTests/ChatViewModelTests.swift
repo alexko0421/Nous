@@ -293,4 +293,37 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertEqual(last.usage.cachedContentTokenCount, 600)
         XCTAssertEqual(Int((summary.cacheHitRate! * 100).rounded()), 66)
     }
+
+    @MainActor
+    func testIngestsSummaryFromAssistantReply() {
+        let suiteName = "ChatViewModelTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let store = ScratchPadStore(defaults: defaults)
+
+        let raw = """
+        搞掂。
+        <summary>
+        # 今次倾咗乜
+
+        ## 问题
+        Alex 想搞清楚 Notion 点走。
+
+        ## 思考
+        倾咗 AI agent 嘅取舍。
+
+        ## 结论
+        唔加。
+
+        ## 下一步
+        - 观察三个月
+        </summary>
+        """
+        let msg = Message(nodeId: UUID(), role: .assistant, content: raw)
+        store.ingestAssistantMessage(content: msg.content, sourceMessageId: msg.id)
+
+        XCTAssertNotNil(store.latestSummary)
+        XCTAssertTrue(store.latestSummary!.markdown.hasPrefix("# 今次倾咗乜"))
+        XCTAssertEqual(store.latestSummary!.sourceMessageId, msg.id)
+    }
 }
