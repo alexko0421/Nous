@@ -111,4 +111,70 @@ final class ClarificationCardParserTests: XCTestCase {
 
         XCTAssertEqual(parsed.displayText, "之前嘅对话.".replacingOccurrences(of: ".", with: "。"))
     }
+
+    func testExtractSummaryReturnsInnerMarkdownWhenWellFormed() {
+        let raw = """
+        整好了，睇下右边。
+        <summary>
+        # 关于 Notion 产品方向
+
+        ## 问题
+        Alex 想搞清楚 Notion 该不该加 AI agent。
+
+        ## 思考
+        倾咗 retention vs differentiation。
+
+        ## 结论
+        暂时唔做。
+
+        ## 下一步
+        - 观察 Coda 三个月
+        </summary>
+        多谢！
+        """
+
+        let extracted = ClarificationCardParser.extractSummary(from: raw)
+        XCTAssertNotNil(extracted)
+        XCTAssertTrue(extracted!.hasPrefix("# 关于 Notion 产品方向"))
+        XCTAssertTrue(extracted!.contains("## 下一步"))
+    }
+
+    func testExtractSummaryReturnsNilWhenNoTag() {
+        XCTAssertNil(ClarificationCardParser.extractSummary(from: "No summary here."))
+    }
+
+    func testExtractSummaryReturnsNilWhenUnclosed() {
+        let raw = "<summary>\n# Title\nSome text without closing tag"
+        XCTAssertNil(ClarificationCardParser.extractSummary(from: raw))
+    }
+
+    func testExtractSummaryReturnsNilWhenEmptyBody() {
+        XCTAssertNil(ClarificationCardParser.extractSummary(from: "before <summary>   </summary> after"))
+    }
+
+    func testExtractSummaryPrefersFirstPair() {
+        let raw = """
+        <summary># First</summary>
+        <summary># Second</summary>
+        """
+        let extracted = ClarificationCardParser.extractSummary(from: raw)
+        XCTAssertEqual(extracted, "# First")
+    }
+
+    func testParseStripsSummaryTagsButPreservesInnerContentInDisplayText() {
+        let raw = """
+        整好了。
+        <summary>
+        # Hello
+
+        世界
+        </summary>
+        """
+        let parsed = ClarificationCardParser.parse(raw)
+        XCTAssertFalse(parsed.displayText.contains("<summary>"))
+        XCTAssertFalse(parsed.displayText.contains("</summary>"))
+        XCTAssertTrue(parsed.displayText.contains("# Hello"))
+        XCTAssertTrue(parsed.displayText.contains("世界"))
+        XCTAssertTrue(parsed.displayText.contains("整好了"))
+    }
 }

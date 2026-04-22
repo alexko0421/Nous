@@ -12,9 +12,18 @@ enum ClarificationCardParser {
         #"<phase>[^<]*$"#,
     ]
 
+    private static let summaryPattern = #"<summary>([\s\S]*?)</summary>"#
+
+    /// Open/close tags of <summary>. Used to strip the tag markers out of chat display
+    /// text while preserving the inner markdown, so the summary reads naturally in the
+    /// chat bubble and the panel renders the same content in document style.
+    private static let summaryTagMarkerPattern = #"</?summary>"#
+
     static func parse(_ text: String) -> ClarificationContent {
         let phaseKept = containsUnderstandingPhaseMarker(in: text)
-        let sanitizedText = removingInternalReasoningMarkers(from: text)
+        let sanitizedText = removingSummaryTagMarkers(
+            from: removingInternalReasoningMarkers(from: text)
+        )
 
         guard
             let blockRegex = try? NSRegularExpression(
@@ -53,6 +62,41 @@ enum ClarificationCardParser {
             displayText: displayText.trimmingCharacters(in: .whitespacesAndNewlines),
             card: ClarificationCard(question: question, options: options),
             keepsQuickActionMode: true
+        )
+    }
+
+    static func extractSummary(from text: String) -> String? {
+        guard
+            let regex = try? NSRegularExpression(
+                pattern: summaryPattern,
+                options: [.caseInsensitive]
+            ),
+            let range = nsRange(for: text),
+            let match = regex.firstMatch(in: text, options: [], range: range),
+            let innerRange = Range(match.range(at: 1), in: text)
+        else {
+            return nil
+        }
+
+        let inner = text[innerRange].trimmingCharacters(in: .whitespacesAndNewlines)
+        return inner.isEmpty ? nil : inner
+    }
+
+    private static func removingSummaryTagMarkers(from text: String) -> String {
+        guard
+            let regex = try? NSRegularExpression(
+                pattern: summaryTagMarkerPattern,
+                options: [.caseInsensitive]
+            ),
+            let range = nsRange(for: text)
+        else {
+            return text
+        }
+        return regex.stringByReplacingMatches(
+            in: text,
+            options: [],
+            range: range,
+            withTemplate: ""
         )
     }
 
