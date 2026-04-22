@@ -16,6 +16,7 @@ struct AppDependencies {
     let finderProjectSync: FinderProjectSyncService
     let userMemoryService: UserMemoryService
     let governanceTelemetry: GovernanceTelemetryStore
+    let scratchPadStore: ScratchPadStore
     let settingsVM: SettingsViewModel
     let chatVM: ChatViewModel
     let noteVM: NoteViewModel
@@ -95,6 +96,7 @@ final class AppEnvironment {
             nodeStore: nodeStore
         )
         let governanceTelemetry = GovernanceTelemetryStore(nodeStore: nodeStore)
+        let scratchPadStore = MainActor.assumeIsolated { ScratchPadStore() }
         let userMemoryService = UserMemoryService(
             nodeStore: nodeStore,
             llmServiceProvider: { settingsVM.makeLLMService() },
@@ -111,7 +113,8 @@ final class AppEnvironment {
             llmServiceProvider: { settingsVM.makeLLMService() },
             currentProviderProvider: { settingsVM.selectedProvider },
             judgeLLMServiceFactory: { settingsVM.makeJudgeLLMService() },
-            governanceTelemetry: governanceTelemetry
+            governanceTelemetry: governanceTelemetry,
+            scratchPadStore: scratchPadStore
         )
         let noteVM = NoteViewModel(
             nodeStore: nodeStore,
@@ -130,6 +133,7 @@ final class AppEnvironment {
             finderProjectSync: finderProjectSync,
             userMemoryService: userMemoryService,
             governanceTelemetry: governanceTelemetry,
+            scratchPadStore: scratchPadStore,
             settingsVM: settingsVM,
             chatVM: chatVM,
             noteVM: noteVM,

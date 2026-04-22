@@ -10,6 +10,7 @@ struct ContentView: View {
     private static let isRunningUnitTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
     @State private var isSidebarVisible = true
+    @State private var isScratchPadVisible = false
     @State private var selectedTab: MainTab = .chat
     @State private var selectedProjectId: UUID?
     @State private var isSetupComplete = UserDefaults.standard.bool(forKey: "nous.setup.complete")
@@ -91,6 +92,14 @@ struct ContentView: View {
                     .background(AppColor.colaBeige)
                     .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
                 }
+            }
+
+            if isScratchPadVisible && selectedTab == .chat {
+                ScratchPadPanel(
+                    isVisible: $isScratchPadVisible,
+                    store: dependencies.scratchPadStore
+                )
+                .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
         .frame(minWidth: 800, minHeight: 600)

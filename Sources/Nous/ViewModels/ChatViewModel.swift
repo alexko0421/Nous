@@ -41,7 +41,7 @@ final class ChatViewModel {
     private var inFlightResponseTaskId: UUID?
     private let governanceTelemetry: GovernanceTelemetryStore
     private let geminiPromptCache: GeminiPromptCacheService
-    private let scratchPadStore: ScratchPadStore?
+    private let scratchPadStore: ScratchPadStore
     /// In-flight cache-refresh bookkeeping, keyed by conversation id. The token map
     /// lets a late-arriving worker detect that it has been superseded and clean up its
     /// orphaned server-side handle instead of overwriting a newer entry.
@@ -63,7 +63,7 @@ final class ChatViewModel {
         provocationJudgeFactory: @escaping (any LLMService) -> any Judging = { ProvocationJudge(llmService: $0) },
         governanceTelemetry: GovernanceTelemetryStore = GovernanceTelemetryStore(),
         geminiPromptCache: GeminiPromptCacheService = GeminiPromptCacheService(),
-        scratchPadStore: ScratchPadStore? = nil,
+        scratchPadStore: ScratchPadStore,
         defaultProjectId: UUID? = nil
     ) {
         self.nodeStore = nodeStore
@@ -307,7 +307,7 @@ final class ChatViewModel {
             currentMode: activeQuickActionMode,
             assistantContent: assistantContent
         )
-        scratchPadStore?.ingestAssistantMessage(
+        scratchPadStore.ingestAssistantMessage(
             content: assistantContent,
             sourceMessageId: assistantMessage.id
         )
@@ -690,7 +690,7 @@ final class ChatViewModel {
         )
         try? nodeStore.insertMessage(assistantMessage)
         messages.append(assistantMessage)
-        scratchPadStore?.ingestAssistantMessage(
+        scratchPadStore.ingestAssistantMessage(
             content: assistantContent,
             sourceMessageId: assistantMessage.id
         )

@@ -7,6 +7,7 @@ import SwiftUI
 /// persists its content in @AppStorage so it survives restarts.
 struct ScratchPadPanel: View {
     @Binding var isVisible: Bool
+    var store: ScratchPadStore
     @AppStorage("nous.scratchpad.content") private var content = ""
     @State private var isPreviewMode = false
 

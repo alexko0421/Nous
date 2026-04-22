@@ -48,7 +48,8 @@ final class ChatViewModelTests: XCTestCase {
             userMemoryScheduler: scheduler,
             llmServiceProvider: { nil },
             currentProviderProvider: { .local },
-            judgeLLMServiceFactory: { nil }
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: MainActor.assumeIsolated { ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!) }
         )
 
         XCTAssertNil(vm.activeChatMode)
@@ -61,6 +62,7 @@ final class ChatViewModelTests: XCTestCase {
         let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
         let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
         let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let scratchPadStore = await MainActor.run { ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!) }
 
         let vm = ChatViewModel(
             nodeStore: nodeStore,
@@ -71,7 +73,8 @@ final class ChatViewModelTests: XCTestCase {
             userMemoryScheduler: scheduler,
             llmServiceProvider: { nil },
             currentProviderProvider: { .local },
-            judgeLLMServiceFactory: { nil }
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: scratchPadStore
         )
 
         let project = Project(title: "Nous")
@@ -92,6 +95,7 @@ final class ChatViewModelTests: XCTestCase {
         let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
         let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
         let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let scratchPadStore = await MainActor.run { ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!) }
 
         let vm = ChatViewModel(
             nodeStore: nodeStore,
@@ -102,7 +106,8 @@ final class ChatViewModelTests: XCTestCase {
             userMemoryScheduler: scheduler,
             llmServiceProvider: { nil },
             currentProviderProvider: { .local },
-            judgeLLMServiceFactory: { nil }
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: scratchPadStore
         )
 
         let project = Project(title: "Memory Project")
@@ -133,7 +138,8 @@ final class ChatViewModelTests: XCTestCase {
             userMemoryScheduler: scheduler,
             llmServiceProvider: { slowLLM },
             currentProviderProvider: { .local },
-            judgeLLMServiceFactory: { nil }
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         )
 
         vm.inputText = "Help me think"
@@ -173,7 +179,8 @@ final class ChatViewModelTests: XCTestCase {
             userMemoryScheduler: scheduler,
             llmServiceProvider: { slowLLM },
             currentProviderProvider: { .local },
-            judgeLLMServiceFactory: { nil }
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         )
 
         vm.inputText = "first"
@@ -218,7 +225,8 @@ final class ChatViewModelTests: XCTestCase {
             llmServiceProvider: { nil },
             currentProviderProvider: { .claude },
             judgeLLMServiceFactory: { nil },
-            governanceTelemetry: telemetry
+            governanceTelemetry: telemetry,
+            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         )
 
         vm.inputText = "Need help"

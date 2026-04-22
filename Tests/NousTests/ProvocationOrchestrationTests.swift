@@ -80,7 +80,8 @@ final class ProvocationOrchestrationTests: XCTestCase {
             currentProviderProvider: { .claude },
             judgeLLMServiceFactory: { CannedLLMService() },
             provocationJudgeFactory: { _ in self.judge },
-            governanceTelemetry: telemetry
+            governanceTelemetry: telemetry,
+            scratchPadStore: MainActor.assumeIsolated { ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!) }
         )
     }
 
@@ -279,7 +280,8 @@ final class ProvocationOrchestrationTests: XCTestCase {
                 j.nextError = .apiError
                 return j
             },
-            governanceTelemetry: telemetry
+            governanceTelemetry: telemetry,
+            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         )
 
         viewModel.inputText = "anything"
@@ -311,7 +313,8 @@ final class ProvocationOrchestrationTests: XCTestCase {
                 j.nextError = .apiError
                 return j
             },
-            governanceTelemetry: telemetry
+            governanceTelemetry: telemetry,
+            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         )
 
         viewModel.inputText = "anything"
@@ -418,7 +421,8 @@ final class ProvocationOrchestrationTests: XCTestCase {
             currentProviderProvider: { .claude },
             judgeLLMServiceFactory: { CannedLLMService() },
             provocationJudgeFactory: { _ in SlowJudge() },
-            governanceTelemetry: telemetry
+            governanceTelemetry: telemetry,
+            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         )
 
         viewModel.inputText = "test"
@@ -468,7 +472,8 @@ final class ProvocationOrchestrationTests: XCTestCase {
             currentProviderProvider: { .claude },
             judgeLLMServiceFactory: { CannedLLMService() },
             provocationJudgeFactory: { _ in slowJudge },
-            governanceTelemetry: telemetry
+            governanceTelemetry: telemetry,
+            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         )
 
         viewModel.inputText = "first"
@@ -517,7 +522,8 @@ final class ProvocationOrchestrationTests: XCTestCase {
             currentProviderProvider: { .claude },
             judgeLLMServiceFactory: { CannedLLMService() },
             provocationJudgeFactory: { _ in slowJudge },
-            governanceTelemetry: telemetry
+            governanceTelemetry: telemetry,
+            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         )
 
         viewModel.inputText = "first"
@@ -677,7 +683,8 @@ final class ProvocationOrchestrationTests: XCTestCase {
             currentProviderProvider: { .local },
             judgeLLMServiceFactory: { CannedLLMService() },
             provocationJudgeFactory: { _ in localJudge },
-            governanceTelemetry: telemetry
+            governanceTelemetry: telemetry,
+            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         )
         let convo = NousNode(type: .conversation, title: "seed", projectId: nil)
         try store.insertNode(convo)
