@@ -20,7 +20,7 @@ func filenameSlug(fromMarkdown markdown: String, fallbackDate: Date = Date()) ->
 private func extractFirstH1(from markdown: String) -> String {
     for line in markdown.components(separatedBy: "\n") {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard trimmed.hasPrefix("# "), !trimmed.hasPrefix("## ") else { continue }
+        guard trimmed.hasPrefix("# ") else { continue }
         return String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
     }
     return ""
@@ -31,7 +31,12 @@ private func slugify(_ raw: String) -> String? {
 
     let disallowed: Set<Character> = ["/", "\\", ":", "*", "?", "\"", "<", ">", "|"]
     var filtered = String(raw.unicodeScalars.compactMap { scalar -> Character? in
-        if scalar.properties.generalCategory == .control { return nil }
+        // Strip control + format scalars (format catches U+202E RTL override,
+        // zero-width joiners, and other directional marks that can spoof filenames).
+        switch scalar.properties.generalCategory {
+        case .control, .format: return nil
+        default: break
+        }
         let ch = Character(scalar)
         if disallowed.contains(ch) { return nil }
         return ch
@@ -42,7 +47,7 @@ private func slugify(_ raw: String) -> String? {
         .components(separatedBy: .whitespaces)
         .filter { !$0.isEmpty }
         .joined(separator: "-")
-    filtered = whitespaceCollapsed.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    filtered = whitespaceCollapsed.trimmingCharacters(in: CharacterSet(charactersIn: "-."))
 
     guard !filtered.isEmpty else { return nil }
 

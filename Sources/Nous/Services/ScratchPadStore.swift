@@ -79,6 +79,11 @@ final class ScratchPadStore {
 
     /// Lower-level ingestion used by tests and by `ingestAssistantMessage`.
     func ingest(summary: ScratchSummary) {
+        // Skip duplicate-content summaries so the panel doesn't flash a spurious
+        // overwrite alert when the LLM emits the same <summary> block twice in a row.
+        if latestSummary?.markdown == summary.markdown {
+            return
+        }
         latestSummary = summary
         persistLatestSummary()
     }

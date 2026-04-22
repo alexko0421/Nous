@@ -376,16 +376,10 @@ private enum MarkdownBlock {
     }
 
     /// Renders **bold**, *italic*, and `code` spans inline.
-    @ViewBuilder
     private func inlineText(_ raw: String) -> some View {
-        if #available(macOS 12, *) {
-            Text(attributedString(from: raw))
-        } else {
-            Text(raw)
-        }
+        Text(attributedString(from: raw))
     }
 
-    @available(macOS 12, *)
     private func attributedString(from raw: String) -> AttributedString {
         var result = AttributedString()
         var remaining = raw
@@ -429,7 +423,6 @@ private enum MarkdownBlock {
         return result
     }
 
-    @available(macOS 12, *)
     private func plainAttr(_ s: String) -> AttributedString {
         AttributedString(s)
     }
