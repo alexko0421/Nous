@@ -266,7 +266,7 @@ enum GeminiSSEParser {
 
 struct GeminiLLMService: LLMService {
     let apiKey: String
-    var model: String = "gemini-2.5-flash"
+    var model: String = "gemini-2.5-pro"
     var thinkingBudgetTokens: Int? = nil
     var cachedContentName: String? = nil
     // Callbacks are @MainActor so the producer task `await`s them. That serializes

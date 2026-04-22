@@ -186,8 +186,8 @@ private struct LLMStepView: View {
                 }
 
                 ProviderCard(
-                    title: "Gemini 2.5 Flash",
-                    subtitle: "Google's fast, capable model"
+                    title: "Gemini 2.5 Pro",
+                    subtitle: "Google's stronger reasoning model"
                 ) {
                     settingsVM.selectedProvider = .gemini
                     settingsVM.savePreferences()
