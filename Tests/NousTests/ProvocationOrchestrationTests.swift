@@ -2,6 +2,7 @@
 import XCTest
 @testable import Nous
 
+@MainActor
 final class ProvocationOrchestrationTests: XCTestCase {
 
     // A fake LLM service that returns a canned stream.
@@ -44,9 +45,17 @@ final class ProvocationOrchestrationTests: XCTestCase {
         var nextVerdict: JudgeVerdict?
         var nextError: JudgeError?
         var previousModeHistory: [ChatMode?] = []
+        var feedbackLoopHistory: [JudgeFeedbackLoop?] = []
 
-        func judge(userMessage: String, citablePool: [CitableEntry], previousMode: ChatMode?, provider: LLMProvider) async throws -> JudgeVerdict {
+        func judge(
+            userMessage: String,
+            citablePool: [CitableEntry],
+            previousMode: ChatMode?,
+            provider: LLMProvider,
+            feedbackLoop: JudgeFeedbackLoop?
+        ) async throws -> JudgeVerdict {
             previousModeHistory.append(previousMode)
+            feedbackLoopHistory.append(feedbackLoop)
             if let err = nextError { throw err }
             return nextVerdict ?? JudgeVerdict(tensionExists: false, userState: .exploring, shouldProvoke: false, entryId: nil, reason: "stub default", inferredMode: .companion)
         }
@@ -401,7 +410,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
         // A judge that sleeps long enough for us to fire cancelInFlightJudge() mid-call.
         final class SlowJudge: Judging {
             func judge(userMessage: String, citablePool: [CitableEntry],
-                       previousMode: ChatMode?, provider: LLMProvider) async throws -> JudgeVerdict {
+                       previousMode: ChatMode?, provider: LLMProvider, feedbackLoop: JudgeFeedbackLoop?) async throws -> JudgeVerdict {
                 try await Task.sleep(nanoseconds: 2_000_000_000)  // 2s — long enough to cancel
                 try Task.checkCancellation()  // propagate cancel even if sleep was swallowed
                 return JudgeVerdict(tensionExists: false, userState: .exploring,
@@ -447,7 +456,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
         final class SlowJudge: Judging {
             var wasCancelled = false
             func judge(userMessage: String, citablePool: [CitableEntry],
-                       previousMode: ChatMode?, provider: LLMProvider) async throws -> JudgeVerdict {
+                       previousMode: ChatMode?, provider: LLMProvider, feedbackLoop: JudgeFeedbackLoop?) async throws -> JudgeVerdict {
                 do {
                     try await Task.sleep(nanoseconds: 2_000_000_000)
                 } catch {
@@ -501,7 +510,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
         final class SlowJudge: Judging {
             var wasCancelled = false
             func judge(userMessage: String, citablePool: [CitableEntry],
-                       previousMode: ChatMode?, provider: LLMProvider) async throws -> JudgeVerdict {
+                       previousMode: ChatMode?, provider: LLMProvider, feedbackLoop: JudgeFeedbackLoop?) async throws -> JudgeVerdict {
                 do { try await Task.sleep(nanoseconds: 2_000_000_000) }
                 catch { wasCancelled = true; throw CancellationError() }
                 return JudgeVerdict(tensionExists: false, userState: .exploring,
@@ -561,8 +570,71 @@ final class ProvocationOrchestrationTests: XCTestCase {
 
         viewModel.recordFeedback(forMessageId: assistantMessage.id, feedback: .down)
 
-        let updated = try store.fetchJudgeEvent(id: eventId)
+        var updated = try store.fetchJudgeEvent(id: eventId)
         XCTAssertEqual(updated?.userFeedback, .down)
+
+        viewModel.recordFeedbackDetail(
+            forMessageId: assistantMessage.id,
+            feedback: .down,
+            reason: .tooRepetitive,
+            note: "same challenge again"
+        )
+
+        updated = try store.fetchJudgeEvent(id: eventId)
+        XCTAssertEqual(updated?.feedbackReason, .tooRepetitive)
+        XCTAssertEqual(updated?.feedbackNote, "same challenge again")
+
+        viewModel.clearFeedback(forMessageId: assistantMessage.id)
+
+        updated = try store.fetchJudgeEvent(id: eventId)
+        XCTAssertNil(updated?.userFeedback)
+        XCTAssertNil(updated?.feedbackReason)
+        XCTAssertNil(updated?.feedbackNote)
+    }
+
+    @MainActor
+    func testRecentDownvoteFeedsBackIntoNextJudgeCall() async throws {
+        let entryId = UUID()
+        try store.insertMemoryEntry(MemoryEntry(
+            id: entryId, scope: .global, kind: .preference, stability: .stable,
+            content: "don't compete on price", sourceNodeIds: []
+        ))
+
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: true,
+            userState: .deciding,
+            shouldProvoke: true,
+            entryId: entryId.uuidString,
+            reason: "conflict",
+            inferredMode: .companion
+        )
+        viewModel.inputText = "i should undercut everyone"
+        await viewModel.send()
+
+        let assistantMessage = try XCTUnwrap(viewModel.messages.last(where: { $0.role == .assistant }))
+        viewModel.recordFeedbackDetail(
+            forMessageId: assistantMessage.id,
+            feedback: .down,
+            reason: .wrongTiming,
+            note: "too early"
+        )
+
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: false,
+            userState: .exploring,
+            shouldProvoke: false,
+            entryId: nil,
+            reason: "back off",
+            inferredMode: .companion
+        )
+        viewModel.inputText = "i am still thinking about it"
+        await viewModel.send()
+
+        let feedbackLoop = try XCTUnwrap(judge.feedbackLoopHistory.last ?? nil)
+        XCTAssertTrue(feedbackLoop.entrySuppressions.contains(where: { $0.entryId == entryId.uuidString }))
+        XCTAssertTrue(feedbackLoop.kindAdjustments.contains(where: { $0.kind == .spark }))
+        XCTAssertTrue(feedbackLoop.globalReasonHints.contains("wrong timing"))
+        XCTAssertTrue(feedbackLoop.noteHints.contains("too early"))
     }
 
     func testLatestChatModeReturnsNewestRow() throws {

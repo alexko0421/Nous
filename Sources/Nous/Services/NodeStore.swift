@@ -193,6 +193,18 @@ final class NodeStore {
             );
         """)
 
+        try ensureColumnExists(
+            table: "judge_events",
+            column: "feedbackReason",
+            alterSQL: "ALTER TABLE judge_events ADD COLUMN feedbackReason TEXT;"
+        )
+
+        try ensureColumnExists(
+            table: "judge_events",
+            column: "feedbackNote",
+            alterSQL: "ALTER TABLE judge_events ADD COLUMN feedbackNote TEXT;"
+        )
+
         // Indexes
         try db.exec("CREATE INDEX IF NOT EXISTS idx_nodes_projectId  ON nodes(projectId);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_messages_nodeId  ON messages(nodeId);")
@@ -221,7 +233,14 @@ final class NodeStore {
     }
 
     private func notifyNodesDidChange() {
-        NotificationCenter.default.post(name: .nousNodesDidChange, object: nil)
+        let post = {
+            NotificationCenter.default.post(name: .nousNodesDidChange, object: nil)
+        }
+        if Thread.isMainThread {
+            post()
+        } else {
+            DispatchQueue.main.async(execute: post)
+        }
     }
 
     // MARK: - Binary helpers
@@ -1196,8 +1215,8 @@ extension NodeStore {
         let stmt = try db.prepare("""
             INSERT INTO judge_events
               (id, ts, nodeId, messageId, chatMode, provider,
-               verdictJSON, fallbackReason, userFeedback, feedbackTs)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+               verdictJSON, fallbackReason, userFeedback, feedbackTs, feedbackReason, feedbackNote)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """)
         try stmt.bind(event.id.uuidString, at: 1)
         try stmt.bind(event.ts.timeIntervalSince1970, at: 2)
@@ -1209,13 +1228,15 @@ extension NodeStore {
         try stmt.bind(event.fallbackReason.rawValue, at: 8)
         try stmt.bind(event.userFeedback?.rawValue, at: 9)
         try stmt.bind(event.feedbackTs?.timeIntervalSince1970, at: 10)
+        try stmt.bind(event.feedbackReason?.rawValue, at: 11)
+        try stmt.bind(event.feedbackNote, at: 12)
         try stmt.step()
     }
 
     func fetchJudgeEvent(id: UUID) throws -> JudgeEvent? {
         let stmt = try db.prepare("""
             SELECT id, ts, nodeId, messageId, chatMode, provider,
-                   verdictJSON, fallbackReason, userFeedback, feedbackTs
+                   verdictJSON, fallbackReason, userFeedback, feedbackTs, feedbackReason, feedbackNote
             FROM judge_events
             WHERE id = ?
             LIMIT 1;
@@ -1241,7 +1262,7 @@ extension NodeStore {
         }
         let stmt = try db.prepare("""
             SELECT id, ts, nodeId, messageId, chatMode, provider,
-                   verdictJSON, fallbackReason, userFeedback, feedbackTs
+                   verdictJSON, fallbackReason, userFeedback, feedbackTs, feedbackReason, feedbackNote
             FROM judge_events
             \(whereClause)
             ORDER BY ts DESC
@@ -1279,15 +1300,36 @@ extension NodeStore {
         try stmt.step()
     }
 
-    func updateJudgeEventFeedback(id: UUID, feedback: JudgeFeedback, at ts: Date) throws {
+    func updateJudgeEventFeedback(
+        id: UUID,
+        feedback: JudgeFeedback,
+        reason: JudgeFeedbackReason? = nil,
+        note: String? = nil,
+        at ts: Date
+    ) throws {
         let stmt = try db.prepare("""
             UPDATE judge_events
-            SET userFeedback = ?, feedbackTs = ?
+            SET userFeedback = ?, feedbackTs = ?, feedbackReason = ?, feedbackNote = ?
             WHERE id = ?;
         """)
         try stmt.bind(feedback.rawValue, at: 1)
         try stmt.bind(ts.timeIntervalSince1970, at: 2)
-        try stmt.bind(id.uuidString, at: 3)
+        try stmt.bind(reason?.rawValue, at: 3)
+        try stmt.bind(note?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty, at: 4)
+        try stmt.bind(id.uuidString, at: 5)
+        try stmt.step()
+    }
+
+    func clearJudgeEventFeedback(id: UUID) throws {
+        let stmt = try db.prepare("""
+            UPDATE judge_events
+            SET userFeedback = NULL,
+                feedbackTs = NULL,
+                feedbackReason = NULL,
+                feedbackNote = NULL
+            WHERE id = ?;
+        """)
+        try stmt.bind(id.uuidString, at: 1)
         try stmt.step()
     }
 
@@ -1315,6 +1357,8 @@ extension NodeStore {
         let messageId = stmt.text(at: 3).flatMap(UUID.init(uuidString:))
         let feedback = stmt.text(at: 8).flatMap(JudgeFeedback.init(rawValue:))
         let feedbackTs = stmt.isNull(at: 9) ? nil : Date(timeIntervalSince1970: stmt.double(at: 9))
+        let feedbackReason = stmt.text(at: 10).flatMap(JudgeFeedbackReason.init(rawValue:))
+        let feedbackNote = stmt.text(at: 11)
         return JudgeEvent(
             id: id,
             ts: Date(timeIntervalSince1970: stmt.double(at: 1)),
@@ -1325,7 +1369,15 @@ extension NodeStore {
             verdictJSON: verdictJSON,
             fallbackReason: fallback,
             userFeedback: feedback,
-            feedbackTs: feedbackTs
+            feedbackTs: feedbackTs,
+            feedbackReason: feedbackReason,
+            feedbackNote: feedbackNote
         )
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }

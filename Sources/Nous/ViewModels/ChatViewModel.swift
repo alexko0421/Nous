@@ -2,6 +2,7 @@ import Foundation
 import Observation
 
 @Observable
+@MainActor
 final class ChatViewModel {
 
     // MARK: - State
@@ -18,6 +19,7 @@ final class ChatViewModel {
     var activeChatMode: ChatMode? = nil
     var defaultProjectId: UUID?
     var lastPromptGovernanceTrace: PromptGovernanceTrace?
+    private var judgeFeedbackVersion: Int = 0
 
     // MARK: - Dependencies
 
@@ -35,18 +37,18 @@ final class ChatViewModel {
     /// `await task.value` and inspect the verdict directly. The slot is guarded on clear:
     /// a later `send()` may have already overwritten it with a new task ID, so only the task
     /// that still owns the slot clears it (see `inFlightJudgeTaskId` guard in `send()`).
-    private var inFlightJudgeTask: Task<JudgeVerdict, Error>?
-    private var inFlightJudgeTaskId: UUID?
-    private var inFlightResponseTask: Task<Void, Never>?
-    private var inFlightResponseTaskId: UUID?
+    @ObservationIgnored nonisolated(unsafe) private var inFlightJudgeTask: Task<JudgeVerdict, Error>?
+    @ObservationIgnored nonisolated(unsafe) private var inFlightJudgeTaskId: UUID?
+    @ObservationIgnored nonisolated(unsafe) private var inFlightResponseTask: Task<Void, Never>?
+    @ObservationIgnored nonisolated(unsafe) private var inFlightResponseTaskId: UUID?
     private let governanceTelemetry: GovernanceTelemetryStore
     private let geminiPromptCache: GeminiPromptCacheService
     private let scratchPadStore: ScratchPadStore
     /// In-flight cache-refresh bookkeeping, keyed by conversation id. The token map
     /// lets a late-arriving worker detect that it has been superseded and clean up its
     /// orphaned server-side handle instead of overwriting a newer entry.
-    private var geminiCacheRefreshTasks: [UUID: Task<Void, Never>] = [:]
-    private var geminiCacheRefreshTokens: [UUID: UUID] = [:]
+    @ObservationIgnored nonisolated(unsafe) private var geminiCacheRefreshTasks: [UUID: Task<Void, Never>] = [:]
+    @ObservationIgnored nonisolated(unsafe) private var geminiCacheRefreshTokens: [UUID: UUID] = [:]
 
     // MARK: - Init
 
@@ -82,7 +84,7 @@ final class ChatViewModel {
         self.defaultProjectId = defaultProjectId
     }
 
-    deinit {
+    @MainActor deinit {
         // VM teardown — make sure no judge task outlives us.
         inFlightJudgeTask?.cancel()
         inFlightResponseTask?.cancel()
@@ -437,6 +439,7 @@ final class ChatViewModel {
         var profile: BehaviorProfile = .supportive
         var focusBlock: String?
         var inferredMode: ChatMode?
+        let feedbackLoop = buildJudgeFeedbackLoop()
 
         if currentProvider == .local {
             fallbackReason = .providerLocal
@@ -450,7 +453,8 @@ final class ChatViewModel {
                     userMessage: promptQuery,
                     citablePool: citablePool,
                     previousMode: activeChatMode,
-                    provider: currentProvider
+                    provider: currentProvider,
+                    feedbackLoop: feedbackLoop
                 )
             }
             inFlightJudgeTask = task
@@ -615,6 +619,7 @@ final class ChatViewModel {
             try? nodeStore.insertMessage(errorMessage)
             messages.append(errorMessage)
             try? nodeStore.updateJudgeEventMessageId(eventId: eventId, messageId: errorMessage.id)
+            bumpJudgeFeedbackVersion()
             persistConversationSnapshot(for: node.id, messages: messages, shouldRefreshEmoji: true)
             activeQuickActionMode = ChatViewModel.updatedQuickActionMode(
                 currentMode: activeQuickActionMode,
@@ -701,6 +706,7 @@ final class ChatViewModel {
 
         // Step 9b: patch the judge event with the message it produced
         try? nodeStore.updateJudgeEventMessageId(eventId: eventId, messageId: assistantMessage.id)
+        bumpJudgeFeedbackVersion()
         persistConversationSnapshot(for: node.id, messages: messages, shouldRefreshEmoji: true)
         activeQuickActionMode = ChatViewModel.updatedQuickActionMode(
             currentMode: activeQuickActionMode,
@@ -777,7 +783,7 @@ final class ChatViewModel {
 
     // MARK: - Focus Block
 
-    private static func buildFocusBlock(entryId: String, rawText: String) -> String {
+    nonisolated private static func buildFocusBlock(entryId: String, rawText: String) -> String {
         """
         RELEVANT PRIOR MEMORY (id=\(entryId)):
         \(rawText)
@@ -853,7 +859,7 @@ final class ChatViewModel {
     Do not romanticize self-destruction, isolation, or dependency.
     """
 
-    private static func activeChatModeBlock(_ chatMode: ChatMode) -> String {
+    nonisolated private static func activeChatModeBlock(_ chatMode: ChatMode) -> String {
         "---\n\nACTIVE CHAT MODE: \(chatMode.label)\n\(chatMode.contextBlock)"
     }
 
@@ -871,7 +877,7 @@ final class ChatViewModel {
         }
     }
 
-    static func assembleContext(
+    nonisolated static func assembleContext(
         chatMode: ChatMode = .companion,
         currentUserInput: String? = nil,
         globalMemory: String?,
@@ -1024,7 +1030,7 @@ final class ChatViewModel {
         )
     }
 
-    static func governanceTrace(
+    nonisolated static func governanceTrace(
         chatMode: ChatMode = .companion,
         currentUserInput: String? = nil,
         globalMemory: String?,
@@ -1075,7 +1081,7 @@ final class ChatViewModel {
         )
     }
 
-    private static func longGapConnectionGuidance(
+    nonisolated private static func longGapConnectionGuidance(
         chatMode: ChatMode,
         currentUserInput: String?,
         citations: [SearchResult],
@@ -1113,7 +1119,7 @@ final class ChatViewModel {
         """
     }
 
-    private static func preferredLongGapBridgeCitation(
+    nonisolated private static func preferredLongGapBridgeCitation(
         citations: [SearchResult],
         now: Date
     ) -> SearchResult? {
@@ -1124,17 +1130,17 @@ final class ChatViewModel {
         }
     }
 
-    private static func ageDays(since createdAt: Date, now: Date) -> Int {
+    nonisolated private static func ageDays(since createdAt: Date, now: Date) -> Int {
         let elapsed = max(0, now.timeIntervalSince(createdAt))
         return Int(elapsed / 86_400)
     }
 
-    private static func userMessageContent(query: String, attachmentNames: [String]) -> String {
+    nonisolated private static func userMessageContent(query: String, attachmentNames: [String]) -> String {
         guard !attachmentNames.isEmpty else { return query }
         return "\(query)\n\nFiles: \(attachmentNames.joined(separator: ", "))"
     }
 
-    static func updatedQuickActionMode(
+    nonisolated static func updatedQuickActionMode(
         currentMode: QuickActionMode?,
         assistantContent: String
     ) -> QuickActionMode? {
@@ -1143,7 +1149,7 @@ final class ChatViewModel {
         return parsed.keepsQuickActionMode ? currentMode : nil
     }
 
-    static func shouldAllowInteractiveClarification(
+    nonisolated static func shouldAllowInteractiveClarification(
         activeQuickActionMode: QuickActionMode?,
         messages: [Message]
     ) -> Bool {
@@ -1156,7 +1162,7 @@ final class ChatViewModel {
     /// Stamped onto verdictJSON by the send flow before the verdict is encoded;
     /// do not call from additional sites or persisted verdictJSON content
     /// becomes non-deterministic.
-    static func deriveProvocationKind(
+    nonisolated static func deriveProvocationKind(
         verdict: JudgeVerdict,
         contradictionCandidateIds: Set<String>
     ) -> ProvocationKind {
@@ -1167,7 +1173,7 @@ final class ChatViewModel {
         return .spark
     }
 
-    static func quickActionOpeningPrompt(for mode: QuickActionMode) -> String {
+    nonisolated static func quickActionOpeningPrompt(for mode: QuickActionMode) -> String {
         """
         Alex just entered the \(mode.label) mode from the welcome screen.
         Start the conversation yourself instead of waiting for him to type.
@@ -1336,7 +1342,7 @@ final class ChatViewModel {
         return geminiPromptCache.activeCache(for: nodeId, model: gemini.model, promptHash: prefixHash)
     }
 
-    static func prefixedUserMessageContent(volatile: String, userContent: String) -> String {
+    nonisolated static func prefixedUserMessageContent(volatile: String, userContent: String) -> String {
         guard !volatile.isEmpty else { return userContent }
         return """
         <turn-context>
@@ -1486,7 +1492,7 @@ final class ChatViewModel {
         geminiCacheRefreshTokens.removeValue(forKey: nodeId)
     }
 
-    private static func shouldCreateGeminiHistoryCache(for messages: [LLMMessage]) -> Bool {
+    nonisolated private static func shouldCreateGeminiHistoryCache(for messages: [LLMMessage]) -> Bool {
         guard messages.count >= 4 else { return false }
         let characterCount = messages.reduce(into: 0) { $0 += $1.content.count }
         // Gemini 2.5 Flash implicit caching starts at 1024 prompt tokens; use a
@@ -1518,24 +1524,202 @@ final class ChatViewModel {
 }
 
 extension ChatViewModel {
-
-    /// Returns the judge event id for a given assistant message, if one was recorded
-    /// for the turn that produced it AND the judge actually provoked.
-    /// Returns nil for messages from non-provoked or pre-feature turns.
     @MainActor
-    func judgeEventId(forMessageId messageId: UUID) -> UUID? {
+    private func buildJudgeFeedbackLoop(limit: Int = 24, now: Date = Date()) -> JudgeFeedbackLoop? {
+        let events = governanceTelemetry.recentJudgeEvents(limit: limit, filter: .none)
+        guard !events.isEmpty else { return nil }
+
+        var entryPenalty: [String: Double] = [:]
+        var entryReasons: [String: [String: Double]] = [:]
+        var kindPenalty: [ProvocationKind: Double] = [:]
+        var kindReasons: [ProvocationKind: [String: Double]] = [:]
+        var globalReasons: [String: Double] = [:]
+        var noteHints: [(text: String, weight: Double)] = []
+
+        for event in events {
+            guard event.fallbackReason == .ok,
+                  let feedback = event.userFeedback,
+                  let verdict = Self.decodeJudgeVerdict(from: event.verdictJSON),
+                  verdict.shouldProvoke
+            else { continue }
+
+            let referenceDate = event.feedbackTs ?? event.ts
+            let ageHours = max(0, now.timeIntervalSince(referenceDate) / 3600)
+            let decay = pow(0.82, ageHours / 24)
+            let weight = (feedback == .down ? 2.0 : -1.0) * decay
+
+            kindPenalty[verdict.provocationKind, default: 0] += weight
+            if let entryId = verdict.entryId {
+                entryPenalty[entryId, default: 0] += weight
+            }
+
+            guard feedback == .down else { continue }
+
+            if let reasonLabel = Self.feedbackReasonLabel(event.feedbackReason) {
+                globalReasons[reasonLabel, default: 0] += decay
+                var reasonsForKind = kindReasons[verdict.provocationKind, default: [:]]
+                reasonsForKind[reasonLabel, default: 0] += decay
+                kindReasons[verdict.provocationKind] = reasonsForKind
+                if let entryId = verdict.entryId {
+                    var reasonsForEntry = entryReasons[entryId, default: [:]]
+                    reasonsForEntry[reasonLabel, default: 0] += decay
+                    entryReasons[entryId] = reasonsForEntry
+                }
+            }
+
+            if let note = Self.feedbackNoteHint(event.feedbackNote) {
+                noteHints.append((text: note, weight: decay))
+            }
+        }
+
+        let entrySuppressions = entryPenalty
+            .filter { $0.value > 0.45 }
+            .sorted { $0.value > $1.value }
+            .prefix(3)
+            .map { entryId, penalty in
+                JudgeFeedbackLoop.EntrySuppression(
+                    entryId: entryId,
+                    penalty: penalty,
+                    reasonHints: Self.topReasonLabels(entryReasons[entryId], limit: 2)
+                )
+            }
+
+        let kindAdjustments = kindPenalty
+            .filter { $0.value > 0.35 }
+            .sorted { lhs, rhs in
+                if lhs.value == rhs.value {
+                    return lhs.key.rawValue < rhs.key.rawValue
+                }
+                return lhs.value > rhs.value
+            }
+            .prefix(3)
+            .map { kind, penalty in
+                JudgeFeedbackLoop.KindAdjustment(
+                    kind: kind,
+                    penalty: penalty,
+                    reasonHints: Self.topReasonLabels(kindReasons[kind], limit: 2)
+                )
+            }
+
+        let loop = JudgeFeedbackLoop(
+            entrySuppressions: Array(entrySuppressions),
+            kindAdjustments: Array(kindAdjustments),
+            globalReasonHints: Self.topReasonLabels(globalReasons, limit: 3),
+            noteHints: Self.topNoteHints(noteHints, limit: 2)
+        )
+        return loop.isEmpty ? nil : loop
+    }
+
+    nonisolated private static func decodeJudgeVerdict(from json: String) -> JudgeVerdict? {
+        guard let data = json.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(JudgeVerdict.self, from: data)
+    }
+
+    nonisolated private static func feedbackReasonLabel(_ reason: JudgeFeedbackReason?) -> String? {
+        reason?.title.lowercased()
+    }
+
+    nonisolated private static func topReasonLabels(_ weightedReasons: [String: Double]?, limit: Int) -> [String] {
+        (weightedReasons ?? [:])
+            .filter { $0.value > 0 }
+            .sorted { lhs, rhs in
+                if lhs.value == rhs.value {
+                    return lhs.key < rhs.key
+                }
+                return lhs.value > rhs.value
+            }
+            .prefix(limit)
+            .map(\.key)
+    }
+
+    nonisolated private static func topNoteHints(_ notes: [(text: String, weight: Double)], limit: Int) -> [String] {
+        var seen: Set<String> = []
+        return notes
+            .sorted { $0.weight > $1.weight }
+            .compactMap { note in
+                guard seen.insert(note.text).inserted else { return nil }
+                return note.text
+            }
+            .prefix(limit)
+            .map { $0 }
+    }
+
+    nonisolated private static func feedbackNoteHint(_ note: String?) -> String? {
+        guard let trimmed = note?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty
+        else { return nil }
+
+        let singleLine = trimmed.replacingOccurrences(of: "\n", with: " ")
+        if singleLine.count <= 96 {
+            return singleLine
+        }
+        let endIndex = singleLine.index(singleLine.startIndex, offsetBy: 93)
+        return String(singleLine[..<endIndex]) + "..."
+    }
+
+    @MainActor
+    private func judgeEvent(forMessageId messageId: UUID) -> JudgeEvent? {
+        _ = judgeFeedbackVersion
         let events = governanceTelemetry.recentJudgeEvents(limit: 500, filter: .none)
         guard let match = events.first(where: { $0.messageId == messageId }),
               match.fallbackReason == .ok else { return nil }
         guard let verdictData = match.verdictJSON.data(using: .utf8),
               let verdict = try? JSONDecoder().decode(JudgeVerdict.self, from: verdictData),
               verdict.shouldProvoke else { return nil }
-        return match.id
+        return match
+    }
+
+    @MainActor
+    private func bumpJudgeFeedbackVersion() {
+        judgeFeedbackVersion &+= 1
+    }
+
+    /// Returns the judge event id for a given assistant message, if one was recorded
+    /// for the turn that produced it AND the judge actually provoked.
+    /// Returns nil for messages from non-provoked or pre-feature turns.
+    @MainActor
+    func judgeEventId(forMessageId messageId: UUID) -> UUID? {
+        judgeEvent(forMessageId: messageId)?.id
+    }
+
+    @MainActor
+    func feedback(forMessageId messageId: UUID) -> JudgeFeedback? {
+        judgeEvent(forMessageId: messageId)?.userFeedback
+    }
+
+    @MainActor
+    func feedbackReason(forMessageId messageId: UUID) -> JudgeFeedbackReason? {
+        judgeEvent(forMessageId: messageId)?.feedbackReason
+    }
+
+    @MainActor
+    func feedbackNote(forMessageId messageId: UUID) -> String {
+        judgeEvent(forMessageId: messageId)?.feedbackNote ?? ""
     }
 
     @MainActor
     func recordFeedback(forMessageId messageId: UUID, feedback: JudgeFeedback) {
         guard let eventId = judgeEventId(forMessageId: messageId) else { return }
         governanceTelemetry.recordFeedback(eventId: eventId, feedback: feedback)
+        bumpJudgeFeedbackVersion()
+    }
+
+    @MainActor
+    func recordFeedbackDetail(
+        forMessageId messageId: UUID,
+        feedback: JudgeFeedback,
+        reason: JudgeFeedbackReason?,
+        note: String?
+    ) {
+        guard let eventId = judgeEventId(forMessageId: messageId) else { return }
+        governanceTelemetry.recordFeedback(eventId: eventId, feedback: feedback, reason: reason, note: note)
+        bumpJudgeFeedbackVersion()
+    }
+
+    @MainActor
+    func clearFeedback(forMessageId messageId: UUID) {
+        guard let eventId = judgeEventId(forMessageId: messageId) else { return }
+        governanceTelemetry.clearFeedback(eventId: eventId)
+        bumpJudgeFeedbackVersion()
     }
 }

@@ -8,6 +8,7 @@ struct ScratchPadPanel: View {
     @Binding var isVisible: Bool
     @Bindable var store: ScratchPadStore
     @State private var isPreviewMode = true
+    @Namespace private var toggleAnimation
 
     var body: some View {
         NativeGlassPanel(cornerRadius: 32, tintColor: AppColor.glassTint) {
@@ -52,20 +53,10 @@ struct ScratchPadPanel: View {
     @ViewBuilder
     private var header: some View {
         HStack(alignment: .center, spacing: 10) {
-            HStack(spacing: 6) {
-                Image(systemName: "note.text")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundColor(.white)
-                    .frame(width: 20, height: 20)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(AppColor.colaOrange)
-                    )
-                Text("Markdown")
-                    .font(.system(size: 14, weight: .bold, design: .rounded))
-                    .foregroundColor(AppColor.colaDarkText)
-            }
-            .frame(height: 32)
+            Text("Markdown")
+                .font(.system(size: 14, weight: .bold, design: .rounded))
+                .foregroundColor(AppColor.colaDarkText)
+                .frame(height: 32)
 
             if store.isDirty {
                 Text("•")
@@ -76,14 +67,10 @@ struct ScratchPadPanel: View {
             Spacer(minLength: 0)
 
             Button(action: handleDownload) {
-                HStack(spacing: 4) {
-                    Image(systemName: "arrow.down.doc")
-                        .font(.system(size: 12, weight: .semibold))
-                    Text("下载")
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                }
+                Text("下載")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
             }
-            .buttonStyle(OrangeGlassButtonStyle(isDisabled: store.currentContent.isEmpty))
+            .buttonStyle(LiquidGlassButtonStyle(isDisabled: store.currentContent.isEmpty))
             .disabled(store.currentContent.isEmpty)
 
             // Write / Preview grouped pill
@@ -98,11 +85,11 @@ struct ScratchPadPanel: View {
                 )
 
                 HStack(spacing: 2) {
-                    modeButton(label: "Preview", icon: "eye", active: isPreviewMode) {
-                        withAnimation(.easeInOut(duration: 0.15)) { isPreviewMode = true }
+                    modeButton(label: "Preview", icon: "eye", active: isPreviewMode, id: "preview") {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.75, blendDuration: 0)) { isPreviewMode = true }
                     }
-                    modeButton(label: "Write", icon: "pencil", active: !isPreviewMode) {
-                        withAnimation(.easeInOut(duration: 0.15)) { isPreviewMode = false }
+                    modeButton(label: "Write", icon: "pencil", active: !isPreviewMode, id: "write") {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.75, blendDuration: 0)) { isPreviewMode = false }
                     }
                 }
                 .padding(3)
@@ -141,6 +128,7 @@ struct ScratchPadPanel: View {
             }
         }
     }
+
 
     @ViewBuilder
     private var divider: some View {
@@ -185,7 +173,6 @@ struct ScratchPadPanel: View {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .stroke(AppColor.panelStroke, lineWidth: 1)
             )
-            .shadow(color: .black.opacity(0.08), radius: 12, y: 4)
     }
 
     @ViewBuilder
@@ -223,6 +210,7 @@ struct ScratchPadPanel: View {
         label: String,
         icon: String,
         active: Bool,
+        id: String,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -232,25 +220,23 @@ struct ScratchPadPanel: View {
                 Text(label)
                     .font(.system(size: 11, weight: active ? .semibold : .medium, design: .rounded))
             }
-            .foregroundColor(active ? .white : AppColor.secondaryText)
-                .padding(.horizontal, 10)
-            .frame(height: 32)
+            .foregroundColor(active ? AppColor.colaDarkText : AppColor.secondaryText)
+            .padding(.horizontal, 10)
+            .frame(height: 26)
             .background(
-                Group {
+                ZStack {
                     if active {
-                        NativeGlassPanel(
-                            cornerRadius: 13,
-                            tintColor: NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.88)
-                        ) { EmptyView() }
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                                .stroke(Color.white.opacity(0.2), lineWidth: 1)
-                        )
-                    } else {
-                        Color.clear
+                        RoundedRectangle(cornerRadius: 13, style: .continuous)
+                            .fill(AppColor.teaPillColor)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                            )
+                            .matchedGeometryEffect(id: "pillBackground", in: toggleAnimation)
                     }
                 }
             )
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -439,31 +425,30 @@ private enum MarkdownBlock {
     }
 }
 
-// MARK: - OrangeGlassButtonStyle
+// MARK: - LiquidGlassButtonStyle
 
-struct OrangeGlassButtonStyle: ButtonStyle {
+struct LiquidGlassButtonStyle: ButtonStyle {
     let isDisabled: Bool
     
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .foregroundColor(isDisabled ? AppColor.secondaryText : (configuration.isPressed ? .white : AppColor.colaOrange))
-            .padding(.horizontal, 10)
+            .foregroundColor(isDisabled ? AppColor.secondaryText : AppColor.colaDarkText)
+            .padding(.horizontal, 12)
             .frame(height: 32)
             .background(
                 NativeGlassPanel(
                     cornerRadius: 14,
-                    tintColor: isDisabled 
-                        ? NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.10)
-                        : (configuration.isPressed 
-                            ? NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.88) 
-                            : NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.18))
+                    tintColor: configuration.isPressed 
+                        ? NSColor(white: 0, alpha: 0.1) // slightly darker when pressed
+                        : AppColor.glassTint
                 ) { EmptyView() }
+                .opacity(isDisabled ? 0.5 : 1.0)
             )
             .overlay(
-                Capsule()
-                    .stroke(isDisabled ? Color.clear : (configuration.isPressed ? Color.white.opacity(0.2) : AppColor.colaOrange.opacity(0.3)), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(AppColor.panelStroke, lineWidth: 1)
             )
-            .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
-            .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
+            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+            .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
     }
 }

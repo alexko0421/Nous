@@ -70,6 +70,28 @@ final class NodeStoreTests: XCTestCase {
         XCTAssertNil(fetched)
     }
 
+    func testNodeChangeNotificationHopsToMainThreadWhenWriteStartsOffMain() {
+        let notification = expectation(description: "nodes change notification")
+        let store = store!
+        let node = makeNode(title: "Background insert")
+
+        let token = NotificationCenter.default.addObserver(
+            forName: .nousNodesDidChange,
+            object: nil,
+            queue: nil
+        ) { _ in
+            XCTAssertTrue(Thread.isMainThread, "UI-driving node change notifications must arrive on the main thread")
+            notification.fulfill()
+        }
+        defer { NotificationCenter.default.removeObserver(token) }
+
+        DispatchQueue.global().async {
+            try? store.insertNode(node)
+        }
+
+        wait(for: [notification], timeout: 2.0)
+    }
+
     func testNodeContentPreservesEmbeddedNullBytes() throws {
         let content = "alpha\u{0000}omega"
         let node = makeNode(title: "Binary-safe", content: content)

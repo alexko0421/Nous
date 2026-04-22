@@ -13,6 +13,14 @@ struct ChatArea: View {
     @State private var isFileImporterPresented = false
     @State private var isPhotosPickerPresented = false
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
+    @State private var floatingHeaderHeight: CGFloat = 76
+    @State private var floatingComposerHeight: CGFloat = 124
+    @State private var activeDownvotePopoverMessageId: UUID?
+    @State private var downvoteFeedbackReason: JudgeFeedbackReason?
+    @State private var downvoteFeedbackNote: String = ""
+
+    private let bottomScrollAnchor = "chat-bottom-anchor"
+    private let bottomVisibleSpacing: CGFloat = 53
     
     private var isWelcomeState: Bool {
         vm.messages.isEmpty && vm.currentNode == nil
@@ -68,88 +76,132 @@ struct ChatArea: View {
                 // Full-screen floating layout
                 ZStack {
                     // Chat log (underneath overlays)
-                    ScrollView {
-                        VStack(spacing: 24) {
-                            ForEach(vm.messages) { msg in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    MessageBubble(
-                                        text: msg.content,
-                                        thinkingContent: msg.thinkingContent,
-                                        isThinkingStreaming: false,
-                                        isUser: msg.role == .user
-                                    )
-                                    if shouldShowRelevantChats(after: msg) {
-                                        RAGCitationView(
-                                            citations: vm.citations,
-                                            isExpanded: $isRelevantChatsExpanded,
-                                            onOpenSource: onNavigateToNode
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            VStack(spacing: 24) {
+                                ForEach(vm.messages) { msg in
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        MessageBubble(
+                                            text: msg.content,
+                                            thinkingContent: msg.thinkingContent,
+                                            isThinkingStreaming: false,
+                                            isUser: msg.role == .user
                                         )
-                                        .padding(.top, 8)
-                                    }
-                                    if msg.role == .assistant {
-                                        HStack(spacing: 4) {
-                                            if let eventId = vm.judgeEventId(forMessageId: msg.id) {
-                                                Button(action: { vm.recordFeedback(forMessageId: msg.id, feedback: .up) }) {
-                                                    Image(systemName: "hand.thumbsup")
-                                                        .frame(width: 24, height: 24)
-                                                        .contentShape(Rectangle())
-                                                }.buttonStyle(.plain)
-                                                Button(action: { vm.recordFeedback(forMessageId: msg.id, feedback: .down) }) {
-                                                    Image(systemName: "hand.thumbsdown")
-                                                        .frame(width: 24, height: 24)
-                                                        .contentShape(Rectangle())
-                                                }.buttonStyle(.plain)
-                                                .help("Was this interjection useful? (event \(eventId.uuidString.prefix(8)))")
-                                            }
-
-                                            CopyButton(text: msg.content)
+                                        if shouldShowRelevantChats(after: msg) {
+                                            RAGCitationView(
+                                                citations: vm.citations,
+                                                isExpanded: $isRelevantChatsExpanded,
+                                                onOpenSource: onNavigateToNode
+                                            )
+                                            .padding(.top, 8)
                                         }
-                                        .font(.footnote)
-                                        .foregroundStyle(AppColor.colaDarkText.opacity(0.5))
+                                        if msg.role == .assistant {
+                                            HStack(spacing: 4) {
+                                                if let eventId = vm.judgeEventId(forMessageId: msg.id) {
+                                                    let feedback = vm.feedback(forMessageId: msg.id)
+
+                                                    AssistantFeedbackButton(
+                                                        symbolName: feedback == .up ? "hand.thumbsup.fill" : "hand.thumbsup",
+                                                        isSelected: feedback == .up,
+                                                        helpText: feedback == .up
+                                                            ? "Clear useful feedback (event \(eventId.uuidString.prefix(8)))"
+                                                            : "Mark this interjection as useful (event \(eventId.uuidString.prefix(8)))"
+                                                    ) {
+                                                        handleThumbsUpTap(for: msg.id)
+                                                    }
+
+                                                    AssistantFeedbackButton(
+                                                        symbolName: feedback == .down ? "hand.thumbsdown.fill" : "hand.thumbsdown",
+                                                        isSelected: feedback == .down,
+                                                        helpText: feedback == .down
+                                                            ? "Clear not useful feedback (event \(eventId.uuidString.prefix(8)))"
+                                                            : "Mark this interjection as not useful (event \(eventId.uuidString.prefix(8)))"
+                                                    ) {
+                                                        handleThumbsDownTap(for: msg.id)
+                                                    }
+                                                    .popover(
+                                                        isPresented: isDownvotePopoverPresented(for: msg.id),
+                                                        arrowEdge: .bottom
+                                                    ) {
+                                                        DownvoteFeedbackPopover(
+                                                            selectedReason: $downvoteFeedbackReason,
+                                                            note: $downvoteFeedbackNote,
+                                                            onSave: { saveDownvoteFeedback(for: msg.id) },
+                                                            onSkip: closeDownvotePopover
+                                                        )
+                                                    }
+                                                }
+
+                                                CopyButton(text: msg.content)
+                                            }
+                                            .font(.footnote)
+                                            .foregroundStyle(AppColor.colaDarkText.opacity(0.5))
+                                        }
                                     }
                                 }
-                            }
-                            if vm.isGenerating && !vm.currentThinking.isEmpty && vm.currentResponse.isEmpty {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    HStack {
-                                        ThinkingAccordion(
-                                            content: vm.currentThinking,
-                                            isStreaming: true
-                                        )
-                                        Spacer()
-                                    }
-                                    if !vm.citations.isEmpty {
-                                        RAGCitationView(
-                                            citations: vm.citations,
-                                            isExpanded: $isRelevantChatsExpanded,
-                                            onOpenSource: onNavigateToNode
-                                        )
-                                        .padding(.top, 4)
-                                    }
-                                }
-                            }
-                            if !vm.currentResponse.isEmpty {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    MessageBubble(
-                                        text: vm.currentResponse,
-                                        thinkingContent: vm.currentThinking.isEmpty ? nil : vm.currentThinking,
-                                        isThinkingStreaming: vm.isGenerating && !vm.currentThinking.isEmpty,
-                                        isUser: false
-                                    )
-                                    if !vm.citations.isEmpty && vm.isGenerating {
-                                        RAGCitationView(
-                                            citations: vm.citations,
-                                            isExpanded: $isRelevantChatsExpanded,
-                                            onOpenSource: onNavigateToNode
-                                        )
-                                        .padding(.top, 4)
+                                if vm.isGenerating && !vm.currentThinking.isEmpty && vm.currentResponse.isEmpty {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        HStack {
+                                            ThinkingAccordion(
+                                                content: vm.currentThinking,
+                                                isStreaming: true
+                                            )
+                                            Spacer()
+                                        }
+                                        if !vm.citations.isEmpty {
+                                            RAGCitationView(
+                                                citations: vm.citations,
+                                                isExpanded: $isRelevantChatsExpanded,
+                                                onOpenSource: onNavigateToNode
+                                            )
+                                            .padding(.top, 4)
+                                        }
                                     }
                                 }
+                                if !vm.currentResponse.isEmpty {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        MessageBubble(
+                                            text: vm.currentResponse,
+                                            thinkingContent: vm.currentThinking.isEmpty ? nil : vm.currentThinking,
+                                            isThinkingStreaming: vm.isGenerating && !vm.currentThinking.isEmpty,
+                                            isUser: false
+                                        )
+                                        if !vm.citations.isEmpty && vm.isGenerating {
+                                            RAGCitationView(
+                                                citations: vm.citations,
+                                                isExpanded: $isRelevantChatsExpanded,
+                                                onOpenSource: onNavigateToNode
+                                            )
+                                            .padding(.top, 4)
+                                        }
+                                    }
+                                }
+                                Color.clear
+                                    .frame(height: floatingComposerHeight + bottomVisibleSpacing)
+                                    .id(bottomScrollAnchor)
                             }
+                            .padding(.horizontal, 36)
+                            .padding(.top, floatingHeaderHeight + 24)
+                            .padding(.bottom, 8)
                         }
-                        .padding(.horizontal, 36)
-                        .padding(.top, 76) // Space to scroll past floating header
-                        .padding(.bottom, 124) // Space to scroll past floating input
+                        .onAppear {
+                            scrollToBottom(with: proxy)
+                        }
+                        .onChange(of: vm.messages.count) { _, _ in
+                            scrollToBottom(with: proxy)
+                        }
+                        .onChange(of: vm.currentResponse) { _, _ in
+                            scrollToBottom(with: proxy)
+                        }
+                        .onChange(of: vm.currentThinking) { _, _ in
+                            scrollToBottom(with: proxy)
+                        }
+                        .onChange(of: floatingComposerHeight) { _, _ in
+                            scrollToBottom(with: proxy)
+                        }
+                        .onChange(of: vm.currentNode?.id) { _, _ in
+                            scrollToBottom(with: proxy)
+                        }
                     }
 
                     // Floating Header
@@ -178,6 +230,8 @@ struct ChatArea: View {
                         )
                         .allowsHitTesting(false)
                     )
+                    .allowsHitTesting(false)
+                    .readHeight { floatingHeaderHeight = $0 }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
                     // Floating Input
@@ -274,6 +328,7 @@ struct ChatArea: View {
                         )
                         .allowsHitTesting(false)
                     )
+                    .readHeight { floatingComposerHeight = $0 }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                 }
             }
@@ -372,6 +427,7 @@ struct ChatArea: View {
         }
         .onChange(of: vm.currentNode?.id) { _, _ in
             attachments = []
+            closeDownvotePopover()
         }
     }
 
@@ -420,6 +476,64 @@ struct ChatArea: View {
         message.id == vm.messages.last(where: { $0.role == .assistant })?.id &&
         !vm.citations.isEmpty &&
         !vm.isGenerating
+    }
+
+    private func scrollToBottom(with proxy: ScrollViewProxy) {
+        DispatchQueue.main.async {
+            proxy.scrollTo(bottomScrollAnchor, anchor: .bottom)
+        }
+    }
+
+    private func handleThumbsUpTap(for messageId: UUID) {
+        closeDownvotePopover()
+        if vm.feedback(forMessageId: messageId) == .up {
+            vm.clearFeedback(forMessageId: messageId)
+            return
+        }
+        vm.recordFeedback(forMessageId: messageId, feedback: .up)
+    }
+
+    private func handleThumbsDownTap(for messageId: UUID) {
+        if vm.feedback(forMessageId: messageId) == .down {
+            closeDownvotePopover()
+            vm.clearFeedback(forMessageId: messageId)
+            return
+        }
+        vm.recordFeedback(forMessageId: messageId, feedback: .down)
+        prepareDownvotePopover(for: messageId)
+    }
+
+    private func prepareDownvotePopover(for messageId: UUID) {
+        downvoteFeedbackReason = vm.feedbackReason(forMessageId: messageId)
+        downvoteFeedbackNote = vm.feedbackNote(forMessageId: messageId)
+        activeDownvotePopoverMessageId = messageId
+    }
+
+    private func saveDownvoteFeedback(for messageId: UUID) {
+        vm.recordFeedbackDetail(
+            forMessageId: messageId,
+            feedback: .down,
+            reason: downvoteFeedbackReason,
+            note: downvoteFeedbackNote
+        )
+        closeDownvotePopover()
+    }
+
+    private func closeDownvotePopover() {
+        activeDownvotePopoverMessageId = nil
+        downvoteFeedbackReason = nil
+        downvoteFeedbackNote = ""
+    }
+
+    private func isDownvotePopoverPresented(for messageId: UUID) -> Binding<Bool> {
+        Binding(
+            get: { activeDownvotePopoverMessageId == messageId },
+            set: { isPresented in
+                if !isPresented, activeDownvotePopoverMessageId == messageId {
+                    closeDownvotePopover()
+                }
+            }
+        )
     }
 }
 
@@ -492,5 +606,162 @@ struct CopyButton: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             copied = false
         }
+    }
+}
+
+struct AssistantFeedbackButton: View {
+    let symbolName: String
+    let isSelected: Bool
+    let helpText: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbolName)
+                .font(.system(size: 12, weight: .medium))
+                .frame(width: 24, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isSelected ? AppColor.colaOrange : AppColor.colaDarkText.opacity(0.5))
+        .animation(.easeInOut(duration: 0.15), value: isSelected)
+        .help(helpText)
+    }
+}
+
+struct DownvoteFeedbackPopover: View {
+    @Binding var selectedReason: JudgeFeedbackReason?
+    @Binding var note: String
+    let onSave: () -> Void
+    let onSkip: () -> Void
+
+    private let columns = [
+        GridItem(.flexible(), spacing: 8, alignment: .leading),
+        GridItem(.flexible(), spacing: 8, alignment: .leading)
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("What felt off?")
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundColor(AppColor.colaDarkText)
+
+                Text("This helps Nous stop repeating the same kind of interjection.")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundColor(AppColor.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
+                ForEach(JudgeFeedbackReason.allCases) { reason in
+                    FeedbackReasonChip(
+                        title: reason.title,
+                        isSelected: selectedReason == reason
+                    ) {
+                        selectedReason = selectedReason == reason ? nil : reason
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Optional note")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundColor(AppColor.secondaryText)
+
+                TextField("What felt off?", text: $note, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundColor(AppColor.colaDarkText)
+                    .lineLimit(2...4)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(
+                        NativeGlassPanel(cornerRadius: 16, tintColor: AppColor.glassTint) { EmptyView() }
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(AppColor.panelStroke, lineWidth: 1)
+                    )
+            }
+
+            HStack(spacing: 10) {
+                Button("Skip", action: onSkip)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundColor(AppColor.secondaryText)
+
+                Spacer()
+
+                Button(action: onSave) {
+                    Text("Save")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(AppColor.colaOrange)
+                        )
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(16)
+        .frame(width: 320)
+        .background(
+            NativeGlassPanel(cornerRadius: 24, tintColor: AppColor.glassTint) { EmptyView() }
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(AppColor.panelStroke, lineWidth: 1)
+        )
+    }
+}
+
+struct FeedbackReasonChip: View {
+    let title: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .foregroundColor(isSelected ? AppColor.colaOrange : AppColor.colaDarkText.opacity(0.74))
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(isSelected ? AppColor.colaOrange.opacity(0.14) : AppColor.surfaceSecondary)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(isSelected ? AppColor.colaOrange.opacity(0.35) : AppColor.panelStroke, lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct HeightPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+private extension View {
+    func readHeight(_ onChange: @escaping (CGFloat) -> Void) -> some View {
+        background(
+            GeometryReader { proxy in
+                Color.clear
+                    .preference(key: HeightPreferenceKey.self, value: proxy.size.height)
+            }
+        )
+        .onPreferenceChange(HeightPreferenceKey.self, perform: onChange)
     }
 }

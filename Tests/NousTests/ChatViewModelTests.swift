@@ -29,6 +29,7 @@ final class SlowStreamingLLMService: LLMService {
     }
 }
 
+@MainActor
 final class ChatViewModelTests: XCTestCase {
 
     func testChatModeDefaultsToNil() throws {

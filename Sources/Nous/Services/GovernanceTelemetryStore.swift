@@ -128,6 +128,31 @@ final class GovernanceTelemetryStore {
         catch { print("[governance] failed to update feedback: \(error)") }
     }
 
+    func recordFeedback(
+        eventId: UUID,
+        feedback: JudgeFeedback,
+        reason: JudgeFeedbackReason?,
+        note: String?
+    ) {
+        guard let nodeStore else { return }
+        do {
+            try nodeStore.updateJudgeEventFeedback(
+                id: eventId,
+                feedback: feedback,
+                reason: reason,
+                note: note,
+                at: Date()
+            )
+        }
+        catch { print("[governance] failed to update detailed feedback: \(error)") }
+    }
+
+    func clearFeedback(eventId: UUID) {
+        guard let nodeStore else { return }
+        do { try nodeStore.clearJudgeEventFeedback(id: eventId) }
+        catch { print("[governance] failed to update feedback: \(error)") }
+    }
+
     /// For the inspector review panel and ad-hoc debugging.
     func recentJudgeEvents(limit: Int, filter: JudgeEventFilter) -> [JudgeEvent] {
         guard let nodeStore else { return [] }

@@ -75,6 +75,18 @@ struct AppColor {
         dark: NSColor(red: 34/255, green: 34/255, blue: 37/255, alpha: 0.20)
     )
     
+    // 专门为茶色玻璃效果设计嘅 Tint Color (Tea/Brown Glass)
+    static let teaGlassTint = dynamicNSColor(
+        light: NSColor(red: 210/255, green: 160/255, blue: 110/255, alpha: 0.15), // 浅色模式：淡茶色/琥珀色透光
+        dark: NSColor(red: 90/255, green: 50/255, blue: 30/255, alpha: 0.30)      // 深色模式：深红茶色透光
+    )
+    
+    // 用于 Preview/Write 切换按钮的茶色 (琥珀色) 高亮
+    static let teaPillColor = dynamicColor(
+        light: NSColor(red: 210/255, green: 160/255, blue: 110/255, alpha: 0.8),
+        dark: NSColor(red: 140/255, green: 80/255, blue: 45/255, alpha: 0.7)
+    )
+    
     // System ultra thin material for the premium blur
     // In SwiftUI we use `.ultraThinMaterial` directly where needed.
 

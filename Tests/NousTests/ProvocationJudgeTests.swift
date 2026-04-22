@@ -70,7 +70,8 @@ final class ProvocationJudgeTests: XCTestCase {
             userMessage: "I'm going with the cheapest option",
             citablePool: pool(),
             previousMode: .companion,
-            provider: .claude
+            provider: .claude,
+            feedbackLoop: nil
         )
 
         XCTAssertTrue(verdict.shouldProvoke)
@@ -85,7 +86,7 @@ final class ProvocationJudgeTests: XCTestCase {
         do {
             _ = try await judge.judge(
                 userMessage: "hi", citablePool: pool(),
-                previousMode: .companion, provider: .claude
+                previousMode: .companion, provider: .claude, feedbackLoop: nil
             )
             XCTFail("Expected badJSON throw")
         } catch let error as JudgeError {
@@ -103,7 +104,7 @@ final class ProvocationJudgeTests: XCTestCase {
         do {
             _ = try await judge.judge(
                 userMessage: "hi", citablePool: pool(),
-                previousMode: .companion, provider: .claude
+                previousMode: .companion, provider: .claude, feedbackLoop: nil
             )
             XCTFail("Expected apiError throw")
         } catch let error as JudgeError {
@@ -124,7 +125,7 @@ final class ProvocationJudgeTests: XCTestCase {
         do {
             _ = try await judge.judge(
                 userMessage: "hi", citablePool: pool(),
-                previousMode: .companion, provider: .claude
+                previousMode: .companion, provider: .claude, feedbackLoop: nil
             )
             XCTFail("Expected timeout throw")
         } catch let error as JudgeError {
@@ -154,7 +155,8 @@ final class ProvocationJudgeTests: XCTestCase {
             userMessage: "so about pricing",
             citablePool: annotatedPool,
             previousMode: .strategist,
-            provider: .claude
+            provider: .claude,
+            feedbackLoop: nil
         )
 
         let prompt = fake.receivedSystem ?? ""
@@ -178,7 +180,8 @@ final class ProvocationJudgeTests: XCTestCase {
             userMessage: "so about pricing",
             citablePool: pool(),
             previousMode: nil,
-            provider: .claude
+            provider: .claude,
+            feedbackLoop: nil
         )
 
         let prompt = fake.receivedSystem ?? ""
@@ -200,11 +203,46 @@ final class ProvocationJudgeTests: XCTestCase {
             userMessage: "should I proceed?",
             citablePool: pool(),
             previousMode: .companion,
-            provider: .claude
+            provider: .claude,
+            feedbackLoop: nil
         )
 
         XCTAssertTrue(verdict.shouldProvoke)
         XCTAssertTrue(verdict.reason.contains("hi"), "reason should contain the escaped quoted 'hi'")
         XCTAssertEqual(verdict.entryId, "E1")
+    }
+
+    func testPromptEmbedsRecentFeedbackLoop() async throws {
+        let fake = FakeLLMService(output: """
+        {"tension_exists":false,"user_state":"exploring","should_provoke":false,
+         "entry_id":null,"reason":"no tension","inferred_mode":"companion"}
+        """)
+        let judge = ProvocationJudge(llmService: fake, timeout: 1.0)
+        let feedbackLoop = JudgeFeedbackLoop(
+            entrySuppressions: [
+                .init(entryId: "E1", penalty: 1.8, reasonHints: ["wrong timing", "too repetitive"])
+            ],
+            kindAdjustments: [
+                .init(kind: .contradiction, penalty: 1.2, reasonHints: ["too forceful"])
+            ],
+            globalReasonHints: ["wrong timing"],
+            noteHints: ["same challenge again"]
+        )
+
+        _ = try await judge.judge(
+            userMessage: "should I proceed?",
+            citablePool: pool(),
+            previousMode: .companion,
+            provider: .claude,
+            feedbackLoop: feedbackLoop
+        )
+
+        let prompt = fake.receivedSystem ?? ""
+        XCTAssertTrue(prompt.contains("RECENT USER FEEDBACK"))
+        XCTAssertTrue(prompt.contains("recently_downvoted_entry_ids:"))
+        XCTAssertTrue(prompt.contains("E1"))
+        XCTAssertTrue(prompt.contains("contradiction"))
+        XCTAssertTrue(prompt.contains("wrong timing"))
+        XCTAssertTrue(prompt.contains("same challenge again"))
     }
 }
