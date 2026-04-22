@@ -1010,8 +1010,11 @@ git commit -m "feat(prompt): summary_output_policy stable layer — wrap summari
 
 **Files:**
 - Modify: `Sources/Nous/Views/ScratchPadPanel.swift`
+- Modify: `Sources/Nous/Views/ChatArea.swift` (add toggle entry point — see prerequisite)
 
 This task replaces the body of `ScratchPadPanel` with a document-style layout and accepts the store. It does NOT yet implement download; that lands in Task 8. Overwrite alert lands in Task 7.
+
+**Prerequisite carried over from Task 4:** Right now `ContentView.isScratchPadVisible` has no UI to toggle it to `true`. The toggle button (a `note.text` glass chip in the top-right) used to live in a stashed thinking-accordion WIP and isn't in the current tree. Before (or as the first step of) this task, add a `@Binding var isScratchPadVisible: Bool` to `ChatArea` and a ~10-line button that calls `isScratchPadVisible.toggle()`. Update `ContentView.swift` to pass `isScratchPadVisible: $isScratchPadVisible` to `ChatArea`. Without this, the panel is unreachable and Task 9's smoke checks can't run.
 
 - [ ] **Step 1: Change the struct signature and remove the old `@AppStorage` field**
 

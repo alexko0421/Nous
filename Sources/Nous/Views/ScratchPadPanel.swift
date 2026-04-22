@@ -7,6 +7,7 @@ import SwiftUI
 /// persists its content in @AppStorage so it survives restarts.
 struct ScratchPadPanel: View {
     @Binding var isVisible: Bool
+    // Task 6 will drive content off this store; the @AppStorage path below is about to be replaced.
     var store: ScratchPadStore
     @AppStorage("nous.scratchpad.content") private var content = ""
     @State private var isPreviewMode = false
