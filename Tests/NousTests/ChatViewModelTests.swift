@@ -327,7 +327,15 @@ final class ChatViewModelTests: XCTestCase {
             projectGoal: nil
         )
         XCTAssertTrue(slice.stable.contains("<summary>"), "Stable system prompt must mention <summary> tag.")
-        XCTAssertTrue(slice.stable.contains("## 下一步"))
+        // The policy must be language-adaptive, not hard-wired to Mandarin.
+        XCTAssertTrue(
+            slice.stable.contains("match the conversation language"),
+            "Stable system prompt must tell the model to match the conversation language."
+        )
+        // It should still carry concrete header vocab for each supported language so the model
+        // knows what to emit when the conversation is in that language.
+        XCTAssertTrue(slice.stable.contains("下一步"), "Should include Chinese header vocabulary.")
+        XCTAssertTrue(slice.stable.contains("Next steps"), "Should include English header vocabulary.")
     }
 
     @MainActor

@@ -820,26 +820,22 @@ final class ChatViewModel {
     ---
 
     SUMMARY OUTPUT POLICY:
-    When Alex asks you to summarize the current conversation (keywords and intents include "总结", "summarize", "repo", "做笔记", "summary", "整份笔记", or equivalents), wrap the summary body in <summary>…</summary>. Inside the tag, use this exact markdown structure:
+    When Alex asks you to summarize the current conversation (keywords and intents include "总结", "summarize", "repo", "做笔记", "summary", "整份笔记", or equivalents), wrap the summary body in <summary>…</summary>. Inside the tag, use four H2 sections in this order, followed by a bullet list:
 
-      # <concise title — used as the download filename>
+      1. Problem / what triggered the discussion
+      2. Thinking / the path the conversation took, including pivots
+      3. Conclusion / consensus or decisions reached
+      4. Next steps / short actionable bullets
 
-      ## 问题
-      <one narrative paragraph: what triggered the discussion>
+    CRITICAL — match the conversation language for ALL of: the # title, the ## section headers, and the body prose. Do not translate to another language. Do not default to Mandarin. Use:
+      - 广东话 section headers (问题 / 思考 / 结论 / 下一步) when Alex is writing in Cantonese.
+      - 普通话 section headers (问题 / 思考 / 结论 / 下一步) when Alex is writing in Mandarin.
+      - English section headers (Problem / Thinking / Conclusion / Next steps) when Alex is writing in English.
+      - If Alex mixes Cantonese and English, prefer Cantonese headers with English kept verbatim inside the prose.
 
-      ## 思考
-      <one narrative paragraph: the path the conversation took, including pivots>
+    Sections 1–3 must be narrative prose paragraphs, not bullet dumps. Section 4 is a short bullet list. The # title must contain no filename-unsafe characters (avoid /\\:*?"<>|) and should also follow the conversation language.
 
-      ## 结论
-      <one narrative paragraph: consensus or decisions reached>
-
-      ## 下一步
-      - <short actionable bullet>
-      - <another>
-
-    Paragraphs must be narrative prose, not bullet dumps. The # title must contain no filename-unsafe characters (avoid /\\:*?"<>|).
-
-    Text outside the tag is allowed for a brief conversational wrapper (e.g. "整好了，睇下右边嘅白纸"). The summary content itself must strictly live inside the tag. Never emit the tag when Alex is not asking for a summary.
+    Text outside the tag is allowed for a brief conversational wrapper in the same language (e.g. Cantonese: "整好了，睇下右边嘅白纸"; English: "Done, check the right panel."). The summary content itself must strictly live inside the tag. Never emit the tag when Alex is not asking for a summary.
     """
 
     private static let highRiskSafetyModeBlock = """
