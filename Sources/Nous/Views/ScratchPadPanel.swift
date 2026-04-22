@@ -25,6 +25,23 @@ struct ScratchPadPanel: View {
         .onChange(of: store.latestSummary) { _, _ in
             if isVisible { store.onPanelOpened() }
         }
+        .alert(
+            "有新嘅 summary",
+            isPresented: Binding(
+                get: { store.pendingOverwrite != nil },
+                set: { newValue in
+                    if newValue == false && store.pendingOverwrite != nil {
+                        store.rejectPendingOverwrite()
+                    }
+                }
+            ),
+            presenting: store.pendingOverwrite
+        ) { _ in
+            Button("替换", role: .destructive) { store.acceptPendingOverwrite() }
+            Button("保留现有", role: .cancel) { store.rejectPendingOverwrite() }
+        } message: { _ in
+            Text("你喺白纸度仲有未下载嘅改动。要用新嘅 summary 替换吗？")
+        }
     }
 
     // MARK: - Header
