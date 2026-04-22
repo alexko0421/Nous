@@ -9,7 +9,7 @@ struct WelcomeView: View {
     let onSend: () -> Void
     let onQuickActionSelected: (QuickActionMode) -> Void
     
-    @AppStorage("nous.user.name") private var userName: String = "Alex"
+    @AppStorage("nous.username") private var userName: String = "ALEX"
     
     private var greeting: String {
         let hour = Calendar.current.component(.hour, from: Date())
@@ -22,7 +22,7 @@ struct WelcomeView: View {
     
     private var displayName: String {
         let trimmed = userName.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "Alex" : trimmed.capitalized
+        return trimmed.isEmpty ? "Alex" : trimmed.prefix(1).uppercased() + trimmed.dropFirst().lowercased()
     }
     
     let quickActions = QuickActionMode.allCases
@@ -82,11 +82,11 @@ struct WelcomeView: View {
                                     .padding(.vertical, 8)
                                     .background(
                                         Capsule()
-                                            .fill(AppColor.surfaceSecondary)
+                                            .fill(Color(AppColor.glassTint))
                                     )
                                     .overlay(
                                         Capsule()
-                                            .stroke(AppColor.panelStroke, lineWidth: 1)
+                                            .stroke(AppColor.panelStroke, lineWidth: 0.5)
                                     )
                                 }
                                 .buttonStyle(.plain)
@@ -182,8 +182,7 @@ struct WelcomeView: View {
                 .foregroundColor(AppColor.secondaryText)
                 .frame(width: 32, height: 32)
                 .background(
-                    Circle()
-                        .fill(AppColor.surfaceSecondary)
+                    NativeGlassPanel(cornerRadius: 16, tintColor: AppColor.glassTint) { EmptyView() }
                 )
                 .overlay(
                     Circle()

@@ -246,8 +246,8 @@ struct LeftSidebar: View {
             VStack(alignment: .leading, spacing: 0) {
                 MacOSTrafficLights()
                     .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.top, 16)
-                    .padding(.bottom, 18)
+                    .padding(.top, 26)
+                    .padding(.bottom, 24)
 
                 HStack(spacing: 12) {
                     NavIconButton(
@@ -262,10 +262,10 @@ struct LeftSidebar: View {
                     )
                 }
                 .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.bottom, 18)
+                .padding(.bottom, 14)
 
                 SidebarDivider()
-                    .padding(.bottom, 12)
+                    .padding(.bottom, 10)
 
                 // New Chat button
                 Button(action: {
@@ -274,9 +274,9 @@ struct LeftSidebar: View {
                 }) {
                     HStack(spacing: 6) {
                         Image(systemName: "square.and.pencil")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.system(size: 12, weight: .medium))
                         Text("New Chat")
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
                     }
                     .foregroundColor(AppColor.secondaryText)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -286,10 +286,10 @@ struct LeftSidebar: View {
                 .buttonStyle(.plain)
                 .padding(.leading, 20)
                 .padding(.trailing, 8)
-                .padding(.bottom, 12)
+                .padding(.bottom, 10)
 
                 SidebarDivider()
-                    .padding(.bottom, 18)
+                    .padding(.bottom, 14)
 
                 if showProjectList {
                     ProjectListView(nodeStore: nodeStore, selectedProjectId: $selectedProjectId)
@@ -297,10 +297,10 @@ struct LeftSidebar: View {
                     ScrollView(.vertical, showsIndicators: false) {
                         VStack(alignment: .leading, spacing: 28) {
                             if !favorites.isEmpty {
-                                VStack(alignment: .leading, spacing: 14) {
+                                VStack(alignment: .leading, spacing: 4) {
                                     HStack(spacing: 4) {
                                         Text("Favorites")
-                                            .font(.system(size: 10, weight: .semibold, design: .rounded))
+                                            .font(.system(size: 11, weight: .semibold, design: .rounded))
                                         Image(systemName: "chevron.right")
                                             .font(.system(size: 7, weight: .bold))
                                             .opacity(0.5)
@@ -316,7 +316,7 @@ struct LeftSidebar: View {
                                 }
                             }
 
-                            VStack(alignment: .leading, spacing: 14) {
+                            VStack(alignment: .leading, spacing: 4) {
                                 Text("Recents")
                                     .font(.system(size: 11, weight: .semibold, design: .rounded))
                                     .foregroundColor(AppColor.colaDarkText.opacity(0.6))
@@ -348,17 +348,21 @@ struct LeftSidebar: View {
                     .padding(.bottom, 12)
 
                 HStack(spacing: 12) {
-                    Circle()
-                        .fill(selectedTab == .settings ? AppColor.colaOrange : AppColor.colaOrange.opacity(0.15))
-                        .frame(width: 30, height: 30)
-                        .overlay(
-                            Text(username.first.map(String.init)?.uppercased() ?? "A")
-                                .font(.system(size: 13, weight: .bold, design: .rounded))
-                                .foregroundColor(selectedTab == .settings ? .white : AppColor.colaOrange)
-                        )
+                    NativeGlassPanel(
+                        cornerRadius: 15,
+                        tintColor: selectedTab == .settings
+                            ? NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.88)
+                            : NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.18)
+                    ) { EmptyView() }
+                    .frame(width: 30, height: 30)
+                    .overlay(
+                        Text(username.first.map(String.init)?.uppercased() ?? "A")
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .foregroundColor(selectedTab == .settings ? .white : AppColor.colaOrange)
+                    )
 
                     Text(username.uppercased())
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
                         .foregroundColor(AppColor.colaDarkText)
 
                     Spacer(minLength: 0)
@@ -391,22 +395,28 @@ struct LeftSidebar: View {
     private func sidebarNodeRow(_ node: NousNode) -> some View {
         let isSelected = selectedNodeId == node.id
 
-        HStack(spacing: 10) {
-            Text(node.title)
-                .font(.system(size: 11, weight: .medium, design: .rounded))
-                .foregroundColor(isSelected ? AppColor.colaOrange : AppColor.secondaryText)
-                .lineLimit(1)
-
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.leading, 10)
-        .padding(.trailing, 8)
-        .padding(.vertical, 5)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(isSelected ? AppColor.colaOrange.opacity(0.10) : Color.clear)
-        )
+        Text(node.title)
+            .font(.system(size: 12, weight: .medium, design: .rounded))
+            .foregroundColor(isSelected ? AppColor.colaOrange : AppColor.secondaryText)
+            .lineLimit(1)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                Group {
+                    if isSelected {
+                        NativeGlassPanel(
+                            cornerRadius: 12,
+                            tintColor: NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.15)
+                        ) { EmptyView() }
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(AppColor.colaOrange.opacity(0.3), lineWidth: 0.5)
+                        )
+                    } else {
+                        Color.clear
+                    }
+                }
+            )
     }
 }
 

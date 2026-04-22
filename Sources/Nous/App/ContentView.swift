@@ -12,36 +12,49 @@ struct ContentView: View {
     @State private var isSidebarVisible = true
     @State private var isScratchPadVisible = false
     @State private var selectedTab: MainTab = .chat
+    @State private var selectedSettingsSection: SettingsSection = .profile
     @State private var selectedProjectId: UUID?
     @State private var isSetupComplete = UserDefaults.standard.bool(forKey: "nous.setup.complete")
+    @AppStorage("nous.appearance") private var appearanceMode = "system"
+
+    private var preferredScheme: ColorScheme? {
+        switch appearanceMode {
+        case "light": return .light
+        case "dark":  return .dark
+        default:      return nil
+        }
+    }
 
     var body: some View {
-        switch env.state {
-        case .ready(let dependencies):
-            if isSetupComplete {
-                mainContent(dependencies: dependencies)
-            } else {
-                SetupView(
-                    isSetupComplete: $isSetupComplete,
-                    embeddingService: dependencies.embeddingService,
-                    settingsVM: dependencies.settingsVM
-                )
+        Group {
+            switch env.state {
+            case .ready(let dependencies):
+                if isSetupComplete {
+                    mainContent(dependencies: dependencies)
+                } else {
+                    SetupView(
+                        isSetupComplete: $isSetupComplete,
+                        embeddingService: dependencies.embeddingService,
+                        settingsVM: dependencies.settingsVM
+                    )
+                }
+            case .failed(let message):
+                LaunchFailureView(message: message) {
+                    env.state = AppEnvironment.bootstrap()
+                }
+            case .initializing:
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(AppColor.colaBeige)
             }
-        case .failed(let message):
-            LaunchFailureView(message: message) {
-                env.state = AppEnvironment.bootstrap()
-            }
-        case .initializing:
-            ProgressView()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(AppColor.colaBeige)
         }
+        .preferredColorScheme(preferredScheme)
     }
 
     @ViewBuilder
     private func mainContent(dependencies: AppDependencies) -> some View {
-        HStack(spacing: 20) {
-            if isSidebarVisible {
+        HStack(spacing: 12) {
+            if isSidebarVisible && selectedTab != .settings {
                 LeftSidebar(
                     nodeStore: dependencies.nodeStore,
                     selectedTab: $selectedTab,
@@ -86,8 +99,10 @@ struct ContentView: View {
                 case .settings:
                     SettingsView(
                         vm: dependencies.settingsVM,
+                        selectedTab: $selectedSettingsSection,
                         userMemoryService: dependencies.userMemoryService,
-                        telemetry: dependencies.governanceTelemetry
+                        telemetry: dependencies.governanceTelemetry,
+                        onBack: { selectedTab = .chat }
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(AppColor.colaBeige)

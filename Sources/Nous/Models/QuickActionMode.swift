@@ -21,9 +21,9 @@ enum QuickActionMode: String, CaseIterable {
         case .direction:
             return "safari"
         case .brainstorm:
-            return "sparkles"
+            return "brain"
         case .mentalHealth:
-            return "heart.text.square"
+            return "heart.fill"
         }
     }
 

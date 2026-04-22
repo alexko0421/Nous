@@ -86,23 +86,26 @@ struct ChatArea: View {
                                         )
                                         .padding(.top, 8)
                                     }
-                                    if msg.role == .assistant,
-                                       let eventId = vm.judgeEventId(forMessageId: msg.id) {
+                                    if msg.role == .assistant {
                                         HStack(spacing: 4) {
-                                            Button(action: { vm.recordFeedback(forMessageId: msg.id, feedback: .up) }) {
-                                                Image(systemName: "hand.thumbsup")
-                                                    .frame(width: 24, height: 24)
-                                                    .contentShape(Rectangle())
-                                            }.buttonStyle(.plain)
-                                            Button(action: { vm.recordFeedback(forMessageId: msg.id, feedback: .down) }) {
-                                                Image(systemName: "hand.thumbsdown")
-                                                    .frame(width: 24, height: 24)
-                                                    .contentShape(Rectangle())
-                                            }.buttonStyle(.plain)
+                                            if let eventId = vm.judgeEventId(forMessageId: msg.id) {
+                                                Button(action: { vm.recordFeedback(forMessageId: msg.id, feedback: .up) }) {
+                                                    Image(systemName: "hand.thumbsup")
+                                                        .frame(width: 24, height: 24)
+                                                        .contentShape(Rectangle())
+                                                }.buttonStyle(.plain)
+                                                Button(action: { vm.recordFeedback(forMessageId: msg.id, feedback: .down) }) {
+                                                    Image(systemName: "hand.thumbsdown")
+                                                        .frame(width: 24, height: 24)
+                                                        .contentShape(Rectangle())
+                                                }.buttonStyle(.plain)
+                                                .help("Was this interjection useful? (event \(eventId.uuidString.prefix(8)))")
+                                            }
+
+                                            CopyButton(text: msg.content)
                                         }
                                         .font(.footnote)
                                         .foregroundStyle(AppColor.colaDarkText.opacity(0.5))
-                                        .help("Was this interjection useful? (event \(eventId.uuidString.prefix(8)))")
                                     }
                                 }
                             }
@@ -160,7 +163,7 @@ struct ChatArea: View {
                         }
                         .padding(.leading, 76)
                         .padding(.trailing, 36)
-                        .padding(.top, 20)
+                        .padding(.top, 22)
                     }
                     .padding(.bottom, 36)
                     .background(
@@ -199,12 +202,11 @@ struct ChatArea: View {
 
                         HStack(spacing: 12) {
                             Button(action: { isAttachmentMenuPresented = true }) {
-                                Circle()
-                                    .fill(AppColor.surfaceSecondary)
-                                    .frame(width: 34, height: 34)
+                                NativeGlassPanel(cornerRadius: 18, tintColor: AppColor.glassTint) { EmptyView() }
+                                    .frame(width: 36, height: 36)
                                     .overlay(
                                         Image(systemName: "plus")
-                                            .font(.system(size: 12, weight: .semibold))
+                                            .font(.system(size: 13, weight: .semibold))
                                             .foregroundColor(AppColor.secondaryText)
                                     )
                                     .overlay(
@@ -214,13 +216,13 @@ struct ChatArea: View {
                             }
                             .buttonStyle(.plain)
 
-                            TextField("...", text: $vm.inputText, axis: .vertical)
+                            TextField("", text: $vm.inputText, axis: .vertical)
                                 .textFieldStyle(.plain)
                                 .font(.system(size: 13, weight: .medium, design: .rounded))
                                 .foregroundColor(AppColor.colaDarkText)
                                 .lineLimit(1...4)
                                 .padding(.horizontal, 18)
-                                .padding(.vertical, 12)
+                                .frame(height: 36)
                                 .background(
                                     NativeGlassPanel(
                                         cornerRadius: 18,
@@ -240,10 +242,10 @@ struct ChatArea: View {
                                     .foregroundColor(.white)
                             }
                             .buttonStyle(.plain)
-                            .frame(width: 34, height: 34)
+                            .frame(width: 36, height: 36)
                             .background(
                                 NativeGlassPanel(
-                                    cornerRadius: 17,
+                                    cornerRadius: 18,
                                     tintColor: canPrimaryAction
                                         ? NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.88)
                                         : NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.18)
@@ -289,15 +291,14 @@ struct ChatArea: View {
                 }
             }) {
                 ZStack {
-                    Circle()
-                        .fill(AppColor.subtleFill)
+                    NativeGlassPanel(cornerRadius: 16, tintColor: AppColor.glassTint) { EmptyView() }
+                        .frame(width: 32, height: 32)
                         .overlay(
                             Circle()
                                 .stroke(AppColor.panelStroke, lineWidth: 1)
                         )
-                        .frame(width: isWelcomeState ? 32 : 28, height: isWelcomeState ? 32 : 28)
                     Image(systemName: "sidebar.left")
-                        .font(.system(size: isWelcomeState ? 12 : 11, weight: .medium))
+                        .font(.system(size: 12, weight: .medium))
                         .foregroundColor(AppColor.secondaryText)
                 }
             }
@@ -312,16 +313,23 @@ struct ChatArea: View {
                 }
             }) {
                 ZStack {
-                    Circle()
-                        .fill(AppColor.subtleFill)
-                        .overlay(
-                            Circle()
-                                .stroke(AppColor.panelStroke, lineWidth: 1)
-                        )
-                        .frame(width: isWelcomeState ? 32 : 28, height: isWelcomeState ? 32 : 28)
+                    NativeGlassPanel(
+                        cornerRadius: 16,
+                        tintColor: isScratchPadVisible
+                            ? NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.22)
+                            : AppColor.glassTint
+                    ) { EmptyView() }
+                    .frame(width: 32, height: 32)
+                    .overlay(
+                        Circle()
+                            .stroke(
+                                isScratchPadVisible ? AppColor.colaOrange.opacity(0.4) : AppColor.panelStroke,
+                                lineWidth: 1
+                            )
+                    )
                     Image(systemName: "note.text")
-                        .font(.system(size: isWelcomeState ? 12 : 11, weight: .medium))
-                        .foregroundColor(AppColor.secondaryText)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(isScratchPadVisible ? AppColor.colaOrange : AppColor.secondaryText)
                 }
             }
             .buttonStyle(.plain)
@@ -455,6 +463,32 @@ struct MessageBubble: View {
                     }
                 }
             }
+        }
+    }
+}
+
+struct CopyButton: View {
+    let text: String
+    @State private var copied = false
+
+    var body: some View {
+        Button(action: copy) {
+            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                .frame(width: 24, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(copied ? AppColor.colaOrange : AppColor.colaDarkText.opacity(0.5))
+        .animation(.easeInOut(duration: 0.15), value: copied)
+        .help("Copy response")
+    }
+
+    private func copy() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        copied = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            copied = false
         }
     }
 }

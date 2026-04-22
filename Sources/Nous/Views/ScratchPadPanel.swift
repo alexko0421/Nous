@@ -23,6 +23,7 @@ struct ScratchPadPanel: View {
                 .stroke(AppColor.panelStroke, lineWidth: 1)
         )
         .frame(width: 420)
+        .frame(maxHeight: .infinity)
         .onAppear { store.onPanelOpened() }
         .onChange(of: store.latestSummary) { _, _ in
             if isVisible { store.onPanelOpened() }
@@ -50,73 +51,63 @@ struct ScratchPadPanel: View {
 
     @ViewBuilder
     private var header: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "note.text")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(AppColor.colaOrange)
-
-            Text("白纸")
-                .font(.system(size: 15, weight: .bold, design: .serif))
-                .foregroundColor(AppColor.colaDarkText)
+        HStack(alignment: .center, spacing: 10) {
+            HStack(spacing: 4) {
+                Image(systemName: "note.text")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(AppColor.colaOrange)
+                Text("Markdown")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundColor(AppColor.colaDarkText)
+            }
+            .frame(height: 32)
 
             if store.isDirty {
-                Text("• 未保存")
+                Text("•")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(AppColor.secondaryText)
             }
 
             Spacer(minLength: 0)
 
-            downloadButton
-
-            HStack(spacing: 2) {
-                modeButton(label: "Write", icon: "pencil", active: !isPreviewMode) {
-                    withAnimation(.easeInOut(duration: 0.15)) { isPreviewMode = false }
-                }
-                modeButton(label: "Preview", icon: "eye", active: isPreviewMode) {
-                    withAnimation(.easeInOut(duration: 0.15)) { isPreviewMode = true }
+            Button(action: handleDownload) {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.down.doc")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text("下载")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
                 }
             }
-            .padding(3)
-            .background(AppColor.subtleFill)
-            .clipShape(Capsule())
+            .buttonStyle(OrangeGlassButtonStyle(isDisabled: store.currentContent.isEmpty))
+            .disabled(store.currentContent.isEmpty)
 
-            Button(action: {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                    isVisible = false
+            // Write / Preview grouped pill
+            ZStack {
+                NativeGlassPanel(
+                    cornerRadius: 16,
+                    tintColor: AppColor.glassTint
+                ) { EmptyView() }
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(AppColor.panelStroke, lineWidth: 1)
+                )
+
+                HStack(spacing: 2) {
+                    modeButton(label: "Write", icon: "pencil", active: !isPreviewMode) {
+                        withAnimation(.easeInOut(duration: 0.15)) { isPreviewMode = false }
+                    }
+                    modeButton(label: "Preview", icon: "eye", active: isPreviewMode) {
+                        withAnimation(.easeInOut(duration: 0.15)) { isPreviewMode = true }
+                    }
                 }
-            }) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundColor(AppColor.secondaryText)
-                    .frame(width: 22, height: 22)
-                    .background(AppColor.subtleFill)
-                    .clipShape(Circle())
+                .padding(3)
             }
-            .buttonStyle(.plain)
+            .fixedSize()
+            .frame(height: 32)
         }
-        .padding(.horizontal, 18)
-        .padding(.top, 18)
+        .padding(.horizontal, 16)
+        .padding(.top, 16)
         .padding(.bottom, 12)
-    }
-
-    @ViewBuilder
-    private var downloadButton: some View {
-        Button(action: handleDownload) {
-            HStack(spacing: 4) {
-                Image(systemName: "arrow.down.doc")
-                    .font(.system(size: 10, weight: .semibold))
-                Text("下载")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-            }
-            .foregroundColor(.white)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(AppColor.colaOrange)
-            .clipShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .disabled(store.currentContent.isEmpty)
     }
 
     private func handleDownload() {
@@ -124,7 +115,7 @@ struct ScratchPadPanel: View {
         guard !content.isEmpty else { return }
 
         let panel = NSSavePanel()
-        panel.title = "下载白纸"
+        panel.title = "下载 Markdown"
         panel.nameFieldStringValue = filenameSlug(fromMarkdown: content)
         panel.canCreateDirectories = true
         if let mdType = UTType(filenameExtension: "md") {
@@ -166,8 +157,8 @@ struct ScratchPadPanel: View {
                 MarkdownPreview(markdown: store.currentContent)
             } else {
                 TextEditor(text: editorBinding)
-                    .font(.system(size: 14, design: .serif))
-                    .foregroundColor(AppColor.colaDarkText)
+                    .font(.system(size: 14, design: .rounded))
+                    .foregroundColor(Color(NSColor.black))
                     .scrollContentBackground(.hidden)
                     .background(Color.clear)
                     .lineSpacing(6)
@@ -179,7 +170,7 @@ struct ScratchPadPanel: View {
     @ViewBuilder
     private func paperContainer<Content: View>(@ViewBuilder _ inner: () -> Content) -> some View {
         inner()
-            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .padding(.horizontal, 32)
             .padding(.vertical, 40)
             .background(
@@ -197,16 +188,16 @@ struct ScratchPadPanel: View {
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("想开始？")
-                .font(.system(size: 16, weight: .semibold, design: .serif))
-                .foregroundColor(AppColor.colaDarkText)
+                .font(.system(size: 16, weight: .semibold, design: .rounded))
+                .foregroundColor(Color(NSColor.black))
             Text("喺左边同 Nous 倾一阵，叫佢「总结一下」。生成嘅 summary 会自动出喺呢度，之后你仲可以手动改同下载。")
-                .font(.system(size: 13, design: .serif))
+                .font(.system(size: 13, design: .rounded))
                 .foregroundColor(AppColor.secondaryText)
                 .lineSpacing(6)
 
             TextEditor(text: editorBinding)
-                .font(.system(size: 13, design: .serif))
-                .foregroundColor(AppColor.colaDarkText)
+                .font(.system(size: 13, design: .rounded))
+                .foregroundColor(Color(NSColor.black))
                 .scrollContentBackground(.hidden)
                 .background(Color.clear)
                 .frame(minHeight: 120)
@@ -233,15 +224,29 @@ struct ScratchPadPanel: View {
         Button(action: action) {
             HStack(spacing: 4) {
                 Image(systemName: icon)
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.system(size: 12, weight: .semibold))
                 Text(label)
                     .font(.system(size: 11, weight: active ? .semibold : .medium, design: .rounded))
             }
             .foregroundColor(active ? .white : AppColor.secondaryText)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(active ? AppColor.colaOrange : Color.clear)
-            .clipShape(Capsule())
+                .padding(.horizontal, 10)
+            .frame(height: 32)
+            .background(
+                Group {
+                    if active {
+                        NativeGlassPanel(
+                            cornerRadius: 13,
+                            tintColor: NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.88)
+                        ) { EmptyView() }
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                        )
+                    } else {
+                        Color.clear
+                    }
+                }
+            )
         }
         .buttonStyle(.plain)
     }
@@ -339,26 +344,26 @@ private enum MarkdownBlock {
         case .heading(let level, let text):
             Text(text)
                 .font(headingFont(level: level))
-                .foregroundColor(AppColor.colaDarkText)
+                .foregroundColor(Color(NSColor.black))
                 .padding(.top, level == 1 ? 16 : 10)
                 .padding(.bottom, 4)
 
         case .bullet(let text):
             HStack(alignment: .top, spacing: 6) {
                 Text("•")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 14, weight: .medium, design: .rounded))
                     .foregroundColor(AppColor.colaOrange)
                 inlineText(text)
-                    .font(.system(size: 13))
-                    .foregroundColor(AppColor.colaDarkText)
+                    .font(.system(size: 14, weight: .regular, design: .rounded))
+                    .foregroundColor(Color(NSColor.black))
             }
             .padding(.vertical, 2)
 
         case .paragraph(let text):
             inlineText(text)
-                .font(.system(size: 13))
-                .foregroundColor(AppColor.colaDarkText)
-                .lineSpacing(4)
+                .font(.system(size: 14, weight: .regular, design: .rounded))
+                .foregroundColor(Color(NSColor.black))
+                .lineSpacing(6)
                 .padding(.vertical, 1)
 
         case .spacer:
@@ -390,7 +395,7 @@ private enum MarkdownBlock {
                let endRange = remaining[range.upperBound...].range(of: "**") {
                 result += plainAttr(String(remaining[remaining.startIndex..<range.lowerBound]))
                 var bold = AttributedString(String(remaining[range.upperBound..<endRange.lowerBound]))
-                bold.font = .system(size: 13, weight: .bold)
+                bold.font = .system(size: 14, weight: .bold, design: .rounded)
                 result += bold
                 remaining = String(remaining[endRange.upperBound...])
                 continue
@@ -400,7 +405,7 @@ private enum MarkdownBlock {
                let endRange = remaining[range.upperBound...].range(of: "*") {
                 result += plainAttr(String(remaining[remaining.startIndex..<range.lowerBound]))
                 var italic = AttributedString(String(remaining[range.upperBound..<endRange.lowerBound]))
-                italic.font = .system(size: 13).italic()
+                italic.font = .system(size: 14, design: .rounded).italic()
                 result += italic
                 remaining = String(remaining[endRange.upperBound...])
                 continue
@@ -410,7 +415,7 @@ private enum MarkdownBlock {
                let endRange = remaining[range.upperBound...].range(of: "`") {
                 result += plainAttr(String(remaining[remaining.startIndex..<range.lowerBound]))
                 var code = AttributedString(String(remaining[range.upperBound..<endRange.lowerBound]))
-                code.font = .system(size: 12, design: .monospaced)
+                code.font = .system(size: 13, design: .monospaced)
                 code.backgroundColor = .init(AppColor.subtleFill)
                 result += code
                 remaining = String(remaining[endRange.upperBound...])
@@ -424,6 +429,37 @@ private enum MarkdownBlock {
     }
 
     private func plainAttr(_ s: String) -> AttributedString {
-        AttributedString(s)
+        var attr = AttributedString(s)
+        attr.font = .system(size: 14, weight: .regular, design: .rounded)
+        return attr
+    }
+}
+
+// MARK: - OrangeGlassButtonStyle
+
+struct OrangeGlassButtonStyle: ButtonStyle {
+    let isDisabled: Bool
+    
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundColor(isDisabled ? AppColor.secondaryText : (configuration.isPressed ? .white : AppColor.colaOrange))
+            .padding(.horizontal, 10)
+            .frame(height: 32)
+            .background(
+                NativeGlassPanel(
+                    cornerRadius: 14,
+                    tintColor: isDisabled 
+                        ? NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.10)
+                        : (configuration.isPressed 
+                            ? NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.88) 
+                            : NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.18))
+                ) { EmptyView() }
+            )
+            .overlay(
+                Capsule()
+                    .stroke(isDisabled ? Color.clear : (configuration.isPressed ? Color.white.opacity(0.2) : AppColor.colaOrange.opacity(0.3)), lineWidth: 1)
+            )
+            .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
+            .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
     }
 }
