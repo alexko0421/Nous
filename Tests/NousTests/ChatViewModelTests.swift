@@ -302,6 +302,34 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertEqual(Int((summary.cacheHitRate! * 100).rounded()), 66)
     }
 
+    func testGovernanceTraceIncludesSummaryOutputPolicyLayer() {
+        let trace = ChatViewModel.governanceTrace(
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        )
+        XCTAssertTrue(
+            trace.promptLayers.contains("summary_output_policy"),
+            "Expected stable layer 'summary_output_policy' in \(trace.promptLayers)"
+        )
+    }
+
+    func testAssembleContextStableIncludesSummaryInstruction() {
+        let slice = ChatViewModel.assembleContext(
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        )
+        XCTAssertTrue(slice.stable.contains("<summary>"), "Stable system prompt must mention <summary> tag.")
+        XCTAssertTrue(slice.stable.contains("## 下一步"))
+    }
+
     @MainActor
     func testIngestsSummaryFromAssistantReply() {
         let suiteName = "ChatViewModelTests.\(UUID().uuidString)"

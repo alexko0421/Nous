@@ -816,6 +816,32 @@ final class ChatViewModel {
     Respect memory boundaries: if Alex asks not to store something, or asked for consent before sensitive storage, do not silently turn that into durable memory.
     """
 
+    private static let summaryOutputPolicy = """
+    ---
+
+    SUMMARY OUTPUT POLICY:
+    When Alex asks you to summarize the current conversation (keywords and intents include "总结", "summarize", "repo", "做笔记", "summary", "整份笔记", or equivalents), wrap the summary body in <summary>…</summary>. Inside the tag, use this exact markdown structure:
+
+      # <concise title — used as the download filename>
+
+      ## 问题
+      <one narrative paragraph: what triggered the discussion>
+
+      ## 思考
+      <one narrative paragraph: the path the conversation took, including pivots>
+
+      ## 结论
+      <one narrative paragraph: consensus or decisions reached>
+
+      ## 下一步
+      - <short actionable bullet>
+      - <another>
+
+    Paragraphs must be narrative prose, not bullet dumps. The # title must contain no filename-unsafe characters (avoid /\\:*?"<>|).
+
+    Text outside the tag is allowed for a brief conversational wrapper (e.g. "整好了，睇下右边嘅白纸"). The summary content itself must strictly live inside the tag. Never emit the tag when Alex is not asking for a summary.
+    """
+
     private static let highRiskSafetyModeBlock = """
     ---
 
@@ -871,6 +897,7 @@ final class ChatViewModel {
         stable.append(anchor)
         stable.append(memoryInterpretationPolicy)
         stable.append(coreSafetyPolicy)
+        stable.append(summaryOutputPolicy)
 
         if let globalMemory, !globalMemory.isEmpty {
             stable.append("---\n\nLONG-TERM MEMORY ABOUT ALEX:\n\(globalMemory)")
@@ -1014,7 +1041,7 @@ final class ChatViewModel {
         allowInteractiveClarification: Bool = false,
         now: Date = Date()
     ) -> PromptGovernanceTrace {
-        var layers = ["anchor", "memory_interpretation_policy", "core_safety_policy", "chat_mode"]
+        var layers = ["anchor", "memory_interpretation_policy", "core_safety_policy", "summary_output_policy", "chat_mode"]
         let highRiskQueryDetected = SafetyGuardrails.isHighRiskQuery(currentUserInput)
 
         if let globalMemory, !globalMemory.isEmpty { layers.append("global_memory") }
