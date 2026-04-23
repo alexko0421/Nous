@@ -493,7 +493,52 @@ final class UserMemoryCore {
         - What is Alex trying to do in this chat?
         - What has he told me that I should remember while this chat continues?
         - Do NOT include general facts about Alex — those belong in other memory layers.
-        - Keep under 6 bullet points. Markdown only.
+
+        IMAGERY PRESERVATION:
+        - When Alex's turns contain specific details (concrete numbers, objects, sensory imagery), an original metaphor, or non-obvious phrasing, preserve that specificity in your bullets. Do NOT substitute abstract categories.
+        - If the conversation contained any <signature_moments> blocks, every flagged phrase MUST appear verbatim in a bullet (quote the exact text in 「」).
+        - For other concrete imagery (not flagged), paraphrase with specifics — keep the vivid detail, not just the abstract pattern.
+        - Generic content (routine Q&A, acknowledgments) compresses normally.
+
+        PRIORITY: Preserve imagery > hit bullet count.
+
+        Bullet budget: up to 8 bullets. Prefer fewer when content allows, but extend to 8 before flattening imagery.
+
+        EXAMPLE PAIRS — study the difference between flat ❌ and texture-preserving ✅:
+
+        1. Idea-exploration:
+           ❌ 品味 = 基于大量经验同失败而建立起嚟嘅判断系统
+           ✅ 品味 = 「睇过一千幅画，试过一百种咖啡，失败过十次」之后形成嘅 judgment
+
+        2. Problem-solving:
+           ❌ 修复咗 authentication 嘅 bug
+           ✅ 修咗 login bug：session cookie 响 Safari 被当作 third-party，改咗 SameSite=Lax 之后 work
+
+        3. Emotional-processing:
+           ❌ Alex 处理紧关于工作嘅挫败感
+           ✅ Alex 讲：「我觉得自己系响隧道入面跑，但冇人话我终点响边」——感到 direction 缺失
+
+        4. Planning:
+           ❌ 讨论咗下季度嘅优先事项
+           ✅ 决定 Q2 聚焦 retention 而非 growth，理由：「先把漏斗底补实，再落更多水」
+
+        5. Teaching / learning:
+           ❌ 学咗点用 Swift concurrency
+           ✅ Aha: async let 同 TaskGroup 嘅分别——「async let 系兵，TaskGroup 系将」
+
+        6. Venting:
+           ❌ 对 meeting overload 感到 frustration
+           ✅ Alex 讲：「我嘅 calendar 系别人 agenda 嘅投影」——冇 mental space 做 deep work
+
+        7. Abstract vs concrete (general):
+           ❌ Alex describe 咗一个复杂嘅想法
+           ✅ Alex describe：思考就系「响脑入面开咗十个 tab，但闩唔到其中任何一个」
+
+        8. Routine (not every turn needs preservation):
+           ❌ Alex 问问题、得到答案
+           ✅ Alex 问点 set up Xcode scheme，Nous 给咗三步 instruction
+
+        Markdown only.
         """
 
         do {
