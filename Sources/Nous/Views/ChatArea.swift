@@ -21,6 +21,7 @@ struct ChatArea: View {
 
     private let bottomScrollAnchor = "chat-bottom-anchor"
     private let bottomVisibleSpacing: CGFloat = 53
+    private let composerMaxWidth: CGFloat = 820
     
     private var isWelcomeState: Bool {
         vm.messages.isEmpty && vm.currentNode == nil
@@ -78,7 +79,7 @@ struct ChatArea: View {
                     // Chat log (underneath overlays)
                     ScrollViewReader { proxy in
                         ScrollView {
-                            VStack(spacing: 24) {
+                            VStack(spacing: 28) {
                                 ForEach(vm.messages) { msg in
                                     VStack(alignment: .leading, spacing: 4) {
                                         MessageBubble(
@@ -295,6 +296,7 @@ struct ChatArea: View {
                             .disabled(!canPrimaryAction)
                         }
                     }
+                    .frame(maxWidth: composerMaxWidth)
                     .padding(.horizontal, 36)
                     .padding(.bottom, 16)
                     .padding(.top, 40)
@@ -526,48 +528,149 @@ struct MessageBubble: View {
     let isThinkingStreaming: Bool
     let isUser: Bool
 
-    var body: some View {
+    private let userBubbleMaxWidth: CGFloat = 620
+    private let assistantTextMaxWidth: CGFloat = 690
+    private let userParagraphSpacing: CGFloat = 10
+    private let assistantParagraphSpacing: CGFloat = 14
+
+    private var paragraphTexts: [String] {
         let parsed = isUser
             ? ClarificationContent(displayText: text, card: nil, keepsQuickActionMode: false)
             : ClarificationCardParser.parse(text)
 
-        let formattedText = parsed.displayText
-            .replacingOccurrences(of: #"(?<=[。！？])\n+"#, with: "", options: .regularExpression)
-            .replacingOccurrences(of: #"(?<=[.!?])\n+"#, with: " ", options: .regularExpression)
+        return Self.normalizedParagraphs(from: parsed.displayText)
+    }
 
+    var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let thinkingContent, !thinkingContent.isEmpty {
                 ThinkingAccordion(content: thinkingContent, isStreaming: isThinkingStreaming)
             }
-            if !formattedText.isEmpty {
+            if !paragraphTexts.isEmpty {
                 if isUser {
                     HStack {
-                        Spacer(minLength: 0)
-                        Text(formattedText)
-                            .font(.system(size: 13, weight: .regular))
-                            .foregroundColor(AppColor.colaDarkText)
-                            .lineSpacing(4)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 12)
-                            .background(AppColor.colaBubble)
-                            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                            .textSelection(.enabled)
+                        Spacer(minLength: 60)
+                        VStack(alignment: .leading, spacing: userParagraphSpacing) {
+                            ForEach(Array(paragraphTexts.enumerated()), id: \.offset) { _, paragraph in
+                                Text(paragraph)
+                                    .font(.system(size: 14, weight: .regular))
+                                    .foregroundColor(AppColor.colaDarkText)
+                                    .lineSpacing(6)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .background(AppColor.colaBubble)
+                        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                     }
                 } else {
                     HStack {
-                        Text(formattedText)
-                            .font(.system(size: 13, weight: .regular))
-                            .foregroundColor(AppColor.colaDarkText)
-                            .lineSpacing(6)
-                            .padding(.top, 4)
-                            .padding(.bottom, 8)
-                            .textSelection(.enabled)
+                        VStack(alignment: .leading, spacing: assistantParagraphSpacing) {
+                            ForEach(Array(paragraphTexts.enumerated()), id: \.offset) { _, paragraph in
+                                Text(paragraph)
+                                    .font(.system(size: 14, weight: .regular))
+                                    .foregroundColor(AppColor.colaDarkText)
+                                    .lineSpacing(8)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                        .frame(maxWidth: assistantTextMaxWidth, alignment: .leading)
+                        .padding(.top, 6)
+                        .padding(.bottom, 10)
                         Spacer(minLength: 0)
                     }
-                    .animation(.easeOut(duration: 0.15), value: formattedText)
+                    .animation(.easeOut(duration: 0.15), value: paragraphTexts)
                 }
             }
         }
+    }
+
+    private static func normalizedParagraphs(from text: String) -> [String] {
+        let paragraphBreakToken = "[[NOUS_PARAGRAPH_BREAK]]"
+        let paragraphPreserved = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: #"\n\s*\n+"#, with: paragraphBreakToken, options: .regularExpression)
+        let collapsedSoftBreaks = paragraphPreserved
+            .replacingOccurrences(of: #"(?<=[。！？])\n"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"(?<=[.!?])\n"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "\n", with: " ")
+
+        let rawParagraphs = collapsedSoftBreaks
+            .components(separatedBy: paragraphBreakToken)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        return mergeMechanicalSentenceParagraphs(in: rawParagraphs)
+    }
+
+    private static func mergeMechanicalSentenceParagraphs(in paragraphs: [String]) -> [String] {
+        guard paragraphs.count >= 3 else { return paragraphs }
+
+        var merged: [String] = []
+        var buffer: [String] = []
+
+        for paragraph in paragraphs {
+            if shouldKeepStandaloneParagraph(paragraph) {
+                flushBufferedParagraphs(&buffer, into: &merged)
+                merged.append(paragraph)
+                continue
+            }
+
+            if isMechanicalSentenceParagraph(paragraph) {
+                buffer.append(paragraph)
+                continue
+            }
+
+            flushBufferedParagraphs(&buffer, into: &merged)
+            merged.append(paragraph)
+        }
+
+        flushBufferedParagraphs(&buffer, into: &merged)
+        return merged
+    }
+
+    private static func flushBufferedParagraphs(_ buffer: inout [String], into merged: inout [String]) {
+        guard !buffer.isEmpty else { return }
+
+        if buffer.count >= 2 {
+            merged.append(buffer.joined(separator: " "))
+        } else {
+            merged.append(contentsOf: buffer)
+        }
+
+        buffer.removeAll(keepingCapacity: true)
+    }
+
+    private static func shouldKeepStandaloneParagraph(_ paragraph: String) -> Bool {
+        let trimmed = paragraph.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return true }
+
+        let patterns = [
+            #"^[-*•]\s+"#,
+            #"^\d+\.\s+"#,
+            #"^>\s+"#,
+            #"^#{1,6}\s+"#,
+            #"^[A-Z][^:]{0,24}:\s*$"#
+        ]
+
+        return patterns.contains {
+            trimmed.range(of: $0, options: .regularExpression) != nil
+        }
+    }
+
+    private static func isMechanicalSentenceParagraph(_ paragraph: String) -> Bool {
+        let trimmed = paragraph.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        guard trimmed.count <= 110 else { return false }
+
+        let sentenceEndCount = trimmed
+            .filter { ".!?。！？".contains($0) }
+            .count
+
+        return sentenceEndCount <= 2
     }
 }
 
