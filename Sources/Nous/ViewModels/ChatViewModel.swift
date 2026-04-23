@@ -2,6 +2,7 @@ import Foundation
 import Observation
 
 @Observable
+@MainActor
 final class ChatViewModel {
 
     // MARK: - State
@@ -11,11 +12,14 @@ final class ChatViewModel {
     var inputText: String = ""
     var isGenerating: Bool = false
     var currentResponse: String = ""
+    var currentThinking: String = ""
+    var didHitBudgetExhaustion: Bool = false
     var citations: [SearchResult] = []
     var activeQuickActionMode: QuickActionMode?
     var activeChatMode: ChatMode? = nil
     var defaultProjectId: UUID?
     var lastPromptGovernanceTrace: PromptGovernanceTrace?
+    private var judgeFeedbackVersion: Int = 0
 
     // MARK: - Dependencies
 
@@ -33,9 +37,18 @@ final class ChatViewModel {
     /// `await task.value` and inspect the verdict directly. The slot is guarded on clear:
     /// a later `send()` may have already overwritten it with a new task ID, so only the task
     /// that still owns the slot clears it (see `inFlightJudgeTaskId` guard in `send()`).
-    private var inFlightJudgeTask: Task<JudgeVerdict, Error>?
-    private var inFlightJudgeTaskId: UUID?
+    @ObservationIgnored nonisolated(unsafe) private var inFlightJudgeTask: Task<JudgeVerdict, Error>?
+    @ObservationIgnored nonisolated(unsafe) private var inFlightJudgeTaskId: UUID?
+    @ObservationIgnored nonisolated(unsafe) private var inFlightResponseTask: Task<Void, Never>?
+    @ObservationIgnored nonisolated(unsafe) private var inFlightResponseTaskId: UUID?
     private let governanceTelemetry: GovernanceTelemetryStore
+    private let geminiPromptCache: GeminiPromptCacheService
+    private let scratchPadStore: ScratchPadStore
+    /// In-flight cache-refresh bookkeeping, keyed by conversation id. The token map
+    /// lets a late-arriving worker detect that it has been superseded and clean up its
+    /// orphaned server-side handle instead of overwriting a newer entry.
+    @ObservationIgnored nonisolated(unsafe) private var geminiCacheRefreshTasks: [UUID: Task<Void, Never>] = [:]
+    @ObservationIgnored nonisolated(unsafe) private var geminiCacheRefreshTokens: [UUID: UUID] = [:]
 
     // MARK: - Init
 
@@ -51,6 +64,8 @@ final class ChatViewModel {
         judgeLLMServiceFactory: @escaping () -> (any LLMService)?,
         provocationJudgeFactory: @escaping (any LLMService) -> any Judging = { ProvocationJudge(llmService: $0) },
         governanceTelemetry: GovernanceTelemetryStore = GovernanceTelemetryStore(),
+        geminiPromptCache: GeminiPromptCacheService = GeminiPromptCacheService(),
+        scratchPadStore: ScratchPadStore,
         defaultProjectId: UUID? = nil
     ) {
         self.nodeStore = nodeStore
@@ -64,20 +79,23 @@ final class ChatViewModel {
         self.judgeLLMServiceFactory = judgeLLMServiceFactory
         self.provocationJudgeFactory = provocationJudgeFactory
         self.governanceTelemetry = governanceTelemetry
+        self.geminiPromptCache = geminiPromptCache
+        self.scratchPadStore = scratchPadStore
         self.defaultProjectId = defaultProjectId
-    }
-
-    deinit {
-        // VM teardown — make sure no judge task outlives us.
-        inFlightJudgeTask?.cancel()
-        inFlightJudgeTaskId = nil
     }
 
     // MARK: - Conversation Management
 
     @MainActor
-    func startNewConversation(title: String = "New Conversation", projectId: UUID? = nil) {
-        cancelInFlightJudge()  // any in-flight judge belonged to the old conversation
+    func startNewConversation(
+        title: String = "New Conversation",
+        projectId: UUID? = nil,
+        cancelInFlightWork: Bool = true
+    ) {
+        if cancelInFlightWork {
+            cancelInFlightResponse(clearDraft: true)
+            cancelInFlightJudge()  // any in-flight judge belonged to the old conversation
+        }
         let node = NousNode(
             type: .conversation,
             title: title,
@@ -85,21 +103,30 @@ final class ChatViewModel {
         )
         try? nodeStore.insertNode(node)
         currentNode = node
+        scratchPadStore.activate(conversationId: node.id)
         messages = []
         citations = []
         currentResponse = ""
+        currentThinking = ""
+        didHitBudgetExhaustion = false
         activeQuickActionMode = nil
         activeChatMode = nil  // brand-new chat has no prior judgment
         NotificationCenter.default.post(name: .nousNodesDidChange, object: nil)
     }
 
     @MainActor
-    func loadConversation(_ node: NousNode) {
-        cancelInFlightJudge()  // switching conversations invalidates any pending verdict
+    func loadConversation(_ node: NousNode, cancelInFlightWork: Bool = true) {
+        if cancelInFlightWork {
+            cancelInFlightResponse(clearDraft: true)
+            cancelInFlightJudge()  // switching conversations invalidates any pending verdict
+        }
         currentNode = node
+        scratchPadStore.activate(conversationId: node.id)
         messages = (try? nodeStore.fetchMessages(nodeId: node.id)) ?? []
         citations = []
         currentResponse = ""
+        currentThinking = ""
+        didHitBudgetExhaustion = false
         activeQuickActionMode = nil
         activeChatMode = (try? nodeStore.latestChatMode(forNode: node.id)) ?? nil
     }
@@ -112,7 +139,23 @@ final class ChatViewModel {
     func beginQuickActionConversation(_ mode: QuickActionMode) async {
         guard !isGenerating else { return }
 
-        startNewConversation(title: mode.label, projectId: defaultProjectId)
+        let responseTaskId = UUID()
+        let responseTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.runQuickActionConversation(mode, responseTaskId: responseTaskId)
+        }
+        inFlightResponseTask = responseTask
+        inFlightResponseTaskId = responseTaskId
+        await responseTask.value
+        clearInFlightResponseTaskIfOwned(responseTaskId)
+    }
+
+    @MainActor
+    private func runQuickActionConversation(_ mode: QuickActionMode, responseTaskId: UUID) async {
+        guard isActiveResponseTask(responseTaskId) else { return }
+
+        // Quick actions are a launch path, not the lasting chat label.
+        startNewConversation(projectId: defaultProjectId, cancelInFlightWork: false)
         activeQuickActionMode = mode
         inputText = ""
 
@@ -120,7 +163,11 @@ final class ChatViewModel {
 
         isGenerating = true
         currentResponse = ""
-        defer { isGenerating = false }
+        defer {
+            if isActiveResponseTask(responseTaskId) {
+                isGenerating = false
+            }
+        }
 
         var projectGoal: String? = nil
         if let projectId = node.projectId,
@@ -129,7 +176,7 @@ final class ChatViewModel {
             projectGoal = project.goal
         }
 
-        let context = ChatViewModel.assembleContext(
+        let contextSlice = ChatViewModel.assembleContext(
             chatMode: .companion,
             currentUserInput: ChatViewModel.quickActionOpeningPrompt(for: mode),
             globalMemory: userMemoryService.currentGlobal(),
@@ -182,6 +229,7 @@ final class ChatViewModel {
         governanceTelemetry.recordPromptTrace(promptTrace)
 
         guard let llm = llmServiceProvider() else {
+            guard isActiveResponseTask(responseTaskId) else { return }
             let errorContent = "Please configure an LLM in Settings."
             let errorMessage = Message(nodeId: node.id, role: .assistant, content: errorContent)
             try? nodeStore.insertMessage(errorMessage)
@@ -191,44 +239,111 @@ final class ChatViewModel {
                 currentMode: activeQuickActionMode,
                 assistantContent: errorContent
             )
+            currentResponse = ""
             return
         }
 
+        let quickActionUserText = ChatViewModel.quickActionOpeningPrompt(for: mode)
+        let transcriptForCache = [LLMMessage(role: "user", content: quickActionUserText)]
+        let resolvedCacheEntry = activeGeminiHistoryCache(
+            nodeId: node.id,
+            llm: llm,
+            stableSystem: contextSlice.stable,
+            transcriptMessages: transcriptForCache
+        )
+        let streamingService = configuredStreamingService(
+            from: configuredGeminiService(from: llm, cacheEntry: resolvedCacheEntry),
+            responseTaskId: responseTaskId,
+            captureThinking: false
+        )
+
+        let requestMessages = requestMessages(
+            forSlice: contextSlice,
+            transcriptMessages: transcriptForCache,
+            cacheEntry: resolvedCacheEntry
+        )
+        let requestSystem = requestSystem(
+            forSlice: contextSlice,
+            cacheEntry: resolvedCacheEntry
+        )
+
         do {
-            let stream = try await llm.generate(
-                messages: [
-                    LLMMessage(
-                        role: "user",
-                        content: ChatViewModel.quickActionOpeningPrompt(for: mode)
-                    )
-                ],
-                system: context
+            let stream = try await streamingService.generate(
+                messages: requestMessages,
+                system: requestSystem
             )
             for try await chunk in stream {
+                try Task.checkCancellation()
+                guard isActiveResponseTask(responseTaskId) else { return }
                 currentResponse += chunk
             }
+            guard isActiveResponseTask(responseTaskId) else { return }
+        } catch is CancellationError {
+            return
         } catch {
+            guard isActiveResponseTask(responseTaskId) else { return }
+            // If a cached-content handle was attached, the server may have evicted the
+            // cache before our local TTL. Drop the stale entry so the next turn rebuilds
+            // instead of repeatedly failing against a dead handle.
+            if resolvedCacheEntry != nil {
+                geminiPromptCache.removeEntry(for: node.id)
+            }
             currentResponse = "Error: \(error.localizedDescription)"
         }
 
-        let assistantContent = currentResponse
+        guard isActiveResponseTask(responseTaskId) else { return }
+        let rawAssistantContent = currentResponse
+        let assistantContent = ClarificationCardParser.stripChatTitle(from: rawAssistantContent)
+        let conversationTitle = ChatViewModel.sanitizedConversationTitle(
+            from: ClarificationCardParser.extractChatTitle(from: rawAssistantContent)
+        )
         let assistantMessage = Message(nodeId: node.id, role: .assistant, content: assistantContent)
         try? nodeStore.insertMessage(assistantMessage)
         messages.append(assistantMessage)
+        if let conversationTitle {
+            maybeApplyConversationTitle(conversationTitle, nodeId: node.id, messages: messages)
+        }
         persistConversationSnapshot(for: node.id, messages: messages, shouldRefreshEmoji: true)
         activeQuickActionMode = ChatViewModel.updatedQuickActionMode(
             currentMode: activeQuickActionMode,
             assistantContent: assistantContent
         )
+        scratchPadStore.ingestAssistantMessage(
+            content: assistantContent,
+            sourceMessageId: assistantMessage.id,
+            conversationId: node.id
+        )
         scheduleUserMemoryRefresh(for: node, messages: messages)
+        refreshGeminiConversationCacheIfNeeded(
+            nodeId: node.id,
+            llm: llm,
+            stableSystem: contextSlice.stable,
+            persistedMessages: messages
+        )
+        currentResponse = ""
     }
 
     // MARK: - Send (RAG Pipeline)
 
     @MainActor
     func send(attachments: [AttachedFileContext] = []) async {
+        guard (!inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty), !isGenerating else { return }
+
+        let responseTaskId = UUID()
+        let responseTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.runSend(attachments: attachments, responseTaskId: responseTaskId)
+        }
+        inFlightResponseTask = responseTask
+        inFlightResponseTaskId = responseTaskId
+        await responseTask.value
+        clearInFlightResponseTaskIfOwned(responseTaskId)
+    }
+
+    @MainActor
+    private func runSend(attachments: [AttachedFileContext], responseTaskId: UUID) async {
         let query = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard (!query.isEmpty || !attachments.isEmpty), !isGenerating else { return }
+        guard (!query.isEmpty || !attachments.isEmpty), isActiveResponseTask(responseTaskId) else { return }
 
         let attachmentNames = attachments.map(\.name)
         let promptQuery = query.isEmpty ? "Please review the attached files." : query
@@ -241,12 +356,15 @@ final class ChatViewModel {
         inputText = ""
         isGenerating = true
         currentResponse = ""
-        defer { isGenerating = false }
+        defer {
+            if isActiveResponseTask(responseTaskId) {
+                isGenerating = false
+            }
+        }
 
         // Step 1: Create conversation node if nil
         if currentNode == nil {
-            let title = String(promptQuery.prefix(40))
-            startNewConversation(title: title, projectId: defaultProjectId)
+            startNewConversation(projectId: defaultProjectId, cancelInFlightWork: false)
         }
 
         guard let node = currentNode else { return }
@@ -258,10 +376,12 @@ final class ChatViewModel {
         persistConversationSnapshot(for: node.id, messages: messages)
 
         // Step 3: Embed query and search for citations
+        citations = []
         if embeddingService.isLoaded {
             if let queryEmbedding = try? embeddingService.embed(retrievalQuery) {
-                let results = (try? vectorStore.search(
+                let results = (try? vectorStore.searchForChatCitations(
                     query: queryEmbedding,
+                    queryText: retrievalQuery,
                     topK: 5,
                     excludeIds: [node.id]
                 )) ?? []
@@ -315,6 +435,7 @@ final class ChatViewModel {
         var profile: BehaviorProfile = .supportive
         var focusBlock: String?
         var inferredMode: ChatMode?
+        let feedbackLoop = buildJudgeFeedbackLoop()
 
         if currentProvider == .local {
             fallbackReason = .providerLocal
@@ -328,7 +449,8 @@ final class ChatViewModel {
                     userMessage: promptQuery,
                     citablePool: citablePool,
                     previousMode: activeChatMode,
-                    provider: currentProvider
+                    provider: currentProvider,
+                    feedbackLoop: feedbackLoop
                 )
             }
             inFlightJudgeTask = task
@@ -372,6 +494,10 @@ final class ChatViewModel {
             fallbackReason = .judgeUnavailable
         }
 
+        // Guard after judge await: if the turn was canceled (chat switch, stop, new send)
+        // while we were waiting on the judge, bail before mutating any downstream state.
+        guard isActiveResponseTask(responseTaskId) else { return }
+
         // Step C: Decide the effective mode for this turn.
         let effectiveMode: ChatMode = inferredMode ?? (activeChatMode ?? .companion)
 
@@ -380,7 +506,7 @@ final class ChatViewModel {
             activeQuickActionMode: activeQuickActionMode,
             messages: messages
         )
-        let context = ChatViewModel.assembleContext(
+        let contextSlice = ChatViewModel.assembleContext(
             chatMode: effectiveMode,
             currentUserInput: promptQuery,
             globalMemory: userMemoryService.currentGlobal(),
@@ -433,10 +559,14 @@ final class ChatViewModel {
         lastPromptGovernanceTrace = promptTrace
         governanceTelemetry.recordPromptTrace(promptTrace)
 
-        // Step E: Compose final system prompt.
-        var finalSystemParts: [String] = [context, profile.contextBlock]
-        if let fb = focusBlock { finalSystemParts.append(fb) }
-        let finalSystem = finalSystemParts.joined(separator: "\n\n")
+        // Step E: Compose the per-turn slice. `stableSystem` rides the Gemini cache;
+        // `volatileSystem` also absorbs the judge's per-turn profile block and any
+        // focus directive so the cache hash survives judge-driven churn.
+        let stableSystem = contextSlice.stable
+        var volatilePartsForTurn: [String] = [contextSlice.volatile, profile.contextBlock]
+        if let fb = focusBlock { volatilePartsForTurn.append(fb) }
+        let volatileSystem = volatilePartsForTurn.filter { !$0.isEmpty }.joined(separator: "\n\n")
+        let turnSlice = TurnSystemSlice(stable: stableSystem, volatile: volatileSystem)
 
         // Step F: Append the judge_events row using effectiveMode.
         // BEFORE the main call so the row survives main-call failure.
@@ -479,41 +609,121 @@ final class ChatViewModel {
 
         // Step 7: Get LLM from provider
         guard let llm = llmServiceProvider() else {
+            guard isActiveResponseTask(responseTaskId) else { return }
             let errorContent = "Please configure an LLM in Settings."
             let errorMessage = Message(nodeId: node.id, role: .assistant, content: errorContent)
             try? nodeStore.insertMessage(errorMessage)
             messages.append(errorMessage)
+            try? nodeStore.updateJudgeEventMessageId(eventId: eventId, messageId: errorMessage.id)
+            bumpJudgeFeedbackVersion()
+            persistConversationSnapshot(for: node.id, messages: messages, shouldRefreshEmoji: true)
             activeQuickActionMode = ChatViewModel.updatedQuickActionMode(
                 currentMode: activeQuickActionMode,
                 assistantContent: errorContent
             )
+            currentResponse = ""
             return
         }
 
+        // Resolve the cache entry exactly once per turn. Previously this was recomputed
+        // three times (once per helper) — each recompute ran a full SHA256 over system
+        // + transcript. Thread the resolved entry through the helpers instead.
+        let resolvedCacheEntry = activeGeminiHistoryCache(
+            nodeId: node.id,
+            llm: llm,
+            stableSystem: stableSystem,
+            transcriptMessages: llmMessages
+        )
+        let requestMessages = requestMessages(
+            forSlice: turnSlice,
+            transcriptMessages: llmMessages,
+            cacheEntry: resolvedCacheEntry
+        )
+        let requestSystem = requestSystem(
+            forSlice: turnSlice,
+            cacheEntry: resolvedCacheEntry
+        )
+
         // Step 8: Stream response
+        currentThinking = ""
+        didHitBudgetExhaustion = false
+        let streamingService = configuredStreamingService(
+            from: configuredGeminiService(from: llm, cacheEntry: resolvedCacheEntry),
+            responseTaskId: responseTaskId,
+            captureThinking: true
+        )
         do {
-            let stream = try await llm.generate(messages: llmMessages, system: finalSystem)
+            let stream = try await streamingService.generate(messages: requestMessages, system: requestSystem)
+            // Guard after the generate() await: same window as the judge guard above.
+            guard isActiveResponseTask(responseTaskId) else { return }
             for try await chunk in stream {
+                try Task.checkCancellation()
+                guard isActiveResponseTask(responseTaskId) else { return }
                 currentResponse += chunk
             }
+            guard isActiveResponseTask(responseTaskId) else { return }
+        } catch is CancellationError {
+            return
         } catch {
+            guard isActiveResponseTask(responseTaskId) else { return }
+            // Cached handle may have been evicted server-side before our local TTL ran
+            // out. Drop the stale entry so the next turn rebuilds against a live cache
+            // instead of repeatedly hitting 400/404 on the same dead handle.
+            if resolvedCacheEntry != nil {
+                geminiPromptCache.removeEntry(for: node.id)
+            }
             currentResponse = "Error: \(error.localizedDescription)"
         }
 
         // Step 9: Save assistant message
-        let assistantContent = currentResponse
-        let assistantMessage = Message(nodeId: node.id, role: .assistant, content: assistantContent)
+        guard isActiveResponseTask(responseTaskId) else { return }
+        // Budget-exhausted path: Gemini burned the whole thinking budget on thoughts
+        // and emitted no user-facing text. Surface it as a real assistant message so
+        // Alex sees the turn failed and has an obvious retry path (type again). We
+        // persist it as a normal message so it roundtrips through reload.
+        if didHitBudgetExhaustion && currentResponse.isEmpty {
+            currentResponse = "(I ran out of thinking budget on that one. Try asking again, maybe a touch simpler.)"
+        }
+        let rawAssistantContent = currentResponse
+        let assistantContent = ClarificationCardParser.stripChatTitle(from: rawAssistantContent)
+        let conversationTitle = ChatViewModel.sanitizedConversationTitle(
+            from: ClarificationCardParser.extractChatTitle(from: rawAssistantContent)
+        )
+        let persistedThinking = currentThinking.isEmpty ? nil : currentThinking
+        let assistantMessage = Message(
+            nodeId: node.id,
+            role: .assistant,
+            content: assistantContent,
+            thinkingContent: persistedThinking
+        )
         try? nodeStore.insertMessage(assistantMessage)
         messages.append(assistantMessage)
+        if let conversationTitle {
+            maybeApplyConversationTitle(conversationTitle, nodeId: node.id, messages: messages)
+        }
+        scratchPadStore.ingestAssistantMessage(
+            content: assistantContent,
+            sourceMessageId: assistantMessage.id,
+            conversationId: node.id
+        )
 
         // Step 9b: patch the judge event with the message it produced
         try? nodeStore.updateJudgeEventMessageId(eventId: eventId, messageId: assistantMessage.id)
+        bumpJudgeFeedbackVersion()
         persistConversationSnapshot(for: node.id, messages: messages, shouldRefreshEmoji: true)
         activeQuickActionMode = ChatViewModel.updatedQuickActionMode(
             currentMode: activeQuickActionMode,
             assistantContent: assistantContent
         )
         scheduleUserMemoryRefresh(for: node, messages: messages)
+        refreshGeminiConversationCacheIfNeeded(
+            nodeId: node.id,
+            llm: llm,
+            stableSystem: stableSystem,
+            persistedMessages: messages
+        )
+        currentResponse = ""
+        currentThinking = ""
 
         // Step 10: Async task — update node embedding + regenerate edges
         let nodeId = node.id
@@ -543,9 +753,40 @@ final class ChatViewModel {
         inFlightJudgeTaskId = nil
     }
 
+    @MainActor
+    func stopGenerating() {
+        cancelInFlightJudge()
+        cancelInFlightResponse(clearDraft: false)
+    }
+
+    @MainActor
+    private func cancelInFlightResponse(clearDraft: Bool) {
+        inFlightResponseTask?.cancel()
+        inFlightResponseTask = nil
+        inFlightResponseTaskId = nil
+        isGenerating = false
+        if clearDraft {
+            currentResponse = ""
+            currentThinking = ""
+            didHitBudgetExhaustion = false
+        }
+    }
+
+    @MainActor
+    private func isActiveResponseTask(_ taskId: UUID) -> Bool {
+        inFlightResponseTaskId == taskId
+    }
+
+    @MainActor
+    private func clearInFlightResponseTaskIfOwned(_ taskId: UUID) {
+        guard inFlightResponseTaskId == taskId else { return }
+        inFlightResponseTask = nil
+        inFlightResponseTaskId = nil
+    }
+
     // MARK: - Focus Block
 
-    private static func buildFocusBlock(entryId: String, rawText: String) -> String {
+    nonisolated private static func buildFocusBlock(entryId: String, rawText: String) -> String {
         """
         RELEVANT PRIOR MEMORY (id=\(entryId)):
         \(rawText)
@@ -560,7 +801,7 @@ final class ChatViewModel {
 
     /// Loads the anchor document — Nous's immutable core identity and thinking methods.
     /// This is who Nous is. It does not change with context.
-    private static let anchor: String = {
+    nonisolated private static let anchor: String = {
         guard let url = Bundle.main.url(forResource: "anchor", withExtension: "md"),
               let content = try? String(contentsOf: url, encoding: .utf8) else {
             print("[Nous] WARNING: anchor.md not found in bundle, using fallback")
@@ -570,9 +811,105 @@ final class ChatViewModel {
         return content
     }()
 
+    nonisolated private static let memoryInterpretationPolicy = """
+    ---
+
+    MEMORY INTERPRETATION POLICY:
+    If you notice a personal pattern, state it as a hypothesis unless Alex clearly confirmed it or it is strongly supported across multiple moments.
+    Prefer wording like: "I might be wrong, but...", "One hypothesis is...", "Does this fit, or is something else more true?"
+    Do not present diagnoses or identity labels as certainty.
+    """
+
+    nonisolated private static let coreSafetyPolicy = """
+    ---
+
+    CORE SAFETY POLICY:
+    Do not encourage Alex to become emotionally dependent on Nous.
+    Do not present medical, psychological, or legal certainty when the situation is ambiguous.
+    Respect memory boundaries: if Alex asks not to store something, or asked for consent before sensitive storage, do not silently turn that into durable memory.
+    """
+
+    nonisolated private static let stoicGroundingPolicy = """
+    ---
+
+    STOIC GROUNDING POLICY:
+    Let Stoic thinking quietly shape your judgment, not your surface style.
+    Help Alex separate what is in his control from what is not.
+    Do not spend energy arguing with reality once something has already happened; focus on the next right move.
+    When fear, anger, ego, or external pressure is driving the frame, name that plainly and return to facts, choices, and consequences.
+    Bias toward steadiness, proportion, self-command, and aligned action.
+    Keep this human and grounded. Do not sound like a philosophy book, do not quote Stoics unless Alex asks, and do not turn real emotion into cold detachment.
+    """
+
+    nonisolated private static let summaryOutputPolicy = """
+    ---
+
+    SUMMARY OUTPUT POLICY:
+    When Alex asks you to summarize the current conversation (keywords and intents include "总结", "summarize", "repo", "做笔记", "summary", "整份笔记", or equivalents), wrap the summary body in <summary>…</summary>. Inside the tag, use four H2 sections in this order, followed by a bullet list:
+
+      1. Problem / what triggered the discussion
+      2. Thinking / the path the conversation took, including pivots
+      3. Conclusion / consensus or decisions reached
+      4. Next steps / short actionable bullets
+
+    CRITICAL — match the conversation language for ALL of: the # title, the ## section headers, and the body prose. Do not translate to another language. Do not default to Mandarin. Use:
+      - 广东话 section headers (问题 / 思考 / 结论 / 下一步) when Alex is writing in Cantonese.
+      - 普通话 section headers (问题 / 思考 / 结论 / 下一步) when Alex is writing in Mandarin.
+      - English section headers (Problem / Thinking / Conclusion / Next steps) when Alex is writing in English.
+      - If Alex mixes Cantonese and English, prefer Cantonese headers with English kept verbatim inside the prose.
+
+    Sections 1–3 must be narrative prose paragraphs, not bullet dumps. Section 4 is a short bullet list. The # title must contain no filename-unsafe characters (avoid /\\:*?"<>|) and should also follow the conversation language.
+
+    Text outside the tag is allowed for a brief conversational wrapper in the same language (e.g. Cantonese: "整好了，睇下右边嘅白纸"; English: "Done, check the right panel."). The summary content itself must strictly live inside the tag. Never emit the tag when Alex is not asking for a summary.
+    """
+
+    nonisolated private static let conversationTitleOutputPolicy = """
+    ---
+
+    CONVERSATION TITLE POLICY:
+    At the very end of every assistant reply, append exactly one hidden line in this format:
+    <chat_title>short topic title here</chat_title>
+
+    Rules:
+    - This tag is hidden from Alex and is only used to label the chat.
+    - Match the conversation language and dialect. Do not translate Cantonese into Mandarin.
+    - Make it a concise topic label, not a full sentence, not a quote, and not a question.
+    - No markdown, no emoji, no surrounding quotes, and no trailing punctuation.
+    - Keep it specific. Good: "AI 时代仲要唔要生细路". Bad: "Actually you think that in the future..."
+    - Prefer 2 to 6 words for spaced languages, or a short phrase for Chinese.
+    - Put the tag on its own final line after all visible text, summary tags, or clarification blocks.
+    """
+
+    nonisolated private static let highRiskSafetyModeBlock = """
+    ---
+
+    HIGH-RISK SAFETY MODE:
+    Alex may be describing imminent danger, self-harm, abuse, or another acute safety issue.
+    Prioritize immediate safety, grounding, and real-world human support over abstract analysis.
+    Be calm, direct, and practical.
+    If he may be in immediate danger, encourage contacting local emergency services or a trusted nearby person right now.
+    Do not romanticize self-destruction, isolation, or dependency.
+    """
+
+    nonisolated private static func activeChatModeBlock(_ chatMode: ChatMode) -> String {
+        "---\n\nACTIVE CHAT MODE: \(chatMode.label)\n\(chatMode.contextBlock)"
+    }
+
     // MARK: - Context Assembly
 
-    static func assembleContext(
+    /// Output of prompt assembly, split into the slow-changing prefix that can ride the
+    /// Gemini prompt cache and the per-turn block that must refresh every request.
+    /// `combined` reconstructs the original single-string layout for non-cache callers.
+    struct TurnSystemSlice: Equatable {
+        let stable: String
+        let volatile: String
+
+        var combined: String {
+            [stable, volatile].filter { !$0.isEmpty }.joined(separator: "\n\n")
+        }
+    }
+
+    nonisolated static func assembleContext(
         chatMode: ChatMode = .companion,
         currentUserInput: String? = nil,
         globalMemory: String?,
@@ -586,133 +923,108 @@ final class ChatViewModel {
         projectGoal: String?,
         attachments: [AttachedFileContext] = [],
         activeQuickActionMode: QuickActionMode? = nil,
-        allowInteractiveClarification: Bool = false
-    ) -> String {
-        var parts: [String] = []
-        let highRiskSafetyMode = SafetyGuardrails.isHighRiskQuery(currentUserInput)
+        allowInteractiveClarification: Bool = false,
+        now: Date = Date()
+    ) -> TurnSystemSlice {
+        var stable: [String] = []
+        var volatilePieces: [String] = []
 
-        // Layer 1: Anchor — who Nous is (immutable)
-        parts.append(anchor)
+        // Stable prefix: identity + policies + slow-changing memory layers. This is what
+        // gets frozen into cachedContents.systemInstruction; any per-turn additions here
+        // would invalidate the cache hash every request and defeat the whole point.
+        stable.append(anchor)
+        stable.append(memoryInterpretationPolicy)
+        stable.append(coreSafetyPolicy)
+        stable.append(stoicGroundingPolicy)
+        stable.append(summaryOutputPolicy)
+        stable.append(conversationTitleOutputPolicy)
 
-        // Layer 2a: Global identity memory (across all chats)
         if let globalMemory, !globalMemory.isEmpty {
-            parts.append("---\n\nLONG-TERM MEMORY ABOUT ALEX:\n\(globalMemory)")
+            stable.append("---\n\nLONG-TERM MEMORY ABOUT ALEX:\n\(globalMemory)")
         }
 
-        // Layer 2b: bounded wake-up layer bridging identity and scoped recall.
         if let essentialStory, !essentialStory.isEmpty {
-            parts.append("---\n\nBROADER SITUATION RIGHT NOW:\n\(essentialStory)")
+            stable.append("---\n\nBROADER SITUATION RIGHT NOW:\n\(essentialStory)")
         }
 
-        // Layer 2c: Project memory (only when this chat has a projectId)
         if let projectMemory, !projectMemory.isEmpty {
-            parts.append("---\n\nTHIS PROJECT'S CONTEXT:\n\(projectMemory)")
+            stable.append("---\n\nTHIS PROJECT'S CONTEXT:\n\(projectMemory)")
         }
 
-        // Layer 2d: This chat's own thread memory
         if let conversationMemory, !conversationMemory.isEmpty {
-            parts.append("---\n\nTHIS CHAT'S THREAD SO FAR:\n\(conversationMemory)")
+            stable.append("---\n\nTHIS CHAT'S THREAD SO FAR:\n\(conversationMemory)")
         }
 
-        // Layer 2e: bounded evidence backing the higher-priority memory layers.
         if !memoryEvidence.isEmpty {
-            parts.append("---\n\nSHORT SOURCE EVIDENCE FOR THE ABOVE MEMORY:")
+            stable.append("---\n\nSHORT SOURCE EVIDENCE FOR THE ABOVE MEMORY:")
             for evidence in memoryEvidence {
-                parts.append("- \(evidence.label) · \"\(evidence.sourceTitle)\": \(evidence.snippet)")
+                stable.append("- \(evidence.label) · \"\(evidence.sourceTitle)\": \(evidence.snippet)")
             }
-        }
-
-        parts.append(
-            """
-            ---
-
-            MEMORY INTERPRETATION POLICY:
-            If you notice a personal pattern, state it as a hypothesis unless Alex clearly confirmed it or it is strongly supported across multiple moments.
-            Prefer wording like: "I might be wrong, but...", "One hypothesis is...", "Does this fit, or is something else more true?"
-            Do not present diagnoses or identity labels as certainty.
-            """
-        )
-
-        parts.append(
-            """
-            ---
-
-            CORE SAFETY POLICY:
-            Do not encourage Alex to become emotionally dependent on Nous.
-            Do not present medical, psychological, or legal certainty when the situation is ambiguous.
-            Respect memory boundaries: if Alex asks not to store something, or asked for consent before sensitive storage, do not silently turn that into durable memory.
-            """
-        )
-
-        if highRiskSafetyMode {
-            parts.append(
-                """
-                ---
-
-                HIGH-RISK SAFETY MODE:
-                Alex may be describing imminent danger, self-harm, abuse, or another acute safety issue.
-                Prioritize immediate safety, grounding, and real-world human support over abstract analysis.
-                Be calm, direct, and practical.
-                If he may be in immediate danger, encourage contacting local emergency services or a trusted nearby person right now.
-                Do not romanticize self-destruction, isolation, or dependency.
-                """
-            )
         }
 
         if let userModel,
            let promptBlock = userModel.promptBlock(includeIdentity: globalMemory?.isEmpty ?? true) {
-            parts.append("---\n\nDERIVED USER MODEL:\n\(promptBlock)")
+            stable.append("---\n\nDERIVED USER MODEL:\n\(promptBlock)")
         }
 
-        parts.append("---\n\nACTIVE CHAT MODE: \(chatMode.label)\n\(chatMode.contextBlock)")
-
-        // Layer 3: Project context (if active)
         if let goal = projectGoal, !goal.isEmpty {
-            parts.append("---\n\nCURRENT PROJECT GOAL: \(goal)")
+            stable.append("---\n\nCURRENT PROJECT GOAL: \(goal)")
         }
 
-        // Layer 4: Recent conversations for cross-window continuity.
-        // Uses active conversation memory entries (Alex-only,
-        // evidence-filtered), NOT the raw transcript — raw content includes
-        // Nous's own replies and would reintroduce self-confirmation across
-        // chats. See Codex #4.
         if !recentConversations.isEmpty {
-            parts.append("---\n\nRECENT CONVERSATIONS WITH ALEX:")
+            stable.append("---\n\nRECENT CONVERSATIONS WITH ALEX:")
             for conversation in recentConversations {
                 let snippet = String(conversation.memory.prefix(280))
-                parts.append("\"\(conversation.title)\": \(snippet)")
+                stable.append("\"\(conversation.title)\": \(snippet)")
             }
         }
 
-        // Layer 5: Attached files (if any)
+        // Volatile: per-turn signals. The judge re-infers chat mode each turn, citations
+        // come from fresh RAG, attachments are turn-specific, etc. Keeping these out of
+        // the cache costs ~300 tokens/turn in re-send but keeps hit rate near 100%.
+        volatilePieces.append(activeChatModeBlock(chatMode))
+
+        if SafetyGuardrails.isHighRiskQuery(currentUserInput) {
+            volatilePieces.append(highRiskSafetyModeBlock)
+        }
+
         if !attachments.isEmpty {
-            parts.append("---\n\nATTACHED FILES:")
+            volatilePieces.append("---\n\nATTACHED FILES:")
             for attachment in attachments {
                 if let extractedText = attachment.extractedText, !extractedText.isEmpty {
-                    parts.append("FILE: \(attachment.name)\n\(extractedText)")
+                    volatilePieces.append("FILE: \(attachment.name)\n\(extractedText)")
                 } else {
-                    parts.append("FILE: \(attachment.name)\nContent preview unavailable. Ask Alex for the relevant excerpt if more detail is needed.")
+                    volatilePieces.append("FILE: \(attachment.name)\nContent preview unavailable. Ask Alex for the relevant excerpt if more detail is needed.")
                 }
             }
         }
 
-        // Layer 6: Retrieved knowledge (RAG)
         if !citations.isEmpty {
-            parts.append("---\n\nRELEVANT KNOWLEDGE FROM ALEX'S NOTES AND CONVERSATIONS:")
+            volatilePieces.append("---\n\nRELEVANT KNOWLEDGE FROM ALEX'S NOTES AND CONVERSATIONS:")
             for (index, result) in citations.enumerated() {
                 let percent = Int(result.similarity * 100)
-                let snippet = String(result.node.content.prefix(300))
-                parts.append("[\(index + 1)] \"\(result.node.title)\" (\(percent)% relevance): \(snippet)")
+                let snippet = result.surfacedSnippet
+                let laneNote = result.lane == .longGap ? ", older cross-time connection" : ""
+                volatilePieces.append("[\(index + 1)] \"\(result.node.title)\" (\(percent)% relevance\(laneNote)): \(snippet)")
             }
-            parts.append("Reference the above when relevant. Cite by title. If knowledge contradicts something Alex said before, surface the tension.")
+            volatilePieces.append("Reference the above when relevant. Cite by title. If knowledge contradicts something Alex said before, surface the tension.")
+        }
+
+        if let longGapGuidance = longGapConnectionGuidance(
+            chatMode: chatMode,
+            currentUserInput: currentUserInput,
+            citations: citations,
+            now: now
+        ) {
+            volatilePieces.append(longGapGuidance)
         }
 
         if let activeQuickActionMode {
-            parts.append("ACTIVE QUICK MODE: \(activeQuickActionMode.label)")
+            volatilePieces.append("ACTIVE QUICK MODE: \(activeQuickActionMode.label)")
         }
 
         if allowInteractiveClarification {
-            parts.append(
+            volatilePieces.append(
                 """
                 ---
 
@@ -746,10 +1058,13 @@ final class ChatViewModel {
             )
         }
 
-        return parts.joined(separator: "\n\n")
+        return TurnSystemSlice(
+            stable: stable.joined(separator: "\n\n"),
+            volatile: volatilePieces.joined(separator: "\n\n")
+        )
     }
 
-    static func governanceTrace(
+    nonisolated static func governanceTrace(
         chatMode: ChatMode = .companion,
         currentUserInput: String? = nil,
         globalMemory: String?,
@@ -763,9 +1078,10 @@ final class ChatViewModel {
         projectGoal: String?,
         attachments: [AttachedFileContext] = [],
         activeQuickActionMode: QuickActionMode? = nil,
-        allowInteractiveClarification: Bool = false
+        allowInteractiveClarification: Bool = false,
+        now: Date = Date()
     ) -> PromptGovernanceTrace {
-        var layers = ["anchor", "memory_interpretation_policy", "core_safety_policy", "chat_mode"]
+        var layers = ["anchor", "memory_interpretation_policy", "core_safety_policy", "stoic_grounding_policy", "summary_output_policy", "conversation_title_output_policy", "chat_mode"]
         let highRiskQueryDetected = SafetyGuardrails.isHighRiskQuery(currentUserInput)
 
         if let globalMemory, !globalMemory.isEmpty { layers.append("global_memory") }
@@ -778,6 +1094,14 @@ final class ChatViewModel {
         if !recentConversations.isEmpty { layers.append("recent_conversations") }
         if !attachments.isEmpty { layers.append("attachments") }
         if !citations.isEmpty { layers.append("citations") }
+        if longGapConnectionGuidance(
+            chatMode: chatMode,
+            currentUserInput: currentUserInput,
+            citations: citations,
+            now: now
+        ) != nil {
+            layers.append("long_gap_bridge_guidance")
+        }
         if activeQuickActionMode != nil { layers.append("quick_action_mode") }
         if allowInteractiveClarification { layers.append("interactive_clarification") }
         if chatMode == .strategist { layers.append("strategist_mode") }
@@ -791,12 +1115,130 @@ final class ChatViewModel {
         )
     }
 
-    private static func userMessageContent(query: String, attachmentNames: [String]) -> String {
+    nonisolated private static func longGapConnectionGuidance(
+        chatMode: ChatMode,
+        currentUserInput: String?,
+        citations: [SearchResult],
+        now: Date
+    ) -> String? {
+        guard !SafetyGuardrails.isHighRiskQuery(currentUserInput) else { return nil }
+        guard let candidate = preferredLongGapBridgeCitation(citations: citations, now: now) else { return nil }
+
+        let snippet = String(candidate.surfacedSnippet.prefix(220))
+        let modeSpecificRule: String
+
+        switch chatMode {
+        case .companion:
+            modeSpecificRule = "- Keep it gentle and hypothesis-led. Use language like \"might\", \"seems\", or \"could be\"."
+        case .strategist:
+            modeSpecificRule = "- Name the line directly and clearly. Prioritize precision over cushioning, but do not sound prosecutorial or therapeutic."
+        }
+
+        return """
+        ---
+
+        LONG-GAP CONNECTION CUE:
+        One retrieved source may matter here as an older cross-time connection:
+        "\(candidate.node.title)": \(snippet)
+
+        Use this only if it deepens the answer.
+        If you use it:
+        - Add at most one short bridge sentence.
+        - Explain why that earlier moment matters now.
+        - Focus on movement, tension, or progression across time, not on catching Alex being inconsistent.
+        - Do not mention retrieval, citations, similarity scores, dates, percentages, or the phrase "long-gap".
+        - If the answer already works without this connection, leave it out.
+        - Do not stack multiple older threads in one reply.
+        \(modeSpecificRule)
+        """
+    }
+
+    nonisolated private static func preferredLongGapBridgeCitation(
+        citations: [SearchResult],
+        now: Date
+    ) -> SearchResult? {
+        citations.first {
+            $0.lane == .longGap &&
+            $0.similarity >= 0.62 &&
+            ageDays(since: $0.node.createdAt, now: now) >= 45
+        }
+    }
+
+    nonisolated private static func ageDays(since createdAt: Date, now: Date) -> Int {
+        let elapsed = max(0, now.timeIntervalSince(createdAt))
+        return Int(elapsed / 86_400)
+    }
+
+    nonisolated private static func userMessageContent(query: String, attachmentNames: [String]) -> String {
         guard !attachmentNames.isEmpty else { return query }
         return "\(query)\n\nFiles: \(attachmentNames.joined(separator: ", "))"
     }
 
-    static func updatedQuickActionMode(
+    nonisolated private static func sanitizedConversationTitle(from raw: String?) -> String? {
+        guard var title = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else {
+            return nil
+        }
+
+        title = title
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\t", with: " ")
+        while title.contains("  ") {
+            title = title.replacingOccurrences(of: "  ", with: " ")
+        }
+
+        while let first = title.first, first == "#" || first == "-" || first == "*" || first.isWhitespace {
+            title.removeFirst()
+        }
+
+        title = title.trimmingCharacters(in: CharacterSet(charactersIn: "\"'`“”‘’"))
+        title = title.trimmingCharacters(in: CharacterSet(charactersIn: ".!?,;:。！？、，；："))
+
+        let filteredScalars = title.unicodeScalars.filter { scalar in
+            !CharacterSet(charactersIn: "<>|/\\").contains(scalar)
+        }
+        title = String(String.UnicodeScalarView(filteredScalars))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if title.count > 48 {
+            title = String(title.prefix(48)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        return title.isEmpty ? nil : title
+    }
+
+    nonisolated private static func shouldAutoRenameConversation(
+        currentTitle: String,
+        messages: [Message]
+    ) -> Bool {
+        let trimmed = currentTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return true }
+
+        if ["new conversation", "new chat", "untitled"].contains(trimmed.lowercased()) {
+            return true
+        }
+
+        if QuickActionMode.isPlaceholderConversationTitle(trimmed) {
+            return true
+        }
+
+        guard let legacySeed = legacyConversationSeedTitle(from: messages) else { return false }
+        return trimmed == legacySeed
+    }
+
+    nonisolated private static func legacyConversationSeedTitle(from messages: [Message]) -> String? {
+        guard let firstUser = messages.first(where: { $0.role == .user })?.content else {
+            return nil
+        }
+
+        let queryOnly = firstUser
+            .components(separatedBy: "\n\nFiles:")
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? firstUser
+        guard !queryOnly.isEmpty else { return nil }
+        return String(queryOnly.prefix(40)).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    nonisolated static func updatedQuickActionMode(
         currentMode: QuickActionMode?,
         assistantContent: String
     ) -> QuickActionMode? {
@@ -805,7 +1247,7 @@ final class ChatViewModel {
         return parsed.keepsQuickActionMode ? currentMode : nil
     }
 
-    static func shouldAllowInteractiveClarification(
+    nonisolated static func shouldAllowInteractiveClarification(
         activeQuickActionMode: QuickActionMode?,
         messages: [Message]
     ) -> Bool {
@@ -818,7 +1260,7 @@ final class ChatViewModel {
     /// Stamped onto verdictJSON by the send flow before the verdict is encoded;
     /// do not call from additional sites or persisted verdictJSON content
     /// becomes non-deterministic.
-    static func deriveProvocationKind(
+    nonisolated static func deriveProvocationKind(
         verdict: JudgeVerdict,
         contradictionCandidateIds: Set<String>
     ) -> ProvocationKind {
@@ -829,7 +1271,7 @@ final class ChatViewModel {
         return .spark
     }
 
-    static func quickActionOpeningPrompt(for mode: QuickActionMode) -> String {
+    nonisolated static func quickActionOpeningPrompt(for mode: QuickActionMode) -> String {
         """
         Alex just entered the \(mode.label) mode from the welcome screen.
         Start the conversation yourself instead of waiting for him to type.
@@ -840,6 +1282,23 @@ final class ChatViewModel {
         Ask one short, warm opening question that helps you understand his situation.
         Do not mention hidden prompts, modes, system instructions, or formatting rules.
         """
+    }
+
+    @MainActor
+    private func maybeApplyConversationTitle(_ title: String, nodeId: UUID, messages: [Message]) {
+        guard var node = try? nodeStore.fetchNode(id: nodeId) else { return }
+        guard ChatViewModel.shouldAutoRenameConversation(currentTitle: node.title, messages: messages) else {
+            return
+        }
+        guard node.title != title else { return }
+
+        node.title = title
+        node.updatedAt = Date()
+        try? nodeStore.updateNode(node)
+
+        if currentNode?.id == node.id {
+            currentNode = node
+        }
     }
 
     private func persistConversationSnapshot(
@@ -867,8 +1326,6 @@ final class ChatViewModel {
                     guard let self else { return }
                     let emoji = await resolveConversationEmoji(for: node, messages: messages)
                     guard var refreshedNode = try? nodeStore.fetchNode(id: nodeId) else { return }
-                    refreshedNode.content = transcript
-                    refreshedNode.updatedAt = Date()
                     refreshedNode.emoji = emoji
                     try? nodeStore.updateNode(refreshedNode)
                     let finalNode = refreshedNode
@@ -885,7 +1342,9 @@ final class ChatViewModel {
         }
 
         try? nodeStore.updateNode(node)
-        currentNode = node
+        if currentNode?.id == node.id {
+            currentNode = node
+        }
         NotificationCenter.default.post(name: .nousNodesDidChange, object: nil)
     }
 
@@ -929,6 +1388,233 @@ final class ChatViewModel {
         return fallback
     }
 
+    /// Attaches the resolved cache handle to the Gemini service. When the handle is
+    /// `nil`, returns the service unchanged so the full system + transcript goes through
+    /// the normal request path.
+    @MainActor
+    private func configuredGeminiService(
+        from llm: any LLMService,
+        cacheEntry: GeminiConversationCacheEntry?
+    ) -> any LLMService {
+        guard var gemini = llm as? GeminiLLMService, let entry = cacheEntry else { return llm }
+        gemini.cachedContentName = entry.name
+        return gemini
+    }
+
+    /// Builds the `contents` array for a single turn. With an active cache the server
+    /// already has the transcript prefix + stable system, so we send just the current
+    /// user message — with the volatile block prepended so per-turn signals (chat mode,
+    /// citations, quick-action label, etc.) still reach the model.
+    @MainActor
+    private func requestMessages(
+        forSlice slice: TurnSystemSlice,
+        transcriptMessages: [LLMMessage],
+        cacheEntry: GeminiConversationCacheEntry?
+    ) -> [LLMMessage] {
+        guard cacheEntry != nil,
+              let latestMessage = transcriptMessages.last,
+              latestMessage.role == "user" else {
+            return transcriptMessages
+        }
+
+        let prefixedContent = ChatViewModel.prefixedUserMessageContent(
+            volatile: slice.volatile,
+            userContent: latestMessage.content
+        )
+        return [LLMMessage(role: "user", content: prefixedContent)]
+    }
+
+    /// When the cache is active, Gemini rejects a request that also supplies a
+    /// `systemInstruction` (it's locked into the cache). Return nil in that case; the
+    /// volatile block is carried via the prepended user message content instead.
+    @MainActor
+    private func requestSystem(
+        forSlice slice: TurnSystemSlice,
+        cacheEntry: GeminiConversationCacheEntry?
+    ) -> String? {
+        if cacheEntry != nil { return nil }
+        return slice.combined
+    }
+
+    /// Looks up a valid cache entry for this conversation by hashing the stable system
+    /// and the transcript prefix (everything except the current user turn). Separated
+    /// from `configuredGeminiService` + `requestMessages` + `requestSystem` so callers
+    /// resolve the entry exactly once per turn and thread it through — the previous
+    /// implementation recomputed the SHA256 three times per send.
+    @MainActor
+    private func activeGeminiHistoryCache(
+        nodeId: UUID,
+        llm: any LLMService,
+        stableSystem: String,
+        transcriptMessages: [LLMMessage]
+    ) -> GeminiConversationCacheEntry? {
+        guard let gemini = llm as? GeminiLLMService else { return nil }
+        guard transcriptMessages.count >= 2 else { return nil }
+        let prefixHash = GeminiPromptCacheService.promptHash(
+            system: stableSystem,
+            messages: Array(transcriptMessages.dropLast())
+        )
+        return geminiPromptCache.activeCache(for: nodeId, model: gemini.model, promptHash: prefixHash)
+    }
+
+    nonisolated static func prefixedUserMessageContent(volatile: String, userContent: String) -> String {
+        guard !volatile.isEmpty else { return userContent }
+        return """
+        <turn-context>
+        \(volatile)
+        </turn-context>
+
+        \(userContent)
+        """
+    }
+
+    @MainActor
+    private func configuredStreamingService(
+        from llm: any LLMService,
+        responseTaskId: UUID,
+        captureThinking: Bool
+    ) -> any LLMService {
+        guard var gemini = llm as? GeminiLLMService else { return llm }
+
+        gemini.onUsageMetadata = { [weak self] usage in
+            guard let self, self.isActiveResponseTask(responseTaskId) else { return }
+            self.governanceTelemetry.recordGeminiUsage(usage)
+        }
+
+        guard captureThinking else { return gemini }
+
+        gemini.thinkingBudgetTokens = 2000
+        // @MainActor closures: the producer `await`s these, so writes land in
+        // parse order and are visible to the post-stream budget-exhaust check below.
+        gemini.onThinkingDelta = { [weak self] delta in
+            guard let self, self.isActiveResponseTask(responseTaskId) else { return }
+            self.currentThinking.append(delta)
+        }
+        gemini.onBudgetExhausted = { [weak self] in
+            guard let self, self.isActiveResponseTask(responseTaskId) else { return }
+            self.didHitBudgetExhaustion = true
+        }
+        return gemini
+    }
+
+    @MainActor
+    private func refreshGeminiConversationCacheIfNeeded(
+        nodeId: UUID,
+        llm: any LLMService,
+        stableSystem: String,
+        persistedMessages: [Message]
+    ) {
+        guard let gemini = llm as? GeminiLLMService else {
+            geminiPromptCache.removeEntry(for: nodeId)
+            cancelInFlightCacheRefresh(for: nodeId)
+            return
+        }
+
+        let transcriptMessages = persistedMessages.map {
+            LLMMessage(role: $0.role == .user ? "user" : "assistant", content: $0.content)
+        }
+        let existingEntry = geminiPromptCache.entry(for: nodeId)
+
+        guard Self.shouldCreateGeminiHistoryCache(for: transcriptMessages) else {
+            geminiPromptCache.removeEntry(for: nodeId)
+            cancelInFlightCacheRefresh(for: nodeId)
+            guard let existingEntry else { return }
+            Task {
+                try? await gemini.deleteCachedContent(name: existingEntry.name)
+            }
+            return
+        }
+
+        let promptHash = GeminiPromptCacheService.promptHash(
+            system: stableSystem,
+            messages: transcriptMessages
+        )
+        if let existingEntry,
+           existingEntry.model == gemini.model,
+           existingEntry.promptHash == promptHash,
+           existingEntry.expireTime.map({ $0 > Date() }) ?? true {
+            return
+        }
+
+        let oldCacheName = existingEntry?.name
+        let displayName = "nous-\(nodeId.uuidString.prefix(8))"
+
+        // Cancel any prior in-flight refresh for this conversation. Without this, a
+        // slow earlier refresh completing after a newer one would overwrite the newer
+        // entry and leak the newer server-side cache (oldCacheName captures from
+        // `existingEntry` at spawn time, so the stale delete is correct either way).
+        cancelInFlightCacheRefresh(for: nodeId)
+
+        // Generation token: the worker only commits its result if this conversation's
+        // token still matches at store time. If a newer refresh started and bumped the
+        // token, this worker's cache handle is orphaned server-side and must be cleaned
+        // up to avoid storage billing for a cache nobody will ever reference.
+        let token = UUID()
+        geminiCacheRefreshTokens[nodeId] = token
+
+        let task = Task { [weak self] in
+            do {
+                let created = try await gemini.createCachedContent(
+                    messages: transcriptMessages,
+                    system: stableSystem,
+                    ttlSeconds: 300,
+                    displayName: displayName
+                )
+                try Task.checkCancellation()
+                let committed = await MainActor.run { () -> Bool in
+                    guard let self else { return false }
+                    guard self.geminiCacheRefreshTokens[nodeId] == token else { return false }
+                    self.geminiPromptCache.store(
+                        GeminiConversationCacheEntry(
+                            name: created.name,
+                            model: created.model,
+                            promptHash: promptHash,
+                            expireTime: created.expireTime
+                        ),
+                        for: nodeId
+                    )
+                    return true
+                }
+                if committed {
+                    if let oldCacheName, oldCacheName != created.name {
+                        try? await gemini.deleteCachedContent(name: oldCacheName)
+                    }
+                } else {
+                    // Superseded by a newer refresh. Drop our orphaned handle server-side
+                    // so it isn't billed for the full TTL with nobody to reference it.
+                    try? await gemini.deleteCachedContent(name: created.name)
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                print("[gemini-cache] failed to refresh cached content: \(error)")
+            }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                if self.geminiCacheRefreshTokens[nodeId] == token {
+                    self.geminiCacheRefreshTokens.removeValue(forKey: nodeId)
+                    self.geminiCacheRefreshTasks.removeValue(forKey: nodeId)
+                }
+            }
+        }
+        geminiCacheRefreshTasks[nodeId] = task
+    }
+
+    @MainActor
+    private func cancelInFlightCacheRefresh(for nodeId: UUID) {
+        geminiCacheRefreshTasks[nodeId]?.cancel()
+        geminiCacheRefreshTasks.removeValue(forKey: nodeId)
+        geminiCacheRefreshTokens.removeValue(forKey: nodeId)
+    }
+
+    nonisolated private static func shouldCreateGeminiHistoryCache(for messages: [LLMMessage]) -> Bool {
+        guard messages.count >= 4 else { return false }
+        let characterCount = messages.reduce(into: 0) { $0 += $1.content.count }
+        // Gemini implicit caching starts at 1024 prompt tokens; use a
+        // conservative char-count gate before paying an explicit cache-create call.
+        return characterCount >= 4096
+    }
+
     /// Routes refresh work through the scheduler actor so it serialises after
     /// the reply stream + persist step, avoiding MLX container contention on
     /// local models (v2.1 §5, Q9=B).
@@ -953,24 +1639,196 @@ final class ChatViewModel {
 }
 
 extension ChatViewModel {
+    @MainActor
+    private func buildJudgeFeedbackLoop(limit: Int = 24, now: Date = Date()) -> JudgeFeedbackLoop? {
+        let events = governanceTelemetry.recentJudgeEvents(limit: limit, filter: .none)
+        guard !events.isEmpty else { return nil }
 
-    /// Returns the judge event id for a given assistant message, if one was recorded
-    /// for the turn that produced it AND the judge actually provoked.
-    /// Returns nil for messages from non-provoked or pre-feature turns.
+        var entryPenalty: [String: Double] = [:]
+        var entryReasons: [String: [String: Double]] = [:]
+        var kindPenalty: [ProvocationKind: Double] = [:]
+        var kindReasons: [ProvocationKind: [String: Double]] = [:]
+        var globalReasons: [String: Double] = [:]
+        var noteHints: [(text: String, weight: Double)] = []
+
+        for event in events {
+            guard event.fallbackReason == .ok,
+                  let feedback = event.userFeedback,
+                  let verdict = Self.decodeJudgeVerdict(from: event.verdictJSON),
+                  verdict.shouldProvoke
+            else { continue }
+
+            let referenceDate = event.feedbackTs ?? event.ts
+            let ageHours = max(0, now.timeIntervalSince(referenceDate) / 3600)
+            let decay = pow(0.82, ageHours / 24)
+            let weight = (feedback == .down ? 2.0 : -1.0) * decay
+
+            kindPenalty[verdict.provocationKind, default: 0] += weight
+            if let entryId = verdict.entryId {
+                entryPenalty[entryId, default: 0] += weight
+            }
+
+            guard feedback == .down else { continue }
+
+            if let reasonLabel = Self.feedbackReasonLabel(event.feedbackReason) {
+                globalReasons[reasonLabel, default: 0] += decay
+                var reasonsForKind = kindReasons[verdict.provocationKind, default: [:]]
+                reasonsForKind[reasonLabel, default: 0] += decay
+                kindReasons[verdict.provocationKind] = reasonsForKind
+                if let entryId = verdict.entryId {
+                    var reasonsForEntry = entryReasons[entryId, default: [:]]
+                    reasonsForEntry[reasonLabel, default: 0] += decay
+                    entryReasons[entryId] = reasonsForEntry
+                }
+            }
+
+            if let note = Self.feedbackNoteHint(event.feedbackNote) {
+                noteHints.append((text: note, weight: decay))
+            }
+        }
+
+        let entrySuppressions = entryPenalty
+            .filter { $0.value > 0.45 }
+            .sorted { $0.value > $1.value }
+            .prefix(3)
+            .map { entryId, penalty in
+                JudgeFeedbackLoop.EntrySuppression(
+                    entryId: entryId,
+                    penalty: penalty,
+                    reasonHints: Self.topReasonLabels(entryReasons[entryId], limit: 2)
+                )
+            }
+
+        let kindAdjustments = kindPenalty
+            .filter { $0.value > 0.35 }
+            .sorted { lhs, rhs in
+                if lhs.value == rhs.value {
+                    return lhs.key.rawValue < rhs.key.rawValue
+                }
+                return lhs.value > rhs.value
+            }
+            .prefix(3)
+            .map { kind, penalty in
+                JudgeFeedbackLoop.KindAdjustment(
+                    kind: kind,
+                    penalty: penalty,
+                    reasonHints: Self.topReasonLabels(kindReasons[kind], limit: 2)
+                )
+            }
+
+        let loop = JudgeFeedbackLoop(
+            entrySuppressions: Array(entrySuppressions),
+            kindAdjustments: Array(kindAdjustments),
+            globalReasonHints: Self.topReasonLabels(globalReasons, limit: 3),
+            noteHints: Self.topNoteHints(noteHints, limit: 2)
+        )
+        return loop.isEmpty ? nil : loop
+    }
+
+    nonisolated private static func decodeJudgeVerdict(from json: String) -> JudgeVerdict? {
+        guard let data = json.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(JudgeVerdict.self, from: data)
+    }
+
+    nonisolated private static func feedbackReasonLabel(_ reason: JudgeFeedbackReason?) -> String? {
+        reason?.title.lowercased()
+    }
+
+    nonisolated private static func topReasonLabels(_ weightedReasons: [String: Double]?, limit: Int) -> [String] {
+        (weightedReasons ?? [:])
+            .filter { $0.value > 0 }
+            .sorted { lhs, rhs in
+                if lhs.value == rhs.value {
+                    return lhs.key < rhs.key
+                }
+                return lhs.value > rhs.value
+            }
+            .prefix(limit)
+            .map(\.key)
+    }
+
+    nonisolated private static func topNoteHints(_ notes: [(text: String, weight: Double)], limit: Int) -> [String] {
+        var seen: Set<String> = []
+        return notes
+            .sorted { $0.weight > $1.weight }
+            .compactMap { note in
+                guard seen.insert(note.text).inserted else { return nil }
+                return note.text
+            }
+            .prefix(limit)
+            .map { $0 }
+    }
+
+    nonisolated private static func feedbackNoteHint(_ note: String?) -> String? {
+        guard let trimmed = note?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty
+        else { return nil }
+
+        let singleLine = trimmed.replacingOccurrences(of: "\n", with: " ")
+        if singleLine.count <= 96 {
+            return singleLine
+        }
+        let endIndex = singleLine.index(singleLine.startIndex, offsetBy: 93)
+        return String(singleLine[..<endIndex]) + "..."
+    }
+
+    @MainActor
+    private func judgeEvent(forMessageId messageId: UUID) -> JudgeEvent? {
+        _ = judgeFeedbackVersion
+        let events = governanceTelemetry.recentJudgeEvents(limit: 500, filter: .none)
+        return events.first(where: { $0.messageId == messageId })
+    }
+
+    @MainActor
+    private func bumpJudgeFeedbackVersion() {
+        judgeFeedbackVersion &+= 1
+    }
+
+    /// Returns the judge event id for a given assistant message when the turn
+    /// that produced it logged one. Older pre-feature turns may still return nil.
     @MainActor
     func judgeEventId(forMessageId messageId: UUID) -> UUID? {
-        let events = governanceTelemetry.recentJudgeEvents(limit: 500, filter: .none)
-        guard let match = events.first(where: { $0.messageId == messageId }),
-              match.fallbackReason == .ok else { return nil }
-        guard let verdictData = match.verdictJSON.data(using: .utf8),
-              let verdict = try? JSONDecoder().decode(JudgeVerdict.self, from: verdictData),
-              verdict.shouldProvoke else { return nil }
-        return match.id
+        judgeEvent(forMessageId: messageId)?.id
+    }
+
+    @MainActor
+    func feedback(forMessageId messageId: UUID) -> JudgeFeedback? {
+        judgeEvent(forMessageId: messageId)?.userFeedback
+    }
+
+    @MainActor
+    func feedbackReason(forMessageId messageId: UUID) -> JudgeFeedbackReason? {
+        judgeEvent(forMessageId: messageId)?.feedbackReason
+    }
+
+    @MainActor
+    func feedbackNote(forMessageId messageId: UUID) -> String {
+        judgeEvent(forMessageId: messageId)?.feedbackNote ?? ""
     }
 
     @MainActor
     func recordFeedback(forMessageId messageId: UUID, feedback: JudgeFeedback) {
         guard let eventId = judgeEventId(forMessageId: messageId) else { return }
         governanceTelemetry.recordFeedback(eventId: eventId, feedback: feedback)
+        bumpJudgeFeedbackVersion()
+    }
+
+    @MainActor
+    func recordFeedbackDetail(
+        forMessageId messageId: UUID,
+        feedback: JudgeFeedback,
+        reason: JudgeFeedbackReason?,
+        note: String?
+    ) {
+        guard let eventId = judgeEventId(forMessageId: messageId) else { return }
+        governanceTelemetry.recordFeedback(eventId: eventId, feedback: feedback, reason: reason, note: note)
+        bumpJudgeFeedbackVersion()
+    }
+
+    @MainActor
+    func clearFeedback(forMessageId messageId: UUID) {
+        guard let eventId = judgeEventId(forMessageId: messageId) else { return }
+        governanceTelemetry.clearFeedback(eventId: eventId)
+        bumpJudgeFeedbackVersion()
     }
 }

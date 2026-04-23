@@ -78,11 +78,39 @@ final class JudgeEventsStoreTests: XCTestCase {
     func testUpdateFeedbackPersists() throws {
         let event = makeEvent()
         try store.appendJudgeEvent(event)
-        try store.updateJudgeEventFeedback(id: event.id, feedback: .down, at: Date())
+        try store.updateJudgeEventFeedback(
+            id: event.id,
+            feedback: .down,
+            reason: .wrongTiming,
+            note: "too early",
+            at: Date()
+        )
 
         let fetched = try store.fetchJudgeEvent(id: event.id)
         XCTAssertEqual(fetched?.userFeedback, .down)
         XCTAssertNotNil(fetched?.feedbackTs)
+        XCTAssertEqual(fetched?.feedbackReason, .wrongTiming)
+        XCTAssertEqual(fetched?.feedbackNote, "too early")
+    }
+
+    func testClearFeedbackRemovesReasonAndNote() throws {
+        let event = makeEvent()
+        try store.appendJudgeEvent(event)
+        try store.updateJudgeEventFeedback(
+            id: event.id,
+            feedback: .down,
+            reason: .tooForceful,
+            note: "back off",
+            at: Date()
+        )
+
+        try store.clearJudgeEventFeedback(id: event.id)
+
+        let fetched = try store.fetchJudgeEvent(id: event.id)
+        XCTAssertNil(fetched?.userFeedback)
+        XCTAssertNil(fetched?.feedbackTs)
+        XCTAssertNil(fetched?.feedbackReason)
+        XCTAssertNil(fetched?.feedbackNote)
     }
 
     func testGovernanceStoreDelegatesToNodeStore() throws {
@@ -95,8 +123,18 @@ final class JudgeEventsStoreTests: XCTestCase {
         let fetched = try store.fetchJudgeEvent(id: event.id)
         XCTAssertEqual(fetched?.id, event.id)
 
-        telemetry.recordFeedback(eventId: event.id, feedback: .up)
+        telemetry.recordFeedback(
+            eventId: event.id,
+            feedback: .up,
+            reason: .notUseful,
+            note: "detail"
+        )
         XCTAssertEqual(try store.fetchJudgeEvent(id: event.id)?.userFeedback, .up)
+        XCTAssertEqual(try store.fetchJudgeEvent(id: event.id)?.feedbackReason, .notUseful)
+        XCTAssertEqual(try store.fetchJudgeEvent(id: event.id)?.feedbackNote, "detail")
+
+        telemetry.clearFeedback(eventId: event.id)
+        XCTAssertNil(try store.fetchJudgeEvent(id: event.id)?.userFeedback)
     }
 
     func testGovernanceStoreExposesRecentEvents() throws {

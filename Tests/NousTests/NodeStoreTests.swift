@@ -70,6 +70,37 @@ final class NodeStoreTests: XCTestCase {
         XCTAssertNil(fetched)
     }
 
+    func testNodeChangeNotificationHopsToMainThreadWhenWriteStartsOffMain() {
+        let notification = expectation(description: "nodes change notification")
+        let store = store!
+        let node = makeNode(title: "Background insert")
+
+        let token = NotificationCenter.default.addObserver(
+            forName: .nousNodesDidChange,
+            object: nil,
+            queue: nil
+        ) { _ in
+            XCTAssertTrue(Thread.isMainThread, "UI-driving node change notifications must arrive on the main thread")
+            notification.fulfill()
+        }
+        defer { NotificationCenter.default.removeObserver(token) }
+
+        DispatchQueue.global().async {
+            try? store.insertNode(node)
+        }
+
+        wait(for: [notification], timeout: 2.0)
+    }
+
+    func testNodeContentPreservesEmbeddedNullBytes() throws {
+        let content = "alpha\u{0000}omega"
+        let node = makeNode(title: "Binary-safe", content: content)
+        try store.insertNode(node)
+
+        let fetched = try store.fetchNode(id: node.id)
+        XCTAssertEqual(fetched?.content, content)
+    }
+
     func testFetchAllNodes() throws {
         let node1 = makeNode(title: "Node 1")
         let node2 = makeNode(title: "Node 2")
@@ -336,6 +367,74 @@ final class NodeStoreTests: XCTestCase {
 
         XCTAssertNil(try store.fetchConversationMemory(nodeId: node.id),
                      "Deleting node must cascade-delete its conversation_memory row")
+    }
+
+    func testDeleteNodeRemovesCanonicalConversationMemoryRows() throws {
+        let node = makeNode(type: .conversation)
+        try store.insertNode(node)
+
+        try store.insertMemoryEntry(
+            MemoryEntry(
+                scope: .conversation,
+                scopeRefId: node.id,
+                kind: .thread,
+                stability: .temporary,
+                content: "- active summary",
+                sourceNodeIds: [node.id]
+            )
+        )
+        try store.insertMemoryFactEntry(
+            MemoryFactEntry(
+                scope: .conversation,
+                scopeRefId: node.id,
+                kind: .decision,
+                content: "- fact sidecar",
+                stability: .temporary,
+                sourceNodeIds: [node.id]
+            )
+        )
+
+        try store.deleteNode(id: node.id)
+
+        let remainingEntries = try store.fetchMemoryEntries()
+            .filter { $0.scope == .conversation && $0.scopeRefId == node.id }
+        let remainingFacts = try store.fetchMemoryFactEntries()
+            .filter { $0.scope == .conversation && $0.scopeRefId == node.id }
+        XCTAssertTrue(remainingEntries.isEmpty)
+        XCTAssertTrue(remainingFacts.isEmpty)
+    }
+
+    func testDeleteProjectRemovesCanonicalProjectMemoryRows() throws {
+        let project = Project(title: "Scoped memory")
+        try store.insertProject(project)
+
+        try store.insertMemoryEntry(
+            MemoryEntry(
+                scope: .project,
+                scopeRefId: project.id,
+                kind: .thread,
+                stability: .temporary,
+                content: "- project summary"
+            )
+        )
+        try store.insertMemoryFactEntry(
+            MemoryFactEntry(
+                scope: .project,
+                scopeRefId: project.id,
+                kind: .constraint,
+                content: "- project constraint",
+                stability: .stable
+            )
+        )
+
+        try store.deleteProject(id: project.id)
+
+        let remainingEntries = try store.fetchMemoryEntries()
+            .filter { $0.scope == .project && $0.scopeRefId == project.id }
+        let remainingFacts = try store.fetchMemoryFactEntries()
+            .filter { $0.scope == .project && $0.scopeRefId == project.id }
+        XCTAssertTrue(remainingEntries.isEmpty)
+        XCTAssertTrue(remainingFacts.isEmpty)
     }
 
     /// P1 fix from post-commit /plan-eng-review Codex round: the previous

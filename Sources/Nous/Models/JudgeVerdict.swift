@@ -27,6 +27,32 @@ enum ProvocationKind: String, Codable, CaseIterable {
     case neutral
 }
 
+struct JudgeFeedbackLoop: Equatable {
+    struct EntrySuppression: Equatable {
+        let entryId: String
+        let penalty: Double
+        let reasonHints: [String]
+    }
+
+    struct KindAdjustment: Equatable {
+        let kind: ProvocationKind
+        let penalty: Double
+        let reasonHints: [String]
+    }
+
+    let entrySuppressions: [EntrySuppression]
+    let kindAdjustments: [KindAdjustment]
+    let globalReasonHints: [String]
+    let noteHints: [String]
+
+    var isEmpty: Bool {
+        entrySuppressions.isEmpty &&
+        kindAdjustments.isEmpty &&
+        globalReasonHints.isEmpty &&
+        noteHints.isEmpty
+    }
+}
+
 struct JudgeVerdict: Codable, Equatable {
     let tensionExists: Bool
     let userState: UserState

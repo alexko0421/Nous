@@ -9,7 +9,7 @@ struct WelcomeView: View {
     let onSend: () -> Void
     let onQuickActionSelected: (QuickActionMode) -> Void
     
-    @AppStorage("nous.user.name") private var userName: String = "Alex"
+    @AppStorage("nous.username") private var userName: String = "ALEX"
     
     private var greeting: String {
         let hour = Calendar.current.component(.hour, from: Date())
@@ -22,7 +22,7 @@ struct WelcomeView: View {
     
     private var displayName: String {
         let trimmed = userName.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "Alex" : trimmed.capitalized
+        return trimmed.isEmpty ? "Alex" : trimmed.prefix(1).uppercased() + trimmed.dropFirst().lowercased()
     }
     
     let quickActions = QuickActionMode.allCases
@@ -39,13 +39,12 @@ struct WelcomeView: View {
                 Spacer(minLength: 0)
                 
                 VStack(spacing: 30) {
-                    VStack(spacing: 4) {
-                        Text("NOUS")
-                            .font(.system(size: 64, weight: .semibold, design: .rounded))
-                            .foregroundColor(AppColor.colaOrange)
+                    VStack(spacing: 20) {
+                        NOUSLogoView(logoColor: AppColor.colaOrange)
+                            .frame(width: 200)
 
                         Text("\(greeting), \(displayName)")
-                            .font(.system(size: 26, weight: .medium, design: .rounded))
+                            .font(.system(size: 34, weight: .medium, design: .rounded))
                             .foregroundColor(AppColor.colaDarkText)
                             .multilineTextAlignment(.center)
                     }
@@ -82,11 +81,11 @@ struct WelcomeView: View {
                                     .padding(.vertical, 8)
                                     .background(
                                         Capsule()
-                                            .fill(AppColor.surfaceSecondary)
+                                            .fill(Color(AppColor.glassTint))
                                     )
                                     .overlay(
                                         Capsule()
-                                            .stroke(AppColor.panelStroke, lineWidth: 1)
+                                            .stroke(AppColor.panelStroke, lineWidth: 0.5)
                                     )
                                 }
                                 .buttonStyle(.plain)
@@ -96,7 +95,7 @@ struct WelcomeView: View {
                     .frame(maxWidth: 520)
                 }
                 .padding(.horizontal, 48)
-                .padding(.bottom, 92)
+                .padding(.bottom, 44) // Reduced from 92 to lower the UI slightly, keeping it comfortably above center
                 
                 Spacer(minLength: 0)
             }
@@ -110,23 +109,11 @@ struct WelcomeView: View {
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
-            
-            Circle()
-                .fill(AppColor.colaOrange.opacity(0.10))
-                .frame(width: 340, height: 340)
-                .blur(radius: 140)
-                .offset(x: -220, y: 220)
-            
-            Circle()
-                .fill(AppColor.ambientHighlight)
-                .frame(width: 300, height: 300)
-                .blur(radius: 120)
-                .offset(x: 250, y: -200)
         }
     }
     
     private var composerRow: some View {
-        HStack(spacing: 10) {
+        HStack(alignment: .bottom, spacing: 6) {
             circleActionButton(systemImage: "plus", action: onPickAttachment)
                 .frame(width: 34, height: 34)
 
@@ -135,7 +122,8 @@ struct WelcomeView: View {
                     .textFieldStyle(.plain)
                     .font(.system(size: 13, weight: .medium, design: .rounded))
                     .foregroundColor(AppColor.colaDarkText)
-                    .lineLimit(1...3)
+                    .lineLimit(1...6)
+                    .fixedSize(horizontal: false, vertical: true)
                     .onSubmit { onSend() }
             }
             .padding(.horizontal, 16)
@@ -182,8 +170,7 @@ struct WelcomeView: View {
                 .foregroundColor(AppColor.secondaryText)
                 .frame(width: 32, height: 32)
                 .background(
-                    Circle()
-                        .fill(AppColor.surfaceSecondary)
+                    NativeGlassPanel(cornerRadius: 16, tintColor: AppColor.glassTint) { EmptyView() }
                 )
                 .overlay(
                     Circle()

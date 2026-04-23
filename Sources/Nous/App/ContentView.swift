@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 enum MainTab {
@@ -5,108 +6,69 @@ enum MainTab {
 }
 
 struct ContentView: View {
+    let env: AppEnvironment
+    private static let isRunningUnitTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+
     @State private var isSidebarVisible = true
+    @State private var isScratchPadVisible = false
     @State private var selectedTab: MainTab = .chat
+    @State private var selectedSettingsSection: SettingsSection = .profile
     @State private var selectedProjectId: UUID?
     @State private var isSetupComplete = UserDefaults.standard.bool(forKey: "nous.setup.complete")
+    @AppStorage("nous.appearance") private var appearanceMode = "system"
 
-    // Services
-    @State private var nodeStore: NodeStore
-    @State private var vectorStore: VectorStore
-    @State private var embeddingService = EmbeddingService()
-    @State private var localLLM = LocalLLMService()
-    @State private var graphEngine: GraphEngine
-    @State private var userMemoryService: UserMemoryService
-    @State private var governanceTelemetry: GovernanceTelemetryStore
-    @State private var settingsVM: SettingsViewModel
-    @State private var chatVM: ChatViewModel
-    @State private var noteVM: NoteViewModel
-    @State private var galaxyVM: GalaxyViewModel
-
-    init() {
-        let dbPath = Self.databasePath()
-        let ns = try! NodeStore(path: dbPath)
-
-        // One-time migration from pre-v2.1 user_memory blob. No-op if already done.
-        // Idempotent: guarded by schema_meta.memory_version.
-        do {
-            try MemoryV2Migrator.runIfNeeded(db: ns.rawDatabase)
-        } catch {
-            print("[Nous] MemoryV2Migrator failed: \(error)")
+    private var preferredScheme: ColorScheme? {
+        switch appearanceMode {
+        case "light": return .light
+        case "dark":  return .dark
+        default:      return nil
         }
-
-        // v2.2b: bootstrap memory_entries from existing scope blobs. Idempotent
-        // via schema_meta.memory_entries_version. 1 blob → 1 entry, content
-        // preserved so blob/entry parity holds post-migration.
-        do {
-            try MemoryEntriesMigrator.runIfNeeded(store: ns)
-        } catch {
-            print("[Nous] MemoryEntriesMigrator failed: \(error)")
-        }
-
-        let vs = VectorStore(nodeStore: ns)
-        let es = EmbeddingService()
-        let llm = LocalLLMService()
-        let ge = GraphEngine(nodeStore: ns, vectorStore: vs)
-        let svm = SettingsViewModel(embeddingService: es, localLLM: llm, nodeStore: ns)
-        let governanceTelemetry = GovernanceTelemetryStore(nodeStore: ns)
-        let ums = UserMemoryService(
-            nodeStore: ns,
-            llmServiceProvider: { svm.makeLLMService() },
-            governanceTelemetry: governanceTelemetry
-        )
-        let scheduler = UserMemoryScheduler(service: ums)
-
-        _nodeStore = State(initialValue: ns)
-        _vectorStore = State(initialValue: vs)
-        _embeddingService = State(initialValue: es)
-        _localLLM = State(initialValue: llm)
-        _graphEngine = State(initialValue: ge)
-        _userMemoryService = State(initialValue: ums)
-        _governanceTelemetry = State(initialValue: governanceTelemetry)
-        _settingsVM = State(initialValue: svm)
-        _chatVM = State(initialValue: ChatViewModel(
-            nodeStore: ns, vectorStore: vs, embeddingService: es, graphEngine: ge,
-            userMemoryService: ums,
-            userMemoryScheduler: scheduler,
-            llmServiceProvider: { svm.makeLLMService() },
-            currentProviderProvider: { svm.selectedProvider },
-            judgeLLMServiceFactory: { svm.makeJudgeLLMService() },
-            governanceTelemetry: governanceTelemetry
-        ))
-        _noteVM = State(initialValue: NoteViewModel(nodeStore: ns, vectorStore: vs, embeddingService: es, graphEngine: ge))
-        _galaxyVM = State(initialValue: GalaxyViewModel(nodeStore: ns, graphEngine: ge))
     }
 
     var body: some View {
-        if isSetupComplete {
-            mainContent
-        } else {
-            SetupView(
-                isSetupComplete: $isSetupComplete,
-                embeddingService: embeddingService,
-                settingsVM: settingsVM
-            )
+        Group {
+            switch env.state {
+            case .ready(let dependencies):
+                if isSetupComplete {
+                    mainContent(dependencies: dependencies)
+                } else {
+                    SetupView(
+                        isSetupComplete: $isSetupComplete,
+                        embeddingService: dependencies.embeddingService,
+                        settingsVM: dependencies.settingsVM
+                    )
+                }
+            case .failed(let message):
+                LaunchFailureView(message: message) {
+                    env.state = AppEnvironment.bootstrap()
+                }
+            case .initializing:
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(AppColor.colaBeige)
+            }
         }
+        .preferredColorScheme(preferredScheme)
     }
 
     @ViewBuilder
-    private var mainContent: some View {
-        HStack(spacing: 20) {
-            if isSidebarVisible {
+    private func mainContent(dependencies: AppDependencies) -> some View {
+        HStack(spacing: 12) {
+            if isSidebarVisible && selectedTab != .settings {
                 LeftSidebar(
-                    nodeStore: nodeStore,
+                    nodeStore: dependencies.nodeStore,
                     selectedTab: $selectedTab,
                     selectedProjectId: $selectedProjectId,
-                    selectedNodeId: currentSidebarNodeId,
-                    onNodeSelected: { node in navigateToNode(node) },
+                    selectedNodeId: currentSidebarNodeId(dependencies: dependencies),
+                    onNodeSelected: { node in navigateToNode(node, dependencies: dependencies) },
                     onNewChat: {
-                        chatVM.cancelInFlightJudge()
-                        chatVM.currentNode = nil
-                        chatVM.messages = []
-                        chatVM.citations = []
-                        chatVM.currentResponse = ""
-                        chatVM.inputText = ""
+                        dependencies.chatVM.stopGenerating()
+                        dependencies.chatVM.currentNode = nil
+                        dependencies.chatVM.messages = []
+                        dependencies.chatVM.citations = []
+                        dependencies.chatVM.currentResponse = ""
+                        dependencies.chatVM.inputText = ""
+                        dependencies.scratchPadStore.activate(conversationId: nil)
                         selectedTab = .chat
                     }
                 )
@@ -116,73 +78,133 @@ struct ContentView: View {
             ZStack {
                 switch selectedTab {
                 case .chat:
-                    ChatArea(vm: chatVM, isSidebarVisible: $isSidebarVisible)
+                    ChatArea(
+                        vm: dependencies.chatVM,
+                        isSidebarVisible: $isSidebarVisible,
+                        isScratchPadVisible: $isScratchPadVisible,
+                        onNavigateToNode: { node in navigateToNode(node, dependencies: dependencies) }
+                    )
                 case .notes:
-                    NoteEditor(vm: noteVM, onNavigateToNode: { node in navigateToNode(node) })
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(AppColor.colaBeige)
-                        .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
+                    NoteEditor(
+                        vm: dependencies.noteVM,
+                        onNavigateToNode: { node in navigateToNode(node, dependencies: dependencies) }
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(AppColor.colaBeige)
+                    .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
                 case .galaxy:
-                    GalaxyView(vm: galaxyVM, onNodeSelected: { node in navigateToNode(node) })
+                    GalaxyView(
+                        vm: dependencies.galaxyVM,
+                        onNodeSelected: { node in navigateToNode(node, dependencies: dependencies) }
+                    )
                 case .settings:
-                    SettingsView(vm: settingsVM, userMemoryService: userMemoryService, telemetry: governanceTelemetry)
+                    SettingsView(
+                        vm: dependencies.settingsVM,
+                        selectedTab: $selectedSettingsSection,
+                        userMemoryService: dependencies.userMemoryService,
+                        telemetry: dependencies.governanceTelemetry,
+                        onBack: { selectedTab = .chat }
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(AppColor.colaBeige)
+                    .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
                 }
+            }
 
-                // Tab navigation is handled via sidebar icons (Galaxy, Project)
-                // No floating tab bar needed
+            if isScratchPadVisible && selectedTab == .chat {
+                ScratchPadPanel(
+                    isVisible: $isScratchPadVisible,
+                    store: dependencies.scratchPadStore
+                )
+                .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
-        .frame(width: 800, height: 600)
+        .frame(minWidth: 800, minHeight: 600)
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 36, style: .continuous)
+                .fill(AppColor.colaBeige.opacity(0.72))
+                .shadow(color: .black.opacity(0.12), radius: 24, x: 0, y: 8)
+        )
         .background(.clear)
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isSidebarVisible)
         .task {
-            chatVM.defaultProjectId = selectedProjectId
-            await settingsVM.loadEmbeddingModel()
+            dependencies.chatVM.defaultProjectId = selectedProjectId
+            dependencies.finderProjectSync.scheduleSync()
+            Task {
+                await dependencies.conversationTitleBackfill.runIfNeeded()
+            }
+            if !Self.isRunningUnitTests {
+                await dependencies.settingsVM.loadEmbeddingModel()
+            }
+            // WeeklyReflection rollover — fires once per launch, idempotent.
+            // Skipped during unit tests; closure silently no-ops if Gemini
+            // key is unconfigured.
+            if !Self.isRunningUnitTests, let rollover = dependencies.weeklyReflectionRollover {
+                Task.detached(priority: .utility) {
+                    await rollover()
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .nousNodesDidChange)) { _ in
+            dependencies.finderProjectSync.scheduleSync()
         }
         .onChange(of: selectedProjectId) { _, newValue in
-            chatVM.defaultProjectId = newValue
+            dependencies.chatVM.defaultProjectId = newValue
         }
     }
 
-    private var currentSidebarNodeId: UUID? {
+    private func currentSidebarNodeId(dependencies: AppDependencies) -> UUID? {
         switch selectedTab {
         case .chat:
-            return chatVM.currentNode?.id
+            return dependencies.chatVM.currentNode?.id
         case .notes:
-            return noteVM.currentNote?.id
+            return dependencies.noteVM.currentNote?.id
         case .galaxy, .settings:
             return nil
         }
     }
 
-    private func tabButton(_ title: String, tab: MainTab) -> some View {
-        Button(action: { selectedTab = tab }) {
-            Text(title)
-                .font(.system(size: 11, weight: selectedTab == tab ? .semibold : .regular))
-                .foregroundColor(selectedTab == tab ? AppColor.colaOrange : AppColor.colaDarkText.opacity(0.5))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 6)
-                .background(selectedTab == tab ? AppColor.colaOrange.opacity(0.12) : Color.clear)
-                .clipShape(Capsule())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func navigateToNode(_ node: NousNode) {
+    private func navigateToNode(_ node: NousNode, dependencies: AppDependencies) {
         switch node.type {
         case .conversation:
-            chatVM.loadConversation(node)
+            dependencies.chatVM.loadConversation(node)
             selectedTab = .chat
         case .note:
-            noteVM.openNote(node)
+            dependencies.noteVM.openNote(node)
             selectedTab = .notes
         }
     }
+}
 
-    private static func databasePath() -> String {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let nousDir = appSupport.appendingPathComponent("Nous", isDirectory: true)
-        try? FileManager.default.createDirectory(at: nousDir, withIntermediateDirectories: true)
-        return nousDir.appendingPathComponent("nous.db").path
+private struct LaunchFailureView: View {
+    let message: String
+    let onRetry: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Nous couldn't open its data store.")
+                .font(.system(size: 26, weight: .semibold))
+                .foregroundStyle(AppColor.colaDarkText)
+
+            Text(message)
+                .font(.system(size: 14))
+                .foregroundStyle(AppColor.colaDarkText.opacity(0.75))
+                .textSelection(.enabled)
+
+            HStack(spacing: 12) {
+                Button("Retry") { onRetry() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(AppColor.colaOrange)
+
+                Button("Quit Nous") {
+                    NSApplication.shared.terminate(nil)
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .padding(32)
+        .background(AppColor.colaBeige)
     }
 }

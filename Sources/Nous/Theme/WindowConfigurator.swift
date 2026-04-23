@@ -13,6 +13,9 @@ struct WindowConfigurator: NSViewRepresentable {
             window.isMovableByWindowBackground = true
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
+            if #available(macOS 11.0, *) {
+                window.titlebarSeparatorStyle = .none
+            }
             window.standardWindowButton(.closeButton)?.isHidden = true
             window.standardWindowButton(.miniaturizeButton)?.isHidden = true
             window.standardWindowButton(.zoomButton)?.isHidden = true
@@ -41,5 +44,14 @@ struct WindowConfigurator: NSViewRepresentable {
         return view
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {}
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async {
+            guard let window = nsView.window else { return }
+            if #available(macOS 11.0, *) {
+                window.titlebarSeparatorStyle = .none
+            }
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+        }
+    }
 }

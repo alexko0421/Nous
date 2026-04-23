@@ -4,6 +4,7 @@ enum MemoryScope: String, Codable {
     case global
     case project
     case conversation
+    case selfReflection = "self_reflection"
 }
 
 enum MemoryKind: String, Codable, CaseIterable {

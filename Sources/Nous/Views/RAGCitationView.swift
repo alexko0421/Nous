@@ -2,35 +2,219 @@ import SwiftUI
 
 struct RAGCitationView: View {
     let citations: [SearchResult]
-    var onTap: (NousNode) -> Void = { _ in }
+    @Binding var isExpanded: Bool
+    var onOpenSource: (NousNode) -> Void = { _ in }
+    @State private var hoveredNodeId: UUID?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ForEach(citations.prefix(3), id: \.node.id) { result in
-                Button {
-                    onTap(result.node)
-                } label: {
-                    HStack(spacing: 6) {
-                        Text("📎")
-                            .font(.caption)
-                        Text(result.node.title)
-                            .font(.caption)
-                            .lineLimit(1)
-                            .foregroundStyle(AppColor.colaDarkText)
-                        Spacer()
-                        Text("\(Int(result.similarity * 100))%")
-                            .font(.caption2)
-                            .foregroundStyle(AppColor.colaDarkText.opacity(0.6))
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(AppColor.colaDarkText.opacity(0.04))
-                    )
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                    isExpanded.toggle()
                 }
-                .buttonStyle(.plain)
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 11))
+                        .foregroundStyle(AppColor.secondaryText)
+
+                    Text(resultCountLabel)
+                        .font(.system(size: 11))
+                        .foregroundStyle(AppColor.secondaryText)
+
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(AppColor.secondaryText)
+                }
+                .padding(.horizontal, 10)
+                .frame(height: 28)
+                .background(
+                    RoundedRectangle(cornerRadius: 14)
+                        .fill(AppColor.subtleFill)
+                )
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(citations.enumerated()), id: \.element.node.id) { index, result in
+                        // 单行 Citation，鼠标悬停时弹出 Popover 预览
+                        Button {
+                            onOpenSource(result.node)
+                        } label: {
+                            HStack(alignment: .center, spacing: 8) {
+                                Text(result.node.title)
+                                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(AppColor.colaDarkText)
+                                    .lineLimit(1)
+
+                                Spacer(minLength: 8)
+
+                                typeBadge(for: result.node)
+
+                                if result.lane == .longGap {
+                                    infoBadge(
+                                        text: "Long-gap link",
+                                        tint: AppColor.colaOrange.opacity(0.14),
+                                        textColor: AppColor.colaOrange
+                                    )
+                                }
+
+                                // Hover 提示 — 鼠标悬停时变橙色
+                                Image(systemName: "arrow.up.right")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(
+                                        hoveredNodeId == result.node.id
+                                            ? AppColor.colaOrange
+                                            : AppColor.secondaryText.opacity(0.4)
+                                    )
+                                    .animation(.easeOut(duration: 0.15), value: hoveredNodeId)
+                            }
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                            .background(
+                                // Hover 时背景微高亮
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(
+                                        hoveredNodeId == result.node.id
+                                            ? AppColor.colaOrange.opacity(0.06)
+                                            : Color.clear
+                                    )
+                                    .animation(.easeOut(duration: 0.15), value: hoveredNodeId)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .onHover { isHovering in
+                            hoveredNodeId = isHovering ? result.node.id : nil
+                        }
+                        // Quick Look Popover — 鼠标悬停时弹出预览浮窗
+                        .popover(
+                            isPresented: Binding(
+                                get: { hoveredNodeId == result.node.id },
+                                set: { if !$0 { hoveredNodeId = nil } }
+                            ),
+                            arrowEdge: .leading
+                        ) {
+                            citationPopover(for: result)
+                        }
+
+                        if index < citations.count - 1 {
+                            Divider()
+                                .padding(.leading, 18)
+                                .overlay(AppColor.panelStroke)
+                        }
+                    }
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(AppColor.surfaceSecondary)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(AppColor.panelStroke, lineWidth: 1)
+                )
+                .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
+        .onChange(of: isExpanded) { _, expanded in
+            if !expanded { hoveredNodeId = nil }
+        }
+        .onChange(of: citationNodeIDs) { _, ids in
+            guard let hoveredNodeId, !ids.contains(hoveredNodeId) else { return }
+            self.hoveredNodeId = nil
+        }
+    }
+
+    private var resultCountLabel: String {
+        citations.count == 1 ? "1 result" : "\(citations.count) results"
+    }
+
+    private var citationNodeIDs: [UUID] {
+        citations.map(\.node.id)
+    }
+
+    @ViewBuilder
+    private func typeBadge(for node: NousNode) -> some View {
+        let label = node.type == .conversation ? "Chat" : "Note"
+        infoBadge(
+            text: label,
+            tint: AppColor.colaDarkText.opacity(0.06),
+            textColor: AppColor.secondaryText
+        )
+    }
+
+    private func infoBadge(text: String, tint: Color, textColor: Color) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .semibold, design: .rounded))
+            .foregroundStyle(textColor)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(
+                Capsule()
+                    .fill(tint)
+            )
+    }
+
+    // MARK: - Quick Look Popover 内容
+
+    private func citationPopover(for result: SearchResult) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // 顶部元信息
+            HStack(spacing: 8) {
+                typeBadge(for: result.node)
+                Text(relative(result.node.createdAt))
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(AppColor.secondaryText)
+                Spacer()
+                if result.lane == .longGap {
+                    infoBadge(
+                        text: "Long-gap link",
+                        tint: AppColor.colaOrange.opacity(0.12),
+                        textColor: AppColor.colaOrange
+                    )
+                }
+            }
+
+            // 标题
+            Text(result.node.title)
+                .font(.system(size: 14, weight: .bold, design: .rounded))
+                .foregroundStyle(AppColor.colaDarkText)
+                .lineLimit(2)
+
+            // 内容 Snippet
+            Text(result.surfacedSnippet)
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(AppColor.colaDarkText.opacity(0.8))
+                .lineSpacing(4)
+                .lineLimit(8)
+                .multilineTextAlignment(.leading)
+
+            Divider()
+                .overlay(AppColor.panelStroke)
+
+            // 底部操作
+            Button {
+                onOpenSource(result.node)
+            } label: {
+                HStack(spacing: 6) {
+                    Text("Open source")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    Image(systemName: "arrow.up.right")
+                        .font(.system(size: 10, weight: .bold))
+                }
+                .foregroundStyle(AppColor.colaOrange)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(16)
+        .frame(width: 300)
+    }
+
+    private func relative(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return formatter.localizedString(for: date, relativeTo: Date())
     }
 }

@@ -12,7 +12,8 @@ protocol Judging {
         userMessage: String,
         citablePool: [CitableEntry],
         previousMode: ChatMode?,
-        provider: LLMProvider
+        provider: LLMProvider,
+        feedbackLoop: JudgeFeedbackLoop?
     ) async throws -> JudgeVerdict
 }
 
@@ -31,9 +32,14 @@ final class ProvocationJudge {
         userMessage: String,
         citablePool: [CitableEntry],
         previousMode: ChatMode?,
-        provider: LLMProvider
+        provider: LLMProvider,
+        feedbackLoop: JudgeFeedbackLoop?
     ) async throws -> JudgeVerdict {
-        let systemPrompt = Self.buildPrompt(pool: citablePool, previousMode: previousMode)
+        let systemPrompt = Self.buildPrompt(
+            pool: citablePool,
+            previousMode: previousMode,
+            feedbackLoop: feedbackLoop
+        )
         let llmMessages = [LLMMessage(role: "user", content: userMessage)]
 
         let rawOutput: String
@@ -63,7 +69,11 @@ final class ProvocationJudge {
 
     // MARK: Prompt
 
-    static func buildPrompt(pool: [CitableEntry], previousMode: ChatMode?) -> String {
+    static func buildPrompt(
+        pool: [CitableEntry],
+        previousMode: ChatMode?,
+        feedbackLoop: JudgeFeedbackLoop?
+    ) -> String {
         let poolText: String
         if pool.isEmpty {
             poolText = "(empty — no citable entries this turn)"
@@ -74,6 +84,47 @@ final class ProvocationJudge {
                 return "[\(idx + 1)] \(annotation)id=\(e.id) scope=\(e.scope.rawValue)\(kind)\n\(e.text)"
             }.joined(separator: "\n---\n")
         }
+
+        let feedbackText: String = {
+            guard let feedbackLoop, !feedbackLoop.isEmpty else {
+                return "No explicit recent thumbs feedback."
+            }
+
+            var lines: [String] = []
+
+            if !feedbackLoop.entrySuppressions.isEmpty {
+                lines.append("recently_downvoted_entry_ids:")
+                for suppression in feedbackLoop.entrySuppressions {
+                    let reasons = suppression.reasonHints.isEmpty
+                        ? "none recorded"
+                        : suppression.reasonHints.joined(separator: ", ")
+                    lines.append("- \(suppression.entryId) | penalty=\(String(format: "%.2f", suppression.penalty)) | complaints=\(reasons)")
+                }
+            }
+
+            if !feedbackLoop.kindAdjustments.isEmpty {
+                lines.append("tighten_these_provocation_kinds:")
+                for adjustment in feedbackLoop.kindAdjustments {
+                    let reasons = adjustment.reasonHints.isEmpty
+                        ? "none recorded"
+                        : adjustment.reasonHints.joined(separator: ", ")
+                    lines.append("- \(adjustment.kind.rawValue) | penalty=\(String(format: "%.2f", adjustment.penalty)) | complaints=\(reasons)")
+                }
+            }
+
+            if !feedbackLoop.globalReasonHints.isEmpty {
+                lines.append("global_complaints: \(feedbackLoop.globalReasonHints.joined(separator: ", "))")
+            }
+
+            if !feedbackLoop.noteHints.isEmpty {
+                lines.append("recent_note_hints:")
+                for note in feedbackLoop.noteHints {
+                    lines.append("- \(note)")
+                }
+            }
+
+            return lines.joined(separator: "\n")
+        }()
 
         return """
         You are a silent judge deciding (a) whether Nous should interject during its next reply, and (b) what framing mode the next reply should use.
@@ -100,12 +151,26 @@ final class ProvocationJudge {
         - user_state = "venting" FORCES should_provoke = false regardless of any tension. Venting is not a moment to challenge.
         - entry_id MUST be copied verbatim from the `id=` field of one CITABLE ENTRY. Do not invent.
         - Entries tagged `[contradiction-candidate]` are retrieval hints only. They often mark earlier decisions, boundaries, or constraints that may be in tension with the user's current message, but they are not proof by themselves.
+        - Entries tagged `[weekly-reflection]` (scope=self_reflection) are patterns Nous inferred from the user's conversations last week. They describe conversational behavior in our chats, NOT whole-person traits. Treat them as background context. You MAY anchor a provocation on a weekly-reflection entry ONLY when the user's current message is in clear tension with that conversational pattern (e.g., previously grounded decisions in environment-first, now asking purely tactical questions with no context). Soft tension with a reflection → should_provoke = false.
         - inferred_mode-dependent threshold (apply to YOUR OWN inferred_mode choice):
           * strategist → if tension_exists is true AND user_state ∈ {deciding, exploring}, set should_provoke = true. Soft tensions count.
           * companion  → only set should_provoke = true when the tension is strong AND clearly relevant to a decision the user is making. Soft tensions → false.
+        - Recent thumbs feedback is behavior tuning from the same user. Treat it as a real preference signal.
+        - If an entry id appears in RECENT USER FEEDBACK as downvoted, do NOT reuse that same entry unless the evidence is clearly stronger now. Borderline reuse => should_provoke = false.
+        - If a provocation kind appears with a penalty, raise the bar for that kind. Borderline cases should flip to should_provoke = false.
+        - Apply complaint hints:
+          * wrong memory  → only provoke if the cited memory directly fits the current message.
+          * wrong timing  → if the user is still opening up or timing is uncertain, prefer should_provoke = false.
+          * too forceful  → avoid sharp challenge; require unusually clear tension.
+          * too repetitive → avoid repeating the same challenge pattern again.
+          * not useful    → if the intervention adds little leverage, prefer should_provoke = false.
+        - Recent note hints are literal complaints. Respect their direction, but never quote them back to the user.
 
         PREVIOUS TURN MODE
         \(previousMode?.rawValue ?? "none (first turn)")
+
+        RECENT USER FEEDBACK
+        \(feedbackText)
 
         CITABLE ENTRIES
         \(poolText)

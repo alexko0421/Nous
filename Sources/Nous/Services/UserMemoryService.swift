@@ -875,6 +875,8 @@ final class UserMemoryService {
             return "Project memory"
         case .conversation:
             return "Thread memory"
+        case .selfReflection:
+            return "Self-reflection"
         }
     }
 
@@ -1376,7 +1378,8 @@ extension UserMemoryService {
         hardRecallFacts: [MemoryFactEntry] = [],
         contradictionCandidateIds: Set<String> = [],
         capacity: Int = 15,
-        recencySeedPerScope: Int = 3
+        recencySeedPerScope: Int = 3,
+        reflectionSeed: Int = 2
     ) throws -> [CitableEntry] {
         var seen = Set<String>()
         var out: [CitableEntry] = []
@@ -1420,7 +1423,27 @@ extension UserMemoryService {
             }
         }
 
-        // Pass 3 — recency seed per active scope.
+        // Pass 3 — weekly self-reflection claims. Reserved slots before
+        // ambient recency so the judge can anchor a provocation on a pattern
+        // observed across last week's conversations. Capped at
+        // `reflectionSeed` (default 2, matching per-week production) so older
+        // weeks don't crowd out the freshest read. Scope-safe: free-chat
+        // (projectId=nil) matches NULL-projectId reflection rows.
+        if reflectionSeed > 0 && out.count < capacity {
+            let reflections = (try? nodeStore.fetchActiveReflectionClaims(projectId: projectId)) ?? []
+            for claim in reflections.prefix(reflectionSeed) {
+                admit(CitableEntry(
+                    id: claim.id.uuidString,
+                    text: claim.claim,
+                    scope: .selfReflection,
+                    kind: nil,
+                    promptAnnotation: "weekly-reflection"
+                ))
+                if out.count >= capacity { break }
+            }
+        }
+
+        // Pass 4 — recency seed per active scope.
         let globalRecent = (try? fetchRecentEntries(scope: .global, scopeRefId: nil, limit: recencySeedPerScope)) ?? []
         globalRecent.forEach(admit)
 
@@ -1445,6 +1468,10 @@ extension UserMemoryService {
             return entry.scopeRefId == projectId
         case .conversation:
             return entry.scopeRefId == conversationId
+        case .selfReflection:
+            // Reflections live in `reflection_claim`, never in `memory_entries`.
+            // Compiler requires the case; at runtime this path is unreachable.
+            return false
         }
     }
 
@@ -1456,6 +1483,8 @@ extension UserMemoryService {
             return fact.scopeRefId == projectId
         case .conversation:
             return fact.scopeRefId == conversationId
+        case .selfReflection:
+            return false
         }
     }
 

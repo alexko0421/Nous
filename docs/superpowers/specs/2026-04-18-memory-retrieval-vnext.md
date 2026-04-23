@@ -1,8 +1,8 @@
 # Memory Retrieval vNext
 
 **Date:** 2026-04-18
-**Status:** Draft
-**Branch target:** TBD
+**Status:** Phase 1 substrate shipped (via PR #10 + PR #13, 2026-04-19). Hard Recall lane + Pool composition + annotation pass deferred pending real pain signal — see "Shipped State" below.
+**Branch target:** main (already landed)
 
 ## Thesis
 
@@ -25,6 +25,32 @@ Improve two things that directly serve the thinking-companion product:
    The system should reliably surface prior `decision`, `boundary`, and `constraint` memories when the current turn pushes against them.
 2. **Thinking spark quality**
    The judge pool should contain better raw entries for provocation: smaller, more grounded, and more likely to support "you said X before, but now you're saying Y."
+
+## Shipped State (2026-04-19)
+
+This spec was written 2026-04-18. By 2026-04-19, the substrate it called for had already landed on `main` via two unrelated-looking PRs:
+
+**Shipped (PR #10 — proactive surfacing):**
+- `decision` and `boundary` added to `MemoryKind` enum (`Sources/Nous/Models/MemoryEntry.swift:13-14`)
+- `MemoryFactStoreTests.testMemoryKindJSONRoundTripsNewCases` covers Codable round-trip + legacy decode
+- Conversation-scope write prompt teaches the LLM when to emit `decision` vs `boundary` vs `constraint` (`UserMemoryService.swift:1020-1048`)
+- `contradictionFactKinds = [.decision, .boundary, .constraint]` constant exists (`UserMemoryService.swift:23`)
+- Fixture `01-clear-contradiction-deciding.json` exercises a real `decision`-shaped contradiction
+
+**Shipped (PR #13 — provocation_kind discriminator):**
+- Telemetry: `provocation_kind: contradiction | spark | neutral` on every JudgeVerdict
+- Deterministic Swift derivation; SQL filter via `json_extract`; Memory Debug Inspector picker rows
+
+**Deferred (no current pain signal):**
+- Lane A: Hard Recall (deterministic type-based recall regardless of vector score)
+- Pool composition with hard/vector/recency split
+- Lane B/C explicit definition (currently vector retrieval is unchanged from pre-spec state)
+- Contradiction-candidate annotation pass (`UserMemoryService.annotateContradictionCandidates(...)`)
+- `[contradiction-candidate] id=<entry-id>` prompt marker
+
+**Reason for deferral:** Per Alex's pain test (2026-04-19), current memory volume is small enough that vector retrieval feels adequate. Building Hard Recall + annotation now is forward-looking work; the false-positive cost (Nous becoming nag-prone) outweighs the benefit until accumulated `decision`/`boundary` rows make vector noise dominant. Revisit when Alex experiences "Nous should have caught this" in real use.
+
+---
 
 ## Non-goals
 
@@ -103,14 +129,14 @@ These were discussed, but are not needed for Phase 1 contradiction recall:
 
 Phase 1 is intentionally small, but it still crosses several implementation seams. The migration checklist is:
 
-- **Enum + serialization**
-  Add `decision` and `boundary` to `MemoryKind`, and update Codable / persistence tests so old rows still decode safely.
-- **Write-path / governance refresh prompt**
-  Update the memory refresh prompt and write logic so the system can emit `decision` and `boundary` when the evidence supports them.
-- **Fixture bank**
-  Add representative `decision` / `boundary` fixtures so contradiction-oriented retrieval is exercised immediately.
-- **Backwards-compat tests**
-  Add explicit tests for unknown-kind / pre-migration rows so older data does not break when new kinds are introduced.
+- ✅ **Enum + serialization** (PR #10)
+  `decision` and `boundary` added to `MemoryKind`. Codable round-trip + legacy decode tested in `MemoryFactStoreTests.testMemoryKindJSONRoundTripsNewCases`.
+- ✅ **Write-path / governance refresh prompt** (PR #10)
+  Conversation-scope refresh in `UserMemoryService.swift:1020-1048` instructs the LLM to emit `decision` / `boundary` / `constraint` with explicit definitions.
+- ✅ **Fixture bank** (PR #10)
+  `Tests/NousTests/Fixtures/ProvocationScenarios/` has 6 scenarios; `01-clear-contradiction-deciding.json` exercises a `decision`-shaped contradiction directly.
+- ⚠️ **Backwards-compat tests** (partial)
+  Existing `MemoryKind` round-trip is covered. True unknown-kind robustness (e.g., a future `hypothesis` value in a row this client does not recognise) is NOT covered — `MemoryKind` will throw on unknown raw values. Defer until a second client version exists.
 
 ## Retrieval Lanes
 

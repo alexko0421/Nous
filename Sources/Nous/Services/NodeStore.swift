@@ -58,13 +58,20 @@ final class NodeStore {
 
         try db.exec("""
             CREATE TABLE IF NOT EXISTS messages (
-                id        TEXT PRIMARY KEY,
-                nodeId    TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-                role      TEXT NOT NULL,
-                content   TEXT NOT NULL,
-                timestamp REAL NOT NULL
+                id               TEXT PRIMARY KEY,
+                nodeId           TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+                role             TEXT NOT NULL,
+                content          TEXT NOT NULL,
+                timestamp        REAL NOT NULL,
+                thinking_content TEXT
             );
         """)
+
+        try ensureColumnExists(
+            table: "messages",
+            column: "thinking_content",
+            alterSQL: "ALTER TABLE messages ADD COLUMN thinking_content TEXT;"
+        )
 
         try db.exec("""
             CREATE TABLE IF NOT EXISTS edges (
@@ -168,6 +175,52 @@ final class NodeStore {
             );
         """)
 
+        // Weekly self-reflection tables (WeeklyReflectionService).
+        // `reflection_runs` is one row per weekly job; `reflection_claim` stores
+        // validator-passed claims; `reflection_evidence` binds each claim to the
+        // `messages` rows that support it. Evidence cascades when messages are
+        // deleted; an app-level step then re-checks claim evidence count and
+        // flips `reflection_claim.status` to 'orphaned' if it drops below the
+        // validator's minimum (2).
+        //
+        // `project_id` is nullable because conversations without a project
+        // (Alex's primary usage mode as of 2026-04-22) still need weekly
+        // reflection. NULL means "free-chat scope" — all projectId IS NULL
+        // conversations in the week. The unique index below uses COALESCE so
+        // NULL-scoped runs still dedupe per-week.
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS reflection_runs (
+                id               TEXT PRIMARY KEY,
+                project_id       TEXT REFERENCES projects(id) ON DELETE CASCADE,
+                week_start       REAL NOT NULL,
+                week_end         REAL NOT NULL,
+                ran_at           REAL NOT NULL,
+                status           TEXT NOT NULL,
+                rejection_reason TEXT,
+                cost_cents       INTEGER
+            );
+        """)
+
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS reflection_claim (
+                id              TEXT PRIMARY KEY,
+                run_id          TEXT NOT NULL REFERENCES reflection_runs(id) ON DELETE CASCADE,
+                claim           TEXT NOT NULL,
+                confidence      REAL NOT NULL,
+                why_non_obvious TEXT NOT NULL,
+                status          TEXT NOT NULL,
+                created_at      REAL NOT NULL
+            );
+        """)
+
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS reflection_evidence (
+                reflection_id TEXT NOT NULL REFERENCES reflection_claim(id) ON DELETE CASCADE,
+                message_id    TEXT NOT NULL REFERENCES messages(id)         ON DELETE CASCADE,
+                PRIMARY KEY (reflection_id, message_id)
+            );
+        """)
+
         // judge_events — append-only per-turn verdict log. Feedback columns patched
         // after the fact. verdict_json kept as a blob so adding fields to
         // JudgeVerdict doesn't require a schema migration.
@@ -186,6 +239,18 @@ final class NodeStore {
             );
         """)
 
+        try ensureColumnExists(
+            table: "judge_events",
+            column: "feedbackReason",
+            alterSQL: "ALTER TABLE judge_events ADD COLUMN feedbackReason TEXT;"
+        )
+
+        try ensureColumnExists(
+            table: "judge_events",
+            column: "feedbackNote",
+            alterSQL: "ALTER TABLE judge_events ADD COLUMN feedbackNote TEXT;"
+        )
+
         // Indexes
         try db.exec("CREATE INDEX IF NOT EXISTS idx_nodes_projectId  ON nodes(projectId);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_messages_nodeId  ON messages(nodeId);")
@@ -198,6 +263,13 @@ final class NodeStore {
         try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_fact_entries_updatedAt ON memory_fact_entries(updatedAt);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_judge_events_ts ON judge_events(ts);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_judge_events_fallback ON judge_events(fallbackReason);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_reflection_runs_project_week ON reflection_runs(project_id, week_end);")
+        // SQLite treats NULLs as distinct in UNIQUE constraints, so the free-chat
+        // scope (project_id IS NULL) would accept duplicate rows for the same week.
+        // COALESCE folds NULL to '' and restores the single-row-per-(scope, week) invariant.
+        try db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_reflection_runs_unique ON reflection_runs(COALESCE(project_id, ''), week_start, week_end);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_reflection_claim_run ON reflection_claim(run_id);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_reflection_claim_status ON reflection_claim(status);")
     }
 
     /// Direct access for migrator (transaction control, table-exists probing).
@@ -211,6 +283,17 @@ final class NodeStore {
             }
         }
         try db.exec(alterSQL)
+    }
+
+    private func notifyNodesDidChange() {
+        let post = {
+            NotificationCenter.default.post(name: .nousNodesDidChange, object: nil)
+        }
+        if Thread.isMainThread {
+            post()
+        } else {
+            DispatchQueue.main.async(execute: post)
+        }
     }
 
     // MARK: - Binary helpers
@@ -246,6 +329,7 @@ final class NodeStore {
         try stmt.bind(node.createdAt.timeIntervalSince1970, at: 9)
         try stmt.bind(node.updatedAt.timeIntervalSince1970, at: 10)
         try stmt.step()
+        notifyNodesDidChange()
     }
 
     func updateNode(_ node: NousNode) throws {
@@ -265,12 +349,20 @@ final class NodeStore {
         try stmt.bind(node.updatedAt.timeIntervalSince1970, at: 8)
         try stmt.bind(node.id.uuidString, at: 9)
         try stmt.step()
+        notifyNodesDidChange()
     }
 
     func deleteNode(id: UUID) throws {
-        let stmt = try db.prepare("DELETE FROM nodes WHERE id=?;")
-        try stmt.bind(id.uuidString, at: 1)
-        try stmt.step()
+        try inTransaction {
+            try deleteCanonicalMemory(scope: .conversation, scopeRefId: id)
+            let stmt = try db.prepare("DELETE FROM nodes WHERE id=?;")
+            try stmt.bind(id.uuidString, at: 1)
+            try stmt.step()
+            // Messages cascade out via FK; reflection_evidence cascades from
+            // messages. Reconcile any claim that lost its two-evidence floor.
+            try reconcileOrphanedReflectionClaims()
+        }
+        notifyNodesDidChange()
     }
 
     func fetchNode(id: UUID) throws -> NousNode? {
@@ -291,6 +383,24 @@ final class NodeStore {
         var results: [NousNode] = []
         while try stmt.step() {
             results.append(nodeFrom(stmt))
+        }
+        return results
+    }
+
+    /// Lightweight title lookup for inspector/debug UIs that should not decode
+    /// full node bodies or embedding blobs just to render labels.
+    func fetchAllNodeTitles() throws -> [UUID: String] {
+        let stmt = try db.prepare("""
+            SELECT id, title
+            FROM nodes
+            ORDER BY updatedAt DESC;
+        """)
+        var results: [UUID: String] = [:]
+        while try stmt.step() {
+            guard let rawId = stmt.text(at: 0),
+                  let id = UUID(uuidString: rawId) else { continue }
+            let title = stmt.text(at: 1) ?? ""
+            results[id] = title.isEmpty ? "Untitled" : title
         }
         return results
     }
@@ -470,20 +580,22 @@ final class NodeStore {
 
     func insertMessage(_ message: Message) throws {
         let stmt = try db.prepare("""
-            INSERT INTO messages (id, nodeId, role, content, timestamp)
-            VALUES (?, ?, ?, ?, ?);
+            INSERT INTO messages (id, nodeId, role, content, timestamp, thinking_content)
+            VALUES (?, ?, ?, ?, ?, ?);
         """)
         try stmt.bind(message.id.uuidString, at: 1)
         try stmt.bind(message.nodeId.uuidString, at: 2)
         try stmt.bind(message.role.rawValue, at: 3)
         try stmt.bind(message.content, at: 4)
         try stmt.bind(message.timestamp.timeIntervalSince1970, at: 5)
+        try stmt.bind(message.thinkingContent, at: 6)
         try stmt.step()
+        notifyNodesDidChange()
     }
 
     func fetchMessages(nodeId: UUID) throws -> [Message] {
         let stmt = try db.prepare("""
-            SELECT id, nodeId, role, content, timestamp
+            SELECT id, nodeId, role, content, timestamp, thinking_content
             FROM messages WHERE nodeId=? ORDER BY timestamp ASC;
         """)
         try stmt.bind(nodeId.uuidString, at: 1)
@@ -494,7 +606,15 @@ final class NodeStore {
             let role = MessageRole(rawValue: stmt.text(at: 2) ?? "") ?? .user
             let content = stmt.text(at: 3) ?? ""
             let timestamp = Date(timeIntervalSince1970: stmt.double(at: 4))
-            results.append(Message(id: id, nodeId: nId, role: role, content: content, timestamp: timestamp))
+            let thinkingContent = stmt.text(at: 5)
+            results.append(Message(
+                id: id,
+                nodeId: nId,
+                role: role,
+                content: content,
+                timestamp: timestamp,
+                thinkingContent: thinkingContent
+            ))
         }
         return results
     }
@@ -942,6 +1062,24 @@ final class NodeStore {
         return arr.compactMap { UUID(uuidString: $0) }
     }
 
+    private func deleteCanonicalMemory(scope: MemoryScope, scopeRefId: UUID) throws {
+        let deleteEntries = try db.prepare("""
+            DELETE FROM memory_entries
+            WHERE scope = ? AND scopeRefId = ?;
+        """)
+        try deleteEntries.bind(scope.rawValue, at: 1)
+        try deleteEntries.bind(scopeRefId.uuidString, at: 2)
+        try deleteEntries.step()
+
+        let deleteFactEntries = try db.prepare("""
+            DELETE FROM memory_fact_entries
+            WHERE scope = ? AND scopeRefId = ?;
+        """)
+        try deleteFactEntries.bind(scope.rawValue, at: 1)
+        try deleteFactEntries.bind(scopeRefId.uuidString, at: 2)
+        try deleteFactEntries.step()
+    }
+
     private func memoryEntryFrom(_ stmt: Statement) -> MemoryEntry? {
         guard let idText = stmt.text(at: 0), let id = UUID(uuidString: idText) else { return nil }
         guard let scopeText = stmt.text(at: 1), let scope = MemoryScope(rawValue: scopeText) else { return nil }
@@ -1015,6 +1153,7 @@ final class NodeStore {
         try stmt.bind(project.emoji, at: 4)
         try stmt.bind(project.createdAt.timeIntervalSince1970, at: 5)
         try stmt.step()
+        notifyNodesDidChange()
     }
 
     func fetchProject(id: UUID) throws -> Project? {
@@ -1038,9 +1177,17 @@ final class NodeStore {
     }
 
     func deleteProject(id: UUID) throws {
-        let stmt = try db.prepare("DELETE FROM projects WHERE id=?;")
-        try stmt.bind(id.uuidString, at: 1)
-        try stmt.step()
+        try inTransaction {
+            try deleteCanonicalMemory(scope: .project, scopeRefId: id)
+            let stmt = try db.prepare("DELETE FROM projects WHERE id=?;")
+            try stmt.bind(id.uuidString, at: 1)
+            try stmt.step()
+            // Nodes cascade via FK → messages cascade → reflection_evidence
+            // cascades. Reflection_runs for this project also cascade, which
+            // drops their claims. Sweep any other claims that lost evidence.
+            try reconcileOrphanedReflectionClaims()
+        }
+        notifyNodesDidChange()
     }
 
     private func projectFrom(_ stmt: Statement) -> Project {
@@ -1128,8 +1275,8 @@ extension NodeStore {
         let stmt = try db.prepare("""
             INSERT INTO judge_events
               (id, ts, nodeId, messageId, chatMode, provider,
-               verdictJSON, fallbackReason, userFeedback, feedbackTs)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+               verdictJSON, fallbackReason, userFeedback, feedbackTs, feedbackReason, feedbackNote)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """)
         try stmt.bind(event.id.uuidString, at: 1)
         try stmt.bind(event.ts.timeIntervalSince1970, at: 2)
@@ -1141,13 +1288,15 @@ extension NodeStore {
         try stmt.bind(event.fallbackReason.rawValue, at: 8)
         try stmt.bind(event.userFeedback?.rawValue, at: 9)
         try stmt.bind(event.feedbackTs?.timeIntervalSince1970, at: 10)
+        try stmt.bind(event.feedbackReason?.rawValue, at: 11)
+        try stmt.bind(event.feedbackNote, at: 12)
         try stmt.step()
     }
 
     func fetchJudgeEvent(id: UUID) throws -> JudgeEvent? {
         let stmt = try db.prepare("""
             SELECT id, ts, nodeId, messageId, chatMode, provider,
-                   verdictJSON, fallbackReason, userFeedback, feedbackTs
+                   verdictJSON, fallbackReason, userFeedback, feedbackTs, feedbackReason, feedbackNote
             FROM judge_events
             WHERE id = ?
             LIMIT 1;
@@ -1173,7 +1322,7 @@ extension NodeStore {
         }
         let stmt = try db.prepare("""
             SELECT id, ts, nodeId, messageId, chatMode, provider,
-                   verdictJSON, fallbackReason, userFeedback, feedbackTs
+                   verdictJSON, fallbackReason, userFeedback, feedbackTs, feedbackReason, feedbackNote
             FROM judge_events
             \(whereClause)
             ORDER BY ts DESC
@@ -1211,15 +1360,36 @@ extension NodeStore {
         try stmt.step()
     }
 
-    func updateJudgeEventFeedback(id: UUID, feedback: JudgeFeedback, at ts: Date) throws {
+    func updateJudgeEventFeedback(
+        id: UUID,
+        feedback: JudgeFeedback,
+        reason: JudgeFeedbackReason? = nil,
+        note: String? = nil,
+        at ts: Date
+    ) throws {
         let stmt = try db.prepare("""
             UPDATE judge_events
-            SET userFeedback = ?, feedbackTs = ?
+            SET userFeedback = ?, feedbackTs = ?, feedbackReason = ?, feedbackNote = ?
             WHERE id = ?;
         """)
         try stmt.bind(feedback.rawValue, at: 1)
         try stmt.bind(ts.timeIntervalSince1970, at: 2)
-        try stmt.bind(id.uuidString, at: 3)
+        try stmt.bind(reason?.rawValue, at: 3)
+        try stmt.bind(note?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty, at: 4)
+        try stmt.bind(id.uuidString, at: 5)
+        try stmt.step()
+    }
+
+    func clearJudgeEventFeedback(id: UUID) throws {
+        let stmt = try db.prepare("""
+            UPDATE judge_events
+            SET userFeedback = NULL,
+                feedbackTs = NULL,
+                feedbackReason = NULL,
+                feedbackNote = NULL
+            WHERE id = ?;
+        """)
+        try stmt.bind(id.uuidString, at: 1)
         try stmt.step()
     }
 
@@ -1247,6 +1417,8 @@ extension NodeStore {
         let messageId = stmt.text(at: 3).flatMap(UUID.init(uuidString:))
         let feedback = stmt.text(at: 8).flatMap(JudgeFeedback.init(rawValue:))
         let feedbackTs = stmt.isNull(at: 9) ? nil : Date(timeIntervalSince1970: stmt.double(at: 9))
+        let feedbackReason = stmt.text(at: 10).flatMap(JudgeFeedbackReason.init(rawValue:))
+        let feedbackNote = stmt.text(at: 11)
         return JudgeEvent(
             id: id,
             ts: Date(timeIntervalSince1970: stmt.double(at: 1)),
@@ -1257,7 +1429,350 @@ extension NodeStore {
             verdictJSON: verdictJSON,
             fallbackReason: fallback,
             userFeedback: feedback,
-            feedbackTs: feedbackTs
+            feedbackTs: feedbackTs,
+            feedbackReason: feedbackReason,
+            feedbackNote: feedbackNote
+        )
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
+    }
+}
+
+// MARK: - Reflections
+
+extension NodeStore {
+
+    /// Per-conversation rollup used by WeeklyReflectionService when building
+    /// the prompt fixture. The reflection prompt is chat-aware — it wants the
+    /// model to notice patterns across separate conversations in the same
+    /// week, so we group messages by `nodeId` rather than returning a flat list.
+    struct ReflectionFixtureRow {
+        let nodeId: UUID
+        let nodeTitle: String
+        let messages: [Message]
+    }
+
+    /// Pulls messages in the week window across all nodes matching `projectId`.
+    /// `projectId == nil` matches free-chat nodes (projectId IS NULL).
+    /// Ordered by node, then by timestamp ascending within each node.
+    func fetchReflectionFixture(
+        projectId: UUID?,
+        weekStart: Date,
+        weekEnd: Date
+    ) throws -> [ReflectionFixtureRow] {
+        let sql: String
+        if projectId != nil {
+            sql = """
+                SELECT m.id, m.nodeId, n.title, m.role, m.content, m.timestamp, m.thinking_content
+                FROM messages m
+                JOIN nodes n ON n.id = m.nodeId
+                WHERE n.projectId = ?
+                  AND m.timestamp >= ?
+                  AND m.timestamp <  ?
+                ORDER BY m.nodeId, m.timestamp ASC;
+            """
+        } else {
+            sql = """
+                SELECT m.id, m.nodeId, n.title, m.role, m.content, m.timestamp, m.thinking_content
+                FROM messages m
+                JOIN nodes n ON n.id = m.nodeId
+                WHERE n.projectId IS NULL
+                  AND m.timestamp >= ?
+                  AND m.timestamp <  ?
+                ORDER BY m.nodeId, m.timestamp ASC;
+            """
+        }
+        let stmt = try db.prepare(sql)
+        if let projectId {
+            try stmt.bind(projectId.uuidString, at: 1)
+            try stmt.bind(weekStart.timeIntervalSince1970, at: 2)
+            try stmt.bind(weekEnd.timeIntervalSince1970, at: 3)
+        } else {
+            try stmt.bind(weekStart.timeIntervalSince1970, at: 1)
+            try stmt.bind(weekEnd.timeIntervalSince1970, at: 2)
+        }
+
+        var grouped: [(UUID, String, [Message])] = []
+        while try stmt.step() {
+            let id = UUID(uuidString: stmt.text(at: 0) ?? "") ?? UUID()
+            let nodeId = UUID(uuidString: stmt.text(at: 1) ?? "") ?? UUID()
+            let title = stmt.text(at: 2) ?? ""
+            let role = MessageRole(rawValue: stmt.text(at: 3) ?? "") ?? .user
+            let content = stmt.text(at: 4) ?? ""
+            let ts = Date(timeIntervalSince1970: stmt.double(at: 5))
+            let thinking = stmt.text(at: 6)
+            let msg = Message(id: id, nodeId: nodeId, role: role, content: content, timestamp: ts, thinkingContent: thinking)
+            if let i = grouped.lastIndex(where: { $0.0 == nodeId }) {
+                grouped[i].2.append(msg)
+            } else {
+                grouped.append((nodeId, title, [msg]))
+            }
+        }
+        return grouped.map { ReflectionFixtureRow(nodeId: $0.0, nodeTitle: $0.1, messages: $0.2) }
+    }
+
+    /// Writes a run + its validated claims + evidence rows in a single
+    /// transaction (Codex T5). If the validator rejected everything, pass
+    /// empty `claims` / `evidence` and a non-nil `run.rejectionReason`.
+    /// Callers get atomic "either the whole weekly reflection lands or
+    /// nothing does".
+    func persistReflectionRun(
+        _ run: ReflectionRun,
+        claims: [ReflectionClaim],
+        evidence: [ReflectionEvidence]
+    ) throws {
+        try inTransaction {
+            try self.insertReflectionRun(run)
+            for claim in claims {
+                try self.insertReflectionClaim(claim)
+            }
+            for ev in evidence {
+                try self.insertReflectionEvidence(ev)
+            }
+        }
+    }
+
+    /// Returns true iff a run (success OR rejected_all OR failed) already
+    /// exists for this (scope, week). The foreground trigger calls this
+    /// before kicking off a job so we don't double-run on app launches
+    /// after the Sunday rollover.
+    ///
+    /// NULL-safe match: `projectId == nil` matches rows with
+    /// `project_id IS NULL`. Mirrors the COALESCE unique index.
+    func existsReflectionRun(
+        projectId: UUID?,
+        weekStart: Date,
+        weekEnd: Date
+    ) throws -> Bool {
+        let sql: String
+        if projectId != nil {
+            sql = """
+                SELECT 1 FROM reflection_runs
+                WHERE project_id = ? AND week_start = ? AND week_end = ?
+                LIMIT 1;
+            """
+        } else {
+            sql = """
+                SELECT 1 FROM reflection_runs
+                WHERE project_id IS NULL AND week_start = ? AND week_end = ?
+                LIMIT 1;
+            """
+        }
+        let stmt = try db.prepare(sql)
+        if let projectId {
+            try stmt.bind(projectId.uuidString, at: 1)
+            try stmt.bind(weekStart.timeIntervalSince1970, at: 2)
+            try stmt.bind(weekEnd.timeIntervalSince1970, at: 3)
+        } else {
+            try stmt.bind(weekStart.timeIntervalSince1970, at: 1)
+            try stmt.bind(weekEnd.timeIntervalSince1970, at: 2)
+        }
+        return try stmt.step()
+    }
+
+    /// Most-recent run regardless of status. The foreground trigger uses this
+    /// to decide whether *any* attempt has happened this week (so we don't
+    /// retry a `.failed` run five times per app launch).
+    func latestReflectionRun(projectId: UUID?) throws -> ReflectionRun? {
+        let sql: String
+        if projectId != nil {
+            sql = """
+                SELECT id, project_id, week_start, week_end, ran_at, status,
+                       rejection_reason, cost_cents
+                FROM reflection_runs
+                WHERE project_id = ?
+                ORDER BY ran_at DESC
+                LIMIT 1;
+            """
+        } else {
+            sql = """
+                SELECT id, project_id, week_start, week_end, ran_at, status,
+                       rejection_reason, cost_cents
+                FROM reflection_runs
+                WHERE project_id IS NULL
+                ORDER BY ran_at DESC
+                LIMIT 1;
+            """
+        }
+        let stmt = try db.prepare(sql)
+        if let projectId {
+            try stmt.bind(projectId.uuidString, at: 1)
+        }
+        guard try stmt.step() else { return nil }
+        return reflectionRunFrom(stmt)
+    }
+
+    /// Active reflections for a scope. Pulls claims whose parent run matches
+    /// `projectId` (including NULL = free-chat scope) and whose `status =
+    /// 'active'`. Used by retrieval when building the Self-reflection slice
+    /// of the citable-entry pool (Codex R2).
+    func fetchActiveReflectionClaims(projectId: UUID?) throws -> [ReflectionClaim] {
+        let sql: String
+        if projectId != nil {
+            sql = """
+                SELECT c.id, c.run_id, c.claim, c.confidence, c.why_non_obvious,
+                       c.status, c.created_at
+                FROM reflection_claim c
+                JOIN reflection_runs r ON r.id = c.run_id
+                WHERE r.project_id = ? AND c.status = 'active'
+                ORDER BY c.created_at DESC;
+            """
+        } else {
+            sql = """
+                SELECT c.id, c.run_id, c.claim, c.confidence, c.why_non_obvious,
+                       c.status, c.created_at
+                FROM reflection_claim c
+                JOIN reflection_runs r ON r.id = c.run_id
+                WHERE r.project_id IS NULL AND c.status = 'active'
+                ORDER BY c.created_at DESC;
+            """
+        }
+        let stmt = try db.prepare(sql)
+        if let projectId {
+            try stmt.bind(projectId.uuidString, at: 1)
+        }
+        var results: [ReflectionClaim] = []
+        while try stmt.step() {
+            results.append(reflectionClaimFrom(stmt))
+        }
+        return results
+    }
+
+    /// Flip a single claim to `.orphaned`. Used by the MemoryDebugInspector
+    /// manual-orphan button and by `reconcileOrphanedReflectionClaims`.
+    /// No-op if the claim is already orphaned/superseded.
+    func orphanReflectionClaim(id: UUID) throws {
+        let stmt = try db.prepare("""
+            UPDATE reflection_claim
+            SET status = 'orphaned'
+            WHERE id = ? AND status = 'active';
+        """)
+        try stmt.bind(id.uuidString, at: 1)
+        try stmt.step()
+    }
+
+    /// After a cascade-delete drops evidence rows, any claim whose remaining
+    /// grounded evidence falls below 2 loses the "two independent turns"
+    /// invariant the validator enforced at creation time. Flip those claims
+    /// to `.orphaned` so they exit the citable-entry pool.
+    ///
+    /// Returns the claim IDs that were flipped (useful for tests + debug UI).
+    @discardableResult
+    func reconcileOrphanedReflectionClaims() throws -> [UUID] {
+        let stmt = try db.prepare("""
+            SELECT c.id
+            FROM reflection_claim c
+            LEFT JOIN reflection_evidence e ON e.reflection_id = c.id
+            WHERE c.status = 'active'
+            GROUP BY c.id
+            HAVING COUNT(e.message_id) < 2;
+        """)
+        var flipped: [UUID] = []
+        while try stmt.step() {
+            guard let raw = stmt.text(at: 0),
+                  let uuid = UUID(uuidString: raw) else { continue }
+            flipped.append(uuid)
+        }
+        for id in flipped {
+            try orphanReflectionClaim(id: id)
+        }
+        return flipped
+    }
+
+    // MARK: - Internal inserts
+
+    private func insertReflectionRun(_ run: ReflectionRun) throws {
+        let stmt = try db.prepare("""
+            INSERT INTO reflection_runs
+              (id, project_id, week_start, week_end, ran_at, status,
+               rejection_reason, cost_cents)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+        """)
+        try stmt.bind(run.id.uuidString, at: 1)
+        try stmt.bind(run.projectId?.uuidString, at: 2)
+        try stmt.bind(run.weekStart.timeIntervalSince1970, at: 3)
+        try stmt.bind(run.weekEnd.timeIntervalSince1970, at: 4)
+        try stmt.bind(run.ranAt.timeIntervalSince1970, at: 5)
+        try stmt.bind(run.status.rawValue, at: 6)
+        try stmt.bind(run.rejectionReason?.rawValue, at: 7)
+        if let cents = run.costCents {
+            try stmt.bind(cents, at: 8)
+        } else {
+            try stmt.bind(nil as String?, at: 8)
+        }
+        try stmt.step()
+    }
+
+    private func insertReflectionClaim(_ claim: ReflectionClaim) throws {
+        let stmt = try db.prepare("""
+            INSERT INTO reflection_claim
+              (id, run_id, claim, confidence, why_non_obvious, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?);
+        """)
+        try stmt.bind(claim.id.uuidString, at: 1)
+        try stmt.bind(claim.runId.uuidString, at: 2)
+        try stmt.bind(claim.claim, at: 3)
+        try stmt.bind(claim.confidence, at: 4)
+        try stmt.bind(claim.whyNonObvious, at: 5)
+        try stmt.bind(claim.status.rawValue, at: 6)
+        try stmt.bind(claim.createdAt.timeIntervalSince1970, at: 7)
+        try stmt.step()
+    }
+
+    private func insertReflectionEvidence(_ ev: ReflectionEvidence) throws {
+        let stmt = try db.prepare("""
+            INSERT OR IGNORE INTO reflection_evidence
+              (reflection_id, message_id)
+            VALUES (?, ?);
+        """)
+        try stmt.bind(ev.reflectionId.uuidString, at: 1)
+        try stmt.bind(ev.messageId.uuidString, at: 2)
+        try stmt.step()
+    }
+
+    // MARK: - Row decoders
+
+    private func reflectionRunFrom(_ stmt: Statement) -> ReflectionRun {
+        let id = UUID(uuidString: stmt.text(at: 0) ?? "") ?? UUID()
+        let projectId = (stmt.text(at: 1)).flatMap { UUID(uuidString: $0) }
+        let weekStart = Date(timeIntervalSince1970: stmt.double(at: 2))
+        let weekEnd = Date(timeIntervalSince1970: stmt.double(at: 3))
+        let ranAt = Date(timeIntervalSince1970: stmt.double(at: 4))
+        let status = ReflectionRunStatus(rawValue: stmt.text(at: 5) ?? "failed") ?? .failed
+        let reason = (stmt.text(at: 6)).flatMap(ReflectionRejectionReason.init(rawValue:))
+        let cost: Int? = stmt.isNull(at: 7) ? nil : stmt.int(at: 7)
+        return ReflectionRun(
+            id: id,
+            projectId: projectId,
+            weekStart: weekStart,
+            weekEnd: weekEnd,
+            ranAt: ranAt,
+            status: status,
+            rejectionReason: reason,
+            costCents: cost
+        )
+    }
+
+    private func reflectionClaimFrom(_ stmt: Statement) -> ReflectionClaim {
+        let id = UUID(uuidString: stmt.text(at: 0) ?? "") ?? UUID()
+        let runId = UUID(uuidString: stmt.text(at: 1) ?? "") ?? UUID()
+        let claim = stmt.text(at: 2) ?? ""
+        let confidence = stmt.double(at: 3)
+        let whyNonObvious = stmt.text(at: 4) ?? ""
+        let status = ReflectionClaimStatus(rawValue: stmt.text(at: 5) ?? "active") ?? .active
+        let createdAt = Date(timeIntervalSince1970: stmt.double(at: 6))
+        return ReflectionClaim(
+            id: id,
+            runId: runId,
+            claim: claim,
+            confidence: confidence,
+            whyNonObvious: whyNonObvious,
+            status: status,
+            createdAt: createdAt
         )
     }
 }

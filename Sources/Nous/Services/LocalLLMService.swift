@@ -64,13 +64,21 @@ final class LocalLLMService: LLMService {
         let stream = try MLXLMCommon.generate(input: input, parameters: parameters, context: context)
 
         return AsyncThrowingStream { continuation in
-            Task {
-                for await generation in stream {
-                    if let chunk = generation.chunk {
-                        continuation.yield(chunk)
+            let producer = Task {
+                do {
+                    for await generation in stream {
+                        try Task.checkCancellation()
+                        if let chunk = generation.chunk {
+                            continuation.yield(chunk)
+                        }
                     }
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish(throwing: CancellationError())
                 }
-                continuation.finish()
+            }
+            continuation.onTermination = { _ in
+                producer.cancel()
             }
         }
     }

@@ -1,5 +1,26 @@
 import Foundation
 
+struct GeminiCacheSnapshot: Codable, Equatable {
+    let usage: GeminiUsageMetadata
+    let recordedAt: Date
+
+    var cacheHitRate: Double? {
+        usage.cacheHitRate
+    }
+}
+
+struct GeminiCacheSummary: Equatable {
+    let requestCount: Int
+    let totalPromptTokens: Int
+    let totalCachedTokens: Int
+    let lastSnapshot: GeminiCacheSnapshot?
+
+    var cacheHitRate: Double? {
+        guard totalPromptTokens > 0 else { return nil }
+        return Double(totalCachedTokens) / Double(totalPromptTokens)
+    }
+}
+
 final class GovernanceTelemetryStore {
     private let defaults: UserDefaults
     private let nodeStore: NodeStore?
@@ -12,6 +33,10 @@ final class GovernanceTelemetryStore {
         }
 
         static let memoryStorageSuppressedCount = "nous.governance.memoryStorageSuppressedCount"
+        static let lastGeminiCacheSnapshot = "nous.governance.lastGeminiCacheSnapshot"
+        static let geminiCacheRequestCount = "nous.governance.geminiCacheRequestCount"
+        static let geminiCachePromptTokens = "nous.governance.geminiCachePromptTokens"
+        static let geminiCacheHitTokens = "nous.governance.geminiCacheHitTokens"
     }
 
     init(defaults: UserDefaults = .standard, nodeStore: NodeStore? = nil) {
@@ -55,6 +80,37 @@ final class GovernanceTelemetryStore {
         defaults.integer(forKey: Keys.memoryStorageSuppressedCount)
     }
 
+    func recordGeminiUsage(_ usage: GeminiUsageMetadata, at date: Date = Date()) {
+        let snapshot = GeminiCacheSnapshot(usage: usage, recordedAt: date)
+        if let data = try? JSONEncoder().encode(snapshot) {
+            defaults.set(data, forKey: Keys.lastGeminiCacheSnapshot)
+        }
+
+        defaults.set(defaults.integer(forKey: Keys.geminiCacheRequestCount) + 1, forKey: Keys.geminiCacheRequestCount)
+        defaults.set(defaults.integer(forKey: Keys.geminiCachePromptTokens) + usage.promptTokenCount, forKey: Keys.geminiCachePromptTokens)
+        defaults.set(defaults.integer(forKey: Keys.geminiCacheHitTokens) + usage.cachedContentTokenCount, forKey: Keys.geminiCacheHitTokens)
+    }
+
+    var lastGeminiCacheSnapshot: GeminiCacheSnapshot? {
+        guard let data = defaults.data(forKey: Keys.lastGeminiCacheSnapshot) else { return nil }
+        return try? JSONDecoder().decode(GeminiCacheSnapshot.self, from: data)
+    }
+
+    var geminiCacheSummary: GeminiCacheSummary? {
+        let requestCount = defaults.integer(forKey: Keys.geminiCacheRequestCount)
+        let totalPromptTokens = defaults.integer(forKey: Keys.geminiCachePromptTokens)
+        let totalCachedTokens = defaults.integer(forKey: Keys.geminiCacheHitTokens)
+        let lastSnapshot = lastGeminiCacheSnapshot
+
+        guard requestCount > 0 || lastSnapshot != nil else { return nil }
+        return GeminiCacheSummary(
+            requestCount: requestCount,
+            totalPromptTokens: totalPromptTokens,
+            totalCachedTokens: totalCachedTokens,
+            lastSnapshot: lastSnapshot
+        )
+    }
+
     // MARK: - Judge event API (SQLite-backed)
 
     /// Append a judge verdict event. Silently no-op if nodeStore wasn't injected
@@ -69,6 +125,31 @@ final class GovernanceTelemetryStore {
     func recordFeedback(eventId: UUID, feedback: JudgeFeedback) {
         guard let nodeStore else { return }
         do { try nodeStore.updateJudgeEventFeedback(id: eventId, feedback: feedback, at: Date()) }
+        catch { print("[governance] failed to update feedback: \(error)") }
+    }
+
+    func recordFeedback(
+        eventId: UUID,
+        feedback: JudgeFeedback,
+        reason: JudgeFeedbackReason?,
+        note: String?
+    ) {
+        guard let nodeStore else { return }
+        do {
+            try nodeStore.updateJudgeEventFeedback(
+                id: eventId,
+                feedback: feedback,
+                reason: reason,
+                note: note,
+                at: Date()
+            )
+        }
+        catch { print("[governance] failed to update detailed feedback: \(error)") }
+    }
+
+    func clearFeedback(eventId: UUID) {
+        guard let nodeStore else { return }
+        do { try nodeStore.clearJudgeEventFeedback(id: eventId) }
         catch { print("[governance] failed to update feedback: \(error)") }
     }
 

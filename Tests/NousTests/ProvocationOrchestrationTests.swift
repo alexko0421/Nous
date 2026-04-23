@@ -2,18 +2,38 @@
 import XCTest
 @testable import Nous
 
+@MainActor
 final class ProvocationOrchestrationTests: XCTestCase {
 
     // A fake LLM service that returns a canned stream.
     final class CannedLLMService: LLMService {
-        var replyOutput: String = "ok"
-        var receivedSystems: [String?] = []
-        var receivedSystem: String? { receivedSystems.first(where: { $0?.contains("BEHAVIOR:") == true }) ?? receivedSystems.first ?? nil }
-        var nextError: Error?
+        private let lock = NSLock()
+        private var storedReceivedSystems: [String?] = []
+        private var storedReplyOutput: String = "ok"
+        private var storedNextError: Error?
+
+        var replyOutput: String {
+            get { lock.withLock { storedReplyOutput } }
+            set { lock.withLock { storedReplyOutput = newValue } }
+        }
+        var receivedSystems: [String?] {
+            lock.withLock { storedReceivedSystems }
+        }
+        var receivedSystem: String? {
+            let systems = receivedSystems
+            return systems.first(where: { $0?.contains("BEHAVIOR:") == true }) ?? systems.first ?? nil
+        }
+        var nextError: Error? {
+            get { lock.withLock { storedNextError } }
+            set { lock.withLock { storedNextError = newValue } }
+        }
         func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
-            receivedSystems.append(system)
-            if let err = nextError { throw err }
-            let out = replyOutput
+            let snapshot = lock.withLock { () -> (String, Error?) in
+                storedReceivedSystems.append(system)
+                return (storedReplyOutput, storedNextError)
+            }
+            if let err = snapshot.1 { throw err }
+            let out = snapshot.0
             return AsyncThrowingStream { cont in
                 cont.yield(out); cont.finish()
             }
@@ -25,9 +45,17 @@ final class ProvocationOrchestrationTests: XCTestCase {
         var nextVerdict: JudgeVerdict?
         var nextError: JudgeError?
         var previousModeHistory: [ChatMode?] = []
+        var feedbackLoopHistory: [JudgeFeedbackLoop?] = []
 
-        func judge(userMessage: String, citablePool: [CitableEntry], previousMode: ChatMode?, provider: LLMProvider) async throws -> JudgeVerdict {
+        func judge(
+            userMessage: String,
+            citablePool: [CitableEntry],
+            previousMode: ChatMode?,
+            provider: LLMProvider,
+            feedbackLoop: JudgeFeedbackLoop?
+        ) async throws -> JudgeVerdict {
             previousModeHistory.append(previousMode)
+            feedbackLoopHistory.append(feedbackLoop)
             if let err = nextError { throw err }
             return nextVerdict ?? JudgeVerdict(tensionExists: false, userState: .exploring, shouldProvoke: false, entryId: nil, reason: "stub default", inferredMode: .companion)
         }
@@ -61,7 +89,8 @@ final class ProvocationOrchestrationTests: XCTestCase {
             currentProviderProvider: { .claude },
             judgeLLMServiceFactory: { CannedLLMService() },
             provocationJudgeFactory: { _ in self.judge },
-            governanceTelemetry: telemetry
+            governanceTelemetry: telemetry,
+            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         )
     }
 
@@ -170,6 +199,25 @@ final class ProvocationOrchestrationTests: XCTestCase {
     }
 
     @MainActor
+    func testNonProvokedAssistantReplyStillSupportsFeedback() async throws {
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: false, userState: .exploring,
+            shouldProvoke: false, entryId: nil, reason: "no tension", inferredMode: .companion
+        )
+
+        viewModel.inputText = "just answer normally"
+        await viewModel.send()
+
+        let assistantMessage = try XCTUnwrap(viewModel.messages.last(where: { $0.role == .assistant }))
+        let eventId = try XCTUnwrap(viewModel.judgeEventId(forMessageId: assistantMessage.id))
+
+        viewModel.recordFeedback(forMessageId: assistantMessage.id, feedback: .up)
+
+        let updated = try store.fetchJudgeEvent(id: eventId)
+        XCTAssertEqual(updated?.userFeedback, .up)
+    }
+
+    @MainActor
     func testHardRecallFactEntryCanDriveFocusBlock() async throws {
         let node = NousNode(type: .conversation, title: "Contradiction chat", content: "")
         try store.insertNode(node)
@@ -260,7 +308,8 @@ final class ProvocationOrchestrationTests: XCTestCase {
                 j.nextError = .apiError
                 return j
             },
-            governanceTelemetry: telemetry
+            governanceTelemetry: telemetry,
+            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         )
 
         viewModel.inputText = "anything"
@@ -292,7 +341,8 @@ final class ProvocationOrchestrationTests: XCTestCase {
                 j.nextError = .apiError
                 return j
             },
-            governanceTelemetry: telemetry
+            governanceTelemetry: telemetry,
+            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         )
 
         viewModel.inputText = "anything"
@@ -379,7 +429,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
         // A judge that sleeps long enough for us to fire cancelInFlightJudge() mid-call.
         final class SlowJudge: Judging {
             func judge(userMessage: String, citablePool: [CitableEntry],
-                       previousMode: ChatMode?, provider: LLMProvider) async throws -> JudgeVerdict {
+                       previousMode: ChatMode?, provider: LLMProvider, feedbackLoop: JudgeFeedbackLoop?) async throws -> JudgeVerdict {
                 try await Task.sleep(nanoseconds: 2_000_000_000)  // 2s — long enough to cancel
                 try Task.checkCancellation()  // propagate cancel even if sleep was swallowed
                 return JudgeVerdict(tensionExists: false, userState: .exploring,
@@ -399,7 +449,8 @@ final class ProvocationOrchestrationTests: XCTestCase {
             currentProviderProvider: { .claude },
             judgeLLMServiceFactory: { CannedLLMService() },
             provocationJudgeFactory: { _ in SlowJudge() },
-            governanceTelemetry: telemetry
+            governanceTelemetry: telemetry,
+            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         )
 
         viewModel.inputText = "test"
@@ -424,7 +475,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
         final class SlowJudge: Judging {
             var wasCancelled = false
             func judge(userMessage: String, citablePool: [CitableEntry],
-                       previousMode: ChatMode?, provider: LLMProvider) async throws -> JudgeVerdict {
+                       previousMode: ChatMode?, provider: LLMProvider, feedbackLoop: JudgeFeedbackLoop?) async throws -> JudgeVerdict {
                 do {
                     try await Task.sleep(nanoseconds: 2_000_000_000)
                 } catch {
@@ -449,7 +500,8 @@ final class ProvocationOrchestrationTests: XCTestCase {
             currentProviderProvider: { .claude },
             judgeLLMServiceFactory: { CannedLLMService() },
             provocationJudgeFactory: { _ in slowJudge },
-            governanceTelemetry: telemetry
+            governanceTelemetry: telemetry,
+            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         )
 
         viewModel.inputText = "first"
@@ -477,7 +529,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
         final class SlowJudge: Judging {
             var wasCancelled = false
             func judge(userMessage: String, citablePool: [CitableEntry],
-                       previousMode: ChatMode?, provider: LLMProvider) async throws -> JudgeVerdict {
+                       previousMode: ChatMode?, provider: LLMProvider, feedbackLoop: JudgeFeedbackLoop?) async throws -> JudgeVerdict {
                 do { try await Task.sleep(nanoseconds: 2_000_000_000) }
                 catch { wasCancelled = true; throw CancellationError() }
                 return JudgeVerdict(tensionExists: false, userState: .exploring,
@@ -498,7 +550,8 @@ final class ProvocationOrchestrationTests: XCTestCase {
             currentProviderProvider: { .claude },
             judgeLLMServiceFactory: { CannedLLMService() },
             provocationJudgeFactory: { _ in slowJudge },
-            governanceTelemetry: telemetry
+            governanceTelemetry: telemetry,
+            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         )
 
         viewModel.inputText = "first"
@@ -536,8 +589,71 @@ final class ProvocationOrchestrationTests: XCTestCase {
 
         viewModel.recordFeedback(forMessageId: assistantMessage.id, feedback: .down)
 
-        let updated = try store.fetchJudgeEvent(id: eventId)
+        var updated = try store.fetchJudgeEvent(id: eventId)
         XCTAssertEqual(updated?.userFeedback, .down)
+
+        viewModel.recordFeedbackDetail(
+            forMessageId: assistantMessage.id,
+            feedback: .down,
+            reason: .tooRepetitive,
+            note: "same challenge again"
+        )
+
+        updated = try store.fetchJudgeEvent(id: eventId)
+        XCTAssertEqual(updated?.feedbackReason, .tooRepetitive)
+        XCTAssertEqual(updated?.feedbackNote, "same challenge again")
+
+        viewModel.clearFeedback(forMessageId: assistantMessage.id)
+
+        updated = try store.fetchJudgeEvent(id: eventId)
+        XCTAssertNil(updated?.userFeedback)
+        XCTAssertNil(updated?.feedbackReason)
+        XCTAssertNil(updated?.feedbackNote)
+    }
+
+    @MainActor
+    func testRecentDownvoteFeedsBackIntoNextJudgeCall() async throws {
+        let entryId = UUID()
+        try store.insertMemoryEntry(MemoryEntry(
+            id: entryId, scope: .global, kind: .preference, stability: .stable,
+            content: "don't compete on price", sourceNodeIds: []
+        ))
+
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: true,
+            userState: .deciding,
+            shouldProvoke: true,
+            entryId: entryId.uuidString,
+            reason: "conflict",
+            inferredMode: .companion
+        )
+        viewModel.inputText = "i should undercut everyone"
+        await viewModel.send()
+
+        let assistantMessage = try XCTUnwrap(viewModel.messages.last(where: { $0.role == .assistant }))
+        viewModel.recordFeedbackDetail(
+            forMessageId: assistantMessage.id,
+            feedback: .down,
+            reason: .wrongTiming,
+            note: "too early"
+        )
+
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: false,
+            userState: .exploring,
+            shouldProvoke: false,
+            entryId: nil,
+            reason: "back off",
+            inferredMode: .companion
+        )
+        viewModel.inputText = "i am still thinking about it"
+        await viewModel.send()
+
+        let feedbackLoop = try XCTUnwrap(judge.feedbackLoopHistory.last ?? nil)
+        XCTAssertTrue(feedbackLoop.entrySuppressions.contains(where: { $0.entryId == entryId.uuidString }))
+        XCTAssertTrue(feedbackLoop.kindAdjustments.contains(where: { $0.kind == .spark }))
+        XCTAssertTrue(feedbackLoop.globalReasonHints.contains("wrong timing"))
+        XCTAssertTrue(feedbackLoop.noteHints.contains("too early"))
     }
 
     func testLatestChatModeReturnsNewestRow() throws {
@@ -658,7 +774,8 @@ final class ProvocationOrchestrationTests: XCTestCase {
             currentProviderProvider: { .local },
             judgeLLMServiceFactory: { CannedLLMService() },
             provocationJudgeFactory: { _ in localJudge },
-            governanceTelemetry: telemetry
+            governanceTelemetry: telemetry,
+            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         )
         let convo = NousNode(type: .conversation, title: "seed", projectId: nil)
         try store.insertNode(convo)

@@ -40,18 +40,22 @@ targets:
     deploymentTarget: "26.0"
     sources:
       - Sources/ProvocationFixtureRunner
-      - path: Sources/Nous/Services/ProvocationJudge.swift
-        group: ProvocationFixtureRunner/Shared
-      - path: Sources/Nous/Services/LLMService.swift
-        group: ProvocationFixtureRunner/Shared
-      - path: Sources/Nous/Models/JudgeVerdict.swift
-        group: ProvocationFixtureRunner/Shared
-      - path: Sources/Nous/Models/CitableEntry.swift
-        group: ProvocationFixtureRunner/Shared
-      - path: Sources/Nous/Models/ChatMode.swift
-        group: ProvocationFixtureRunner/Shared
-      - path: Sources/Nous/Models/MemoryEntry.swift
-        group: ProvocationFixtureRunner/Shared
+      - Sources/Nous/Services/ProvocationJudge.swift
+      - Sources/Nous/Services/LLMService.swift
+      - Sources/Nous/Models/JudgeVerdict.swift
+      - Sources/Nous/Models/CitableEntry.swift
+      - Sources/Nous/Models/ChatMode.swift
+      - Sources/Nous/Models/MemoryEntry.swift
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+  ReflectionFixtureRunner:
+    type: tool
+    platform: macOS
+    deploymentTarget: "26.0"
+    sources:
+      - Sources/ReflectionFixtureRunner
+      - Sources/Nous/Services/Database.swift
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
