@@ -39,12 +39,12 @@ struct WelcomeView: View {
                 Spacer(minLength: 0)
                 
                 VStack(spacing: 30) {
-                    VStack(spacing: 4) {
+                    VStack(spacing: 20) {
                         NOUSLogoView(logoColor: AppColor.colaOrange)
-                            .frame(width: 280, height: 180)
+                            .frame(width: 180)
 
                         Text("\(greeting), \(displayName)")
-                            .font(.system(size: 26, weight: .medium, design: .rounded))
+                            .font(.system(size: 34, weight: .medium, design: .rounded))
                             .foregroundColor(AppColor.colaDarkText)
                             .multilineTextAlignment(.center)
                     }
@@ -95,7 +95,7 @@ struct WelcomeView: View {
                     .frame(maxWidth: 520)
                 }
                 .padding(.horizontal, 48)
-                .padding(.bottom, 92)
+                .padding(.bottom, 44) // Reduced from 92 to lower the UI slightly, keeping it comfortably above center
                 
                 Spacer(minLength: 0)
             }

@@ -16,37 +16,67 @@ final class WeeklyReflectionService {
     /// in the week to find cross-conversation patterns.
     static let minMessagesForRun = 10
 
-    /// Matches the W1 D1 spike prompt that Alex hand-graded 2026-04-22.
+    /// W1 D1 spike prompt (Alex-graded 2026-04-22), revised 2026-04-22 to add
+    /// the CORPUS SCOPE rule after Alex flagged that a trait-style claim about
+    /// his "anchoring in abstract feelings" generalized beyond the observable
+    /// corpus — he has plenty of granular analysis, it just doesn't happen
+    /// inside Nous chats. The fix: every claim must stay scoped to the
+    /// week's conversations, never make claims about Alex as a whole person.
     static let systemPrompt = """
     You are reading one week of conversations between Alex and Nous.
 
-    Your job is to produce at most 2 "reflection claims" about Alex — patterns you notice across multiple conversations that week, NOT summaries of what was discussed.
+    Your job is to produce at most 2 "reflection claims" — patterns you notice across multiple conversations that week, NOT summaries of what was discussed.
 
-    HARD BAR (read this twice):
-    A reflection claim that reads like a journal entry is REJECTED. Examples of
-    REJECTED claims:
+    CORPUS SCOPE (this is the most important rule — read it twice):
+
+    You only see what Alex shared with Nous this week. You do NOT see:
+    - His private notes or journals
+    - His conversations with other AIs or people
+    - His in-person discussions
+    - His unspoken thoughts
+
+    A pattern that is true inside our chats this week may be FALSE about Alex
+    as a person. He may do the opposite thing everywhere else. Therefore:
+
+    Every claim MUST be scoped to the conversations. Use phrasing like:
+    - "In your conversations with me this week, you tend to..."
+    - "Across N conversations this week, you..."
+    - "When you talk to me, you..."
+
+    REJECTED (trait claims about Alex as a person — DO NOT PRODUCE THESE):
+    - "You anchor your understanding of the world in abstract feelings."
+    - "You prefer lifestyle over technical details."
+    - "You are skeptical of AI hype."
+
+    ACCEPTED (corpus claims about these specific conversations):
+    - "Across four conversations this week, you framed decisions through
+      environment and lifestyle ('Austin', 'outdoors for design inspiration')
+      before discussing tactical skill-building. This may reflect how you
+      use our chats to think about direction, not necessarily your whole
+      planning style."
+    - "In three conversations you rejected technical framings (golden ratio,
+      specific metrics) in favor of feelings and vibes. This may be how
+      you prefer to explore ideas with me, not a general preference for
+      abstraction — you may analyze granularly in contexts I can't see."
+
+    If a claim cannot be stated as a corpus claim without becoming a trivial
+    summary, return fewer claims rather than force it.
+
+    HARD BAR — still rejected even when corpus-scoped:
     - "This week you discussed Swift and design." (summary, not pattern)
     - "You worked on Nous a lot." (generic, not non-obvious)
     - "You asked questions about engineering." (tautological)
 
-    Examples of ACCEPTED claims:
-    - "Three times this week you asked for a 'second opinion' right after
-      committing to a direction yourself. The pattern is: decide → seek
-      validation → reinforce the original call. You might be using outside
-      voices as post-hoc confirmation rather than real re-evaluation."
-    - "In reflective-mode you accepted my provocations without pushback; in
-      debug-mode you pushed back three times. You may be calibrating tolerance
-      for challenge by context, not by topic."
-
     A claim must be specific, backed by at least two turns, and tell Alex
-    something he would NOT have said about himself before reading it.
+    something he would NOT have said about himself before reading it —
+    AND must stay inside the corpus.
 
     Rules:
     - claims array has length 0, 1, or 2. Never more.
-    - Length 0 is a VALID answer. If nothing clears the "non-obvious" bar, return {"claims": []}. Do not invent patterns.
+    - Length 0 is a VALID answer. If nothing clears the "non-obvious" AND "corpus-scoped" bars, return {"claims": []}. Do not invent patterns.
     - supporting_turn_ids MUST be real `id` values copied verbatim from the fixture messages. Minimum 2 ids per claim.
     - confidence below 0.5 means you're not confident. Use it honestly.
-    - why_non_obvious explains why this is a pattern Alex wouldn't self-report, not a description of the claim.
+    - why_non_obvious explains why this pattern in OUR CHATS is something Alex wouldn't self-report, not a description of the claim.
 
     Alex's fixture (one week of his free-chat conversations) follows as the user message.
     """
