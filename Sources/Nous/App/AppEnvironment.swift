@@ -22,6 +22,7 @@ struct AppDependencies {
     let chatVM: ChatViewModel
     let noteVM: NoteViewModel
     let galaxyVM: GalaxyViewModel
+    let weeklyReflectionRollover: (@Sendable () async -> Void)?
 }
 
 enum AppBootstrapError: LocalizedError {
@@ -131,6 +132,31 @@ final class AppEnvironment {
         )
         let galaxyVM = GalaxyViewModel(nodeStore: nodeStore, graphEngine: graphEngine)
 
+        // WeeklyReflectionService rollover closure. Called once per app launch
+        // from ContentView.onAppear; idempotent via existsReflectionRun so
+        // repeated launches in the same week are no-ops. Requires Gemini —
+        // skips silently if the user hasn't configured a Gemini key (R4:
+        // Settings provider-picker surfaces the warning UI).
+        let reflectionRollover: @Sendable () async -> Void = {
+            let key = settingsVM.geminiApiKey
+            guard !key.isEmpty else { return }
+            guard let (weekStart, weekEnd) = WeeklyReflectionService.previousCompletedWeek(now: Date())
+            else { return }
+            let llm = GeminiLLMService(apiKey: key)
+            let service = WeeklyReflectionService(nodeStore: nodeStore, llm: llm)
+            do {
+                _ = try await service.runForWeek(
+                    projectId: nil,
+                    weekStart: weekStart,
+                    weekEnd: weekEnd
+                )
+            } catch {
+                // Swallow — failure was already persisted as a `.failed` row
+                // inside the service. Next launch's rollover is a no-op on
+                // that week.
+            }
+        }
+
         return AppDependencies(
             nodeStore: nodeStore,
             vectorStore: vectorStore,
@@ -145,7 +171,8 @@ final class AppEnvironment {
             settingsVM: settingsVM,
             chatVM: chatVM,
             noteVM: noteVM,
-            galaxyVM: galaxyVM
+            galaxyVM: galaxyVM,
+            weeklyReflectionRollover: reflectionRollover
         )
     }
 

@@ -173,7 +173,7 @@ struct MacOSTrafficLights: View {
     @State private var isHovered = false
     
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) { // 6pt spacing + 14pt size = 20pt center-to-center, matching macOS Big Sur+
             // Close
             trafficLightButton(
                 color: Color(red: 255/255, green: 95/255, blue: 86/255),
@@ -211,7 +211,7 @@ struct MacOSTrafficLights: View {
     func trafficLightButton(color: Color, icon: String, iconSize: CGFloat, action: @escaping () -> Void) -> some View {
         Circle()
             .fill(color)
-            .frame(width: 12, height: 12)
+            .frame(width: 14, height: 14) // Standard size for Big Sur+
             .overlay(
                 Image(systemName: icon)
                     .font(.system(size: iconSize, weight: .bold))

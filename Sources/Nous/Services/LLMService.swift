@@ -362,6 +362,79 @@ struct GeminiLLMService: LLMService {
         }
     }
 
+    /// Non-streaming structured-output call. Returns the raw JSON text that
+    /// Gemini produced (already constrained to `responseSchema`) plus usage
+    /// metadata. Caller is responsible for `JSONDecoder().decode(...)` into
+    /// the target type; we keep it as a string so reflection validation can
+    /// inspect the shape before decoding.
+    ///
+    /// The REST field name is `responseJsonSchema` (camelCase) per the
+    /// official Gemini API docs — not `responseSchema`. Getting that wrong
+    /// is exactly what the W1 D1 spike was designed to catch.
+    func generateStructured(
+        messages: [LLMMessage],
+        system: String? = nil,
+        responseSchema: [String: Any],
+        temperature: Double = 0.7
+    ) async throws -> (text: String, usage: GeminiUsageMetadata?) {
+        let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(apiKey)")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        var contents: [[String: Any]] = []
+        for msg in messages {
+            contents.append([
+                "role": msg.role == "assistant" ? "model" : "user",
+                "parts": [["text": msg.content]]
+            ])
+        }
+
+        var body: [String: Any] = ["contents": contents]
+        if let system {
+            body["systemInstruction"] = ["parts": [["text": system]]]
+        }
+        body["generationConfig"] = [
+            "temperature": temperature,
+            "responseMimeType": "application/json",
+            "responseJsonSchema": responseSchema
+        ]
+
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw LLMError.invalidResponse
+        }
+        guard httpResponse.statusCode == 200 else {
+            throw LLMError.httpError(httpResponse.statusCode)
+        }
+
+        guard
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let candidates = json["candidates"] as? [[String: Any]],
+            let firstCandidate = candidates.first,
+            let content = firstCandidate["content"] as? [String: Any],
+            let parts = content["parts"] as? [[String: Any]],
+            let text = parts.first?["text"] as? String
+        else {
+            throw LLMError.invalidResponse
+        }
+
+        let usage: GeminiUsageMetadata? = {
+            guard let u = json["usageMetadata"] as? [String: Any] else { return nil }
+            return GeminiUsageMetadata(
+                promptTokenCount: (u["promptTokenCount"] as? Int) ?? 0,
+                cachedContentTokenCount: (u["cachedContentTokenCount"] as? Int) ?? 0,
+                candidatesTokenCount: u["candidatesTokenCount"] as? Int,
+                thoughtsTokenCount: u["thoughtsTokenCount"] as? Int,
+                totalTokenCount: u["totalTokenCount"] as? Int
+            )
+        }()
+
+        return (text, usage)
+    }
+
     func createCachedContent(
         messages: [LLMMessage],
         system: String? = nil,
