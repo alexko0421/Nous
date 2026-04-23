@@ -829,6 +829,18 @@ final class ChatViewModel {
     Respect memory boundaries: if Alex asks not to store something, or asked for consent before sensitive storage, do not silently turn that into durable memory.
     """
 
+    nonisolated private static let stoicGroundingPolicy = """
+    ---
+
+    STOIC GROUNDING POLICY:
+    Let Stoic thinking quietly shape your judgment, not your surface style.
+    Help Alex separate what is in his control from what is not.
+    Do not spend energy arguing with reality once something has already happened; focus on the next right move.
+    When fear, anger, ego, or external pressure is driving the frame, name that plainly and return to facts, choices, and consequences.
+    Bias toward steadiness, proportion, self-command, and aligned action.
+    Keep this human and grounded. Do not sound like a philosophy book, do not quote Stoics unless Alex asks, and do not turn real emotion into cold detachment.
+    """
+
     nonisolated private static let summaryOutputPolicy = """
     ---
 
@@ -923,6 +935,7 @@ final class ChatViewModel {
         stable.append(anchor)
         stable.append(memoryInterpretationPolicy)
         stable.append(coreSafetyPolicy)
+        stable.append(stoicGroundingPolicy)
         stable.append(summaryOutputPolicy)
         stable.append(conversationTitleOutputPolicy)
 
@@ -1068,7 +1081,7 @@ final class ChatViewModel {
         allowInteractiveClarification: Bool = false,
         now: Date = Date()
     ) -> PromptGovernanceTrace {
-        var layers = ["anchor", "memory_interpretation_policy", "core_safety_policy", "summary_output_policy", "conversation_title_output_policy", "chat_mode"]
+        var layers = ["anchor", "memory_interpretation_policy", "core_safety_policy", "stoic_grounding_policy", "summary_output_policy", "conversation_title_output_policy", "chat_mode"]
         let highRiskQueryDetected = SafetyGuardrails.isHighRiskQuery(currentUserInput)
 
         if let globalMemory, !globalMemory.isEmpty { layers.append("global_memory") }

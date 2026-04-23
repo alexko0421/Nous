@@ -119,6 +119,11 @@ final class RAGPipelineTests: XCTestCase {
         XCTAssertTrue(context.contains("One hypothesis is"))
         XCTAssertTrue(context.contains("Does this fit, or is something else more true?"))
 
+        // Verify stoic grounding policy is present
+        XCTAssertTrue(context.contains("STOIC GROUNDING POLICY"))
+        XCTAssertTrue(context.contains("separate what is in his control from what is not"))
+        XCTAssertTrue(context.contains("Do not sound like a philosophy book"))
+
         // Verify recent conversation is included
         XCTAssertTrue(context.contains("Funding worries"))
         XCTAssertTrue(context.contains("cash runway is tight"))
@@ -375,6 +380,8 @@ final class RAGPipelineTests: XCTestCase {
         XCTAssertTrue(context.contains("MEMORY INTERPRETATION POLICY"))
         XCTAssertTrue(context.contains("I might be wrong, but"))
         XCTAssertTrue(context.contains("Do not present diagnoses or identity labels as certainty"))
+        XCTAssertTrue(context.contains("STOIC GROUNDING POLICY"))
+        XCTAssertTrue(context.contains("focus on the next right move"))
     }
 
     func testAssembleContextInvokesHighRiskSafetyModeWhenQueryIsDangerous() {
@@ -453,6 +460,19 @@ final class RAGPipelineTests: XCTestCase {
 
         XCTAssertTrue(trace.promptLayers.contains("citations"))
         XCTAssertTrue(trace.promptLayers.contains("long_gap_bridge_guidance"))
+    }
+
+    func testGovernanceTraceIncludesStoicGroundingLayer() {
+        let trace = ChatViewModel.governanceTrace(
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        )
+
+        XCTAssertTrue(trace.promptLayers.contains("stoic_grounding_policy"))
     }
 
     func testAssembleContextIncludesIdentityFacetWhenGlobalMemoryIsEmpty() {

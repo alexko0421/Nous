@@ -368,6 +368,10 @@ final class ChatViewModelTests: XCTestCase {
             projectGoal: nil
         )
         XCTAssertTrue(
+            trace.promptLayers.contains("stoic_grounding_policy"),
+            "Expected stable layer 'stoic_grounding_policy' in \(trace.promptLayers)"
+        )
+        XCTAssertTrue(
             trace.promptLayers.contains("summary_output_policy"),
             "Expected stable layer 'summary_output_policy' in \(trace.promptLayers)"
         )
@@ -388,6 +392,14 @@ final class ChatViewModelTests: XCTestCase {
         )
         XCTAssertTrue(slice.stable.contains("<summary>"), "Stable system prompt must mention <summary> tag.")
         XCTAssertTrue(slice.stable.contains("<chat_title>"), "Stable system prompt must mention <chat_title> tag.")
+        XCTAssertTrue(
+            slice.stable.contains("STOIC GROUNDING POLICY"),
+            "Stable system prompt must carry the explicit Stoic grounding layer."
+        )
+        XCTAssertTrue(
+            slice.stable.contains("Do not sound like a philosophy book"),
+            "Stoic grounding must stay a judgment rule, not a surface voice gimmick."
+        )
         // The policy must be language-adaptive, not hard-wired to Mandarin.
         XCTAssertTrue(
             slice.stable.contains("match the conversation language"),
