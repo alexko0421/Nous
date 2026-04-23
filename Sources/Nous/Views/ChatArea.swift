@@ -105,7 +105,7 @@ struct ChatArea: View {
                                                         isSelected: feedback == .up,
                                                         helpText: feedback == .up
                                                             ? "Clear useful feedback (event \(eventId.uuidString.prefix(8)))"
-                                                            : "Mark this interjection as useful (event \(eventId.uuidString.prefix(8)))"
+                                                            : "Mark this reply as useful (event \(eventId.uuidString.prefix(8)))"
                                                     ) {
                                                         handleThumbsUpTap(for: msg.id)
                                                     }
@@ -115,7 +115,7 @@ struct ChatArea: View {
                                                         isSelected: feedback == .down,
                                                         helpText: feedback == .down
                                                             ? "Clear not useful feedback (event \(eventId.uuidString.prefix(8)))"
-                                                            : "Mark this interjection as not useful (event \(eventId.uuidString.prefix(8)))"
+                                                            : "Mark this reply as not useful (event \(eventId.uuidString.prefix(8)))"
                                                     ) {
                                                         handleThumbsDownTap(for: msg.id)
                                                     }
@@ -560,6 +560,7 @@ struct MessageBubble: View {
                             .textSelection(.enabled)
                         Spacer(minLength: 0)
                     }
+                    .animation(.easeOut(duration: 0.15), value: parsed.displayText)
                 }
             }
         }

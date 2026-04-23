@@ -35,6 +35,8 @@ struct ThinkingAccordion: View {
                 }
             }
         }
+        // 当文字内容增加导致高度变动时，平滑撑开而唔系突然跳动
+        .animation(.easeOut(duration: 0.15), value: content)
     }
 
     private var pill: some View {

@@ -1758,12 +1758,7 @@ extension ChatViewModel {
     private func judgeEvent(forMessageId messageId: UUID) -> JudgeEvent? {
         _ = judgeFeedbackVersion
         let events = governanceTelemetry.recentJudgeEvents(limit: 500, filter: .none)
-        guard let match = events.first(where: { $0.messageId == messageId }),
-              match.fallbackReason == .ok else { return nil }
-        guard let verdictData = match.verdictJSON.data(using: .utf8),
-              let verdict = try? JSONDecoder().decode(JudgeVerdict.self, from: verdictData),
-              verdict.shouldProvoke else { return nil }
-        return match
+        return events.first(where: { $0.messageId == messageId })
     }
 
     @MainActor
@@ -1771,9 +1766,8 @@ extension ChatViewModel {
         judgeFeedbackVersion &+= 1
     }
 
-    /// Returns the judge event id for a given assistant message, if one was recorded
-    /// for the turn that produced it AND the judge actually provoked.
-    /// Returns nil for messages from non-provoked or pre-feature turns.
+    /// Returns the judge event id for a given assistant message when the turn
+    /// that produced it logged one. Older pre-feature turns may still return nil.
     @MainActor
     func judgeEventId(forMessageId messageId: UUID) -> UUID? {
         judgeEvent(forMessageId: messageId)?.id

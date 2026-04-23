@@ -199,6 +199,25 @@ final class ProvocationOrchestrationTests: XCTestCase {
     }
 
     @MainActor
+    func testNonProvokedAssistantReplyStillSupportsFeedback() async throws {
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: false, userState: .exploring,
+            shouldProvoke: false, entryId: nil, reason: "no tension", inferredMode: .companion
+        )
+
+        viewModel.inputText = "just answer normally"
+        await viewModel.send()
+
+        let assistantMessage = try XCTUnwrap(viewModel.messages.last(where: { $0.role == .assistant }))
+        let eventId = try XCTUnwrap(viewModel.judgeEventId(forMessageId: assistantMessage.id))
+
+        viewModel.recordFeedback(forMessageId: assistantMessage.id, feedback: .up)
+
+        let updated = try store.fetchJudgeEvent(id: eventId)
+        XCTAssertEqual(updated?.userFeedback, .up)
+    }
+
+    @MainActor
     func testHardRecallFactEntryCanDriveFocusBlock() async throws {
         let node = NousNode(type: .conversation, title: "Contradiction chat", content: "")
         try store.insertNode(node)
