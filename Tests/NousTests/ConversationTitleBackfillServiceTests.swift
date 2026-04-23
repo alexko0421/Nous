@@ -100,6 +100,34 @@ final class ConversationTitleBackfillServiceTests: XCTestCase {
         XCTAssertEqual(try schemaVersion(store), ConversationTitleBackfillService.targetVersion)
     }
 
+    func testBackfillTreatsQuickActionTitlesAsPlaceholders() async throws {
+        let store = try NodeStore(path: ":memory:")
+        let chat = NousNode(type: .conversation, title: "Direction")
+        try store.insertNode(chat)
+        try store.insertMessage(Message(nodeId: chat.id, role: .assistant, content: "你而家最卡住边一步？"))
+        try store.insertMemoryEntry(
+            MemoryEntry(
+                scope: .conversation,
+                scopeRefId: chat.id,
+                kind: .thread,
+                stability: .temporary,
+                content: "- Alex is deciding whether to move to New York or Austin",
+                sourceNodeIds: [chat.id]
+            )
+        )
+
+        let service = ConversationTitleBackfillService(
+            nodeStore: store,
+            llmServiceProvider: { FakeLLMService(output: "move to New York or Austin") }
+        )
+
+        await service.runIfNeeded()
+
+        let updated = try XCTUnwrap(store.fetchNode(id: chat.id))
+        XCTAssertEqual(updated.title, "move to New York or Austin")
+        XCTAssertEqual(try schemaVersion(store), ConversationTitleBackfillService.targetVersion)
+    }
+
     private func schemaVersion(_ store: NodeStore) throws -> String? {
         let stmt = try store.rawDatabase.prepare("SELECT value FROM schema_meta WHERE key = ?;")
         try stmt.bind(ConversationTitleBackfillService.versionKey, at: 1)

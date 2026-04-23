@@ -531,15 +531,19 @@ struct MessageBubble: View {
             ? ClarificationContent(displayText: text, card: nil, keepsQuickActionMode: false)
             : ClarificationCardParser.parse(text)
 
+        let formattedText = parsed.displayText
+            .replacingOccurrences(of: #"(?<=[。！？])\n+"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"(?<=[.!?])\n+"#, with: " ", options: .regularExpression)
+
         VStack(alignment: .leading, spacing: 6) {
             if let thinkingContent, !thinkingContent.isEmpty {
                 ThinkingAccordion(content: thinkingContent, isStreaming: isThinkingStreaming)
             }
-            if !parsed.displayText.isEmpty {
+            if !formattedText.isEmpty {
                 if isUser {
                     HStack {
                         Spacer(minLength: 0)
-                        Text(parsed.displayText)
+                        Text(formattedText)
                             .font(.system(size: 13, weight: .regular))
                             .foregroundColor(AppColor.colaDarkText)
                             .lineSpacing(4)
@@ -551,16 +555,16 @@ struct MessageBubble: View {
                     }
                 } else {
                     HStack {
-                        Text(parsed.displayText)
+                        Text(formattedText)
                             .font(.system(size: 13, weight: .regular))
                             .foregroundColor(AppColor.colaDarkText)
-                            .lineSpacing(4)
+                            .lineSpacing(6)
                             .padding(.top, 4)
                             .padding(.bottom, 8)
                             .textSelection(.enabled)
                         Spacer(minLength: 0)
                     }
-                    .animation(.easeOut(duration: 0.15), value: parsed.displayText)
+                    .animation(.easeOut(duration: 0.15), value: formattedText)
                 }
             }
         }
