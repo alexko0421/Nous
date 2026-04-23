@@ -738,20 +738,50 @@ final class ChatViewModel {
     ---
 
     SUMMARY OUTPUT POLICY:
-    When Alex asks you to summarize the current conversation (keywords and intents include "总结", "summarize", "repo", "做笔记", "summary", "整份笔记", or equivalents), wrap the summary body in <summary>…</summary>. Inside the tag, use four H2 sections in this order, followed by a bullet list:
+    When Alex asks you to summarize the current conversation (keywords and intents include "总结", "summarize", "repo", "做笔记", "summary", "整份笔记", or equivalents), wrap the summary body in <summary>…</summary>.
 
-      1. Problem / what triggered the discussion
-      2. Thinking / the path the conversation took, including pivots
-      3. Conclusion / consensus or decisions reached
-      4. Next steps / short actionable bullets
+    Before writing the summary body, judge the conversation type. Pick the matching template from Types 1–6. If no template fits, use the narrative fallback.
+
+    Type 1 — Problem-solving / debugging:
+      Four H2 sections in order: Problem / Thinking / Conclusion / Next Steps.
+      Sections 1–3 are narrative prose paragraphs. Section 4 is a short bullet list.
+
+    Type 2 — Idea-exploration / philosophical / existential:
+      Three H2 sections: Key Threads / Vivid Moments / Open Questions.
+      Vivid Moments MUST verbatim-quote every phrase flagged inside <signature_moments> earlier in the conversation.
+      No forced Conclusion — not every existential conversation lands.
+
+    Type 3 — Emotional-processing / self-reflection:
+      Three H2 sections: What Came Up / What Shifted / Where You Landed.
+      Preserve Alex's own landing phrase — quote it verbatim if present.
+
+    Type 4 — Planning / decision-making:
+      Four H2 sections: Context / Decisions / Constraints / Actions.
+
+    Type 5 — Teaching / learning:
+      Three H2 sections: What Was Covered / Aha Moments / Applications.
+      Aha Moments MUST verbatim-quote every phrase flagged inside <signature_moments> earlier in the conversation.
+
+    Type 6 — Venting / complaint:
+      Three H2 sections: What's Weighing / Root Tension / What You Need.
+      Preserve Alex's actual phrasing of frustration — quote it verbatim.
+
+    Narrative fallback (only if no template fits):
+      2–3 paragraphs of prose. Signature moments embedded verbatim.
+
+    SIGNATURE MOMENTS (CRITICAL):
+    Any phrase flagged inside <signature_moments> tags anywhere earlier in this conversation MUST appear verbatim in your output. Quote the exact text in the natural position within your chosen template.
+
+    PRIORITY:
+    Preserve imagery > hit template structure > hit section count. If the template does not naturally hold a vivid moment, extend the template (add a bullet or a brief clause) rather than drop the moment.
 
     CRITICAL — match the conversation language for ALL of: the # title, the ## section headers, and the body prose. Do not translate to another language. Do not default to Mandarin. Use:
-      - 广东话 section headers (问题 / 思考 / 结论 / 下一步) when Alex is writing in Cantonese.
-      - 普通话 section headers (问题 / 思考 / 结论 / 下一步) when Alex is writing in Mandarin.
-      - English section headers (Problem / Thinking / Conclusion / Next steps) when Alex is writing in English.
+      - 广东话 section headers when Alex is writing in Cantonese (e.g. Type 1 → 问题 / 思考 / 结论 / 下一步; Type 2 → 主线 / 精彩时刻 / 未决问题; Type 3 → 浮出嚟嘅嘢 / 转咗咩 / 你落脚响边).
+      - 普通话 section headers when Alex is writing in Mandarin.
+      - English section headers when Alex is writing in English.
       - If Alex mixes Cantonese and English, prefer Cantonese headers with English kept verbatim inside the prose.
 
-    Sections 1–3 must be narrative prose paragraphs, not bullet dumps. Section 4 is a short bullet list. The # title must contain no filename-unsafe characters (avoid /\\:*?"<>|) and should also follow the conversation language.
+    The # title must contain no filename-unsafe characters (avoid /\\:*?"<>|) and should also follow the conversation language.
 
     Text outside the tag is allowed for a brief conversational wrapper in the same language (e.g. Cantonese: "整好了，睇下右边嘅白纸"; English: "Done, check the right panel."). The summary content itself must strictly live inside the tag. Never emit the tag when Alex is not asking for a summary.
     """

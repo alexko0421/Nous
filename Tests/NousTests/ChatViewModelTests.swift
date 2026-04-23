@@ -593,7 +593,7 @@ final class ChatViewModelTests: XCTestCase {
         // It should still carry concrete header vocab for each supported language so the model
         // knows what to emit when the conversation is in that language.
         XCTAssertTrue(slice.stable.contains("下一步"), "Should include Chinese header vocabulary.")
-        XCTAssertTrue(slice.stable.contains("Next steps"), "Should include English header vocabulary.")
+        XCTAssertTrue(slice.stable.contains("Next Steps"), "Should include English header vocabulary.")
         XCTAssertTrue(
             slice.stable.contains("Do not translate Cantonese into Mandarin"),
             "Stable system prompt must preserve Cantonese titles instead of flattening them into Mandarin."
