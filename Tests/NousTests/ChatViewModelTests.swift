@@ -136,6 +136,45 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertEqual(vm.currentNode?.projectId, project.id)
     }
 
+    func testQuickActionConversationPromotesHiddenChatTitle() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let llm = SingleReplyLLMService(output: """
+        我想先听你讲多少少。
+
+        <chat_title>搬去纽约定Austin</chat_title>
+        """)
+
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { llm },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        )
+
+        await vm.beginQuickActionConversation(.direction)
+
+        let nodeId = try XCTUnwrap(vm.currentNode?.id)
+        let storedNode = try XCTUnwrap(nodeStore.fetchNode(id: nodeId))
+        let storedMessages = try nodeStore.fetchMessages(nodeId: nodeId)
+        let assistant = try XCTUnwrap(storedMessages.last)
+
+        XCTAssertEqual(vm.currentNode?.title, "搬去纽约定Austin")
+        XCTAssertEqual(storedNode.title, "搬去纽约定Austin")
+        XCTAssertEqual(assistant.content, "我想先听你讲多少少。")
+        XCTAssertFalse(assistant.content.contains("<chat_title>"))
+    }
+
     @MainActor
     func testStopGeneratingCancelsMainResponseWithoutPersistingAssistant() async throws {
         let nodeStore = try NodeStore(path: ":memory:")

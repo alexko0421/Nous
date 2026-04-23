@@ -554,7 +554,7 @@ struct MessageBubble: View {
                         Text(parsed.displayText)
                             .font(.system(size: 13, weight: .regular))
                             .foregroundColor(AppColor.colaDarkText)
-                            .lineSpacing(6)
+                            .lineSpacing(4)
                             .padding(.top, 4)
                             .padding(.bottom, 8)
                             .textSelection(.enabled)

@@ -1,7 +1,7 @@
 import Foundation
 
-/// One-shot repair pass for pre-title-policy conversations whose stored title
-/// is still the old "first user sentence, truncated to 40 chars" seed.
+/// One-shot repair pass for conversations whose stored title is still a placeholder,
+/// like the old "first user sentence, truncated to 40 chars" seed or a quick-action label.
 ///
 /// The pass is deliberately conservative:
 /// - Only conversations that still look like legacy seeds are touched.
@@ -11,12 +11,12 @@ import Foundation
 ///   stops paying even the candidate-scan cost.
 final class ConversationTitleBackfillService {
     static let versionKey = "conversation_title_backfill_version"
-    static let targetVersion = "1"
+    static let targetVersion = "2"
 
     private struct Candidate {
         var node: NousNode
         let messages: [Message]
-        let legacySeed: String
+        let legacySeed: String?
         let conversationMemory: String?
     }
 
@@ -82,9 +82,7 @@ final class ConversationTitleBackfillService {
             .filter { $0.type == .conversation }
             .compactMap { node in
                 let messages = try nodeStore.fetchMessages(nodeId: node.id)
-                guard let legacySeed = Self.legacyConversationSeedTitle(from: messages) else {
-                    return nil
-                }
+                let legacySeed = Self.legacyConversationSeedTitle(from: messages)
                 let trimmedTitle = node.title.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard Self.isLegacyConversationTitle(trimmedTitle, legacySeed: legacySeed) else {
                     return nil
@@ -93,6 +91,9 @@ final class ConversationTitleBackfillService {
                     scope: .conversation,
                     scopeRefId: node.id
                 )?.content
+                let hasUsefulContext = !messages.isEmpty ||
+                    !(memory?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+                guard hasUsefulContext else { return nil }
                 return Candidate(
                     node: node,
                     messages: messages,
@@ -197,7 +198,7 @@ final class ConversationTitleBackfillService {
         conversationMemory: String?,
         messages: [Message],
         currentTitle: String,
-        legacySeed: String
+        legacySeed: String?
     ) -> String? {
         if let conversationMemory {
             for line in extractSummaryLines(from: conversationMemory, limit: 3) {
@@ -230,7 +231,7 @@ final class ConversationTitleBackfillService {
     private static func usableTitle(
         _ raw: String?,
         currentTitle: String,
-        legacySeed: String
+        legacySeed: String?
     ) -> String? {
         guard var title = sanitizeTitle(raw) else { return nil }
 
@@ -244,7 +245,9 @@ final class ConversationTitleBackfillService {
         ]
         guard !banned.contains(lower) else { return nil }
         guard title != currentTitle else { return nil }
-        guard title != legacySeed else { return nil }
+        if let legacySeed {
+            guard title != legacySeed else { return nil }
+        }
 
         if title.hasPrefix("Alex ") && title.count > 5 {
             title = String(title.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -300,8 +303,9 @@ final class ConversationTitleBackfillService {
         return title.isEmpty ? nil : title
     }
 
-    private static func isLegacyConversationTitle(_ title: String, legacySeed: String) -> Bool {
-        if title == legacySeed { return true }
+    private static func isLegacyConversationTitle(_ title: String, legacySeed: String?) -> Bool {
+        if let legacySeed, title == legacySeed { return true }
+        if QuickActionMode.isPlaceholderConversationTitle(title) { return true }
         return ["new conversation", "new chat", "untitled"].contains(title.lowercased())
     }
 

@@ -154,7 +154,8 @@ final class ChatViewModel {
     private func runQuickActionConversation(_ mode: QuickActionMode, responseTaskId: UUID) async {
         guard isActiveResponseTask(responseTaskId) else { return }
 
-        startNewConversation(title: mode.label, projectId: defaultProjectId, cancelInFlightWork: false)
+        // Quick actions are a launch path, not the lasting chat label.
+        startNewConversation(projectId: defaultProjectId, cancelInFlightWork: false)
         activeQuickActionMode = mode
         inputText = ""
 
@@ -1200,6 +1201,10 @@ final class ChatViewModel {
         guard !trimmed.isEmpty else { return true }
 
         if ["new conversation", "new chat", "untitled"].contains(trimmed.lowercased()) {
+            return true
+        }
+
+        if QuickActionMode.isPlaceholderConversationTitle(trimmed) {
             return true
         }
 

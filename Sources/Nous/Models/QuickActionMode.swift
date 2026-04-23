@@ -5,6 +5,10 @@ enum QuickActionMode: String, CaseIterable {
     case brainstorm
     case mentalHealth
 
+    private static let placeholderConversationTitles: Set<String> = Set(
+        Self.allCases.map { $0.label.lowercased() }
+    )
+
     var label: String {
         switch self {
         case .direction:
@@ -62,5 +66,11 @@ enum QuickActionMode: String, CaseIterable {
             If something sounds serious, say that clearly and carefully.
             """
         }
+    }
+
+    static func isPlaceholderConversationTitle(_ title: String) -> Bool {
+        placeholderConversationTitles.contains(
+            title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        )
     }
 }
