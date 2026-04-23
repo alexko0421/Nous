@@ -147,4 +147,157 @@ final class CitableEntryPoolTests: XCTestCase {
         XCTAssertTrue(pool.contains { $0.id == globalEntry.id.uuidString },
                       "hard recall should prepend contradiction facts without removing the normal recency seed path")
     }
+
+    // MARK: - R2: weekly reflection claims
+
+    func testPoolAdmitsActiveReflectionWithWeeklyReflectionAnnotation() throws {
+        let (_, claim) = try seedReflection(
+            projectId: nil,
+            claim: "Across four conversations this week, you grounded decisions in environment first.",
+            status: .active
+        )
+
+        let pool = try service.citableEntryPool(
+            projectId: nil,
+            conversationId: UUID(),
+            nodeHits: [],
+            capacity: 10
+        )
+
+        let match = try XCTUnwrap(pool.first { $0.id == claim.id.uuidString })
+        XCTAssertEqual(match.scope, .selfReflection)
+        XCTAssertEqual(match.promptAnnotation, "weekly-reflection")
+        XCTAssertTrue(match.text.contains("environment first"))
+        XCTAssertNil(match.kind, "reflection claims don't have a MemoryKind")
+    }
+
+    func testPoolSkipsOrphanedReflectionClaims() throws {
+        let (_, orphaned) = try seedReflection(
+            projectId: nil,
+            claim: "Dropped trait-style claim.",
+            status: .orphaned
+        )
+
+        let pool = try service.citableEntryPool(
+            projectId: nil,
+            conversationId: UUID(),
+            nodeHits: [],
+            capacity: 10
+        )
+
+        XCTAssertFalse(pool.contains { $0.id == orphaned.id.uuidString },
+                       "orphaned reflections must NOT enter the retrieval pool")
+    }
+
+    func testReflectionSeedCapsHowManyClaimsEnter() throws {
+        // Three active claims; cap at 2 → only the 2 most recent land.
+        let now = Date()
+        let (_, older) = try seedReflection(
+            projectId: nil,
+            claim: "older claim",
+            status: .active,
+            createdAt: now.addingTimeInterval(-3 * 86400)
+        )
+        let (_, middle) = try seedReflection(
+            projectId: nil,
+            claim: "middle claim",
+            status: .active,
+            createdAt: now.addingTimeInterval(-2 * 86400)
+        )
+        let (_, newest) = try seedReflection(
+            projectId: nil,
+            claim: "newest claim",
+            status: .active,
+            createdAt: now
+        )
+
+        let pool = try service.citableEntryPool(
+            projectId: nil,
+            conversationId: UUID(),
+            nodeHits: [],
+            capacity: 10,
+            reflectionSeed: 2
+        )
+
+        let poolIds = Set(pool.map { $0.id })
+        XCTAssertTrue(poolIds.contains(newest.id.uuidString))
+        XCTAssertTrue(poolIds.contains(middle.id.uuidString))
+        XCTAssertFalse(poolIds.contains(older.id.uuidString),
+                       "older claim must be dropped when reflectionSeed=2")
+    }
+
+    func testReflectionSeedZeroSkipsReflectionPassEntirely() throws {
+        _ = try seedReflection(projectId: nil, claim: "c", status: .active)
+
+        let pool = try service.citableEntryPool(
+            projectId: nil,
+            conversationId: UUID(),
+            nodeHits: [],
+            capacity: 10,
+            reflectionSeed: 0
+        )
+
+        XCTAssertFalse(pool.contains { $0.scope == .selfReflection },
+                       "reflectionSeed=0 is the opt-out for the reflection pass")
+    }
+
+    func testProjectScopedCallOnlySeesProjectReflections() throws {
+        let projectId = UUID()
+        let (_, inProject) = try seedReflection(
+            projectId: projectId,
+            claim: "project-scoped reflection",
+            status: .active
+        )
+        let (_, freeChat) = try seedReflection(
+            projectId: nil,
+            claim: "free-chat reflection",
+            status: .active
+        )
+
+        let pool = try service.citableEntryPool(
+            projectId: projectId,
+            conversationId: UUID(),
+            nodeHits: [],
+            capacity: 10
+        )
+
+        XCTAssertTrue(pool.contains { $0.id == inProject.id.uuidString })
+        XCTAssertFalse(pool.contains { $0.id == freeChat.id.uuidString },
+                       "free-chat reflections must not leak into a project's pool")
+    }
+
+    // MARK: - Helpers
+
+    @discardableResult
+    private func seedReflection(
+        projectId: UUID?,
+        claim claimText: String,
+        status: ReflectionClaimStatus,
+        createdAt: Date = Date()
+    ) throws -> (run: ReflectionRun, claim: ReflectionClaim) {
+        if let projectId, try store.fetchProject(id: projectId) == nil {
+            try store.insertProject(Project(id: projectId, title: "Test Project"))
+        }
+        let weekStart = createdAt.addingTimeInterval(-7 * 86400)
+        let weekEnd = createdAt
+        let run = ReflectionRun(
+            projectId: projectId,
+            weekStart: weekStart,
+            weekEnd: weekEnd,
+            ranAt: createdAt,
+            status: .success,
+            rejectionReason: nil,
+            costCents: 0
+        )
+        let claim = ReflectionClaim(
+            runId: run.id,
+            claim: claimText,
+            confidence: 0.8,
+            whyNonObvious: "why",
+            status: status,
+            createdAt: createdAt
+        )
+        try store.persistReflectionRun(run, claims: [claim], evidence: [])
+        return (run, claim)
+    }
 }

@@ -109,23 +109,11 @@ struct WelcomeView: View {
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
-            
-            Circle()
-                .fill(AppColor.colaOrange.opacity(0.10))
-                .frame(width: 340, height: 340)
-                .blur(radius: 140)
-                .offset(x: -220, y: 220)
-            
-            Circle()
-                .fill(AppColor.ambientHighlight)
-                .frame(width: 300, height: 300)
-                .blur(radius: 120)
-                .offset(x: 250, y: -200)
         }
     }
     
     private var composerRow: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 6) {
             circleActionButton(systemImage: "plus", action: onPickAttachment)
                 .frame(width: 34, height: 34)
 

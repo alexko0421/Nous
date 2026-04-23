@@ -151,6 +151,7 @@ final class ProvocationJudge {
         - user_state = "venting" FORCES should_provoke = false regardless of any tension. Venting is not a moment to challenge.
         - entry_id MUST be copied verbatim from the `id=` field of one CITABLE ENTRY. Do not invent.
         - Entries tagged `[contradiction-candidate]` are retrieval hints only. They often mark earlier decisions, boundaries, or constraints that may be in tension with the user's current message, but they are not proof by themselves.
+        - Entries tagged `[weekly-reflection]` (scope=self_reflection) are patterns Nous inferred from the user's conversations last week. They describe conversational behavior in our chats, NOT whole-person traits. Treat them as background context. You MAY anchor a provocation on a weekly-reflection entry ONLY when the user's current message is in clear tension with that conversational pattern (e.g., previously grounded decisions in environment-first, now asking purely tactical questions with no context). Soft tension with a reflection → should_provoke = false.
         - inferred_mode-dependent threshold (apply to YOUR OWN inferred_mode choice):
           * strategist → if tension_exists is true AND user_state ∈ {deciding, exploring}, set should_provoke = true. Soft tensions count.
           * companion  → only set should_provoke = true when the tension is strong AND clearly relevant to a decision the user is making. Soft tensions → false.
