@@ -41,7 +41,7 @@ struct WelcomeView: View {
                 VStack(spacing: 30) {
                     VStack(spacing: 20) {
                         NOUSLogoView(logoColor: AppColor.colaOrange)
-                            .frame(width: 210)
+                            .frame(width: 200)
 
                         Text("\(greeting), \(displayName)")
                             .font(.system(size: 34, weight: .medium, design: .rounded))
