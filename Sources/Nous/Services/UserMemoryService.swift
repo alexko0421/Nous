@@ -477,6 +477,17 @@ final class UserMemoryCore {
             .joined(separator: "\n---\n")
 
         guard !userTurns.isEmpty else { return }
+
+        let assistantMessages = messages.filter { $0.role == .assistant }
+        let signaturePhrases = Self.extractSignatureMoments(from: assistantMessages)
+        let signatureMomentsBlock: String
+        if signaturePhrases.isEmpty {
+            signatureMomentsBlock = "[none]"
+        } else {
+            signatureMomentsBlock = signaturePhrases
+                .map { "- \"\($0)\"" }
+                .joined(separator: "\n")
+        }
         guard let llm = llmServiceProvider() else { return }
 
         let existing = currentConversation(nodeId: nodeId) ?? ""
@@ -494,9 +505,12 @@ final class UserMemoryCore {
         - What has he told me that I should remember while this chat continues?
         - Do NOT include general facts about Alex — those belong in other memory layers.
 
+        Signature moments flagged by Nous earlier in this conversation (preservation-critical — MUST appear verbatim in a bullet, quoted in 「」):
+        \(signatureMomentsBlock)
+
         IMAGERY PRESERVATION:
-        - When Alex's turns contain specific details (concrete numbers, objects, sensory imagery), an original metaphor, or non-obvious phrasing, preserve that specificity in your bullets. Do NOT substitute abstract categories.
-        - If the conversation contained any <signature_moments> blocks, every flagged phrase MUST appear verbatim in a bullet (quote the exact text in 「」).
+        - Every phrase in the signature moments list above MUST appear verbatim in a bullet (quote in 「」). If the list is [none], skip this rule.
+        - When Alex's turns contain specific details (concrete numbers, objects, sensory imagery), an original metaphor, or non-obvious phrasing, preserve that specificity. Do NOT substitute abstract categories.
         - For other concrete imagery (not flagged), paraphrase with specifics — keep the vivid detail, not just the abstract pattern.
         - Generic content (routine Q&A, acknowledgments) compresses normally.
 
@@ -536,7 +550,7 @@ final class UserMemoryCore {
 
         8. Routine (not every turn needs preservation):
            ❌ Alex 问问题、得到答案
-           ✅ Alex 问点 set up Xcode scheme，Nous 给咗三步 instruction
+           ✅ Alex 问点 set up Xcode scheme（basic dev question，唔需要特别 preserve）
 
         Markdown only.
         """
@@ -1202,6 +1216,41 @@ final class UserMemoryCore {
 
     /// Removes markdown blockquote lines (`> …` or `>> …`) from content.
     /// Used to drop quoted assistant text that Alex pastes into his next turn.
+    static func extractSignatureMoments(from assistantMessages: [Message]) -> [String] {
+        let blockPattern = #"<signature_moments>([\s\S]*?)</signature_moments>"#
+        let textPattern = #"text:\s*"([^"]*)""#
+
+        guard
+            let blockRegex = try? NSRegularExpression(pattern: blockPattern),
+            let textRegex = try? NSRegularExpression(pattern: textPattern)
+        else {
+            return []
+        }
+
+        var phrases: [String] = []
+        for message in assistantMessages {
+            let content = message.content
+            let range = NSRange(content.startIndex..., in: content)
+            let blockMatches = blockRegex.matches(in: content, range: range)
+            for blockMatch in blockMatches {
+                guard blockMatch.numberOfRanges >= 2,
+                      let inner = Range(blockMatch.range(at: 1), in: content) else { continue }
+                let body = String(content[inner])
+                let bodyRange = NSRange(body.startIndex..., in: body)
+                let textMatches = textRegex.matches(in: body, range: bodyRange)
+                for textMatch in textMatches {
+                    guard textMatch.numberOfRanges >= 2,
+                          let textRange = Range(textMatch.range(at: 1), in: body) else { continue }
+                    let phrase = String(body[textRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !phrase.isEmpty {
+                        phrases.append(phrase)
+                    }
+                }
+            }
+        }
+        return phrases
+    }
+
     static func stripQuoteBlocks(_ content: String) -> String {
         content
             .components(separatedBy: .newlines)
