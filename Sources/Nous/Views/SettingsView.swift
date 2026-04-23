@@ -189,6 +189,14 @@ struct SettingsView: View {
                         .pickerStyle(.menu)
                         .onChange(of: vm.selectedProvider) { _, _ in vm.savePreferences() }
                     }
+
+                    if vm.selectedProvider != .gemini {
+                        Text("Weekly reflections only run when Gemini is configured — the Sunday-night batch uses Gemini's structured-output path to stay on budget.")
+                            .font(.system(size: 12, design: .rounded))
+                            .foregroundColor(AppColor.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, 8)
+                    }
                 }
 
                 if vm.selectedProvider != .local {

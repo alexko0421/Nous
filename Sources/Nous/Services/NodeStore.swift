@@ -358,6 +358,9 @@ final class NodeStore {
             let stmt = try db.prepare("DELETE FROM nodes WHERE id=?;")
             try stmt.bind(id.uuidString, at: 1)
             try stmt.step()
+            // Messages cascade out via FK; reflection_evidence cascades from
+            // messages. Reconcile any claim that lost its two-evidence floor.
+            try reconcileOrphanedReflectionClaims()
         }
         notifyNodesDidChange()
     }
@@ -1179,6 +1182,10 @@ final class NodeStore {
             let stmt = try db.prepare("DELETE FROM projects WHERE id=?;")
             try stmt.bind(id.uuidString, at: 1)
             try stmt.step()
+            // Nodes cascade via FK → messages cascade → reflection_evidence
+            // cascades. Reflection_runs for this project also cascade, which
+            // drops their claims. Sweep any other claims that lost evidence.
+            try reconcileOrphanedReflectionClaims()
         }
         notifyNodesDidChange()
     }
@@ -1633,6 +1640,47 @@ extension NodeStore {
             results.append(reflectionClaimFrom(stmt))
         }
         return results
+    }
+
+    /// Flip a single claim to `.orphaned`. Used by the MemoryDebugInspector
+    /// manual-orphan button and by `reconcileOrphanedReflectionClaims`.
+    /// No-op if the claim is already orphaned/superseded.
+    func orphanReflectionClaim(id: UUID) throws {
+        let stmt = try db.prepare("""
+            UPDATE reflection_claim
+            SET status = 'orphaned'
+            WHERE id = ? AND status = 'active';
+        """)
+        try stmt.bind(id.uuidString, at: 1)
+        try stmt.step()
+    }
+
+    /// After a cascade-delete drops evidence rows, any claim whose remaining
+    /// grounded evidence falls below 2 loses the "two independent turns"
+    /// invariant the validator enforced at creation time. Flip those claims
+    /// to `.orphaned` so they exit the citable-entry pool.
+    ///
+    /// Returns the claim IDs that were flipped (useful for tests + debug UI).
+    @discardableResult
+    func reconcileOrphanedReflectionClaims() throws -> [UUID] {
+        let stmt = try db.prepare("""
+            SELECT c.id
+            FROM reflection_claim c
+            LEFT JOIN reflection_evidence e ON e.reflection_id = c.id
+            WHERE c.status = 'active'
+            GROUP BY c.id
+            HAVING COUNT(e.message_id) < 2;
+        """)
+        var flipped: [UUID] = []
+        while try stmt.step() {
+            guard let raw = stmt.text(at: 0),
+                  let uuid = UUID(uuidString: raw) else { continue }
+            flipped.append(uuid)
+        }
+        for id in flipped {
+            try orphanReflectionClaim(id: id)
+        }
+        return flipped
     }
 
     // MARK: - Internal inserts

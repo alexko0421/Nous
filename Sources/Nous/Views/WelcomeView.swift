@@ -113,7 +113,7 @@ struct WelcomeView: View {
     }
     
     private var composerRow: some View {
-        HStack(spacing: 6) {
+        HStack(alignment: .bottom, spacing: 6) {
             circleActionButton(systemImage: "plus", action: onPickAttachment)
                 .frame(width: 34, height: 34)
 
@@ -122,7 +122,8 @@ struct WelcomeView: View {
                     .textFieldStyle(.plain)
                     .font(.system(size: 13, weight: .medium, design: .rounded))
                     .foregroundColor(AppColor.colaDarkText)
-                    .lineLimit(1...3)
+                    .lineLimit(1...6)
+                    .fixedSize(horizontal: false, vertical: true)
                     .onSubmit { onSend() }
             }
             .padding(.horizontal, 16)

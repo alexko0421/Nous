@@ -255,9 +255,11 @@ struct ChatArea: View {
                                 .textFieldStyle(.plain)
                                 .font(.system(size: 13, weight: .medium, design: .rounded))
                                 .foregroundColor(AppColor.colaDarkText)
-                                .lineLimit(1...4)
+                                .lineLimit(1...6)
+                                .fixedSize(horizontal: false, vertical: true)
                                 .padding(.horizontal, 18)
-                                .frame(height: 36)
+                                .padding(.vertical, 10)
+                                .frame(minHeight: 36)
                                 .background(
                                     NativeGlassPanel(
                                         cornerRadius: 18,

@@ -723,6 +723,9 @@ struct MemoryDebugInspector: View {
 
                 JudgeEventsTab(telemetry: telemetry)
                     .tabItem { Label("Judge", systemImage: "wand.and.sparkles") }
+
+                ReflectionClaimsTab(nodeStore: nodeStore)
+                    .tabItem { Label("Reflections", systemImage: "sparkles.rectangle.stack") }
             }
         }
         .frame(minWidth: 860, minHeight: 640)
@@ -1158,5 +1161,185 @@ struct JudgeEventsTab: View {
 
     private func reload() {
         events = telemetry.recentJudgeEvents(limit: 200, filter: filter)
+    }
+}
+
+// MARK: - Reflections tab
+
+/// Debug-only inspector for weekly self-reflection claims. Lists every active
+/// claim (free-chat + all projects) and lets the user manually orphan a claim
+/// that doesn't actually describe them. Manual orphan is the final validator —
+/// the corpus-scope prompt is best-effort, and wrong claims still slip through.
+struct ReflectionClaimsTab: View {
+    let nodeStore: NodeStore
+
+    private struct ClaimRow: Identifiable {
+        let id: UUID
+        let claim: ReflectionClaim
+        let projectTitle: String?
+    }
+
+    @State private var rows: [ClaimRow] = []
+    @State private var loadError: String?
+    @State private var acting: UUID?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                header
+
+                if let loadError {
+                    Text(loadError)
+                        .font(.system(size: 12, design: .rounded))
+                        .foregroundColor(.red)
+                        .padding(.horizontal, 4)
+                }
+
+                if rows.isEmpty {
+                    empty
+                } else {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        ForEach(rows) { row in
+                            claimCard(row)
+                        }
+                    }
+                }
+            }
+            .padding(24)
+        }
+        .background(AppColor.colaBeige)
+        .onAppear(perform: reload)
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Weekly Reflections")
+                .font(.system(size: 18, weight: .semibold, design: .rounded))
+                .foregroundColor(AppColor.colaDarkText)
+            Text("Patterns Nous inferred from last week's chats. Orphan any claim that doesn't match you — orphaned claims stop entering new retrieval pools.")
+                .font(.system(size: 12, design: .rounded))
+                .foregroundColor(AppColor.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var empty: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("No active reflections yet.")
+                .font(.system(size: 13, design: .rounded))
+                .foregroundColor(AppColor.secondaryText)
+            Text("Reflections land every Sunday night when Gemini is configured and you've logged at least 8 messages across 2 conversations in the week.")
+                .font(.system(size: 12, design: .rounded))
+                .foregroundColor(AppColor.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppColor.surfaceSecondary)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private func claimCard(_ row: ClaimRow) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                scopeBadge(row.projectTitle)
+                confidenceBadge(row.claim.confidence)
+                Spacer()
+                Text(Self.relative(row.claim.createdAt))
+                    .font(.system(size: 11, design: .rounded))
+                    .foregroundColor(AppColor.secondaryText)
+            }
+
+            Text(row.claim.claim)
+                .font(.system(size: 13, design: .rounded))
+                .foregroundColor(AppColor.colaDarkText)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if !row.claim.whyNonObvious.isEmpty {
+                Text("Why non-obvious: \(row.claim.whyNonObvious)")
+                    .font(.system(size: 11, design: .rounded))
+                    .foregroundColor(AppColor.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack {
+                Spacer()
+                Button(action: { orphan(row.claim.id) }) {
+                    Text(acting == row.claim.id ? "Orphaning..." : "Orphan this claim")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(AppColor.colaOrange)
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(acting == row.claim.id)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppColor.surfaceSecondary)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private func scopeBadge(_ projectTitle: String?) -> some View {
+        let label = projectTitle.map { "Project · \($0)" } ?? "Free chat"
+        return Text(label)
+            .font(.system(size: 11, weight: .semibold, design: .rounded))
+            .foregroundColor(AppColor.colaDarkText)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(AppColor.colaOrange.opacity(0.14))
+            .clipShape(Capsule())
+    }
+
+    private func confidenceBadge(_ confidence: Double) -> some View {
+        Text("conf \(String(format: "%.2f", confidence))")
+            .font(.system(size: 11, weight: .semibold, design: .rounded))
+            .foregroundColor(AppColor.secondaryText)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(AppColor.surfacePrimary)
+            .clipShape(Capsule())
+    }
+
+    private func orphan(_ id: UUID) {
+        acting = id
+        do {
+            try nodeStore.orphanReflectionClaim(id: id)
+        } catch {
+            loadError = "Failed to orphan: \(error.localizedDescription)"
+        }
+        acting = nil
+        reload()
+    }
+
+    private func reload() {
+        do {
+            var collected: [ClaimRow] = []
+            let projects = try nodeStore.fetchAllProjects()
+            for project in projects {
+                let claims = try nodeStore.fetchActiveReflectionClaims(projectId: project.id)
+                collected.append(contentsOf: claims.map {
+                    ClaimRow(id: $0.id, claim: $0, projectTitle: project.title)
+                })
+            }
+            let freeChat = try nodeStore.fetchActiveReflectionClaims(projectId: nil)
+            collected.append(contentsOf: freeChat.map {
+                ClaimRow(id: $0.id, claim: $0, projectTitle: nil)
+            })
+            rows = collected.sorted { $0.claim.createdAt > $1.claim.createdAt }
+            loadError = nil
+        } catch {
+            loadError = "Failed to load reflections: \(error.localizedDescription)"
+        }
+    }
+
+    private static func relative(_ date: Date) -> String {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .short
+        return f.localizedString(for: date, relativeTo: Date())
     }
 }
