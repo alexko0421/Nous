@@ -179,10 +179,10 @@ Budget：每 turn 0–2 个 moment。Zero 系 valid 嘅 default——大多数 t
 - 你每个 reply 都 flag（self-inflation）
 - Standard Q&A phrasing
 
-When in doubt, skip.
+唔确定，就唔好 flag。
 
 Tag 规则：
 - source 只限 user 或 nous
-- text 必须係 verbatim（exact wording），唔准 paraphrase
+- text 必须係 verbatim（exact wording，连 typo / 不规则 punctuation 都保留），唔准 paraphrase / 唔准 clean up
 - Block 放响 reply 最末尾，响 <chat_title> 之前
 - 呢个 block 系 hidden，UI 唔会 show
