@@ -109,13 +109,19 @@ final class WeeklyReflectionService {
     }
 
     private let nodeStore: NodeStore
-    private let llm: GeminiLLMService
+    private let llm: StructuredLLMClient
     private let now: () -> Date
 
-    init(nodeStore: NodeStore, llm: GeminiLLMService, now: @escaping () -> Date = Date.init) {
+    init(nodeStore: NodeStore, llm: StructuredLLMClient, now: @escaping () -> Date = Date.init) {
         self.nodeStore = nodeStore
         self.llm = llm
         self.now = now
+    }
+
+    /// Convenience init matching the production call site: a concrete
+    /// `GeminiLLMService`. Test code uses the protocol-based init with a fake.
+    convenience init(nodeStore: NodeStore, llm: GeminiLLMService, now: @escaping () -> Date = Date.init) {
+        self.init(nodeStore: nodeStore, llm: GeminiStructuredLLMAdapter(service: llm), now: now)
     }
 
     /// Idempotent entrypoint. Returns `nil` if a run already exists for this

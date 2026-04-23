@@ -137,6 +137,14 @@ struct ContentView: View {
             if !Self.isRunningUnitTests {
                 await dependencies.settingsVM.loadEmbeddingModel()
             }
+            // WeeklyReflection rollover — fires once per launch, idempotent.
+            // Skipped during unit tests; closure silently no-ops if Gemini
+            // key is unconfigured.
+            if !Self.isRunningUnitTests, let rollover = dependencies.weeklyReflectionRollover {
+                Task.detached(priority: .utility) {
+                    await rollover()
+                }
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .nousNodesDidChange)) { _ in
             dependencies.finderProjectSync.scheduleSync()
