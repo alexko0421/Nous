@@ -875,6 +875,8 @@ final class UserMemoryService {
             return "Project memory"
         case .conversation:
             return "Thread memory"
+        case .selfReflection:
+            return "Self-reflection"
         }
     }
 
@@ -1445,6 +1447,10 @@ extension UserMemoryService {
             return entry.scopeRefId == projectId
         case .conversation:
             return entry.scopeRefId == conversationId
+        case .selfReflection:
+            // Reflections live in `reflection_claim`, never in `memory_entries`.
+            // Compiler requires the case; at runtime this path is unreachable.
+            return false
         }
     }
 
@@ -1456,6 +1462,8 @@ extension UserMemoryService {
             return fact.scopeRefId == projectId
         case .conversation:
             return fact.scopeRefId == conversationId
+        case .selfReflection:
+            return false
         }
     }
 

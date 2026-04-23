@@ -139,34 +139,15 @@ struct ChatArea: View {
                                         }
                                     }
                                 }
-                                if vm.isGenerating && !vm.currentThinking.isEmpty && vm.currentResponse.isEmpty {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        HStack {
-                                            ThinkingAccordion(
-                                                content: vm.currentThinking,
-                                                isStreaming: true
-                                            )
-                                            Spacer()
-                                        }
-                                        if !vm.citations.isEmpty {
-                                            RAGCitationView(
-                                                citations: vm.citations,
-                                                isExpanded: $isRelevantChatsExpanded,
-                                                onOpenSource: onNavigateToNode
-                                            )
-                                            .padding(.top, 4)
-                                        }
-                                    }
-                                }
-                                if !vm.currentResponse.isEmpty {
+                                if vm.isGenerating && (!vm.currentThinking.isEmpty || !vm.currentResponse.isEmpty) {
                                     VStack(alignment: .leading, spacing: 4) {
                                         MessageBubble(
                                             text: vm.currentResponse,
                                             thinkingContent: vm.currentThinking.isEmpty ? nil : vm.currentThinking,
-                                            isThinkingStreaming: vm.isGenerating && !vm.currentThinking.isEmpty,
+                                            isThinkingStreaming: vm.currentResponse.isEmpty, // 只要 currentResponse 还是空，就代表还在思考阶段
                                             isUser: false
                                         )
-                                        if !vm.citations.isEmpty && vm.isGenerating {
+                                        if !vm.citations.isEmpty {
                                             RAGCitationView(
                                                 citations: vm.citations,
                                                 isExpanded: $isRelevantChatsExpanded,

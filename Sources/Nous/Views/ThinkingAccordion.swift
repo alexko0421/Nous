@@ -4,7 +4,14 @@ struct ThinkingAccordion: View {
     let content: String
     let isStreaming: Bool
 
-    @State private var isExpanded: Bool = false
+    @State private var isExpanded: Bool
+
+    init(content: String, isStreaming: Bool) {
+        self.content = content
+        self.isStreaming = isStreaming
+        // 如果一出世就系 Streaming 状态，预设展开
+        self._isExpanded = State(initialValue: isStreaming)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -18,6 +25,14 @@ struct ThinkingAccordion: View {
                     .padding(.leading, 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .onChange(of: isStreaming) { _, newValue in
+            // 当停止 Streaming (开始输出最终答案) 时，自动折叠
+            if !newValue && isExpanded {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                    isExpanded = false
+                }
             }
         }
     }

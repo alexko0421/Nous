@@ -90,7 +90,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
             judgeLLMServiceFactory: { CannedLLMService() },
             provocationJudgeFactory: { _ in self.judge },
             governanceTelemetry: telemetry,
-            scratchPadStore: MainActor.assumeIsolated { ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!) }
+            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         )
     }
 

@@ -50,7 +50,7 @@ final class ChatViewModelTests: XCTestCase {
             llmServiceProvider: { nil },
             currentProviderProvider: { .local },
             judgeLLMServiceFactory: { nil },
-            scratchPadStore: MainActor.assumeIsolated { ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!) }
+            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         )
 
         XCTAssertNil(vm.activeChatMode)

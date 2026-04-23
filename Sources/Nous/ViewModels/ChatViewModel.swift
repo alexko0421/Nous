@@ -84,17 +84,6 @@ final class ChatViewModel {
         self.defaultProjectId = defaultProjectId
     }
 
-    @MainActor deinit {
-        // VM teardown — make sure no judge task outlives us.
-        inFlightJudgeTask?.cancel()
-        inFlightResponseTask?.cancel()
-        inFlightJudgeTaskId = nil
-        inFlightResponseTaskId = nil
-        for task in geminiCacheRefreshTasks.values { task.cancel() }
-        geminiCacheRefreshTasks.removeAll()
-        geminiCacheRefreshTokens.removeAll()
-    }
-
     // MARK: - Conversation Management
 
     @MainActor
@@ -1495,7 +1484,7 @@ final class ChatViewModel {
     nonisolated private static func shouldCreateGeminiHistoryCache(for messages: [LLMMessage]) -> Bool {
         guard messages.count >= 4 else { return false }
         let characterCount = messages.reduce(into: 0) { $0 += $1.content.count }
-        // Gemini 2.5 Flash implicit caching starts at 1024 prompt tokens; use a
+        // Gemini implicit caching starts at 1024 prompt tokens; use a
         // conservative char-count gate before paying an explicit cache-create call.
         return characterCount >= 4096
     }

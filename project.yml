@@ -49,6 +49,16 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
+  ReflectionFixtureRunner:
+    type: tool
+    platform: macOS
+    deploymentTarget: "26.0"
+    sources:
+      - Sources/ReflectionFixtureRunner
+      - Sources/Nous/Services/Database.swift
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
   NousTests:
     type: bundle.unit-test
     platform: macOS

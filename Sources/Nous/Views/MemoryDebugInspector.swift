@@ -831,6 +831,8 @@ struct MemoryDebugInspector: View {
         case .conversation:
             guard let scopeRefId = entry.scopeRefId else { return "Thread" }
             return "Thread · \(nodeTitles[scopeRefId] ?? "Untitled")"
+        case .selfReflection:
+            return "Self-reflection"
         }
     }
 
@@ -846,6 +848,8 @@ struct MemoryDebugInspector: View {
             return 1
         case .conversation:
             return 2
+        case .selfReflection:
+            return 3
         }
     }
 
@@ -859,6 +863,8 @@ struct MemoryDebugInspector: View {
         case .conversation:
             guard let scopeRefId = entry.scopeRefId else { return "Thread memory" }
             return nodeTitles[scopeRefId] ?? "Thread memory"
+        case .selfReflection:
+            return "Self-reflection"
         }
     }
 
@@ -870,6 +876,8 @@ struct MemoryDebugInspector: View {
             return entryHeadline(for: entry)
         case .conversation:
             return entryHeadline(for: entry)
+        case .selfReflection:
+            return "Self-reflection"
         }
     }
 
@@ -881,6 +889,8 @@ struct MemoryDebugInspector: View {
             return "This belongs to one project and should survive across chats until the project direction changes."
         case .conversation:
             return "This note stays local to one thread so the conversation can continue without restating the same context."
+        case .selfReflection:
+            return "Nous's weekly self-reflection about patterns across recent conversations."
         }
     }
 
