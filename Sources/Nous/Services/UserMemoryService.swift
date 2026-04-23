@@ -505,7 +505,7 @@ final class UserMemoryCore {
         - What has he told me that I should remember while this chat continues?
         - Do NOT include general facts about Alex — those belong in other memory layers.
 
-        Signature moments flagged by Nous earlier in this conversation (preservation-critical — MUST appear verbatim in a bullet, quoted in 「」):
+        Signature moments flagged by Nous earlier in this conversation (text-only quotes — no Nous prose, so the self-confirmation guard is preserved; preservation-critical — MUST appear verbatim in a bullet, quoted in 「」):
         \(signatureMomentsBlock)
 
         IMAGERY PRESERVATION:
