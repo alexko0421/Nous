@@ -112,6 +112,51 @@ final class ClarificationCardParserTests: XCTestCase {
         XCTAssertEqual(parsed.displayText, "之前嘅对话.".replacingOccurrences(of: ".", with: "。"))
     }
 
+    func testParserStripsSignatureMomentsBlock() {
+        let response = """
+        你讲得好——品味需要时间堆积。
+        <signature_moments>
+        - source: user
+          text: "睇过一千幅画，试过一百种咖啡，失败过十次"
+        </signature_moments>
+        """
+
+        let parsed = ClarificationCardParser.parse(response)
+
+        XCTAssertFalse(parsed.displayText.contains("<signature_moments>"))
+        XCTAssertFalse(parsed.displayText.contains("</signature_moments>"))
+        XCTAssertFalse(parsed.displayText.contains("睇过一千幅画"))
+        XCTAssertEqual(parsed.displayText, "你讲得好——品味需要时间堆积。")
+    }
+
+    func testParserStripsUnclosedSignatureMomentsDuringStreaming() {
+        let response = "你讲得好。 <signature_moments>\n- source: user\n  text: \"睇过一"
+
+        let parsed = ClarificationCardParser.parse(response)
+
+        XCTAssertFalse(parsed.displayText.contains("<signature_moments>"))
+        XCTAssertFalse(parsed.displayText.contains("source:"))
+        XCTAssertEqual(parsed.displayText, "你讲得好。")
+    }
+
+    func testParserStripsSignatureMomentsAlongsideThinkingAndChatTitle() {
+        let response = """
+        <thinking>judging</thinking>
+        呢个 observation 好准。
+        <signature_moments>
+        - source: nous
+          text: "硬限制系精神上嘅奢侈品"
+        </signature_moments>
+        <chat_title>品味的形成</chat_title>
+        """
+
+        let parsed = ClarificationCardParser.parse(response)
+
+        XCTAssertEqual(parsed.displayText, "呢个 observation 好准。")
+        XCTAssertFalse(parsed.displayText.contains("硬限制"))
+        XCTAssertFalse(parsed.displayText.contains("品味的形成"))
+    }
+
     func testExtractSummaryReturnsInnerMarkdownWhenWellFormed() {
         let raw = """
         整好了，睇下右边。

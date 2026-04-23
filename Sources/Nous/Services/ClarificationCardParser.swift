@@ -10,9 +10,11 @@ enum ClarificationCardParser {
         #"<thinking>[\s\S]*?</thinking>"#,
         #"<phase>\s*\w+\s*</phase>"#,
         #"<chat_title>[\s\S]*?</chat_title>"#,
+        #"<signature_moments>[\s\S]*?</signature_moments>"#,
         #"<thinking>[\s\S]*$"#,
         #"<phase>[^<]*$"#,
         #"<chat_title>[\s\S]*$"#,
+        #"<signature_moments>[\s\S]*$"#,
     ]
 
     private static let summaryPattern = #"<summary>([\s\S]*?)</summary>"#
