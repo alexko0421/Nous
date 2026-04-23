@@ -131,6 +131,9 @@ struct ContentView: View {
         .task {
             dependencies.chatVM.defaultProjectId = selectedProjectId
             dependencies.finderProjectSync.scheduleSync()
+            Task {
+                await dependencies.conversationTitleBackfill.runIfNeeded()
+            }
             if !Self.isRunningUnitTests {
                 await dependencies.settingsVM.loadEmbeddingModel()
             }

@@ -3,13 +3,16 @@
 // fixture for the WeeklyReflectionService prompt feasibility spike.
 //
 // Usage:
-//   ReflectionFixtureRunner --db <path> --project <uuid> --week YYYY-WXX --out <dir>
+//   ReflectionFixtureRunner --db <path> [--project <uuid>] --week YYYY-WXX --out <dir>
 //
-// Example:
+// If --project is omitted, exports the free-chat scope (nodes where
+// projectId IS NULL). This matches Alex's real DB as of 2026-04-22 where all
+// nodes have NULL projectId.
+//
+// Example (free-chat scope):
 //   ReflectionFixtureRunner \
-//     --db ~/Library/Containers/com.nous.app.Nous/Data/Library/Application\ Support/Nous/nous.sqlite \
-//     --project 7B3F...A2 \
-//     --week 2026-W17 \
+//     --db ~/Library/Application\ Support/Nous/nous.db \
+//     --week 2026-W16 \
 //     --out ~/.gstack/projects/alexko0421-Nous/fixtures
 //
 // No `import Nous` — Database.swift is included directly in this target.
@@ -19,8 +22,8 @@ import Foundation
 
 struct Args {
     var dbPath: String
-    var projectId: String
-    var week: String  // ISO week: YYYY-WXX
+    var projectId: String?   // nil = free-chat scope (nodes where projectId IS NULL)
+    var week: String         // ISO week: YYYY-WXX
     var outDir: String
 }
 
@@ -43,8 +46,8 @@ func parseArgs() -> Args {
             fputs("unknown arg: \(k)\n", stderr); exit(64)
         }
     }
-    guard let db, let project, let week, let out else {
-        fputs("usage: ReflectionFixtureRunner --db <path> --project <uuid> --week YYYY-WXX --out <dir>\n", stderr)
+    guard let db, let week, let out else {
+        fputs("usage: ReflectionFixtureRunner --db <path> [--project <uuid>] --week YYYY-WXX --out <dir>\n", stderr)
         exit(64)
     }
     return Args(dbPath: db, projectId: project, week: week, outDir: out)
@@ -90,7 +93,7 @@ struct ExportConversation: Encodable {
 }
 
 struct ExportFixture: Encodable {
-    let project_id: String
+    let project_id: String?   // nil encoded as JSON null = free-chat scope
     let week_start: String
     let week_end: String
     let message_count: Int
@@ -118,24 +121,43 @@ isoFmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 let isoOut = ISO8601DateFormatter()
 isoOut.formatOptions = [.withFullDate]
 
-// Pull messages for nodes in this project during the week window.
+// Pull messages for nodes in this scope during the week window.
 // `messages.timestamp` is stored as REAL unix seconds.
-let sql = """
-    SELECT m.id, m.nodeId, n.title, m.role, m.content, m.timestamp
-    FROM messages m
-    JOIN nodes n ON n.id = m.nodeId
-    WHERE n.projectId = ?
-      AND m.timestamp >= ?
-      AND m.timestamp <  ?
-    ORDER BY m.nodeId, m.timestamp ASC;
-"""
+// Free-chat scope (args.projectId == nil) matches nodes with NULL projectId.
+let sql: String
+if args.projectId != nil {
+    sql = """
+        SELECT m.id, m.nodeId, n.title, m.role, m.content, m.timestamp
+        FROM messages m
+        JOIN nodes n ON n.id = m.nodeId
+        WHERE n.projectId = ?
+          AND m.timestamp >= ?
+          AND m.timestamp <  ?
+        ORDER BY m.nodeId, m.timestamp ASC;
+    """
+} else {
+    sql = """
+        SELECT m.id, m.nodeId, n.title, m.role, m.content, m.timestamp
+        FROM messages m
+        JOIN nodes n ON n.id = m.nodeId
+        WHERE n.projectId IS NULL
+          AND m.timestamp >= ?
+          AND m.timestamp <  ?
+        ORDER BY m.nodeId, m.timestamp ASC;
+    """
+}
 
 let stmt: Statement
 do {
     stmt = try db.prepare(sql)
-    try stmt.bind(args.projectId, at: 1)
-    try stmt.bind(range.start.timeIntervalSince1970, at: 2)
-    try stmt.bind(range.end.timeIntervalSince1970, at: 3)
+    if let projectId = args.projectId {
+        try stmt.bind(projectId, at: 1)
+        try stmt.bind(range.start.timeIntervalSince1970, at: 2)
+        try stmt.bind(range.end.timeIntervalSince1970, at: 3)
+    } else {
+        try stmt.bind(range.start.timeIntervalSince1970, at: 1)
+        try stmt.bind(range.end.timeIntervalSince1970, at: 2)
+    }
 } catch {
     fputs("query prepare failed: \(error)\n", stderr); exit(1)
 }
@@ -189,6 +211,6 @@ let data = try encoder.encode(fixture)
 try data.write(to: URL(fileURLWithPath: outPath))
 
 print("wrote \(outPath)")
-print("  project \(args.projectId)")
+print("  scope   \(args.projectId ?? "free-chat (NULL projectId)")")
 print("  week    \(args.week) → \(isoOut.string(from: range.start)) … \(isoOut.string(from: range.end))")
 print("  \(conversations.count) conversations, \(messageCount) messages")

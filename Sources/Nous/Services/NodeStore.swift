@@ -182,17 +182,22 @@ final class NodeStore {
         // deleted; an app-level step then re-checks claim evidence count and
         // flips `reflection_claim.status` to 'orphaned' if it drops below the
         // validator's minimum (2).
+        //
+        // `project_id` is nullable because conversations without a project
+        // (Alex's primary usage mode as of 2026-04-22) still need weekly
+        // reflection. NULL means "free-chat scope" — all projectId IS NULL
+        // conversations in the week. The unique index below uses COALESCE so
+        // NULL-scoped runs still dedupe per-week.
         try db.exec("""
             CREATE TABLE IF NOT EXISTS reflection_runs (
                 id               TEXT PRIMARY KEY,
-                project_id       TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                project_id       TEXT REFERENCES projects(id) ON DELETE CASCADE,
                 week_start       REAL NOT NULL,
                 week_end         REAL NOT NULL,
                 ran_at           REAL NOT NULL,
                 status           TEXT NOT NULL,
                 rejection_reason TEXT,
-                cost_cents       INTEGER,
-                UNIQUE (project_id, week_start, week_end)
+                cost_cents       INTEGER
             );
         """)
 
@@ -259,6 +264,10 @@ final class NodeStore {
         try db.exec("CREATE INDEX IF NOT EXISTS idx_judge_events_ts ON judge_events(ts);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_judge_events_fallback ON judge_events(fallbackReason);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_reflection_runs_project_week ON reflection_runs(project_id, week_end);")
+        // SQLite treats NULLs as distinct in UNIQUE constraints, so the free-chat
+        // scope (project_id IS NULL) would accept duplicate rows for the same week.
+        // COALESCE folds NULL to '' and restores the single-row-per-(scope, week) invariant.
+        try db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_reflection_runs_unique ON reflection_runs(COALESCE(project_id, ''), week_start, week_end);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_reflection_claim_run ON reflection_claim(run_id);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_reflection_claim_status ON reflection_claim(status);")
     }

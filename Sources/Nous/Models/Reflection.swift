@@ -23,7 +23,10 @@ enum ReflectionClaimStatus: String, Codable {
 /// so foreground-trigger and retry paths can safely no-op on duplicates.
 struct ReflectionRun: Identifiable, Codable, Equatable {
     let id: UUID
-    var projectId: UUID
+    /// `nil` = free-chat scope (no project). Matches the nullable `project_id`
+    /// column on `reflection_runs`, which reflects that most nodes in the real
+    /// DB have `projectId IS NULL` (Alex's primary usage as of 2026-04-22).
+    var projectId: UUID?
     var weekStart: Date
     var weekEnd: Date
     var ranAt: Date
@@ -33,7 +36,7 @@ struct ReflectionRun: Identifiable, Codable, Equatable {
 
     init(
         id: UUID = UUID(),
-        projectId: UUID,
+        projectId: UUID? = nil,
         weekStart: Date,
         weekEnd: Date,
         ranAt: Date = Date(),

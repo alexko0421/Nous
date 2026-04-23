@@ -374,7 +374,6 @@ struct MemoryDebugInspector: View {
             VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) {
-                        badge(text: scopeDisplay(for: entry), tint: AppColor.colaOrange.opacity(0.14), textColor: AppColor.colaDarkText)
                         if entry.status != .active {
                             badge(text: statusDisplay(entry.status), tint: statusTint(entry.status), textColor: statusTextColor(entry.status))
                         }

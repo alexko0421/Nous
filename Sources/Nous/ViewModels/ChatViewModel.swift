@@ -291,10 +291,17 @@ final class ChatViewModel {
         }
 
         guard isActiveResponseTask(responseTaskId) else { return }
-        let assistantContent = currentResponse
+        let rawAssistantContent = currentResponse
+        let assistantContent = ClarificationCardParser.stripChatTitle(from: rawAssistantContent)
+        let conversationTitle = ChatViewModel.sanitizedConversationTitle(
+            from: ClarificationCardParser.extractChatTitle(from: rawAssistantContent)
+        )
         let assistantMessage = Message(nodeId: node.id, role: .assistant, content: assistantContent)
         try? nodeStore.insertMessage(assistantMessage)
         messages.append(assistantMessage)
+        if let conversationTitle {
+            maybeApplyConversationTitle(conversationTitle, nodeId: node.id, messages: messages)
+        }
         persistConversationSnapshot(for: node.id, messages: messages, shouldRefreshEmoji: true)
         activeQuickActionMode = ChatViewModel.updatedQuickActionMode(
             currentMode: activeQuickActionMode,
@@ -356,8 +363,7 @@ final class ChatViewModel {
 
         // Step 1: Create conversation node if nil
         if currentNode == nil {
-            let title = String(promptQuery.prefix(40))
-            startNewConversation(title: title, projectId: defaultProjectId, cancelInFlightWork: false)
+            startNewConversation(projectId: defaultProjectId, cancelInFlightWork: false)
         }
 
         guard let node = currentNode else { return }
@@ -677,7 +683,11 @@ final class ChatViewModel {
         if didHitBudgetExhaustion && currentResponse.isEmpty {
             currentResponse = "(I ran out of thinking budget on that one. Try asking again, maybe a touch simpler.)"
         }
-        let assistantContent = currentResponse
+        let rawAssistantContent = currentResponse
+        let assistantContent = ClarificationCardParser.stripChatTitle(from: rawAssistantContent)
+        let conversationTitle = ChatViewModel.sanitizedConversationTitle(
+            from: ClarificationCardParser.extractChatTitle(from: rawAssistantContent)
+        )
         let persistedThinking = currentThinking.isEmpty ? nil : currentThinking
         let assistantMessage = Message(
             nodeId: node.id,
@@ -687,6 +697,9 @@ final class ChatViewModel {
         )
         try? nodeStore.insertMessage(assistantMessage)
         messages.append(assistantMessage)
+        if let conversationTitle {
+            maybeApplyConversationTitle(conversationTitle, nodeId: node.id, messages: messages)
+        }
         scratchPadStore.ingestAssistantMessage(
             content: assistantContent,
             sourceMessageId: assistantMessage.id,
@@ -787,7 +800,7 @@ final class ChatViewModel {
 
     /// Loads the anchor document — Nous's immutable core identity and thinking methods.
     /// This is who Nous is. It does not change with context.
-    private static let anchor: String = {
+    nonisolated private static let anchor: String = {
         guard let url = Bundle.main.url(forResource: "anchor", withExtension: "md"),
               let content = try? String(contentsOf: url, encoding: .utf8) else {
             print("[Nous] WARNING: anchor.md not found in bundle, using fallback")
@@ -797,7 +810,7 @@ final class ChatViewModel {
         return content
     }()
 
-    private static let memoryInterpretationPolicy = """
+    nonisolated private static let memoryInterpretationPolicy = """
     ---
 
     MEMORY INTERPRETATION POLICY:
@@ -806,7 +819,7 @@ final class ChatViewModel {
     Do not present diagnoses or identity labels as certainty.
     """
 
-    private static let coreSafetyPolicy = """
+    nonisolated private static let coreSafetyPolicy = """
     ---
 
     CORE SAFETY POLICY:
@@ -815,7 +828,7 @@ final class ChatViewModel {
     Respect memory boundaries: if Alex asks not to store something, or asked for consent before sensitive storage, do not silently turn that into durable memory.
     """
 
-    private static let summaryOutputPolicy = """
+    nonisolated private static let summaryOutputPolicy = """
     ---
 
     SUMMARY OUTPUT POLICY:
@@ -837,7 +850,24 @@ final class ChatViewModel {
     Text outside the tag is allowed for a brief conversational wrapper in the same language (e.g. Cantonese: "整好了，睇下右边嘅白纸"; English: "Done, check the right panel."). The summary content itself must strictly live inside the tag. Never emit the tag when Alex is not asking for a summary.
     """
 
-    private static let highRiskSafetyModeBlock = """
+    nonisolated private static let conversationTitleOutputPolicy = """
+    ---
+
+    CONVERSATION TITLE POLICY:
+    At the very end of every assistant reply, append exactly one hidden line in this format:
+    <chat_title>short topic title here</chat_title>
+
+    Rules:
+    - This tag is hidden from Alex and is only used to label the chat.
+    - Match the conversation language and dialect. Do not translate Cantonese into Mandarin.
+    - Make it a concise topic label, not a full sentence, not a quote, and not a question.
+    - No markdown, no emoji, no surrounding quotes, and no trailing punctuation.
+    - Keep it specific. Good: "AI 时代仲要唔要生细路". Bad: "Actually you think that in the future..."
+    - Prefer 2 to 6 words for spaced languages, or a short phrase for Chinese.
+    - Put the tag on its own final line after all visible text, summary tags, or clarification blocks.
+    """
+
+    nonisolated private static let highRiskSafetyModeBlock = """
     ---
 
     HIGH-RISK SAFETY MODE:
@@ -893,6 +923,7 @@ final class ChatViewModel {
         stable.append(memoryInterpretationPolicy)
         stable.append(coreSafetyPolicy)
         stable.append(summaryOutputPolicy)
+        stable.append(conversationTitleOutputPolicy)
 
         if let globalMemory, !globalMemory.isEmpty {
             stable.append("---\n\nLONG-TERM MEMORY ABOUT ALEX:\n\(globalMemory)")
@@ -1036,7 +1067,7 @@ final class ChatViewModel {
         allowInteractiveClarification: Bool = false,
         now: Date = Date()
     ) -> PromptGovernanceTrace {
-        var layers = ["anchor", "memory_interpretation_policy", "core_safety_policy", "summary_output_policy", "chat_mode"]
+        var layers = ["anchor", "memory_interpretation_policy", "core_safety_policy", "summary_output_policy", "conversation_title_output_policy", "chat_mode"]
         let highRiskQueryDetected = SafetyGuardrails.isHighRiskQuery(currentUserInput)
 
         if let globalMemory, !globalMemory.isEmpty { layers.append("global_memory") }
@@ -1129,6 +1160,66 @@ final class ChatViewModel {
         return "\(query)\n\nFiles: \(attachmentNames.joined(separator: ", "))"
     }
 
+    nonisolated private static func sanitizedConversationTitle(from raw: String?) -> String? {
+        guard var title = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else {
+            return nil
+        }
+
+        title = title
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\t", with: " ")
+        while title.contains("  ") {
+            title = title.replacingOccurrences(of: "  ", with: " ")
+        }
+
+        while let first = title.first, first == "#" || first == "-" || first == "*" || first.isWhitespace {
+            title.removeFirst()
+        }
+
+        title = title.trimmingCharacters(in: CharacterSet(charactersIn: "\"'`“”‘’"))
+        title = title.trimmingCharacters(in: CharacterSet(charactersIn: ".!?,;:。！？、，；："))
+
+        let filteredScalars = title.unicodeScalars.filter { scalar in
+            !CharacterSet(charactersIn: "<>|/\\").contains(scalar)
+        }
+        title = String(String.UnicodeScalarView(filteredScalars))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if title.count > 48 {
+            title = String(title.prefix(48)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        return title.isEmpty ? nil : title
+    }
+
+    nonisolated private static func shouldAutoRenameConversation(
+        currentTitle: String,
+        messages: [Message]
+    ) -> Bool {
+        let trimmed = currentTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return true }
+
+        if ["new conversation", "new chat", "untitled"].contains(trimmed.lowercased()) {
+            return true
+        }
+
+        guard let legacySeed = legacyConversationSeedTitle(from: messages) else { return false }
+        return trimmed == legacySeed
+    }
+
+    nonisolated private static func legacyConversationSeedTitle(from messages: [Message]) -> String? {
+        guard let firstUser = messages.first(where: { $0.role == .user })?.content else {
+            return nil
+        }
+
+        let queryOnly = firstUser
+            .components(separatedBy: "\n\nFiles:")
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? firstUser
+        guard !queryOnly.isEmpty else { return nil }
+        return String(queryOnly.prefix(40)).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     nonisolated static func updatedQuickActionMode(
         currentMode: QuickActionMode?,
         assistantContent: String
@@ -1173,6 +1264,23 @@ final class ChatViewModel {
         Ask one short, warm opening question that helps you understand his situation.
         Do not mention hidden prompts, modes, system instructions, or formatting rules.
         """
+    }
+
+    @MainActor
+    private func maybeApplyConversationTitle(_ title: String, nodeId: UUID, messages: [Message]) {
+        guard var node = try? nodeStore.fetchNode(id: nodeId) else { return }
+        guard ChatViewModel.shouldAutoRenameConversation(currentTitle: node.title, messages: messages) else {
+            return
+        }
+        guard node.title != title else { return }
+
+        node.title = title
+        node.updatedAt = Date()
+        try? nodeStore.updateNode(node)
+
+        if currentNode?.id == node.id {
+            currentNode = node
+        }
     }
 
     private func persistConversationSnapshot(

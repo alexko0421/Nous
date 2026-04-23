@@ -197,4 +197,40 @@ final class ClarificationCardParserTests: XCTestCase {
         XCTAssertTrue(parsed.displayText.contains("世界"))
         XCTAssertTrue(parsed.displayText.contains("整好了"))
     }
+
+    func testExtractChatTitleReturnsInnerTextWhenWellFormed() {
+        let raw = """
+        呢个问题要拆开睇。
+
+        <chat_title>AI 时代仲要唔要生细路</chat_title>
+        """
+
+        XCTAssertEqual(
+            ClarificationCardParser.extractChatTitle(from: raw),
+            "AI 时代仲要唔要生细路"
+        )
+    }
+
+    func testStripChatTitleRemovesHiddenTitleBlockFromPersistedText() {
+        let raw = """
+        我会由成本、时间同后悔风险三边睇。
+
+        <chat_title>创业应该搬去边</chat_title>
+        """
+
+        let stripped = ClarificationCardParser.stripChatTitle(from: raw)
+        XCTAssertFalse(stripped.contains("<chat_title>"))
+        XCTAssertFalse(stripped.contains("创业应该搬去边"))
+        XCTAssertTrue(stripped.contains("我会由成本"))
+    }
+
+    func testParseStripsUnclosedChatTitleDuringStreaming() {
+        let raw = """
+        我会直接答你。
+        <chat_title>AI 时代仲要
+        """
+
+        let parsed = ClarificationCardParser.parse(raw)
+        XCTAssertEqual(parsed.displayText, "我会直接答你。")
+    }
 }

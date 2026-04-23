@@ -23,8 +23,11 @@ struct AppColor {
         dark: NSColor(red: 24/255, green: 24/255, blue: 26/255, alpha: 1)
     )
     
-    // Vibrant earthy orange from ColaOS logo
-    static let colaOrange = Color(red: 243/255, green: 131/255, blue: 53/255) 
+    // Vibrant earthy orange from ColaOS logo (softened to amber in dark mode)
+    static let colaOrange = dynamicColor(
+        light: NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 1),
+        dark: NSColor(red: 217/255, green: 131/255, blue: 65/255, alpha: 1) // #D98341
+    )
     
     // Dark text for contrast on beige
     static let colaDarkText = dynamicColor(

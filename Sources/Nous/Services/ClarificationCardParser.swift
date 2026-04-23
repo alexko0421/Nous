@@ -4,12 +4,15 @@ enum ClarificationCardParser {
     private static let blockPattern = #"<clarify>\s*<question>(.*?)</question>(.*?)</clarify>"#
     private static let optionPattern = #"<option>(.*?)</option>"#
     private static let understandingPhasePattern = #"<phase>\s*understanding\s*</phase>"#
+    private static let chatTitlePattern = #"<chat_title>([\s\S]*?)</chat_title>"#
 
     private static let internalReasoningPatterns: [String] = [
         #"<thinking>[\s\S]*?</thinking>"#,
         #"<phase>\s*\w+\s*</phase>"#,
+        #"<chat_title>[\s\S]*?</chat_title>"#,
         #"<thinking>[\s\S]*$"#,
         #"<phase>[^<]*$"#,
+        #"<chat_title>[\s\S]*$"#,
     ]
 
     private static let summaryPattern = #"<summary>([\s\S]*?)</summary>"#
@@ -21,6 +24,11 @@ enum ClarificationCardParser {
 
     private static let summaryRegex = try? NSRegularExpression(
         pattern: summaryPattern,
+        options: [.caseInsensitive, .dotMatchesLineSeparators]
+    )
+
+    private static let chatTitleRegex = try? NSRegularExpression(
+        pattern: chatTitlePattern,
         options: [.caseInsensitive, .dotMatchesLineSeparators]
     )
 
@@ -87,6 +95,43 @@ enum ClarificationCardParser {
 
         let inner = text[innerRange].trimmingCharacters(in: .whitespacesAndNewlines)
         return inner.isEmpty ? nil : inner
+    }
+
+    static func extractChatTitle(from text: String) -> String? {
+        guard
+            let regex = chatTitleRegex,
+            let range = nsRange(for: text),
+            let match = regex.firstMatch(in: text, options: [], range: range),
+            let innerRange = Range(match.range(at: 1), in: text)
+        else {
+            return nil
+        }
+
+        let inner = cleaned(text[innerRange])
+        return inner.isEmpty ? nil : inner
+    }
+
+    static func stripChatTitle(from text: String) -> String {
+        var result = text
+        for pattern in [#"\s*<chat_title>[\s\S]*?</chat_title>\s*"#, #"\s*<chat_title>[\s\S]*$"#] {
+            guard
+                let regex = try? NSRegularExpression(
+                    pattern: pattern,
+                    options: [.caseInsensitive, .dotMatchesLineSeparators]
+                ),
+                let range = nsRange(for: result)
+            else {
+                continue
+            }
+
+            result = regex.stringByReplacingMatches(
+                in: result,
+                options: [],
+                range: range,
+                withTemplate: ""
+            )
+        }
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func removingSummaryTagMarkers(from text: String) -> String {

@@ -29,6 +29,22 @@ final class SlowStreamingLLMService: LLMService {
     }
 }
 
+final class SingleReplyLLMService: LLMService {
+    let output: String
+
+    init(output: String) {
+        self.output = output
+    }
+
+    func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
+        let output = self.output
+        return AsyncThrowingStream { continuation in
+            continuation.yield(output)
+            continuation.finish()
+        }
+    }
+}
+
 @MainActor
 final class ChatViewModelTests: XCTestCase {
 
@@ -316,6 +332,10 @@ final class ChatViewModelTests: XCTestCase {
             trace.promptLayers.contains("summary_output_policy"),
             "Expected stable layer 'summary_output_policy' in \(trace.promptLayers)"
         )
+        XCTAssertTrue(
+            trace.promptLayers.contains("conversation_title_output_policy"),
+            "Expected stable layer 'conversation_title_output_policy' in \(trace.promptLayers)"
+        )
     }
 
     func testAssembleContextStableIncludesSummaryInstruction() {
@@ -328,6 +348,7 @@ final class ChatViewModelTests: XCTestCase {
             projectGoal: nil
         )
         XCTAssertTrue(slice.stable.contains("<summary>"), "Stable system prompt must mention <summary> tag.")
+        XCTAssertTrue(slice.stable.contains("<chat_title>"), "Stable system prompt must mention <chat_title> tag.")
         // The policy must be language-adaptive, not hard-wired to Mandarin.
         XCTAssertTrue(
             slice.stable.contains("match the conversation language"),
@@ -337,6 +358,52 @@ final class ChatViewModelTests: XCTestCase {
         // knows what to emit when the conversation is in that language.
         XCTAssertTrue(slice.stable.contains("下一步"), "Should include Chinese header vocabulary.")
         XCTAssertTrue(slice.stable.contains("Next steps"), "Should include English header vocabulary.")
+        XCTAssertTrue(
+            slice.stable.contains("Do not translate Cantonese into Mandarin"),
+            "Stable system prompt must preserve Cantonese titles instead of flattening them into Mandarin."
+        )
+    }
+
+    @MainActor
+    func testSendPromotesHiddenChatTitleAndStripsItFromStoredAssistantMessage() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let llm = SingleReplyLLMService(output: """
+        我会直接答你。
+
+        <chat_title>AI 时代仲要唔要生细路</chat_title>
+        """)
+
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { llm },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        )
+
+        vm.inputText = "其实你觉得系未来 AI 时代系咪生孩子真系冇有嗰么必要？"
+        await vm.send()
+
+        let nodeId = try XCTUnwrap(vm.currentNode?.id)
+        let storedNode = try XCTUnwrap(nodeStore.fetchNode(id: nodeId))
+        let storedMessages = try nodeStore.fetchMessages(nodeId: nodeId)
+        let assistant = try XCTUnwrap(storedMessages.last)
+
+        XCTAssertEqual(vm.currentNode?.title, "AI 时代仲要唔要生细路")
+        XCTAssertEqual(storedNode.title, "AI 时代仲要唔要生细路")
+        XCTAssertEqual(assistant.role, .assistant)
+        XCTAssertEqual(assistant.content, "我会直接答你。")
+        XCTAssertFalse(assistant.content.contains("<chat_title>"))
     }
 
     @MainActor

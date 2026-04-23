@@ -14,6 +14,7 @@ struct AppDependencies {
     let localLLM: LocalLLMService
     let graphEngine: GraphEngine
     let finderProjectSync: FinderProjectSyncService
+    let conversationTitleBackfill: ConversationTitleBackfillService
     let userMemoryService: UserMemoryService
     let governanceTelemetry: GovernanceTelemetryStore
     let scratchPadStore: ScratchPadStore
@@ -97,6 +98,10 @@ final class AppEnvironment {
             localLLM: localLLM,
             nodeStore: nodeStore
         )
+        let conversationTitleBackfill = ConversationTitleBackfillService(
+            nodeStore: nodeStore,
+            llmServiceProvider: { settingsVM.makeLLMService() }
+        )
         let governanceTelemetry = GovernanceTelemetryStore(nodeStore: nodeStore)
         let scratchPadStore = ScratchPadStore()
         let userMemoryService = UserMemoryService(
@@ -133,6 +138,7 @@ final class AppEnvironment {
             localLLM: localLLM,
             graphEngine: graphEngine,
             finderProjectSync: finderProjectSync,
+            conversationTitleBackfill: conversationTitleBackfill,
             userMemoryService: userMemoryService,
             governanceTelemetry: governanceTelemetry,
             scratchPadStore: scratchPadStore,
