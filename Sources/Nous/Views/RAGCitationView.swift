@@ -5,6 +5,7 @@ struct RAGCitationView: View {
     @Binding var isExpanded: Bool
     var onOpenSource: (NousNode) -> Void = { _ in }
     @State private var hoveredNodeId: UUID?
+    @State private var popoverNodeId: UUID?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -88,12 +89,23 @@ struct RAGCitationView: View {
                         .buttonStyle(.plain)
                         .onHover { isHovering in
                             hoveredNodeId = isHovering ? result.node.id : nil
+                            // 延迟 120ms 后决定是否弹出，避免快速掠过也触发 popover
+                            if isHovering {
+                                let thisId = result.node.id
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                                    if hoveredNodeId == thisId {
+                                        popoverNodeId = thisId
+                                    }
+                                }
+                            } else {
+                                popoverNodeId = nil
+                            }
                         }
-                        // Quick Look Popover — 鼠标悬停时弹出预览浮窗
+                        // Quick Look Popover — 稳定悬停 120ms 后弹出预览浮窗
                         .popover(
                             isPresented: Binding(
-                                get: { hoveredNodeId == result.node.id },
-                                set: { if !$0 { hoveredNodeId = nil } }
+                                get: { popoverNodeId == result.node.id },
+                                set: { if !$0 { popoverNodeId = nil } }
                             ),
                             arrowEdge: .leading
                         ) {
@@ -119,11 +131,15 @@ struct RAGCitationView: View {
             }
         }
         .onChange(of: isExpanded) { _, expanded in
-            if !expanded { hoveredNodeId = nil }
+            if !expanded { hoveredNodeId = nil; popoverNodeId = nil }
         }
         .onChange(of: citationNodeIDs) { _, ids in
-            guard let hoveredNodeId, !ids.contains(hoveredNodeId) else { return }
-            self.hoveredNodeId = nil
+            if let hoveredNodeId, !ids.contains(hoveredNodeId) {
+                self.hoveredNodeId = nil
+            }
+            if let popoverNodeId, !ids.contains(popoverNodeId) {
+                self.popoverNodeId = nil
+            }
         }
     }
 
@@ -185,7 +201,7 @@ struct RAGCitationView: View {
 
             // 内容 Snippet
             Text(result.surfacedSnippet)
-                .font(.system(size: 12, weight: .regular))
+                .font(.system(size: 12, weight: .regular, design: .rounded))
                 .foregroundStyle(AppColor.colaDarkText.opacity(0.8))
                 .lineSpacing(4)
                 .lineLimit(8)

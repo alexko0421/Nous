@@ -26,6 +26,8 @@ struct SettingsView: View {
 
     @AppStorage("nous.username")   private var username       = "ALEX"
     @AppStorage("nous.appearance") private var appearanceMode = "system"
+    @Namespace private var toggleAnimation
+    @Namespace private var navAnimation
 
     var body: some View {
         HStack(spacing: 0) {
@@ -52,31 +54,16 @@ struct SettingsView: View {
                     .padding(.bottom, 8)
 
                 ForEach(SettingsSection.allCases, id: \.self) { section in
-                    Button(action: { selectedTab = section }) {
-                        HStack(spacing: 10) {
-                            Image(systemName: section.icon)
-                                .font(.system(size: 12, weight: .medium))
-                                .frame(width: 18, alignment: .center)
-                            Text(section.rawValue)
-                                .font(.system(size: 13, weight: .medium, design: .rounded))
-                            Spacer()
-                        }
-                        .foregroundColor(selectedTab == section ? AppColor.colaOrange : AppColor.secondaryText)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(selectedTab == section ? AppColor.colaOrange.opacity(0.10) : Color.clear)
-                        )
-                    }
-                    .buttonStyle(.plain)
+                    navButton(section: section)
                 }
 
                 Spacer()
             }
             .frame(width: 180)
             .padding(.horizontal, 8)
-            .background(AppColor.surfaceSecondary.opacity(0.5))
+            .background(
+                NativeGlassPanel(cornerRadius: 0, tintColor: AppColor.glassTint) { EmptyView() }
+            )
 
             Divider()
 
@@ -387,28 +374,105 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
-    private var appearancePicker: some View {
-        HStack(spacing: 2) {
-            ForEach([("sun.max", "Light", "light"), ("moon", "Dark", "dark"), ("circle.lefthalf.filled", "Auto", "system")], id: \.2) { icon, label, value in
-                Button(action: { appearanceMode = value }) {
-                    HStack(spacing: 5) {
-                        Image(systemName: icon).font(.system(size: 11, weight: .medium))
-                        Text(label).font(.system(size: 12, weight: .medium, design: .rounded))
-                    }
-                    .foregroundColor(appearanceMode == value ? .white : AppColor.secondaryText)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 7)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(appearanceMode == value ? AppColor.colaOrange : Color.clear)
-                    )
-                }
-                .buttonStyle(.plain)
+    private func navButton(section: SettingsSection) -> some View {
+        let active = selectedTab == section
+        NavHoverButton {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+                selectedTab = section
             }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: section.icon)
+                    .font(.system(size: 12, weight: .medium))
+                    .frame(width: 18, alignment: .center)
+                Text(section.rawValue)
+                    .font(.system(size: 13, weight: active ? .semibold : .medium, design: .rounded))
+                Spacer()
+            }
+            .foregroundColor(active ? AppColor.colaOrange : AppColor.secondaryText)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                ZStack {
+                    if active {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(AppColor.colaOrange.opacity(0.10))
+                            .matchedGeometryEffect(id: "navHighlight", in: navAnimation)
+                    }
+                }
+            )
         }
-        .padding(3)
-        .background(AppColor.surfacePrimary)
-        .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(AppColor.panelStroke, lineWidth: 1))
+    }
+
+    @ViewBuilder
+    private var appearancePicker: some View {
+        ZStack {
+            NativeGlassPanel(
+                cornerRadius: 16,
+                tintColor: AppColor.glassTint
+            ) { EmptyView() }
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(AppColor.panelStroke, lineWidth: 1)
+            )
+
+            HStack(spacing: 2) {
+                appearanceButton(icon: "sun.max", label: "Light", value: "light")
+                appearanceButton(icon: "moon", label: "Dark", value: "dark")
+                appearanceButton(icon: "circle.lefthalf.filled", label: "Auto", value: "system")
+            }
+            .padding(3)
+        }
+        .fixedSize()
+        .frame(height: 32)
+    }
+
+    @ViewBuilder
+    private func appearanceButton(icon: String, label: String, value: String) -> some View {
+        let active = (appearanceMode == value)
+        Button(action: { 
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.75, blendDuration: 0)) {
+                appearanceMode = value 
+            }
+        }) {
+            HStack(spacing: 5) {
+                Image(systemName: icon).font(.system(size: 11, weight: .semibold))
+                Text(label).font(.system(size: 12, weight: active ? .semibold : .medium, design: .rounded))
+            }
+            .foregroundColor(active ? AppColor.colaDarkText : AppColor.secondaryText)
+            .padding(.horizontal, 12)
+            .frame(height: 26)
+            .background(
+                ZStack {
+                    if active {
+                        RoundedRectangle(cornerRadius: 13, style: .continuous)
+                            .fill(AppColor.teaPillColor)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                            )
+                            .matchedGeometryEffect(id: "appearancePill", in: toggleAnimation)
+                    }
+                }
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - NavHoverButton
+
+private struct NavHoverButton<Label: View>: View {
+    let action: () -> Void
+    @ViewBuilder let label: Label
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) { label }
+            .buttonStyle(.plain)
+            .scaleEffect(isHovered ? 1.03 : 1.0)
+            .animation(.spring(response: 0.28, dampingFraction: 0.6), value: isHovered)
+            .onHover { isHovered = $0 }
     }
 }

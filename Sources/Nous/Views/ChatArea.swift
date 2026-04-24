@@ -145,7 +145,7 @@ struct ChatArea: View {
                                         MessageBubble(
                                             text: vm.currentResponse,
                                             thinkingContent: vm.currentThinking.isEmpty ? nil : vm.currentThinking,
-                                            isThinkingStreaming: vm.currentResponse.isEmpty, // 只要 currentResponse 还是空，就代表还在思考阶段
+                                            isThinkingStreaming: vm.currentResponse.isEmpty,
                                             isUser: false
                                         )
                                         if !vm.citations.isEmpty {
@@ -185,6 +185,27 @@ struct ChatArea: View {
                             scrollToBottom(with: proxy)
                         }
                     }
+                    // 顶底双向消散遮罩：文字滚入 Header 或输入框时自然虚化
+                    .mask(
+                        VStack(spacing: 0) {
+                            // 顶部消散（文字滚进 Header 区域时淡出）
+                            LinearGradient(
+                                colors: [.clear, .black],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                            .frame(height: floatingHeaderHeight)
+                            // 中间完全可见
+                            Rectangle().fill(Color.black)
+                            // 底部消散（文字滚向输入框时淡出）
+                            LinearGradient(
+                                colors: [.black, .clear],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                            .frame(height: 80)
+                        }
+                    )
 
                     // Floating Header
                     VStack {
@@ -299,20 +320,6 @@ struct ChatArea: View {
                     .frame(maxWidth: composerMaxWidth)
                     .padding(.horizontal, 36)
                     .padding(.bottom, 16)
-                    .padding(.top, 40)
-                    .background(
-                        LinearGradient(
-                            colors: [
-                                AppColor.colaBeige.opacity(0.0),
-                                AppColor.colaBeige.opacity(0.85),
-                                AppColor.colaBeige,
-                                AppColor.colaBeige
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                        .allowsHitTesting(false)
-                    )
                     .readHeight { floatingComposerHeight = $0 }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                 }

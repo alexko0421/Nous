@@ -128,6 +128,7 @@ struct NavIconButton<Icon: View>: View {
     let icon: Icon
     let label: String
     let action: () -> Void
+    @State private var isHovered = false
     
     var body: some View {
         Button(action: action) {
@@ -148,6 +149,9 @@ struct NavIconButton<Icon: View>: View {
             }
         }
         .buttonStyle(.plain)
+        .scaleEffect(isHovered ? 1.07 : 1.0)
+        .animation(.spring(response: 0.28, dampingFraction: 0.6), value: isHovered)
+        .onHover { isHovered = $0 }
     }
 }
 
@@ -308,10 +312,11 @@ struct LeftSidebar: View {
                                     .foregroundColor(AppColor.colaDarkText.opacity(0.6))
 
                                     ForEach(favorites) { node in
-                                        Button(action: { onNodeSelected?(node) }) {
-                                            sidebarNodeRow(node)
-                                        }
-                                        .buttonStyle(.plain)
+                                        SidebarNodeItem(
+                                            node: node,
+                                            isSelected: selectedNodeId == node.id,
+                                            action: { onNodeSelected?(node) }
+                                        )
                                     }
                                 }
                             }
@@ -322,10 +327,11 @@ struct LeftSidebar: View {
                                     .foregroundColor(AppColor.colaDarkText.opacity(0.6))
 
                                 ForEach(recents) { node in
-                                    Button(action: { onNodeSelected?(node) }) {
-                                        sidebarNodeRow(node)
-                                    }
-                                    .buttonStyle(.plain)
+                                    SidebarNodeItem(
+                                        node: node,
+                                        isSelected: selectedNodeId == node.id,
+                                        action: { onNodeSelected?(node) }
+                                    )
                                     .contextMenu {
                                         Button(role: .destructive) {
                                             try? nodeStore.deleteNode(id: node.id)
@@ -390,33 +396,46 @@ struct LeftSidebar: View {
         favorites = (try? nodeStore.fetchFavorites()) ?? []
         recents = (try? nodeStore.fetchRecents(limit: 20)) ?? []
     }
+}
 
-    @ViewBuilder
-    private func sidebarNodeRow(_ node: NousNode) -> some View {
-        let isSelected = selectedNodeId == node.id
+// MARK: - SidebarNodeItem
 
-        Text(node.title)
-            .font(.system(size: 12, weight: .medium, design: .rounded))
-            .foregroundColor(isSelected ? AppColor.colaOrange : AppColor.secondaryText)
-            .lineLimit(1)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(
-                Group {
-                    if isSelected {
-                        NativeGlassPanel(
-                            cornerRadius: 12,
-                            tintColor: NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.15)
-                        ) { EmptyView() }
-                        .overlay(
+struct SidebarNodeItem: View {
+    let node: NousNode
+    let isSelected: Bool
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(node.title)
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundColor(isSelected ? AppColor.colaOrange : AppColor.secondaryText)
+                .lineLimit(1)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    ZStack {
+                        if isSelected {
+                            NativeGlassPanel(
+                                cornerRadius: 12,
+                                tintColor: NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.15)
+                            ) { EmptyView() }
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(AppColor.colaOrange.opacity(0.3), lineWidth: 0.5)
+                            )
+                        } else if isHovered {
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .stroke(AppColor.colaOrange.opacity(0.3), lineWidth: 0.5)
-                        )
-                    } else {
-                        Color.clear
+                                .fill(AppColor.colaDarkText.opacity(0.04))
+                        }
                     }
-                }
-            )
+                )
+        }
+        .buttonStyle(.plain)
+        .scaleEffect(isHovered ? 1.03 : 1.0)
+        .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isHovered)
+        .onHover { isHovered = $0 }
     }
 }
 
