@@ -84,6 +84,7 @@
 		9A2C526409C14357AFB82080 /* JudgeVerdict.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC7040454DB1276F244FDDCF /* JudgeVerdict.swift */; };
 		9CA12F6A78C6C54FA3535947 /* VectorStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B93C993AA118825C12F999B /* VectorStore.swift */; };
 		9DE0D671078EE3A3FAD93A63 /* ProvocationJudgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85551858035454B81C02665B /* ProvocationJudgeTests.swift */; };
+		14FC135975394F93973A35EB /* RhythmStyleGuardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E112D2268D36441AA6EFEF16 /* RhythmStyleGuardTests.swift */; };
 		9DF0B7981415723F2B61E384 /* FilenameSlug.swift in Sources */ = {isa = PBXBuildFile; fileRef = 023F16C8415E3503883F39FB /* FilenameSlug.swift */; };
 		9E7CD679D402D0E64AD9DBDC /* ReflectionValidatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F99DD230882CC09237EDA591 /* ReflectionValidatorTests.swift */; };
 		A316A39D1CD4B7CBE01C03A9 /* ScratchPadStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E283B562C0F0CC0E5DED2286 /* ScratchPadStore.swift */; };
@@ -210,6 +211,7 @@
 		850D327949573D584F6A2CD4 /* UserMemoryServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserMemoryServiceTests.swift; sourceTree = "<group>"; };
 		852BFAC3906357D2665F700A /* JudgeVerdictTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JudgeVerdictTests.swift; sourceTree = "<group>"; };
 		85551858035454B81C02665B /* ProvocationJudgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProvocationJudgeTests.swift; sourceTree = "<group>"; };
+		E112D2268D36441AA6EFEF16 /* RhythmStyleGuardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RhythmStyleGuardTests.swift; sourceTree = "<group>"; };
 		85F46CA7772DAA90E7710731 /* 06-register-shift-snaps-back.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "06-register-shift-snaps-back.json"; sourceTree = "<group>"; };
 		866445FF9CB26D7C827EDA29 /* 02-venting-no-interject.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "02-venting-no-interject.json"; sourceTree = "<group>"; };
 		88CB0A79B5A731BC1D27C575 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
@@ -497,6 +499,7 @@
 				2C258CFA6F991D14ED791FE3 /* MemoryV2MigratorTests.swift */,
 				840F091AC2ADF85B26F1884A /* NodeStoreTests.swift */,
 				85551858035454B81C02665B /* ProvocationJudgeTests.swift */,
+				E112D2268D36441AA6EFEF16 /* RhythmStyleGuardTests.swift */,
 				B357963D017ED46D343B3076 /* ProvocationKindDerivationTests.swift */,
 				2CFB807EF1CB01566094058E /* ProvocationOrchestrationTests.swift */,
 				CE5485D2A957CBBB28E2D627 /* RAGPipelineTests.swift */,
@@ -811,6 +814,7 @@
 				293A8F632EE0107ADEF50D82 /* MemoryV2MigratorTests.swift in Sources */,
 				4116C4885DF5E1CB2FE62225 /* NodeStoreTests.swift in Sources */,
 				9DE0D671078EE3A3FAD93A63 /* ProvocationJudgeTests.swift in Sources */,
+				14FC135975394F93973A35EB /* RhythmStyleGuardTests.swift in Sources */,
 				7896E877484BBF4EEFE73D61 /* ProvocationKindDerivationTests.swift in Sources */,
 				39C9A2084EC2ED63B9567FFC /* ProvocationOrchestrationTests.swift in Sources */,
 				8C7CFB0C2C5581CFEBD55BFE /* RAGPipelineTests.swift in Sources */,
