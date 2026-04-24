@@ -206,31 +206,73 @@ enum RhythmVerdict {
 
 ### 5.3 Flow
 
+The flow differs based on which split mechanism (Option 2 or Option 4) wins at Phase 2 kickoff. Both paths converge at the bubble-rendering stage.
+
+**Option 2 path — two-pass judge:**
+
 ```
-Alex send message
+Alex sends message
     ↓
 ChatViewModel.send()
     ↓
 isGenerating = true, typing indicator shows
     ↓
-Main LLM generates complete reply (no streaming to UI, but reply text accumulates as usual internally)
+Main LLM generates reply (streamed to rawReplyText buffer; UI streaming is
+  suppressed until split decision lands — see §8 streaming-regression risk)
     ↓
-ClarificationCardParser runs (existing flow)
+ProvocationJudge runs on rawReplyText (existing flow, unchanged)
     ↓
-RhythmJudge invoked with parsed reply + context
+RhythmJudge runs on rawReplyText + ProvocationJudge verdict + context
+  (§5.1: single canonical coord space = raw pre-strip text)
     ↓
+Verdict validation (§5.4). Invalid or timed-out → fall back to singleBubble.
+    ↓
+Apply split plan to rawReplyText; run ClarificationCardParser
+  per fragment to strip tags for display
+    ↓
+Render (branches below)
+```
+
+**Option 4 path — one-call appended metadata:**
+
+```
+Alex sends message
+    ↓
+ChatViewModel.send()
+    ↓
+isGenerating = true, typing indicator shows
+    ↓
+Main LLM generates reply; tokens stream to UI until the <split> metadata tag
+  starts (at which point streaming pauses, tail-buffer captures the metadata)
+    ↓
+ProvocationJudge runs on rawReplyText (unchanged)
+    ↓
+Parse split metadata from tail; apply to rawReplyText; strip <split> block
+  the same way ClarificationCardParser strips <clarify> / <signature_moments>
+    ↓
+Per-fragment ClarificationCardParser run for display
+    ↓
+Render (branches below)
+```
+
+**Shared render branch:**
+
+```
 ┌─────────────────────────────────┐
 │ singleBubble → render one Message (existing behavior)
 │ split(boundaries, delays) →
-│     for each boundary:
-│         create Message with turnId, indexInTurn
-│         show brief typing indicator (~300ms) before appending
-│         wait delay[i]
-│         append Message
+│     render bubble 0 immediately
+│     for each subsequent bubble i:
+│         show brief typing indicator (~300ms flash — see §5.6 for
+│             how this relates to delay[i])
+│         wait delay[i] total (inter-bubble gap)
+│         append bubble i
 └─────────────────────────────────┘
     ↓
 isGenerating = false when last bubble lands
 ```
+
+Option 4 is streaming-friendlier up to the tail pause; Option 2 eliminates in-bubble streaming entirely. The §3.2 evidence-against gate weighs this directly.
 
 ### 5.4 Failure modes
 
@@ -259,8 +301,10 @@ Both judges run after a reply is generated. `ProvocationJudge` (pre-existing) ju
 ### 5.6 UI changes (ChatArea)
 
 - Existing single-bubble path unchanged.
-- Multi-bubble path: between bubbles, a brief typing indicator (~300ms flash) replaces the static gap, then the next bubble lands. Creates the "Nous is about to say something else" micro-tension.
+- Multi-bubble path: between bubbles, a brief typing indicator fills most of the gap, then the next bubble lands. Creates the "Nous is about to say something else" micro-tension.
 - Delay values come from `RhythmVerdict.delays`, not UI constants. Jitter ±150ms applied at UI layer on top of the verdict delay.
+
+**Typing indicator + `delay[i]` are NOT additive.** `delay[i]` is the total inter-bubble gap between bubble `i-1` landing and bubble `i` appearing. The typing indicator is shown *within* that window — from roughly `delay[i] - 300ms` until bubble `i` renders — so the user sees dwell → typing flash → next bubble inside one contiguous `delay[i]` span. If `delay[i]` is very short (near the 500ms floor), the flash window shrinks rather than the total gap growing.
 
 **Content-aware pacing (replaces fixed 1.2-1.8s / 0.8-1.2s ranges).**
 
@@ -306,33 +350,39 @@ Prompt-layer work cannot be unit-tested for rhythm quality. Validation is:
 
 ### 6.2 Phase 2
 
-Judge is testable.
+The unit under test is the **split decision** (verdict-producing stage), regardless of whether Option 2 or Option 4 wins. Test file name and structure differ by option; Phase 2 plan picks the concrete name.
 
-`Tests/NousTests/RhythmJudgeTests.swift`:
+**Option 2 — `Tests/NousTests/RhythmJudgeTests.swift`:**
 
 - Fixed reply fixtures spanning emotional-opener / analysis / contradiction-surface / small-talk cases.
-- Assert verdict shape (singleBubble vs split; if split, correct rough boundary count).
-- Timeout simulation → fallback.
+- Assert verdict shape (singleBubble vs split; if split, correct rough boundary count and sanity-checked delays).
+- Timeout → fallback.
 - Malformed LLM response → fallback.
 - Invalid boundary offsets → fallback.
 
-`Tests/NousTests/ChatViewModelTests.swift` extensions:
+**Option 4 — `Tests/NousTests/RhythmMetadataParserTests.swift` (or equivalent):**
 
-- Multi-bubble turn persistence round-trip.
-- History-construction: N bubbles concat into single assistant message when fed back to main LLM.
-- Judge failure path → 1 bubble rendered, turn still marked complete.
+- Fixed reply fixtures including a `<split>…</split>` trailing block with valid / malformed / missing metadata.
+- Assert parser extracts boundaries and delays; malformed → fallback to singleBubble.
+- Assert `<split>` block is stripped from rendered text (reuse `ClarificationCardParser` span pattern).
+- Boundary validation reuses the same rules as Option 2 (§5.4).
 
-UI pacing is subjective — manual QA only. Test that:
+Both options share:
 
-- Typing indicator feels natural (not stuck, not flashed).
-- Delays between bubbles feel like reading rhythm, not code rhythm.
-- No flash of unstyled content when a bubble first appears.
+- **`Tests/NousTests/ChatViewModelTests.swift` extensions:**
+  - Multi-bubble turn persistence round-trip.
+  - History-construction: N bubbles concat into single assistant message when fed back to main LLM.
+  - Split-decision failure path → 1 bubble rendered, turn still marked complete.
+- **UI pacing (manual QA only):**
+  - Typing indicator feels natural (not stuck, not flashed).
+  - Inter-bubble delays feel like reading rhythm, not code rhythm.
+  - No flash of unstyled content when a bubble first appears.
 
 ### 6.3 Validation gating
 
 1. Phase 1 ships. 1-2 days real session. If Symptom A visibly improves → lock in; else iterate on examples.
-2. Phase 2 starts only after Phase 1 locks. Reason: Phase 2 changes UI; confounds A/B testing of Phase 1's prompt work.
-3. Phase 2 ships. 1-2 days real session. Validate C + B improvement.
+2. Phase 2 trigger gate (§3.2) evaluated next. If Phase 2 does not proceed, work stops here.
+3. If Phase 2 proceeds and ships: 1-2 days real session. Validate C + B improvement.
 
 ## 7. Rollout
 
@@ -371,7 +421,7 @@ If any of steps 2-6 surfaces a scope issue deeper than expected, Phase 2 stops a
 | Phase 1 regresses existing behaviors (push-back, 1-? cap) | Before/after corpus specifically covers 倾观点 + emotional triggers; `RhythmStyleGuardTests` guards 1-? rule presence |
 | Phase 1 + existing `stoicGroundingPolicy` / ChatMode "fewer, fuller sentences" rules average out | §4.6 orthogonality clause embedded in RHYTHM section; before/after corpus explicitly checks whether disambiguation lands |
 | **Streaming regression under Phase 2** (Option 2 requires full-reply buffering; Option 4 pauses at metadata boundary) | Measure perceived wait-to-first-bubble in Phase 2 spike; if it feels worse than today's streaming, do not ship Phase 2; favor Option 4 to minimize the regression |
-| Phase 2 multi-bubble compounds summarization texture loss (cross-dep with `2026-04-22-nous-summarization-texture-preservation-design.md`) | Phase 2 plan step 6 explicitly reconciles `refreshConversation` with multi-bubble turns before Phase 2 ships |
+| Phase 2 multi-bubble compounds summarization texture loss (cross-dep with `2026-04-22-nous-summarization-texture-preservation-design.md`) | Phase 2 plan step 6 explicitly reconciles `refreshConversation` with multi-bubble turns before any Phase 2 code lands |
 | Phase 2 turn-semantics change has broader blast radius than mapped | §13 is a hard blocker: subsystem impact map (§5.2) must be completed and reviewed before implementation steps begin |
 | Pacing delays feel gimmicky / manipulative | Strict split ratio (≤30%); UI jitter; content-aware pacing (§5.6) ties delay to what was just read; telemetry watches split ratio; judge prompt defaults to `.singleBubble` unless trigger is clear |
 | `RhythmJudge` and `ProvocationJudge` semantics collide | Sequential ordering, provocation verdict flows into rhythm decision (§5.5) |
@@ -402,7 +452,7 @@ Summarizer/`refreshConversation` reconciliation is not an open question — it i
 
 ## 11. Out of scope (v1)
 
-- Streaming multi-bubble (main reply is generated fully before split runs).
+- Full streaming across bubble boundaries. Option 2 fully suppresses streaming until the first bubble renders; Option 4 streams until the tail `<split>` metadata starts and pauses there. A design that streams *across* split boundaries (bubble 1 finishes streaming, bubble 2 begins streaming mid-verdict, etc.) is explicitly out of scope for v1.
 - Adaptive delay learning (delays come from judge verdict; no reinforcement from Alex's reaction timing).
 - Bubble-level undo / regenerate (a turn is one unit).
 - Changes to `WHO YOU ARE`, `EMOTION DETECTION`, `MEMORY` sections of anchor.md.
@@ -432,7 +482,7 @@ Nous quality is validated the same way the 2026-04-21 and 2026-04-22 naturalness
 **Phase 2 diagnostic signals (not ship-blocking):**
 - Split ratio stabilizes in the 15-30% range. Higher is a "too gimmicky" signal; lower is a "judge too conservative" signal. Neither is an auto-fail.
 - Fallback rate < 5%.
-- Judge-level latency p95 within its sub-budget.
+- The total wait-to-first-bubble p95 stays within the §8 800ms budget. Internal component latencies (judge, parser, split application) are diagnostic — their individual numbers don't matter as long as the total holds.
 
 ## 13. Phase 2 blocker — turn semantics schema change
 
@@ -447,7 +497,12 @@ The shift from `1 turn = 1 Message` to `1 turn = N Messages` is a schema change 
 5. **`ChatArea` UI surfaces.** Enumerate every action attached to a message bubble today: reactions, long-press menu, copy, regenerate, quote-reply. Assign each to either bubble-scope or turn-scope with rationale.
 6. **`ThinkingAccordion`.** Must attach to turn, not first bubble. UI layout must handle a single accordion above a group of bubbles.
 7. **`UserMemoryService.refreshConversation` + summarizer prompt.** Same-turn bubbles must feed the summarizer as one unit; otherwise summarization texture loss (ref: `2026-04-22-nous-summarization-texture-preservation-design.md`) gets worse, not better.
-8. **Citations, `<signature_moments>`, `<clarify>`.** These tag blocks must live in the final bubble of a turn. Split validation enforces this (§5.4).
+8. **Trailing tag blocks (`<clarify>`, `<signature_moments>`, `<chat_title>`, `<summary>`).** All tag-carrying content must land in the final bubble of a turn. Concrete consumers that depend on these tags surviving intact:
+   - `ChatViewModel.swift:747-749` — reads `<chat_title>` via `ClarificationCardParser.extractChatTitle` on `rawAssistantContent`. Phase 2 must ensure the raw text seen by this call still contains the intact tag block, i.e., tags are parsed from the raw concatenation of all turn bubbles, not from an arbitrary post-split fragment.
+   - `ScratchPadStore.swift:121-129` (`ingestAssistantMessage`) — reads `<summary>` via `ClarificationCardParser.extractSummary`. Same constraint: must run on concatenated turn text, not per-bubble.
+   - `<signature_moments>` stripping — currently in `ClarificationCardParser`, must stay whole.
+   - `<clarify>` engagement blocks — must stay whole in the final bubble.
+   Split validation (§5.4) enforces the no-split-inside-tag rule; the concat-for-consumers rule is a *different* requirement that Phase 2 plan must enumerate per-consumer.
 9. **Transcript export / share / copy.** Re-flattens turn bubbles into a single block, or preserves turn grouping with explicit markers.
 10. **Test suites.** Any assertion that counts messages must shift to counting turns, or explicitly count messages-per-turn.
 
