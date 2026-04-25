@@ -67,6 +67,13 @@ final class ProvocationOrchestrationTests: XCTestCase {
     var judge: StubJudge!
     var viewModel: ChatViewModel!
 
+    private func makeScratchPadStore() -> ScratchPadStore {
+        let suiteName = "ProvocationOrchestrationTests.scratchpad.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        return ScratchPadStore(nodeStore: store, defaults: defaults)
+    }
+
     override func setUp() {
         super.setUp()
         store = try! NodeStore(path: ":memory:")
@@ -90,7 +97,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
             judgeLLMServiceFactory: { CannedLLMService() },
             provocationJudgeFactory: { _ in self.judge },
             governanceTelemetry: telemetry,
-            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+            scratchPadStore: makeScratchPadStore()
         )
     }
 
@@ -309,7 +316,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
                 return j
             },
             governanceTelemetry: telemetry,
-            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+            scratchPadStore: makeScratchPadStore()
         )
 
         viewModel.inputText = "anything"
@@ -342,7 +349,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
                 return j
             },
             governanceTelemetry: telemetry,
-            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+            scratchPadStore: makeScratchPadStore()
         )
 
         viewModel.inputText = "anything"
@@ -450,7 +457,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
             judgeLLMServiceFactory: { CannedLLMService() },
             provocationJudgeFactory: { _ in SlowJudge() },
             governanceTelemetry: telemetry,
-            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+            scratchPadStore: makeScratchPadStore()
         )
 
         viewModel.inputText = "test"
@@ -501,7 +508,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
             judgeLLMServiceFactory: { CannedLLMService() },
             provocationJudgeFactory: { _ in slowJudge },
             governanceTelemetry: telemetry,
-            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+            scratchPadStore: makeScratchPadStore()
         )
 
         viewModel.inputText = "first"
@@ -551,7 +558,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
             judgeLLMServiceFactory: { CannedLLMService() },
             provocationJudgeFactory: { _ in slowJudge },
             governanceTelemetry: telemetry,
-            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+            scratchPadStore: makeScratchPadStore()
         )
 
         viewModel.inputText = "first"
@@ -775,7 +782,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
             judgeLLMServiceFactory: { CannedLLMService() },
             provocationJudgeFactory: { _ in localJudge },
             governanceTelemetry: telemetry,
-            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+            scratchPadStore: makeScratchPadStore()
         )
         let convo = NousNode(type: .conversation, title: "seed", projectId: nil)
         try store.insertNode(convo)

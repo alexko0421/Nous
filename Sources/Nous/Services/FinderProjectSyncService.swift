@@ -5,17 +5,20 @@ final class FinderProjectSyncService {
     private let nodeStore: NodeStore
     private let fileManager: FileManager
     private let rootURLProvider: () throws -> URL
+    private let shouldExportAssistantThinking: () -> Bool
     private let syncLock = NSLock()
     private var pendingSyncTask: Task<Void, Never>?
 
     init(
         nodeStore: NodeStore,
         fileManager: FileManager = .default,
-        rootURLProvider: @escaping () throws -> URL = { try FinderProjectSyncService.defaultRootURL() }
+        rootURLProvider: @escaping () throws -> URL = { try FinderProjectSyncService.defaultRootURL() },
+        shouldExportAssistantThinking: @escaping () -> Bool = { true }
     ) {
         self.nodeStore = nodeStore
         self.fileManager = fileManager
         self.rootURLProvider = rootURLProvider
+        self.shouldExportAssistantThinking = shouldExportAssistantThinking
     }
 
     func scheduleSync() {
@@ -35,6 +38,22 @@ final class FinderProjectSyncService {
             try exportAllProjects()
         } catch {
             NSLog("FinderProjectSyncService sync failed: %@", error.localizedDescription)
+        }
+    }
+
+    func removeExports() {
+        pendingSyncTask?.cancel()
+        pendingSyncTask = nil
+
+        syncLock.lock()
+        defer { syncLock.unlock() }
+
+        do {
+            let rootURL = try rootURLProvider()
+            guard fileManager.fileExists(atPath: rootURL.path) else { return }
+            try fileManager.removeItem(at: rootURL)
+        } catch {
+            NSLog("FinderProjectSyncService remove export failed: %@", error.localizedDescription)
         }
     }
 
@@ -166,6 +185,7 @@ final class FinderProjectSyncService {
     }
 
     private func renderConversation(_ node: NousNode, messages: [Message]) -> String {
+        let exportsThinking = shouldExportAssistantThinking()
         var lines = [
             "# \(node.title)",
             "",
@@ -189,7 +209,8 @@ final class FinderProjectSyncService {
             lines.append(message.content.isEmpty ? "_Empty message._" : message.content)
             lines.append("")
 
-            if let thinkingContent = message.thinkingContent,
+            if exportsThinking,
+               let thinkingContent = message.thinkingContent,
                !thinkingContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 lines.append("### Thinking")
                 lines.append("")

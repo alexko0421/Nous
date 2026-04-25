@@ -5,15 +5,18 @@ import XCTest
 final class ScratchPadStoreTests: XCTestCase {
 
     private var defaultsSuite: UserDefaults!
+    private var nodeStore: NodeStore!
 
     override func setUp() {
         super.setUp()
         let suiteName = "ScratchPadStoreTests.\(UUID().uuidString)"
         defaultsSuite = UserDefaults(suiteName: suiteName)!
         defaultsSuite.removePersistentDomain(forName: suiteName)
+        nodeStore = try! NodeStore(path: ":memory:")
     }
 
     override func tearDown() {
+        nodeStore = nil
         defaultsSuite = nil
         super.tearDown()
     }
@@ -22,13 +25,18 @@ final class ScratchPadStoreTests: XCTestCase {
     /// per-conversation split and target the active-conversation surface, so this keeps
     /// them unchanged.
     private func makeStore(conversationId: UUID = UUID()) -> ScratchPadStore {
-        let store = ScratchPadStore(defaults: defaultsSuite)
+        insertConversation(id: conversationId)
+        let store = ScratchPadStore(nodeStore: nodeStore, defaults: defaultsSuite)
         store.activate(conversationId: conversationId)
         return store
     }
 
     private func summary(_ markdown: String, at date: Date = Date()) -> ScratchSummary {
         ScratchSummary(markdown: markdown, generatedAt: date, sourceMessageId: UUID())
+    }
+
+    private func insertConversation(id: UUID) {
+        try? nodeStore.insertNode(NousNode(id: id, type: .conversation, title: "Scratch Pad Conversation"))
     }
 
     // MARK: - Ingest
@@ -181,7 +189,9 @@ final class ScratchPadStoreTests: XCTestCase {
     func testSummaryFromOneConversationDoesNotLeakIntoAnother() {
         let convA = UUID()
         let convB = UUID()
-        let store = ScratchPadStore(defaults: defaultsSuite)
+        insertConversation(id: convA)
+        insertConversation(id: convB)
+        let store = ScratchPadStore(nodeStore: nodeStore, defaults: defaultsSuite)
 
         // A receives a summary.
         store.activate(conversationId: convA)
@@ -200,7 +210,9 @@ final class ScratchPadStoreTests: XCTestCase {
     func testSwitchingBackRestoresConversationState() {
         let convA = UUID()
         let convB = UUID()
-        let store = ScratchPadStore(defaults: defaultsSuite)
+        insertConversation(id: convA)
+        insertConversation(id: convB)
+        let store = ScratchPadStore(nodeStore: nodeStore, defaults: defaultsSuite)
 
         store.activate(conversationId: convA)
         store.ingest(summary: summary("# A summary"))
@@ -218,7 +230,9 @@ final class ScratchPadStoreTests: XCTestCase {
     func testIngestForInactiveConversationDoesNotMutateActiveState() {
         let convA = UUID()
         let convB = UUID()
-        let store = ScratchPadStore(defaults: defaultsSuite)
+        insertConversation(id: convA)
+        insertConversation(id: convB)
+        let store = ScratchPadStore(nodeStore: nodeStore, defaults: defaultsSuite)
 
         store.activate(conversationId: convA)
         store.ingest(summary: summary("# A only"))
@@ -238,7 +252,8 @@ final class ScratchPadStoreTests: XCTestCase {
 
     func testActivateNilClearsObservableFieldsButPreservesCache() {
         let convA = UUID()
-        let store = ScratchPadStore(defaults: defaultsSuite)
+        insertConversation(id: convA)
+        let store = ScratchPadStore(nodeStore: nodeStore, defaults: defaultsSuite)
 
         store.activate(conversationId: convA)
         store.ingest(summary: summary("# A"))
@@ -256,8 +271,10 @@ final class ScratchPadStoreTests: XCTestCase {
     func testPerConversationStateSurvivesStoreRestart() {
         let convA = UUID()
         let convB = UUID()
+        insertConversation(id: convA)
+        insertConversation(id: convB)
 
-        let first = ScratchPadStore(defaults: defaultsSuite)
+        let first = ScratchPadStore(nodeStore: nodeStore, defaults: defaultsSuite)
         first.activate(conversationId: convA)
         first.ingest(summary: summary("# A"))
         first.onPanelOpened()
@@ -266,8 +283,8 @@ final class ScratchPadStoreTests: XCTestCase {
         first.ingest(summary: summary("# B"))
         first.onPanelOpened()
 
-        // Simulate app restart: new store against same defaults.
-        let second = ScratchPadStore(defaults: defaultsSuite)
+        // Simulate app restart: new store against the same database/defaults.
+        let second = ScratchPadStore(nodeStore: nodeStore, defaults: defaultsSuite)
         second.activate(conversationId: convA)
         XCTAssertEqual(second.currentContent, "# A\n\nedits in A")
         XCTAssertEqual(second.latestSummary?.markdown, "# A")
@@ -278,9 +295,48 @@ final class ScratchPadStoreTests: XCTestCase {
     }
 
     func testIngestWithoutActiveConversationAndNoConversationIdIsNoOp() {
-        let store = ScratchPadStore(defaults: defaultsSuite)
+        let store = ScratchPadStore(nodeStore: nodeStore, defaults: defaultsSuite)
         // Never call activate().
         store.ingest(summary: summary("# nowhere"))
         XCTAssertNil(store.latestSummary)
+    }
+
+    func testMigratesLegacyDefaultsIntoSQLiteAndClearsDefaultsKeys() throws {
+        let conversationId = UUID()
+        insertConversation(id: conversationId)
+        let legacySummary = summary("# Legacy", at: Date(timeIntervalSince1970: 123))
+        let prefix = "nous.scratchpad.conv.\(conversationId.uuidString)"
+
+        defaultsSuite.set(try JSONEncoder().encode(legacySummary), forKey: "\(prefix).latestSummary")
+        defaultsSuite.set("# Legacy\n\nnotes", forKey: "\(prefix).content")
+        defaultsSuite.set("# Legacy", forKey: "\(prefix).base")
+        defaultsSuite.set(123.0, forKey: "\(prefix).baseDate")
+
+        let store = ScratchPadStore(nodeStore: nodeStore, defaults: defaultsSuite)
+        store.activate(conversationId: conversationId)
+
+        let persisted = try XCTUnwrap(nodeStore.fetchScratchPadState(nodeId: conversationId))
+        XCTAssertEqual(persisted.latestSummary, legacySummary)
+        XCTAssertEqual(persisted.currentContent, "# Legacy\n\nnotes")
+        XCTAssertEqual(persisted.baseSnapshot, "# Legacy")
+        XCTAssertEqual(persisted.contentBaseGeneratedAt, Date(timeIntervalSince1970: 123))
+        XCTAssertNil(defaultsSuite.object(forKey: "\(prefix).latestSummary"))
+        XCTAssertNil(defaultsSuite.object(forKey: "\(prefix).content"))
+        XCTAssertNil(defaultsSuite.object(forKey: "\(prefix).base"))
+        XCTAssertNil(defaultsSuite.object(forKey: "\(prefix).baseDate"))
+    }
+
+    func testMutationsDoNotWriteConversationStateBackToUserDefaults() {
+        let conversationId = UUID()
+        let store = makeStore(conversationId: conversationId)
+        store.ingest(summary: summary("# Summary"))
+        store.onPanelOpened()
+        store.updateContent("# Summary\n\nprivate edits")
+        store.markDownloaded()
+
+        let scratchpadKeys = defaultsSuite.dictionaryRepresentation().keys.filter {
+            $0.hasPrefix("nous.scratchpad.conv.")
+        }
+        XCTAssertTrue(scratchpadKeys.isEmpty)
     }
 }

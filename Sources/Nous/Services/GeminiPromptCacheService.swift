@@ -39,6 +39,12 @@ final class GeminiPromptCacheService {
         entries.removeValue(forKey: conversationId)
     }
 
+    func removeAllEntries() -> [GeminiConversationCacheEntry] {
+        let existing = Array(entries.values)
+        entries.removeAll()
+        return existing
+    }
+
     /// Canonical hash for a cache entry. Inputs:
     /// - `system`: the stable system prefix that was frozen into `cachedContents`.
     ///   Volatile per-turn blocks (citations, chat mode, focus) MUST be excluded —

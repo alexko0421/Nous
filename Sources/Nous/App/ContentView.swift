@@ -130,24 +130,40 @@ struct ContentView: View {
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isSidebarVisible)
         .task {
             dependencies.chatVM.defaultProjectId = selectedProjectId
-            dependencies.finderProjectSync.scheduleSync()
-            Task {
-                await dependencies.conversationTitleBackfill.runIfNeeded()
-            }
+            handleFinderSyncPreferenceChange(dependencies: dependencies, isEnabled: dependencies.settingsVM.finderSyncEnabled)
             if !Self.isRunningUnitTests {
                 await dependencies.settingsVM.loadEmbeddingModel()
             }
-            // WeeklyReflection rollover — fires once per launch, idempotent.
-            // Skipped during unit tests; closure silently no-ops if Gemini
-            // key is unconfigured.
-            if !Self.isRunningUnitTests, let rollover = dependencies.weeklyReflectionRollover {
-                Task.detached(priority: .utility) {
-                    await rollover()
-                }
+            runBackgroundMaintenanceIfEnabled(dependencies: dependencies)
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: .nousNodesDidChange,
+                object: dependencies.nodeStore
+            )
+        ) { _ in
+            guard dependencies.settingsVM.finderSyncEnabled else { return }
+            dependencies.finderProjectSync.scheduleSync()
+        }
+        .onChange(of: dependencies.settingsVM.finderSyncEnabled) { _, enabled in
+            handleFinderSyncPreferenceChange(dependencies: dependencies, isEnabled: enabled)
+        }
+        .onChange(of: dependencies.settingsVM.assistantThinkingEnabled) { _, enabled in
+            guard !enabled else { return }
+            dependencies.chatVM.purgePersistedThinkingFromLoadedMessages()
+            if dependencies.settingsVM.finderSyncEnabled {
+                dependencies.finderProjectSync.scheduleSync()
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .nousNodesDidChange)) { _ in
-            dependencies.finderProjectSync.scheduleSync()
+        .onChange(of: dependencies.settingsVM.geminiHistoryCacheEnabled) { _, enabled in
+            guard !enabled else { return }
+            Task {
+                await dependencies.chatVM.purgeGeminiHistoryCaches()
+            }
+        }
+        .onChange(of: dependencies.settingsVM.backgroundAnalysisEnabled) { _, enabled in
+            guard enabled else { return }
+            runBackgroundMaintenanceIfEnabled(dependencies: dependencies)
         }
         .onChange(of: selectedProjectId) { _, newValue in
             dependencies.chatVM.defaultProjectId = newValue
@@ -173,6 +189,29 @@ struct ContentView: View {
         case .note:
             dependencies.noteVM.openNote(node)
             selectedTab = .notes
+        }
+    }
+
+    private func handleFinderSyncPreferenceChange(dependencies: AppDependencies, isEnabled: Bool) {
+        if isEnabled {
+            dependencies.finderProjectSync.scheduleSync()
+        } else {
+            dependencies.finderProjectSync.removeExports()
+        }
+    }
+
+    private func runBackgroundMaintenanceIfEnabled(dependencies: AppDependencies) {
+        guard dependencies.settingsVM.backgroundAnalysisEnabled else { return }
+        guard !Self.isRunningUnitTests else { return }
+
+        Task {
+            await dependencies.conversationTitleBackfill.runIfNeeded()
+        }
+
+        if let rollover = dependencies.weeklyReflectionRollover {
+            Task.detached(priority: .utility) {
+                await rollover()
+            }
         }
     }
 }

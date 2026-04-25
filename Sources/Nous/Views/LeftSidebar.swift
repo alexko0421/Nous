@@ -387,7 +387,12 @@ struct LeftSidebar: View {
         }
         .frame(width: 154)
         .onAppear { loadData() }
-        .onReceive(NotificationCenter.default.publisher(for: .nousNodesDidChange)) { _ in
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: .nousNodesDidChange,
+                object: nodeStore
+            )
+        ) { _ in
             loadData()
         }
     }

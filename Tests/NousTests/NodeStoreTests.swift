@@ -77,7 +77,7 @@ final class NodeStoreTests: XCTestCase {
 
         let token = NotificationCenter.default.addObserver(
             forName: .nousNodesDidChange,
-            object: nil,
+            object: store,
             queue: nil
         ) { _ in
             XCTAssertTrue(Thread.isMainThread, "UI-driving node change notifications must arrive on the main thread")
@@ -299,6 +299,24 @@ final class NodeStoreTests: XCTestCase {
         XCTAssertEqual(messages[1].content, "Hi there")
         XCTAssertEqual(messages[0].role, .user)
         XCTAssertEqual(messages[1].role, .assistant)
+    }
+
+    func testClearAllMessageThinkingContentRemovesStoredTraces() throws {
+        let node = makeNode(type: .conversation)
+        try store.insertNode(node)
+        try store.insertMessage(
+            Message(
+                nodeId: node.id,
+                role: .assistant,
+                content: "Answer",
+                thinkingContent: "Private reasoning"
+            )
+        )
+
+        try store.clearAllMessageThinkingContent()
+
+        let messages = try store.fetchMessages(nodeId: node.id)
+        XCTAssertNil(messages.first?.thinkingContent)
     }
 
     // MARK: - Memory scope tests (v2.1)

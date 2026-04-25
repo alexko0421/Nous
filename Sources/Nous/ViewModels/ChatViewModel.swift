@@ -29,6 +29,12 @@ final class ChatViewModel {
     private let graphEngine: GraphEngine
     private let userMemoryService: UserMemoryService
     private let userMemoryScheduler: UserMemoryScheduler
+    private let conversationSessionStore: ConversationSessionStore
+    @ObservationIgnored private let explicitTurnRunner: ChatTurnRunner?
+    @ObservationIgnored private let explicitTurnPlanner: TurnPlanner?
+    @ObservationIgnored private let explicitTurnExecutor: TurnExecutor?
+    @ObservationIgnored private let explicitContextContinuationService: ContextContinuationService?
+    @ObservationIgnored private let explicitTurnHousekeepingService: TurnHousekeepingService?
     private let llmServiceProvider: () -> (any LLMService)?
     private let currentProviderProvider: () -> LLMProvider
     private let judgeLLMServiceFactory: () -> (any LLMService)?
@@ -41,14 +47,131 @@ final class ChatViewModel {
     @ObservationIgnored nonisolated(unsafe) private var inFlightJudgeTaskId: UUID?
     @ObservationIgnored nonisolated(unsafe) private var inFlightResponseTask: Task<Void, Never>?
     @ObservationIgnored nonisolated(unsafe) private var inFlightResponseTaskId: UUID?
+    @ObservationIgnored nonisolated(unsafe) private var inFlightResponseAbortReason: TurnAbortReason?
     private let governanceTelemetry: GovernanceTelemetryStore
     private let geminiPromptCache: GeminiPromptCacheService
     private let scratchPadStore: ScratchPadStore
-    /// In-flight cache-refresh bookkeeping, keyed by conversation id. The token map
-    /// lets a late-arriving worker detect that it has been superseded and clean up its
-    /// orphaned server-side handle instead of overwriting a newer entry.
-    @ObservationIgnored nonisolated(unsafe) private var geminiCacheRefreshTasks: [UUID: Task<Void, Never>] = [:]
-    @ObservationIgnored nonisolated(unsafe) private var geminiCacheRefreshTokens: [UUID: UUID] = [:]
+    private let shouldUseGeminiHistoryCache: () -> Bool
+    private let shouldPersistAssistantThinking: () -> Bool
+    @ObservationIgnored private var cachedTurnPlanner: TurnPlanner?
+    @ObservationIgnored private var cachedTurnExecutor: TurnExecutor?
+    @ObservationIgnored private var cachedContextContinuationService: ContextContinuationService?
+    @ObservationIgnored private var cachedTurnHousekeepingService: TurnHousekeepingService?
+    private var memoryProjectionService: MemoryProjectionService {
+        userMemoryService.projectionReader
+    }
+    private var turnOutcomeFactory: TurnOutcomeFactory {
+        let projectionService = memoryProjectionService
+        return TurnOutcomeFactory(
+            shouldPersistMemory: { messages, projectId in
+                projectionService.shouldPersistMemory(messages: messages, projectId: projectId)
+            }
+        )
+    }
+    private var turnRunner: ChatTurnRunner {
+        if let explicitTurnRunner {
+            return explicitTurnRunner
+        }
+
+        return ChatTurnRunner(
+            conversationSessionStore: conversationSessionStore,
+            turnPlanner: turnPlanner,
+            turnExecutor: turnExecutor,
+            outcomeFactory: turnOutcomeFactory,
+            onPlanReady: { [governanceTelemetry] plan in
+                governanceTelemetry.recordPromptTrace(plan.promptTrace)
+                if let event = plan.judgeEventDraft {
+                    governanceTelemetry.appendJudgeEvent(event)
+                }
+            }
+        )
+    }
+    private var turnPlanner: TurnPlanner {
+        if let explicitTurnPlanner {
+            return explicitTurnPlanner
+        }
+        if let cachedTurnPlanner {
+            return cachedTurnPlanner
+        }
+
+        let planner = TurnPlanner(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            memoryProjectionService: userMemoryService.projectionReader,
+            contradictionMemoryService: userMemoryService.contradictionReader,
+            currentProviderProvider: currentProviderProvider,
+            judgeLLMServiceFactory: judgeLLMServiceFactory,
+            provocationJudgeFactory: provocationJudgeFactory,
+            governanceTelemetry: governanceTelemetry,
+            runJudge: { [weak self] operation in
+                guard let self else { throw CancellationError() }
+                return try await self.executeJudgeTask(operation)
+            }
+        )
+        cachedTurnPlanner = planner
+        return planner
+    }
+    private var turnExecutor: TurnExecutor {
+        if let explicitTurnExecutor {
+            return explicitTurnExecutor
+        }
+        if let cachedTurnExecutor {
+            return cachedTurnExecutor
+        }
+
+        let executor = TurnExecutor(
+            llmServiceProvider: llmServiceProvider,
+            geminiPromptCache: geminiPromptCache,
+            shouldUseGeminiHistoryCache: shouldUseGeminiHistoryCache,
+            shouldPersistAssistantThinking: shouldPersistAssistantThinking,
+            recordGeminiUsage: { [governanceTelemetry] usage in
+                governanceTelemetry.recordGeminiUsage(usage)
+            }
+        )
+        cachedTurnExecutor = executor
+        return executor
+    }
+    private var contextContinuationService: ContextContinuationService {
+        if let explicitContextContinuationService {
+            return explicitContextContinuationService
+        }
+        if let cachedContextContinuationService {
+            return cachedContextContinuationService
+        }
+
+        let service = ContextContinuationService(
+            scratchPadStore: scratchPadStore,
+            userMemoryScheduler: userMemoryScheduler,
+            governanceTelemetry: governanceTelemetry
+        )
+        cachedContextContinuationService = service
+        return service
+    }
+    private var turnHousekeepingService: TurnHousekeepingService {
+        if let explicitTurnHousekeepingService {
+            return explicitTurnHousekeepingService
+        }
+        if let cachedTurnHousekeepingService {
+            return cachedTurnHousekeepingService
+        }
+
+        let service = TurnHousekeepingService(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            geminiPromptCache: geminiPromptCache,
+            llmServiceProvider: llmServiceProvider,
+            shouldUseGeminiHistoryCache: shouldUseGeminiHistoryCache,
+            onConversationNodeUpdated: { [weak self] refreshedNode in
+                guard let self, self.currentNode?.id == refreshedNode.id else { return }
+                self.currentNode = refreshedNode
+            }
+        )
+        cachedTurnHousekeepingService = service
+        return service
+    }
 
     // MARK: - Init
 
@@ -59,6 +182,12 @@ final class ChatViewModel {
         graphEngine: GraphEngine,
         userMemoryService: UserMemoryService,
         userMemoryScheduler: UserMemoryScheduler,
+        conversationSessionStore: ConversationSessionStore? = nil,
+        turnRunner: ChatTurnRunner? = nil,
+        turnPlanner: TurnPlanner? = nil,
+        turnExecutor: TurnExecutor? = nil,
+        contextContinuationService: ContextContinuationService? = nil,
+        turnHousekeepingService: TurnHousekeepingService? = nil,
         llmServiceProvider: @escaping () -> (any LLMService)?,
         currentProviderProvider: @escaping () -> LLMProvider,
         judgeLLMServiceFactory: @escaping () -> (any LLMService)?,
@@ -66,6 +195,8 @@ final class ChatViewModel {
         governanceTelemetry: GovernanceTelemetryStore = GovernanceTelemetryStore(),
         geminiPromptCache: GeminiPromptCacheService = GeminiPromptCacheService(),
         scratchPadStore: ScratchPadStore,
+        shouldUseGeminiHistoryCache: @escaping () -> Bool = { true },
+        shouldPersistAssistantThinking: @escaping () -> Bool = { true },
         defaultProjectId: UUID? = nil
     ) {
         self.nodeStore = nodeStore
@@ -74,6 +205,7 @@ final class ChatViewModel {
         self.graphEngine = graphEngine
         self.userMemoryService = userMemoryService
         self.userMemoryScheduler = userMemoryScheduler
+        self.conversationSessionStore = conversationSessionStore ?? ConversationSessionStore(nodeStore: nodeStore)
         self.llmServiceProvider = llmServiceProvider
         self.currentProviderProvider = currentProviderProvider
         self.judgeLLMServiceFactory = judgeLLMServiceFactory
@@ -81,7 +213,14 @@ final class ChatViewModel {
         self.governanceTelemetry = governanceTelemetry
         self.geminiPromptCache = geminiPromptCache
         self.scratchPadStore = scratchPadStore
+        self.shouldUseGeminiHistoryCache = shouldUseGeminiHistoryCache
+        self.shouldPersistAssistantThinking = shouldPersistAssistantThinking
         self.defaultProjectId = defaultProjectId
+        self.explicitTurnRunner = turnRunner
+        self.explicitTurnPlanner = turnPlanner
+        self.explicitTurnExecutor = turnExecutor
+        self.explicitContextContinuationService = contextContinuationService
+        self.explicitTurnHousekeepingService = turnHousekeepingService
     }
 
     // MARK: - Conversation Management
@@ -93,15 +232,13 @@ final class ChatViewModel {
         cancelInFlightWork: Bool = true
     ) {
         if cancelInFlightWork {
-            cancelInFlightResponse(clearDraft: true)
+            cancelInFlightResponse(clearDraft: true, reason: .supersededByNewTurn)
             cancelInFlightJudge()  // any in-flight judge belonged to the old conversation
         }
-        let node = NousNode(
-            type: .conversation,
+        guard let node = try? conversationSessionStore.startConversation(
             title: title,
             projectId: projectId
-        )
-        try? nodeStore.insertNode(node)
+        ) else { return }
         currentNode = node
         scratchPadStore.activate(conversationId: node.id)
         messages = []
@@ -111,13 +248,12 @@ final class ChatViewModel {
         didHitBudgetExhaustion = false
         activeQuickActionMode = nil
         activeChatMode = nil  // brand-new chat has no prior judgment
-        NotificationCenter.default.post(name: .nousNodesDidChange, object: nil)
     }
 
     @MainActor
     func loadConversation(_ node: NousNode, cancelInFlightWork: Bool = true) {
         if cancelInFlightWork {
-            cancelInFlightResponse(clearDraft: true)
+            cancelInFlightResponse(clearDraft: true, reason: .conversationSwitched)
             cancelInFlightJudge()  // switching conversations invalidates any pending verdict
         }
         currentNode = node
@@ -140,6 +276,7 @@ final class ChatViewModel {
         guard !isGenerating else { return }
 
         let responseTaskId = UUID()
+        inFlightResponseAbortReason = nil
         let responseTask = Task { @MainActor [weak self] in
             guard let self else { return }
             await self.runQuickActionConversation(mode, responseTaskId: responseTaskId)
@@ -148,6 +285,9 @@ final class ChatViewModel {
         inFlightResponseTaskId = responseTaskId
         await responseTask.value
         clearInFlightResponseTaskIfOwned(responseTaskId)
+        if inFlightResponseTaskId == nil {
+            inFlightResponseAbortReason = nil
+        }
     }
 
     @MainActor
@@ -175,25 +315,26 @@ final class ChatViewModel {
            !project.goal.isEmpty {
             projectGoal = project.goal
         }
+        let memoryProjection = memoryProjectionService
 
         let contextSlice = ChatViewModel.assembleContext(
             chatMode: .companion,
             currentUserInput: ChatViewModel.quickActionOpeningPrompt(for: mode),
-            globalMemory: userMemoryService.currentGlobal(),
-            essentialStory: userMemoryService.currentEssentialStory(
+            globalMemory: memoryProjection.currentGlobal(),
+            essentialStory: memoryProjection.currentEssentialStory(
                 projectId: node.projectId,
                 excludingConversationId: node.id
             ),
-            userModel: userMemoryService.currentUserModel(
+            userModel: memoryProjection.currentUserModel(
                 projectId: node.projectId,
                 conversationId: node.id
             ),
-            memoryEvidence: userMemoryService.currentBoundedEvidence(
+            memoryEvidence: memoryProjection.currentBoundedEvidence(
                 projectId: node.projectId,
                 excludingConversationId: node.id
             ),
-            projectMemory: node.projectId.flatMap { userMemoryService.currentProject(projectId: $0) },
-            conversationMemory: userMemoryService.currentConversation(nodeId: node.id),
+            projectMemory: node.projectId.flatMap { memoryProjection.currentProject(projectId: $0) },
+            conversationMemory: memoryProjection.currentConversation(nodeId: node.id),
             recentConversations: [],
             citations: [],
             projectGoal: projectGoal,
@@ -203,21 +344,21 @@ final class ChatViewModel {
         let promptTrace = ChatViewModel.governanceTrace(
             chatMode: .companion,
             currentUserInput: ChatViewModel.quickActionOpeningPrompt(for: mode),
-            globalMemory: userMemoryService.currentGlobal(),
-            essentialStory: userMemoryService.currentEssentialStory(
+            globalMemory: memoryProjection.currentGlobal(),
+            essentialStory: memoryProjection.currentEssentialStory(
                 projectId: node.projectId,
                 excludingConversationId: node.id
             ),
-            userModel: userMemoryService.currentUserModel(
+            userModel: memoryProjection.currentUserModel(
                 projectId: node.projectId,
                 conversationId: node.id
             ),
-            memoryEvidence: userMemoryService.currentBoundedEvidence(
+            memoryEvidence: memoryProjection.currentBoundedEvidence(
                 projectId: node.projectId,
                 excludingConversationId: node.id
             ),
-            projectMemory: node.projectId.flatMap { userMemoryService.currentProject(projectId: $0) },
-            conversationMemory: userMemoryService.currentConversation(nodeId: node.id),
+            projectMemory: node.projectId.flatMap { memoryProjection.currentProject(projectId: $0) },
+            conversationMemory: memoryProjection.currentConversation(nodeId: node.id),
             recentConversations: [],
             citations: [],
             projectGoal: projectGoal,
@@ -231,10 +372,13 @@ final class ChatViewModel {
         guard let llm = llmServiceProvider() else {
             guard isActiveResponseTask(responseTaskId) else { return }
             let errorContent = "Please configure an LLM in Settings."
-            let errorMessage = Message(nodeId: node.id, role: .assistant, content: errorContent)
-            try? nodeStore.insertMessage(errorMessage)
-            messages.append(errorMessage)
-            persistConversationSnapshot(for: node.id, messages: messages)
+            guard let committed = try? conversationSessionStore.commitAssistantTurn(
+                nodeId: node.id,
+                currentMessages: messages,
+                assistantContent: errorContent
+            ) else { return }
+            currentNode = committed.node
+            messages = committed.messagesAfterAssistantAppend
             activeQuickActionMode = ChatViewModel.updatedQuickActionMode(
                 currentMode: activeQuickActionMode,
                 assistantContent: errorContent
@@ -297,29 +441,27 @@ final class ChatViewModel {
         let conversationTitle = ChatViewModel.sanitizedConversationTitle(
             from: ClarificationCardParser.extractChatTitle(from: rawAssistantContent)
         )
-        let assistantMessage = Message(nodeId: node.id, role: .assistant, content: assistantContent)
-        try? nodeStore.insertMessage(assistantMessage)
-        messages.append(assistantMessage)
-        if let conversationTitle {
-            maybeApplyConversationTitle(conversationTitle, nodeId: node.id, messages: messages)
-        }
-        persistConversationSnapshot(for: node.id, messages: messages, shouldRefreshEmoji: true)
+        guard let committed = try? conversationSessionStore.commitAssistantTurn(
+            nodeId: node.id,
+            currentMessages: messages,
+            assistantContent: assistantContent,
+            conversationTitle: conversationTitle
+        ) else { return }
+        currentNode = committed.node
+        messages = committed.messagesAfterAssistantAppend
         activeQuickActionMode = ChatViewModel.updatedQuickActionMode(
             currentMode: activeQuickActionMode,
             assistantContent: assistantContent
         )
-        scratchPadStore.ingestAssistantMessage(
-            content: assistantContent,
-            sourceMessageId: assistantMessage.id,
-            conversationId: node.id
+        let completion = turnOutcomeFactory.makeCompletion(
+            turnId: responseTaskId,
+            nextQuickActionModeIfCompleted: activeQuickActionMode,
+            committed: committed,
+            assistantContent: assistantContent,
+            stableSystem: contextSlice.stable
         )
-        scheduleUserMemoryRefresh(for: node, messages: messages)
-        refreshGeminiConversationCacheIfNeeded(
-            nodeId: node.id,
-            llm: llm,
-            stableSystem: contextSlice.stable,
-            persistedMessages: messages
-        )
+        await contextContinuationService.run(completion.continuationPlan)
+        turnHousekeepingService.run(completion.housekeepingPlan)
         currentResponse = ""
     }
 
@@ -330,6 +472,7 @@ final class ChatViewModel {
         guard (!inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty), !isGenerating else { return }
 
         let responseTaskId = UUID()
+        inFlightResponseAbortReason = nil
         let responseTask = Task { @MainActor [weak self] in
             guard let self else { return }
             await self.runSend(attachments: attachments, responseTaskId: responseTaskId)
@@ -338,6 +481,9 @@ final class ChatViewModel {
         inFlightResponseTaskId = responseTaskId
         await responseTask.value
         clearInFlightResponseTaskIfOwned(responseTaskId)
+        if inFlightResponseTaskId == nil {
+            inFlightResponseAbortReason = nil
+        }
     }
 
     @MainActor
@@ -345,13 +491,20 @@ final class ChatViewModel {
         let query = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard (!query.isEmpty || !attachments.isEmpty), isActiveResponseTask(responseTaskId) else { return }
 
-        let attachmentNames = attachments.map(\.name)
-        let promptQuery = query.isEmpty ? "Please review the attached files." : query
-        let userMessageContent = ChatViewModel.userMessageContent(
-            query: promptQuery,
-            attachmentNames: attachmentNames
+        let turnRequest = TurnRequest(
+            turnId: responseTaskId,
+            snapshot: TurnSessionSnapshot(
+                currentNode: currentNode,
+                messages: messages,
+                defaultProjectId: defaultProjectId,
+                activeChatMode: activeChatMode,
+                activeQuickActionMode: activeQuickActionMode
+            ),
+            inputText: query,
+            attachments: attachments,
+            now: Date()
         )
-        let retrievalQuery = ([promptQuery] + attachmentNames).joined(separator: "\n")
+        let eventSink = makeTurnEventSink(turnId: responseTaskId)
 
         inputText = ""
         isGenerating = true
@@ -362,386 +515,121 @@ final class ChatViewModel {
             }
         }
 
-        // Step 1: Create conversation node if nil
-        if currentNode == nil {
-            startNewConversation(projectId: defaultProjectId, cancelInFlightWork: false)
-        }
-
-        guard let node = currentNode else { return }
-
-        // Step 2: Save user message
-        let userMessage = Message(nodeId: node.id, role: .user, content: userMessageContent)
-        try? nodeStore.insertMessage(userMessage)
-        messages.append(userMessage)
-        persistConversationSnapshot(for: node.id, messages: messages)
-
-        // Step 3: Embed query and search for citations
-        citations = []
-        if embeddingService.isLoaded {
-            if let queryEmbedding = try? embeddingService.embed(retrievalQuery) {
-                let results = (try? vectorStore.searchForChatCitations(
-                    query: queryEmbedding,
-                    queryText: retrievalQuery,
-                    topK: 5,
-                    excludeIds: [node.id]
-                )) ?? []
-                citations = results
+        guard let completion = await turnRunner.run(
+            request: turnRequest,
+            sink: eventSink,
+            abortReason: { [unowned self] in
+                self.responseAbortReason(for: responseTaskId)
             }
-        }
-
-        // Step 4: Fetch project goal if node has projectId
-        var projectGoal: String? = nil
-        if let projectId = node.projectId,
-           let project = try? nodeStore.fetchProject(id: projectId),
-           !project.goal.isEmpty {
-            projectGoal = project.goal
-        }
-
-        let recentConversations = (try? nodeStore.fetchRecentConversationMemories(
-            limit: 2,
-            excludingId: node.id
-        )) ?? []
-
-        // --- BEGIN reordered send flow (per spec D3) ---
-
-        // Step A: Gather contradiction-oriented hard recall and the citable pool (needed by the judge).
-        let nodeHits = citations.map { $0.node.id }
-        let hardRecallFacts = (try? userMemoryService.contradictionRecallFacts(
-            projectId: node.projectId,
-            conversationId: node.id
-        )) ?? []
-        let contradictionCandidateIds = Set(
-            userMemoryService
-                .annotateContradictionCandidates(
-                    currentMessage: promptQuery,
-                    facts: hardRecallFacts
-                )
-                .filter(\.isContradictionCandidate)
-                .map { $0.fact.id.uuidString }
-        )
-        let citablePool = (try? userMemoryService.citableEntryPool(
-            projectId: node.projectId,
-            conversationId: node.id,
-            nodeHits: nodeHits,
-            hardRecallFacts: hardRecallFacts,
-            contradictionCandidateIds: contradictionCandidateIds
-        )) ?? []
-
-        // Step B: Run the judge (or skip on .local).
-        let currentProvider = currentProviderProvider()
-        let eventId = UUID()
-        var verdictForLog: JudgeVerdict?
-        var fallbackReason: JudgeFallbackReason = .ok
-        var profile: BehaviorProfile = .supportive
-        var focusBlock: String?
-        var inferredMode: ChatMode?
-        let feedbackLoop = buildJudgeFeedbackLoop()
-
-        if currentProvider == .local {
-            fallbackReason = .providerLocal
-        } else if let judgeLLM = judgeLLMServiceFactory() {
-            inFlightJudgeTask?.cancel()
-
-            let judge = provocationJudgeFactory(judgeLLM)
-            let taskId = UUID()
-            let task = Task { () async throws -> JudgeVerdict in
-                try await judge.judge(
-                    userMessage: promptQuery,
-                    citablePool: citablePool,
-                    previousMode: activeChatMode,
-                    provider: currentProvider,
-                    feedbackLoop: feedbackLoop
-                )
-            }
-            inFlightJudgeTask = task
-            inFlightJudgeTaskId = taskId
-            defer {
-                if inFlightJudgeTaskId == taskId {
-                    inFlightJudgeTask = nil
-                    inFlightJudgeTaskId = nil
-                }
-            }
-
-            do {
-                let verdict = try await task.value
-                verdictForLog = verdict
-                inferredMode = verdict.inferredMode
-
-                if verdict.shouldProvoke, let entryIdStr = verdict.entryId {
-                    if let matched = citablePool.first(where: { $0.id == entryIdStr }),
-                       !matched.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        profile = .provocative
-                        focusBlock = ChatViewModel.buildFocusBlock(entryId: matched.id, rawText: matched.text)
-                        fallbackReason = .ok
-                    } else {
-                        fallbackReason = .unknownEntryId
-                        profile = .supportive
-                    }
-                } else {
-                    fallbackReason = .ok
-                    profile = .supportive
-                }
-            } catch JudgeError.timeout {
-                fallbackReason = .timeout
-            } catch JudgeError.badJSON {
-                fallbackReason = .badJSON
-            } catch is CancellationError {
-                return
-            } catch {
-                fallbackReason = .apiError
-            }
-        } else {
-            fallbackReason = .judgeUnavailable
-        }
-
-        // Guard after judge await: if the turn was canceled (chat switch, stop, new send)
-        // while we were waiting on the judge, bail before mutating any downstream state.
-        guard isActiveResponseTask(responseTaskId) else { return }
-
-        // Step C: Decide the effective mode for this turn.
-        let effectiveMode: ChatMode = inferredMode ?? (activeChatMode ?? .companion)
-
-        // Step D: Assemble context + governance trace using effectiveMode.
-        let shouldAllowInteractiveClarification = ChatViewModel.shouldAllowInteractiveClarification(
-            activeQuickActionMode: activeQuickActionMode,
-            messages: messages
-        )
-        let contextSlice = ChatViewModel.assembleContext(
-            chatMode: effectiveMode,
-            currentUserInput: promptQuery,
-            globalMemory: userMemoryService.currentGlobal(),
-            essentialStory: userMemoryService.currentEssentialStory(
-                projectId: node.projectId,
-                excludingConversationId: node.id
-            ),
-            userModel: userMemoryService.currentUserModel(
-                projectId: node.projectId,
-                conversationId: node.id
-            ),
-            memoryEvidence: userMemoryService.currentBoundedEvidence(
-                projectId: node.projectId,
-                excludingConversationId: node.id
-            ),
-            projectMemory: node.projectId.flatMap { userMemoryService.currentProject(projectId: $0) },
-            conversationMemory: userMemoryService.currentConversation(nodeId: node.id),
-            recentConversations: recentConversations,
-            citations: citations,
-            projectGoal: projectGoal,
-            attachments: attachments,
-            activeQuickActionMode: activeQuickActionMode,
-            allowInteractiveClarification: shouldAllowInteractiveClarification
-        )
-        let promptTrace = ChatViewModel.governanceTrace(
-            chatMode: effectiveMode,
-            currentUserInput: promptQuery,
-            globalMemory: userMemoryService.currentGlobal(),
-            essentialStory: userMemoryService.currentEssentialStory(
-                projectId: node.projectId,
-                excludingConversationId: node.id
-            ),
-            userModel: userMemoryService.currentUserModel(
-                projectId: node.projectId,
-                conversationId: node.id
-            ),
-            memoryEvidence: userMemoryService.currentBoundedEvidence(
-                projectId: node.projectId,
-                excludingConversationId: node.id
-            ),
-            projectMemory: node.projectId.flatMap { userMemoryService.currentProject(projectId: $0) },
-            conversationMemory: userMemoryService.currentConversation(nodeId: node.id),
-            recentConversations: recentConversations,
-            citations: citations,
-            projectGoal: projectGoal,
-            attachments: attachments,
-            activeQuickActionMode: activeQuickActionMode,
-            allowInteractiveClarification: shouldAllowInteractiveClarification
-        )
-        lastPromptGovernanceTrace = promptTrace
-        governanceTelemetry.recordPromptTrace(promptTrace)
-
-        // Step E: Compose the per-turn slice. `stableSystem` rides the Gemini cache;
-        // `volatileSystem` also absorbs the judge's per-turn profile block and any
-        // focus directive so the cache hash survives judge-driven churn.
-        let stableSystem = contextSlice.stable
-        var volatilePartsForTurn: [String] = [contextSlice.volatile, profile.contextBlock]
-        if let fb = focusBlock { volatilePartsForTurn.append(fb) }
-        let volatileSystem = volatilePartsForTurn.filter { !$0.isEmpty }.joined(separator: "\n\n")
-        let turnSlice = TurnSystemSlice(stable: stableSystem, volatile: volatileSystem)
-
-        // Step F: Append the judge_events row using effectiveMode.
-        // BEFORE the main call so the row survives main-call failure.
-        // SINGLE stamp site for provocationKind — do not add another call to deriveProvocationKind.
-        if var v = verdictForLog {
-            v.provocationKind = ChatViewModel.deriveProvocationKind(
-                verdict: v,
-                contradictionCandidateIds: contradictionCandidateIds
-            )
-            verdictForLog = v
-        }
-        let verdictJSONStr: String = {
-            if let v = verdictForLog, let data = try? JSONEncoder().encode(v) {
-                return String(data: data, encoding: .utf8) ?? "{}"
-            }
-            return "{}"
-        }()
-        let event = JudgeEvent(
-            id: eventId, ts: Date(), nodeId: node.id, messageId: nil,
-            chatMode: effectiveMode, provider: currentProvider,
-            verdictJSON: verdictJSONStr, fallbackReason: fallbackReason,
-            userFeedback: nil, feedbackTs: nil
-        )
-        governanceTelemetry.appendJudgeEvent(event)
-
-        // Step G: Persist runtime activeChatMode NOW, before the main call.
-        // Retry-without-reload must see the freshly-judged mode as previousMode on the next send.
-        activeChatMode = effectiveMode
-
-        // --- END reordered send flow ---
-
-        // Step 6: Build LLMMessage array from conversation history
-        let llmMessages: [LLMMessage] = messages.map { msg in
-            LLMMessage(
-                role: msg.role == .user ? "user" : "assistant",
-                content: msg.content
-            )
-        }
-        // The user message was already appended to messages, so llmMessages already includes it
-
-        // Step 7: Get LLM from provider
-        guard let llm = llmServiceProvider() else {
-            guard isActiveResponseTask(responseTaskId) else { return }
-            let errorContent = "Please configure an LLM in Settings."
-            let errorMessage = Message(nodeId: node.id, role: .assistant, content: errorContent)
-            try? nodeStore.insertMessage(errorMessage)
-            messages.append(errorMessage)
-            try? nodeStore.updateJudgeEventMessageId(eventId: eventId, messageId: errorMessage.id)
-            bumpJudgeFeedbackVersion()
-            persistConversationSnapshot(for: node.id, messages: messages, shouldRefreshEmoji: true)
-            activeQuickActionMode = ChatViewModel.updatedQuickActionMode(
-                currentMode: activeQuickActionMode,
-                assistantContent: errorContent
-            )
-            currentResponse = ""
+        ) else {
             return
         }
-
-        // Resolve the cache entry exactly once per turn. Previously this was recomputed
-        // three times (once per helper) — each recompute ran a full SHA256 over system
-        // + transcript. Thread the resolved entry through the helpers instead.
-        let resolvedCacheEntry = activeGeminiHistoryCache(
-            nodeId: node.id,
-            llm: llm,
-            stableSystem: stableSystem,
-            transcriptMessages: llmMessages
-        )
-        let requestMessages = requestMessages(
-            forSlice: turnSlice,
-            transcriptMessages: llmMessages,
-            cacheEntry: resolvedCacheEntry
-        )
-        let requestSystem = requestSystem(
-            forSlice: turnSlice,
-            cacheEntry: resolvedCacheEntry
-        )
-
-        // Step 8: Stream response
-        currentThinking = ""
-        didHitBudgetExhaustion = false
-        let streamingService = configuredStreamingService(
-            from: configuredGeminiService(from: llm, cacheEntry: resolvedCacheEntry),
-            responseTaskId: responseTaskId,
-            captureThinking: true
-        )
-        do {
-            let stream = try await streamingService.generate(messages: requestMessages, system: requestSystem)
-            // Guard after the generate() await: same window as the judge guard above.
-            guard isActiveResponseTask(responseTaskId) else { return }
-            for try await chunk in stream {
-                try Task.checkCancellation()
-                guard isActiveResponseTask(responseTaskId) else { return }
-                currentResponse += chunk
-            }
-            guard isActiveResponseTask(responseTaskId) else { return }
-        } catch is CancellationError {
-            return
-        } catch {
-            guard isActiveResponseTask(responseTaskId) else { return }
-            // Cached handle may have been evicted server-side before our local TTL ran
-            // out. Drop the stale entry so the next turn rebuilds against a live cache
-            // instead of repeatedly hitting 400/404 on the same dead handle.
-            if resolvedCacheEntry != nil {
-                geminiPromptCache.removeEntry(for: node.id)
-            }
-            currentResponse = "Error: \(error.localizedDescription)"
-        }
-
-        // Step 9: Save assistant message
-        guard isActiveResponseTask(responseTaskId) else { return }
-        // Budget-exhausted path: Gemini burned the whole thinking budget on thoughts
-        // and emitted no user-facing text. Surface it as a real assistant message so
-        // Alex sees the turn failed and has an obvious retry path (type again). We
-        // persist it as a normal message so it roundtrips through reload.
-        if didHitBudgetExhaustion && currentResponse.isEmpty {
-            currentResponse = "(I ran out of thinking budget on that one. Try asking again, maybe a touch simpler.)"
-        }
-        let rawAssistantContent = currentResponse
-        let assistantContent = ClarificationCardParser.stripChatTitle(from: rawAssistantContent)
-        let conversationTitle = ChatViewModel.sanitizedConversationTitle(
-            from: ClarificationCardParser.extractChatTitle(from: rawAssistantContent)
-        )
-        let persistedThinking = currentThinking.isEmpty ? nil : currentThinking
-        let assistantMessage = Message(
-            nodeId: node.id,
-            role: .assistant,
-            content: assistantContent,
-            thinkingContent: persistedThinking
-        )
-        try? nodeStore.insertMessage(assistantMessage)
-        messages.append(assistantMessage)
-        if let conversationTitle {
-            maybeApplyConversationTitle(conversationTitle, nodeId: node.id, messages: messages)
-        }
-        scratchPadStore.ingestAssistantMessage(
-            content: assistantContent,
-            sourceMessageId: assistantMessage.id,
-            conversationId: node.id
-        )
-
-        // Step 9b: patch the judge event with the message it produced
-        try? nodeStore.updateJudgeEventMessageId(eventId: eventId, messageId: assistantMessage.id)
         bumpJudgeFeedbackVersion()
-        persistConversationSnapshot(for: node.id, messages: messages, shouldRefreshEmoji: true)
-        activeQuickActionMode = ChatViewModel.updatedQuickActionMode(
-            currentMode: activeQuickActionMode,
-            assistantContent: assistantContent
+        await contextContinuationService.run(completion.continuationPlan)
+        turnHousekeepingService.run(completion.housekeepingPlan)
+    }
+
+    @MainActor
+    private func makeTurnEventSink(turnId: UUID) -> TurnSequencedEventSink {
+        TurnSequencedEventSink(
+            turnId: turnId,
+            sink: ClosureTurnEventSink { [weak self] envelope in
+                guard let self else { return }
+                await self.handleTurnEvent(envelope)
+            }
         )
-        scheduleUserMemoryRefresh(for: node, messages: messages)
-        refreshGeminiConversationCacheIfNeeded(
-            nodeId: node.id,
-            llm: llm,
-            stableSystem: stableSystem,
-            persistedMessages: messages
-        )
+    }
+
+    @MainActor
+    private func responseAbortReason(for taskId: UUID) -> TurnAbortReason {
+        guard inFlightResponseTaskId == taskId else {
+            return inFlightResponseAbortReason ?? .unexpectedCancellation
+        }
+        return inFlightResponseAbortReason ?? .unexpectedCancellation
+    }
+
+    @MainActor
+    private func handleTurnEvent(_ envelope: TurnEventEnvelope) {
+        guard isActiveResponseTask(envelope.turnId) else { return }
+
+        switch envelope.event {
+        case .prepared(let prepared):
+            currentNode = prepared.node
+            messages = prepared.messagesAfterUserAppend
+            citations = prepared.citations
+            lastPromptGovernanceTrace = prepared.promptTrace
+            activeChatMode = prepared.effectiveMode
+            currentResponse = ""
+            currentThinking = ""
+            didHitBudgetExhaustion = false
+        case .thinkingDelta(let delta):
+            currentThinking.append(delta)
+        case .textDelta(let delta):
+            currentResponse.append(delta)
+        case .completed(let completion):
+            currentNode = completion.node
+            messages = completion.messagesAfterAssistantAppend
+            activeQuickActionMode = completion.nextQuickActionMode
+            currentResponse = ""
+            currentThinking = ""
+            didHitBudgetExhaustion = false
+        case .aborted(let reason):
+            currentThinking = ""
+            didHitBudgetExhaustion = false
+            if reason == .unexpectedCancellation {
+                presentAssistantFailure(
+                    "Error: The reply was interrupted before it finished. Please try again."
+                )
+            }
+        case .failed(let failure):
+            currentThinking = ""
+            didHitBudgetExhaustion = false
+            presentAssistantFailure("Error: \(failure.message)")
+        }
+    }
+
+    @MainActor
+    private func presentAssistantFailure(_ content: String) {
+        guard let nodeId = currentNode?.id else {
+            currentResponse = content
+            return
+        }
+        if let committed = try? conversationSessionStore.commitAssistantTurn(
+            nodeId: nodeId,
+            currentMessages: messages,
+            assistantContent: content
+        ) {
+            currentNode = committed.node
+            messages = committed.messagesAfterAssistantAppend
+        } else {
+            messages.append(
+                Message(
+                    nodeId: nodeId,
+                    role: .assistant,
+                    content: content
+                )
+            )
+        }
         currentResponse = ""
-        currentThinking = ""
+    }
 
-        // Step 10: Async task — update node embedding + regenerate edges
-        let nodeId = node.id
-        let fullContent = messages.map(\.content).joined(separator: "\n")
-        let embeddingService = self.embeddingService
-        let vectorStore = self.vectorStore
-        let nodeStore = self.nodeStore
-        let graphEngine = self.graphEngine
+    @MainActor
+    private func executeJudgeTask(
+        _ operation: @escaping () async throws -> JudgeVerdict
+    ) async throws -> JudgeVerdict {
+        inFlightJudgeTask?.cancel()
 
-        Task.detached(priority: .background) {
-            if let embedding = try? embeddingService.embed(fullContent) {
-                try? vectorStore.storeEmbedding(embedding, for: nodeId)
-                if var updatedNode = try? nodeStore.fetchNode(id: nodeId) {
-                    updatedNode.embedding = embedding
-                    try? graphEngine.regenerateEdges(for: updatedNode)
-                }
+        let taskId = UUID()
+        let task = Task { try await operation() }
+        inFlightJudgeTask = task
+        inFlightJudgeTaskId = taskId
+        defer {
+            if inFlightJudgeTaskId == taskId {
+                inFlightJudgeTask = nil
+                inFlightJudgeTaskId = nil
             }
         }
+        return try await task.value
     }
 
     /// External hook to cancel an in-flight judge call (conversation switch, VM teardown, etc.).
@@ -756,11 +644,28 @@ final class ChatViewModel {
     @MainActor
     func stopGenerating() {
         cancelInFlightJudge()
-        cancelInFlightResponse(clearDraft: false)
+        cancelInFlightResponse(clearDraft: false, reason: .cancelledByUser)
     }
 
     @MainActor
-    private func cancelInFlightResponse(clearDraft: Bool) {
+    func purgePersistedThinkingFromLoadedMessages() {
+        messages = messages.map { message in
+            var updated = message
+            updated.thinkingContent = nil
+            return updated
+        }
+    }
+
+    @MainActor
+    func purgeGeminiHistoryCaches() async {
+        await turnHousekeepingService.purgeGeminiHistoryCaches()
+    }
+
+    @MainActor
+    private func cancelInFlightResponse(clearDraft: Bool, reason: TurnAbortReason) {
+        if inFlightResponseTaskId != nil {
+            inFlightResponseAbortReason = reason
+        }
         inFlightResponseTask?.cancel()
         inFlightResponseTask = nil
         inFlightResponseTaskId = nil
@@ -782,19 +687,7 @@ final class ChatViewModel {
         guard inFlightResponseTaskId == taskId else { return }
         inFlightResponseTask = nil
         inFlightResponseTaskId = nil
-    }
-
-    // MARK: - Focus Block
-
-    nonisolated private static func buildFocusBlock(entryId: String, rawText: String) -> String {
-        """
-        RELEVANT PRIOR MEMORY (id=\(entryId)):
-        \(rawText)
-
-        Surface this memory in your reply. Name the tension with Alex's current claim in plain language.
-        Quote one specific line from the memory faithfully if there is one to quote; otherwise paraphrase tightly.
-        Do not reword the memory into a summary and pretend you remembered it differently.
-        """
+        inFlightResponseAbortReason = nil
     }
 
     // MARK: - Anchor (Core Identity)
@@ -896,18 +789,6 @@ final class ChatViewModel {
     }
 
     // MARK: - Context Assembly
-
-    /// Output of prompt assembly, split into the slow-changing prefix that can ride the
-    /// Gemini prompt cache and the per-turn block that must refresh every request.
-    /// `combined` reconstructs the original single-string layout for non-cache callers.
-    struct TurnSystemSlice: Equatable {
-        let stable: String
-        let volatile: String
-
-        var combined: String {
-            [stable, volatile].filter { !$0.isEmpty }.joined(separator: "\n\n")
-        }
-    }
 
     nonisolated static func assembleContext(
         chatMode: ChatMode = .companion,
@@ -1169,11 +1050,6 @@ final class ChatViewModel {
         return Int(elapsed / 86_400)
     }
 
-    nonisolated private static func userMessageContent(query: String, attachmentNames: [String]) -> String {
-        guard !attachmentNames.isEmpty else { return query }
-        return "\(query)\n\nFiles: \(attachmentNames.joined(separator: ", "))"
-    }
-
     nonisolated private static func sanitizedConversationTitle(from raw: String?) -> String? {
         guard var title = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else {
             return nil
@@ -1204,38 +1080,6 @@ final class ChatViewModel {
         }
 
         return title.isEmpty ? nil : title
-    }
-
-    nonisolated private static func shouldAutoRenameConversation(
-        currentTitle: String,
-        messages: [Message]
-    ) -> Bool {
-        let trimmed = currentTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return true }
-
-        if ["new conversation", "new chat", "untitled"].contains(trimmed.lowercased()) {
-            return true
-        }
-
-        if QuickActionMode.isPlaceholderConversationTitle(trimmed) {
-            return true
-        }
-
-        guard let legacySeed = legacyConversationSeedTitle(from: messages) else { return false }
-        return trimmed == legacySeed
-    }
-
-    nonisolated private static func legacyConversationSeedTitle(from messages: [Message]) -> String? {
-        guard let firstUser = messages.first(where: { $0.role == .user })?.content else {
-            return nil
-        }
-
-        let queryOnly = firstUser
-            .components(separatedBy: "\n\nFiles:")
-            .first?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? firstUser
-        guard !queryOnly.isEmpty else { return nil }
-        return String(queryOnly.prefix(40)).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     nonisolated static func updatedQuickActionMode(
@@ -1282,110 +1126,6 @@ final class ChatViewModel {
         Ask one short, warm opening question that helps you understand his situation.
         Do not mention hidden prompts, modes, system instructions, or formatting rules.
         """
-    }
-
-    @MainActor
-    private func maybeApplyConversationTitle(_ title: String, nodeId: UUID, messages: [Message]) {
-        guard var node = try? nodeStore.fetchNode(id: nodeId) else { return }
-        guard ChatViewModel.shouldAutoRenameConversation(currentTitle: node.title, messages: messages) else {
-            return
-        }
-        guard node.title != title else { return }
-
-        node.title = title
-        node.updatedAt = Date()
-        try? nodeStore.updateNode(node)
-
-        if currentNode?.id == node.id {
-            currentNode = node
-        }
-    }
-
-    private func persistConversationSnapshot(
-        for nodeId: UUID,
-        messages: [Message],
-        shouldRefreshEmoji: Bool = false
-    ) {
-        guard var node = try? nodeStore.fetchNode(id: nodeId) else { return }
-
-        let transcript = messages
-            .map { message in
-                let role = message.role == .user ? "Alex" : "Nous"
-                return "\(role): \(message.content)"
-            }
-            .joined(separator: "\n\n")
-
-        node.content = transcript
-        node.updatedAt = Date()
-
-        if shouldRefreshEmoji {
-            let currentEmoji = TopicEmojiResolver.storedEmoji(from: node.emoji)
-            let shouldAskLLM = currentEmoji == nil || currentEmoji == TopicEmojiResolver.fallbackEmoji(for: .conversation)
-            if shouldAskLLM {
-                Task { [weak self] in
-                    guard let self else { return }
-                    let emoji = await resolveConversationEmoji(for: node, messages: messages)
-                    guard var refreshedNode = try? nodeStore.fetchNode(id: nodeId) else { return }
-                    refreshedNode.emoji = emoji
-                    try? nodeStore.updateNode(refreshedNode)
-                    let finalNode = refreshedNode
-                    await MainActor.run {
-                        if self.currentNode?.id == finalNode.id {
-                            self.currentNode = finalNode
-                        }
-                        NotificationCenter.default.post(name: .nousNodesDidChange, object: nil)
-                    }
-                }
-            } else {
-                node.emoji = currentEmoji
-            }
-        }
-
-        try? nodeStore.updateNode(node)
-        if currentNode?.id == node.id {
-            currentNode = node
-        }
-        NotificationCenter.default.post(name: .nousNodesDidChange, object: nil)
-    }
-
-    private func resolveConversationEmoji(for node: NousNode, messages: [Message]) async -> String {
-        let fallback = TopicEmojiResolver.emoji(for: node)
-        guard let llm = llmServiceProvider() else { return fallback }
-
-        let latestMessages = messages.suffix(4).map { message in
-            let role = message.role == .user ? "Alex" : "Nous"
-            return "\(role): \(message.content)"
-        }.joined(separator: "\n\n")
-
-        let prompt = """
-        Pick exactly one emoji for the main topic of this conversation.
-        Return one emoji only.
-        Allowed emojis: \(TopicEmojiResolver.allowedEmojis.sorted().joined(separator: " "))
-
-        Title: \(node.title)
-
-        Conversation:
-        \(latestMessages)
-        """
-
-        do {
-            let stream = try await llm.generate(
-                messages: [LLMMessage(role: "user", content: prompt)],
-                system: "You classify conversation topics. Return exactly one emoji from the allowed list."
-            )
-
-            var output = ""
-            for try await chunk in stream {
-                output += chunk
-                if let emoji = TopicEmojiResolver.storedEmoji(from: output) {
-                    return emoji
-                }
-            }
-        } catch {
-            return fallback
-        }
-
-        return fallback
     }
 
     /// Attaches the resolved cache handle to the Gemini service. When the handle is
@@ -1448,6 +1188,10 @@ final class ChatViewModel {
         stableSystem: String,
         transcriptMessages: [LLMMessage]
     ) -> GeminiConversationCacheEntry? {
+        guard shouldUseGeminiHistoryCache() else {
+            turnHousekeepingService.clearGeminiHistoryCacheIfPresent(nodeId: nodeId, llm: llm)
+            return nil
+        }
         guard let gemini = llm as? GeminiLLMService else { return nil }
         guard transcriptMessages.count >= 2 else { return nil }
         let prefixHash = GeminiPromptCacheService.promptHash(
@@ -1474,304 +1218,66 @@ final class ChatViewModel {
         responseTaskId: UUID,
         captureThinking: Bool
     ) -> any LLMService {
-        guard var gemini = llm as? GeminiLLMService else { return llm }
-
-        gemini.onUsageMetadata = { [weak self] usage in
-            guard let self, self.isActiveResponseTask(responseTaskId) else { return }
-            self.governanceTelemetry.recordGeminiUsage(usage)
-        }
-
-        guard captureThinking else { return gemini }
-
-        gemini.thinkingBudgetTokens = 2000
-        // @MainActor closures: the producer `await`s these, so writes land in
-        // parse order and are visible to the post-stream budget-exhaust check below.
-        gemini.onThinkingDelta = { [weak self] delta in
-            guard let self, self.isActiveResponseTask(responseTaskId) else { return }
-            self.currentThinking.append(delta)
-        }
-        gemini.onBudgetExhausted = { [weak self] in
-            guard let self, self.isActiveResponseTask(responseTaskId) else { return }
-            self.didHitBudgetExhaustion = true
-        }
-        return gemini
-    }
-
-    @MainActor
-    private func refreshGeminiConversationCacheIfNeeded(
-        nodeId: UUID,
-        llm: any LLMService,
-        stableSystem: String,
-        persistedMessages: [Message]
-    ) {
-        guard let gemini = llm as? GeminiLLMService else {
-            geminiPromptCache.removeEntry(for: nodeId)
-            cancelInFlightCacheRefresh(for: nodeId)
-            return
-        }
-
-        let transcriptMessages = persistedMessages.map {
-            LLMMessage(role: $0.role == .user ? "user" : "assistant", content: $0.content)
-        }
-        let existingEntry = geminiPromptCache.entry(for: nodeId)
-
-        guard Self.shouldCreateGeminiHistoryCache(for: transcriptMessages) else {
-            geminiPromptCache.removeEntry(for: nodeId)
-            cancelInFlightCacheRefresh(for: nodeId)
-            guard let existingEntry else { return }
-            Task {
-                try? await gemini.deleteCachedContent(name: existingEntry.name)
+        if var gemini = llm as? GeminiLLMService {
+            gemini.onUsageMetadata = { [weak self] usage in
+                guard let self, self.isActiveResponseTask(responseTaskId) else { return }
+                self.governanceTelemetry.recordGeminiUsage(usage)
             }
-            return
-        }
 
-        let promptHash = GeminiPromptCacheService.promptHash(
-            system: stableSystem,
-            messages: transcriptMessages
-        )
-        if let existingEntry,
-           existingEntry.model == gemini.model,
-           existingEntry.promptHash == promptHash,
-           existingEntry.expireTime.map({ $0 > Date() }) ?? true {
-            return
-        }
+            guard captureThinking else { return gemini }
 
-        let oldCacheName = existingEntry?.name
-        let displayName = "nous-\(nodeId.uuidString.prefix(8))"
-
-        // Cancel any prior in-flight refresh for this conversation. Without this, a
-        // slow earlier refresh completing after a newer one would overwrite the newer
-        // entry and leak the newer server-side cache (oldCacheName captures from
-        // `existingEntry` at spawn time, so the stale delete is correct either way).
-        cancelInFlightCacheRefresh(for: nodeId)
-
-        // Generation token: the worker only commits its result if this conversation's
-        // token still matches at store time. If a newer refresh started and bumped the
-        // token, this worker's cache handle is orphaned server-side and must be cleaned
-        // up to avoid storage billing for a cache nobody will ever reference.
-        let token = UUID()
-        geminiCacheRefreshTokens[nodeId] = token
-
-        let task = Task { [weak self] in
-            do {
-                let created = try await gemini.createCachedContent(
-                    messages: transcriptMessages,
-                    system: stableSystem,
-                    ttlSeconds: 300,
-                    displayName: displayName
-                )
-                try Task.checkCancellation()
-                let committed = await MainActor.run { () -> Bool in
-                    guard let self else { return false }
-                    guard self.geminiCacheRefreshTokens[nodeId] == token else { return false }
-                    self.geminiPromptCache.store(
-                        GeminiConversationCacheEntry(
-                            name: created.name,
-                            model: created.model,
-                            promptHash: promptHash,
-                            expireTime: created.expireTime
-                        ),
-                        for: nodeId
-                    )
-                    return true
-                }
-                if committed {
-                    if let oldCacheName, oldCacheName != created.name {
-                        try? await gemini.deleteCachedContent(name: oldCacheName)
-                    }
-                } else {
-                    // Superseded by a newer refresh. Drop our orphaned handle server-side
-                    // so it isn't billed for the full TTL with nobody to reference it.
-                    try? await gemini.deleteCachedContent(name: created.name)
-                }
-            } catch is CancellationError {
-                return
-            } catch {
-                print("[gemini-cache] failed to refresh cached content: \(error)")
+            gemini.thinkingBudgetTokens = 2000
+            // @MainActor closures: the producer `await`s these, so writes land in
+            // parse order and are visible to the post-stream budget-exhaust check below.
+            gemini.onThinkingDelta = { [weak self] delta in
+                guard let self, self.isActiveResponseTask(responseTaskId) else { return }
+                self.currentThinking.append(delta)
             }
-            await MainActor.run { [weak self] in
-                guard let self else { return }
-                if self.geminiCacheRefreshTokens[nodeId] == token {
-                    self.geminiCacheRefreshTokens.removeValue(forKey: nodeId)
-                    self.geminiCacheRefreshTasks.removeValue(forKey: nodeId)
-                }
+            gemini.onBudgetExhausted = { [weak self] in
+                guard let self, self.isActiveResponseTask(responseTaskId) else { return }
+                self.didHitBudgetExhaustion = true
             }
-        }
-        geminiCacheRefreshTasks[nodeId] = task
-    }
-
-    @MainActor
-    private func cancelInFlightCacheRefresh(for nodeId: UUID) {
-        geminiCacheRefreshTasks[nodeId]?.cancel()
-        geminiCacheRefreshTasks.removeValue(forKey: nodeId)
-        geminiCacheRefreshTokens.removeValue(forKey: nodeId)
-    }
-
-    nonisolated private static func shouldCreateGeminiHistoryCache(for messages: [LLMMessage]) -> Bool {
-        guard messages.count >= 4 else { return false }
-        let characterCount = messages.reduce(into: 0) { $0 += $1.content.count }
-        // Gemini implicit caching starts at 1024 prompt tokens; use a
-        // conservative char-count gate before paying an explicit cache-create call.
-        return characterCount >= 4096
-    }
-
-    /// Routes refresh work through the scheduler actor so it serialises after
-    /// the reply stream + persist step, avoiding MLX container contention on
-    /// local models (v2.1 §5, Q9=B).
-    private func scheduleUserMemoryRefresh(for node: NousNode, messages: [Message]) {
-        let nodeId = node.id
-        let projectId = node.projectId
-        let snapshot = messages
-        let shouldPersist = userMemoryService.shouldPersistMemory(messages: snapshot, projectId: projectId)
-        if !shouldPersist {
-            governanceTelemetry.recordMemoryStorageSuppressed()
-            return
+            return gemini
         }
 
-        Task { [userMemoryScheduler] in
-            await userMemoryScheduler.enqueueConversationRefresh(
-                nodeId: nodeId,
-                projectId: projectId,
-                messages: snapshot
-            )
+        guard captureThinking else { return llm }
+
+        if var claude = llm as? ClaudeLLMService {
+            claude.thinkingBudgetTokens = 1024
+            claude.onThinkingDelta = { [weak self] delta in
+                guard let self, self.isActiveResponseTask(responseTaskId) else { return }
+                self.currentThinking.append(delta)
+            }
+            return claude
         }
+
+        if var openRouter = llm as? OpenRouterLLMService {
+            openRouter.reasoningBudgetTokens = 1024
+            openRouter.onThinkingDelta = { [weak self] delta in
+                guard let self, self.isActiveResponseTask(responseTaskId) else { return }
+                self.currentThinking.append(delta)
+            }
+            return openRouter
+        }
+
+        return llm
+    }
+
+}
+
+private final class ClosureTurnEventSink: TurnEventSink, @unchecked Sendable {
+    private let handler: @Sendable (TurnEventEnvelope) async -> Void
+
+    init(handler: @escaping @Sendable (TurnEventEnvelope) async -> Void) {
+        self.handler = handler
+    }
+
+    func emit(_ envelope: TurnEventEnvelope) async {
+        await handler(envelope)
     }
 }
 
 extension ChatViewModel {
-    @MainActor
-    private func buildJudgeFeedbackLoop(limit: Int = 24, now: Date = Date()) -> JudgeFeedbackLoop? {
-        let events = governanceTelemetry.recentJudgeEvents(limit: limit, filter: .none)
-        guard !events.isEmpty else { return nil }
-
-        var entryPenalty: [String: Double] = [:]
-        var entryReasons: [String: [String: Double]] = [:]
-        var kindPenalty: [ProvocationKind: Double] = [:]
-        var kindReasons: [ProvocationKind: [String: Double]] = [:]
-        var globalReasons: [String: Double] = [:]
-        var noteHints: [(text: String, weight: Double)] = []
-
-        for event in events {
-            guard event.fallbackReason == .ok,
-                  let feedback = event.userFeedback,
-                  let verdict = Self.decodeJudgeVerdict(from: event.verdictJSON),
-                  verdict.shouldProvoke
-            else { continue }
-
-            let referenceDate = event.feedbackTs ?? event.ts
-            let ageHours = max(0, now.timeIntervalSince(referenceDate) / 3600)
-            let decay = pow(0.82, ageHours / 24)
-            let weight = (feedback == .down ? 2.0 : -1.0) * decay
-
-            kindPenalty[verdict.provocationKind, default: 0] += weight
-            if let entryId = verdict.entryId {
-                entryPenalty[entryId, default: 0] += weight
-            }
-
-            guard feedback == .down else { continue }
-
-            if let reasonLabel = Self.feedbackReasonLabel(event.feedbackReason) {
-                globalReasons[reasonLabel, default: 0] += decay
-                var reasonsForKind = kindReasons[verdict.provocationKind, default: [:]]
-                reasonsForKind[reasonLabel, default: 0] += decay
-                kindReasons[verdict.provocationKind] = reasonsForKind
-                if let entryId = verdict.entryId {
-                    var reasonsForEntry = entryReasons[entryId, default: [:]]
-                    reasonsForEntry[reasonLabel, default: 0] += decay
-                    entryReasons[entryId] = reasonsForEntry
-                }
-            }
-
-            if let note = Self.feedbackNoteHint(event.feedbackNote) {
-                noteHints.append((text: note, weight: decay))
-            }
-        }
-
-        let entrySuppressions = entryPenalty
-            .filter { $0.value > 0.45 }
-            .sorted { $0.value > $1.value }
-            .prefix(3)
-            .map { entryId, penalty in
-                JudgeFeedbackLoop.EntrySuppression(
-                    entryId: entryId,
-                    penalty: penalty,
-                    reasonHints: Self.topReasonLabels(entryReasons[entryId], limit: 2)
-                )
-            }
-
-        let kindAdjustments = kindPenalty
-            .filter { $0.value > 0.35 }
-            .sorted { lhs, rhs in
-                if lhs.value == rhs.value {
-                    return lhs.key.rawValue < rhs.key.rawValue
-                }
-                return lhs.value > rhs.value
-            }
-            .prefix(3)
-            .map { kind, penalty in
-                JudgeFeedbackLoop.KindAdjustment(
-                    kind: kind,
-                    penalty: penalty,
-                    reasonHints: Self.topReasonLabels(kindReasons[kind], limit: 2)
-                )
-            }
-
-        let loop = JudgeFeedbackLoop(
-            entrySuppressions: Array(entrySuppressions),
-            kindAdjustments: Array(kindAdjustments),
-            globalReasonHints: Self.topReasonLabels(globalReasons, limit: 3),
-            noteHints: Self.topNoteHints(noteHints, limit: 2)
-        )
-        return loop.isEmpty ? nil : loop
-    }
-
-    nonisolated private static func decodeJudgeVerdict(from json: String) -> JudgeVerdict? {
-        guard let data = json.data(using: .utf8) else { return nil }
-        return try? JSONDecoder().decode(JudgeVerdict.self, from: data)
-    }
-
-    nonisolated private static func feedbackReasonLabel(_ reason: JudgeFeedbackReason?) -> String? {
-        reason?.title.lowercased()
-    }
-
-    nonisolated private static func topReasonLabels(_ weightedReasons: [String: Double]?, limit: Int) -> [String] {
-        (weightedReasons ?? [:])
-            .filter { $0.value > 0 }
-            .sorted { lhs, rhs in
-                if lhs.value == rhs.value {
-                    return lhs.key < rhs.key
-                }
-                return lhs.value > rhs.value
-            }
-            .prefix(limit)
-            .map(\.key)
-    }
-
-    nonisolated private static func topNoteHints(_ notes: [(text: String, weight: Double)], limit: Int) -> [String] {
-        var seen: Set<String> = []
-        return notes
-            .sorted { $0.weight > $1.weight }
-            .compactMap { note in
-                guard seen.insert(note.text).inserted else { return nil }
-                return note.text
-            }
-            .prefix(limit)
-            .map { $0 }
-    }
-
-    nonisolated private static func feedbackNoteHint(_ note: String?) -> String? {
-        guard let trimmed = note?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !trimmed.isEmpty
-        else { return nil }
-
-        let singleLine = trimmed.replacingOccurrences(of: "\n", with: " ")
-        if singleLine.count <= 96 {
-            return singleLine
-        }
-        let endIndex = singleLine.index(singleLine.startIndex, offsetBy: 93)
-        return String(singleLine[..<endIndex]) + "..."
-    }
-
     @MainActor
     private func judgeEvent(forMessageId messageId: UUID) -> JudgeEvent? {
         _ = judgeFeedbackVersion

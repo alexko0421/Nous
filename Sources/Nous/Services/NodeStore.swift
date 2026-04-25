@@ -4,6 +4,14 @@ extension Notification.Name {
     static let nousNodesDidChange = Notification.Name("NousNodesDidChange")
 }
 
+struct ScratchPadStateRecord: Equatable {
+    let nodeId: UUID
+    let latestSummary: ScratchSummary?
+    let currentContent: String
+    let baseSnapshot: String
+    let contentBaseGeneratedAt: Date?
+}
+
 // MARK: - NodeStore
 
 final class NodeStore {
@@ -116,6 +124,18 @@ final class NodeStore {
                 nodeId    TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
                 content   TEXT NOT NULL DEFAULT '',
                 updatedAt REAL NOT NULL
+            );
+        """)
+
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS scratchpad_state (
+                nodeId                     TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
+                latestSummaryMarkdown      TEXT,
+                latestSummaryGeneratedAt   REAL,
+                latestSummarySourceMessageId TEXT,
+                currentContent             TEXT NOT NULL DEFAULT '',
+                baseSnapshot               TEXT NOT NULL DEFAULT '',
+                contentBaseGeneratedAt     REAL
             );
         """)
 
@@ -287,7 +307,7 @@ final class NodeStore {
 
     private func notifyNodesDidChange() {
         let post = {
-            NotificationCenter.default.post(name: .nousNodesDidChange, object: nil)
+            NotificationCenter.default.post(name: .nousNodesDidChange, object: self)
         }
         if Thread.isMainThread {
             post()
@@ -619,6 +639,16 @@ final class NodeStore {
         return results
     }
 
+    func clearAllMessageThinkingContent() throws {
+        let stmt = try db.prepare("""
+            UPDATE messages
+               SET thinking_content = NULL
+             WHERE thinking_content IS NOT NULL;
+        """)
+        try stmt.step()
+        notifyNodesDidChange()
+    }
+
     // MARK: - Memory scopes (v2.1)
 
     // --- Global ---
@@ -688,6 +718,89 @@ final class NodeStore {
         try stmt.bind(memory.nodeId.uuidString, at: 1)
         try stmt.bind(memory.content, at: 2)
         try stmt.bind(memory.updatedAt.timeIntervalSince1970, at: 3)
+        try stmt.step()
+    }
+
+    func fetchScratchPadState(nodeId: UUID) throws -> ScratchPadStateRecord? {
+        let stmt = try db.prepare("""
+            SELECT latestSummaryMarkdown,
+                   latestSummaryGeneratedAt,
+                   latestSummarySourceMessageId,
+                   currentContent,
+                   baseSnapshot,
+                   contentBaseGeneratedAt
+            FROM scratchpad_state
+            WHERE nodeId = ?;
+        """)
+        try stmt.bind(nodeId.uuidString, at: 1)
+        guard try stmt.step() else { return nil }
+
+        let latestSummary: ScratchSummary?
+        if let markdown = stmt.text(at: 0),
+           let sourceMessageIdRaw = stmt.text(at: 2),
+           let sourceMessageId = UUID(uuidString: sourceMessageIdRaw) {
+            latestSummary = ScratchSummary(
+                markdown: markdown,
+                generatedAt: Date(timeIntervalSince1970: stmt.double(at: 1)),
+                sourceMessageId: sourceMessageId
+            )
+        } else {
+            latestSummary = nil
+        }
+
+        let currentContent = stmt.text(at: 3) ?? ""
+        let baseSnapshot = stmt.text(at: 4) ?? ""
+        let contentBaseGeneratedAt: Date?
+        if stmt.text(at: 5) != nil {
+            contentBaseGeneratedAt = Date(timeIntervalSince1970: stmt.double(at: 5))
+        } else {
+            contentBaseGeneratedAt = nil
+        }
+
+        return ScratchPadStateRecord(
+            nodeId: nodeId,
+            latestSummary: latestSummary,
+            currentContent: currentContent,
+            baseSnapshot: baseSnapshot,
+            contentBaseGeneratedAt: contentBaseGeneratedAt
+        )
+    }
+
+    func saveScratchPadState(_ state: ScratchPadStateRecord) throws {
+        let stmt = try db.prepare("""
+            INSERT INTO scratchpad_state (
+                nodeId,
+                latestSummaryMarkdown,
+                latestSummaryGeneratedAt,
+                latestSummarySourceMessageId,
+                currentContent,
+                baseSnapshot,
+                contentBaseGeneratedAt
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(nodeId) DO UPDATE SET
+                latestSummaryMarkdown = excluded.latestSummaryMarkdown,
+                latestSummaryGeneratedAt = excluded.latestSummaryGeneratedAt,
+                latestSummarySourceMessageId = excluded.latestSummarySourceMessageId,
+                currentContent = excluded.currentContent,
+                baseSnapshot = excluded.baseSnapshot,
+                contentBaseGeneratedAt = excluded.contentBaseGeneratedAt;
+        """)
+        try stmt.bind(state.nodeId.uuidString, at: 1)
+        try stmt.bind(state.latestSummary?.markdown, at: 2)
+        try stmt.bind(state.latestSummary?.generatedAt.timeIntervalSince1970, at: 3)
+        try stmt.bind(state.latestSummary?.sourceMessageId.uuidString, at: 4)
+        try stmt.bind(state.currentContent, at: 5)
+        try stmt.bind(state.baseSnapshot, at: 6)
+        try stmt.bind(state.contentBaseGeneratedAt?.timeIntervalSince1970, at: 7)
+        try stmt.step()
+    }
+
+    func deleteScratchPadState(nodeId: UUID) throws {
+        let stmt = try db.prepare("""
+            DELETE FROM scratchpad_state WHERE nodeId = ?;
+        """)
+        try stmt.bind(nodeId.uuidString, at: 1)
         try stmt.step()
     }
 

@@ -22,7 +22,7 @@ actor UserMemoryScheduler {
 
     static let projectRefreshThreshold = 3
 
-    private let service: UserMemoryService
+    private let service: any MemorySynthesizing
     private var inFlightByNode: [UUID: Task<Void, Never>] = [:]
     /// Per-node monotonic generation counter. Each enqueue bumps the gen; the
     /// task's cleanup only clears the slot if its gen is still the latest —
@@ -35,7 +35,7 @@ actor UserMemoryScheduler {
     /// This set guards the critical section; concurrent attempts skip cleanly.
     private var refreshingProjects: Set<UUID> = []
 
-    init(service: UserMemoryService) {
+    init(service: any MemorySynthesizing) {
         self.service = service
     }
 

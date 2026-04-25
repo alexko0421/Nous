@@ -2,7 +2,7 @@ import Foundation
 import Observation
 
 /// Per-conversation scratchpad state. The store caches these in memory and persists
-/// them to UserDefaults keyed by the conversation's UUID.
+/// them into the main SQLite store keyed by the conversation's UUID.
 private struct ConversationScratchState: Equatable {
     var latestSummary: ScratchSummary?
     var currentContent: String
@@ -26,7 +26,8 @@ private struct ConversationScratchState: Equatable {
 /// conversation's** state. Call `activate(conversationId:)` whenever the chat
 /// view switches conversations (including to `nil` when no conversation is
 /// loaded). State for inactive conversations is preserved in an in-memory cache
-/// plus UserDefaults, so switching back restores what was there.
+/// plus SQLite, so switching back restores what was there without duplicating
+/// scratch content into a second plaintext store.
 ///
 /// `isDirty` is derived (`currentContent != baseSnapshot`) and drives the "•"
 /// in the panel header. `pendingOverwrite` is set only when a newer summary has
@@ -49,6 +50,7 @@ final class ScratchPadStore {
 
     // MARK: - Storage
 
+    private let nodeStore: NodeStore
     private let defaults: UserDefaults
     private var loadedStates: [UUID: ConversationScratchState] = [:]
 
@@ -69,7 +71,8 @@ final class ScratchPadStore {
 
     // MARK: - Init
 
-    init(defaults: UserDefaults = .standard) {
+    init(nodeStore: NodeStore, defaults: UserDefaults = .standard) {
+        self.nodeStore = nodeStore
         self.defaults = defaults
         self.latestSummary = nil
         self.currentContent = ""
@@ -78,12 +81,7 @@ final class ScratchPadStore {
         self.pendingOverwrite = nil
         self.activeConversationId = nil
 
-        // Drop legacy app-level state: we can't attribute it to a specific conversation,
-        // so per-conversation state will rebuild from the next summary onward.
-        defaults.removeObject(forKey: Keys.legacyLatest)
-        defaults.removeObject(forKey: Keys.legacyContent)
-        defaults.removeObject(forKey: Keys.legacyBase)
-        defaults.removeObject(forKey: Keys.legacyBaseDate)
+        migrateLegacyDefaultsIfNeeded()
     }
 
     // MARK: - Activation (conversation switch)
@@ -96,6 +94,7 @@ final class ScratchPadStore {
     func activate(conversationId: UUID?) {
         if let previousId = activeConversationId {
             loadedStates[previousId] = currentActiveState
+            persist(state: currentActiveState, for: previousId)
         }
 
         activeConversationId = conversationId
@@ -154,7 +153,7 @@ final class ScratchPadStore {
 
         state.latestSummary = summary
         loadedStates[targetId] = state
-        persistLatestSummary(summary, for: targetId)
+        persist(state: state, for: targetId)
 
         if isActive {
             latestSummary = summary
@@ -200,14 +199,14 @@ final class ScratchPadStore {
     func updateContent(_ newValue: String) {
         guard let activeId = activeConversationId else { return }
         currentContent = newValue
-        defaults.set(newValue, forKey: Keys.content(activeId))
 
         // Free-typing in empty state: keep base glued to content so isDirty stays
         // false until the first summary lands.
         if latestSummary == nil && contentBaseGeneratedAt == nil {
             baseSnapshot = newValue
-            defaults.set(newValue, forKey: Keys.base(activeId))
         }
+        loadedStates[activeId] = currentActiveState
+        persist(state: currentActiveState, for: activeId)
     }
 
     /// Called by the panel after NSSavePanel completes successfully. The on-disk
@@ -216,7 +215,8 @@ final class ScratchPadStore {
     func markDownloaded() {
         guard let activeId = activeConversationId else { return }
         baseSnapshot = currentContent
-        defaults.set(currentContent, forKey: Keys.base(activeId))
+        loadedStates[activeId] = currentActiveState
+        persist(state: currentActiveState, for: activeId)
     }
 
     // MARK: - Helpers
@@ -244,42 +244,123 @@ final class ScratchPadStore {
         currentContent = summary.markdown
         baseSnapshot = summary.markdown
         contentBaseGeneratedAt = summary.generatedAt
-        defaults.set(summary.markdown, forKey: Keys.content(activeId))
-        defaults.set(summary.markdown, forKey: Keys.base(activeId))
-        defaults.set(summary.generatedAt.timeIntervalSince1970, forKey: Keys.baseDate(activeId))
+        loadedStates[activeId] = currentActiveState
+        persist(state: currentActiveState, for: activeId)
     }
 
     private func load(conversationId: UUID) -> ConversationScratchState {
-        let latest: ScratchSummary?
-        if let data = defaults.data(forKey: Keys.latestSummary(conversationId)),
-           let decoded = try? JSONDecoder().decode(ScratchSummary.self, from: data) {
-            latest = decoded
-        } else {
-            latest = nil
+        guard let record = try? nodeStore.fetchScratchPadState(nodeId: conversationId) else {
+            return .empty
         }
-
-        let content = defaults.string(forKey: Keys.content(conversationId)) ?? ""
-        let base = defaults.string(forKey: Keys.base(conversationId)) ?? ""
-
-        let baseDate: Date?
-        if let raw = defaults.object(forKey: Keys.baseDate(conversationId)) as? Double {
-            baseDate = Date(timeIntervalSince1970: raw)
-        } else {
-            baseDate = nil
-        }
-
         return ConversationScratchState(
-            latestSummary: latest,
-            currentContent: content,
-            baseSnapshot: base,
-            contentBaseGeneratedAt: baseDate,
+            latestSummary: record.latestSummary,
+            currentContent: record.currentContent,
+            baseSnapshot: record.baseSnapshot,
+            contentBaseGeneratedAt: record.contentBaseGeneratedAt,
             pendingOverwrite: nil
         )
     }
 
-    private func persistLatestSummary(_ summary: ScratchSummary, for conversationId: UUID) {
-        if let data = try? JSONEncoder().encode(summary) {
-            defaults.set(data, forKey: Keys.latestSummary(conversationId))
+    private func persist(state: ConversationScratchState, for conversationId: UUID) {
+        do {
+            if shouldPersist(state) {
+                try nodeStore.saveScratchPadState(
+                    ScratchPadStateRecord(
+                        nodeId: conversationId,
+                        latestSummary: state.latestSummary,
+                        currentContent: state.currentContent,
+                        baseSnapshot: state.baseSnapshot,
+                        contentBaseGeneratedAt: state.contentBaseGeneratedAt
+                    )
+                )
+            } else {
+                try nodeStore.deleteScratchPadState(nodeId: conversationId)
+            }
+        } catch {
+            NSLog("ScratchPadStore persist failed: %@", error.localizedDescription)
         }
+    }
+
+    private func shouldPersist(_ state: ConversationScratchState) -> Bool {
+        state.latestSummary != nil ||
+        !state.currentContent.isEmpty ||
+        !state.baseSnapshot.isEmpty ||
+        state.contentBaseGeneratedAt != nil
+    }
+
+    private func migrateLegacyDefaultsIfNeeded() {
+        clearLegacyAppLevelKeys()
+
+        let legacyKeys = defaults.dictionaryRepresentation().keys.filter {
+            $0.hasPrefix(Keys.conversationPrefix)
+        }
+        guard !legacyKeys.isEmpty else { return }
+
+        let conversationIds = Set(legacyKeys.compactMap(conversationId(from:)))
+        for conversationId in conversationIds {
+            let legacyState = loadLegacyState(conversationId: conversationId)
+            defer { removeLegacyConversationKeys(for: conversationId) }
+
+            guard shouldPersist(legacyState) else { continue }
+            guard (try? nodeStore.fetchNode(id: conversationId)) != nil else { continue }
+            guard (try? nodeStore.fetchScratchPadState(nodeId: conversationId)) == nil else { continue }
+            persist(state: legacyState, for: conversationId)
+        }
+    }
+
+    private func clearLegacyAppLevelKeys() {
+        defaults.removeObject(forKey: Keys.legacyLatest)
+        defaults.removeObject(forKey: Keys.legacyContent)
+        defaults.removeObject(forKey: Keys.legacyBase)
+        defaults.removeObject(forKey: Keys.legacyBaseDate)
+    }
+
+    private func loadLegacyState(conversationId: UUID) -> ConversationScratchState {
+        let latestSummary: ScratchSummary?
+        if let data = defaults.data(forKey: Keys.latestSummary(conversationId)),
+           let decoded = try? JSONDecoder().decode(ScratchSummary.self, from: data) {
+            latestSummary = decoded
+        } else {
+            latestSummary = nil
+        }
+
+        let currentContent = defaults.string(forKey: Keys.content(conversationId)) ?? ""
+        let baseSnapshot = defaults.string(forKey: Keys.base(conversationId)) ?? ""
+        let contentBaseGeneratedAt: Date?
+        if let raw = defaults.object(forKey: Keys.baseDate(conversationId)) as? Double {
+            contentBaseGeneratedAt = Date(timeIntervalSince1970: raw)
+        } else {
+            contentBaseGeneratedAt = nil
+        }
+
+        return ConversationScratchState(
+            latestSummary: latestSummary,
+            currentContent: currentContent,
+            baseSnapshot: baseSnapshot,
+            contentBaseGeneratedAt: contentBaseGeneratedAt,
+            pendingOverwrite: nil
+        )
+    }
+
+    private func removeLegacyConversationKeys(for conversationId: UUID) {
+        defaults.removeObject(forKey: Keys.latestSummary(conversationId))
+        defaults.removeObject(forKey: Keys.content(conversationId))
+        defaults.removeObject(forKey: Keys.base(conversationId))
+        defaults.removeObject(forKey: Keys.baseDate(conversationId))
+    }
+
+    private func conversationId(from key: String) -> UUID? {
+        guard key.hasPrefix(Keys.conversationPrefix) else { return nil }
+        let suffixes = [
+            ".latestSummary",
+            ".content",
+            ".base",
+            ".baseDate"
+        ]
+        guard let suffix = suffixes.first(where: { key.hasSuffix($0) }) else { return nil }
+        let start = key.index(key.startIndex, offsetBy: Keys.conversationPrefix.count)
+        let end = key.index(key.endIndex, offsetBy: -suffix.count)
+        guard start <= end else { return nil }
+        return UUID(uuidString: String(key[start..<end]))
     }
 }

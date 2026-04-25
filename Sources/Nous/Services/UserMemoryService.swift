@@ -3,7 +3,7 @@ import Foundation
 /// Three-scope memory service (v2.1). Replaces the single global-blob refresh
 /// with per-conversation / per-project / global layers. See
 /// `.context/plans/cross-chat-memory-v2.md` §5 for the architecture.
-final class UserMemoryService {
+final class UserMemoryCore {
 
     enum PersonalInferenceDisposition {
         case unconfirmed
@@ -1366,7 +1366,7 @@ final class UserMemoryService {
     }
 }
 
-extension UserMemoryService {
+extension UserMemoryCore {
 
     /// Returns the entries the judge may cite this turn. Phase 1 prepends
     /// contradiction-oriented hard-recall facts, then falls back to the existing

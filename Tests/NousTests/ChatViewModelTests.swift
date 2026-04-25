@@ -45,8 +45,21 @@ final class SingleReplyLLMService: LLMService {
     }
 }
 
+final class CancellationFailingLLMService: LLMService {
+    func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
+        throw CancellationError()
+    }
+}
+
 @MainActor
 final class ChatViewModelTests: XCTestCase {
+
+    private func makeScratchPadStore(nodeStore: NodeStore) -> ScratchPadStore {
+        let suiteName = "ChatViewModelTests.scratchpad.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        return ScratchPadStore(nodeStore: nodeStore, defaults: defaults)
+    }
 
     func testChatModeDefaultsToNil() throws {
         let nodeStore = try NodeStore(path: ":memory:")
@@ -66,10 +79,77 @@ final class ChatViewModelTests: XCTestCase {
             llmServiceProvider: { nil },
             currentProviderProvider: { .local },
             judgeLLMServiceFactory: { nil },
-            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+            scratchPadStore: makeScratchPadStore(nodeStore: nodeStore)
         )
 
         XCTAssertNil(vm.activeChatMode)
+    }
+
+    func testPurgePersistedThinkingFromLoadedMessagesClearsVisibleTraces() throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { nil },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: makeScratchPadStore(nodeStore: nodeStore)
+        )
+        vm.messages = [
+            Message(nodeId: UUID(), role: .assistant, content: "Answer", thinkingContent: "Stored trace")
+        ]
+
+        vm.purgePersistedThinkingFromLoadedMessages()
+
+        XCTAssertNil(vm.messages.first?.thinkingContent)
+    }
+
+    func testPurgeGeminiHistoryCachesClearsLocalEntries() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let promptCache = GeminiPromptCacheService()
+        let conversationId = UUID()
+        promptCache.store(
+            GeminiConversationCacheEntry(
+                name: "cachedContents/test",
+                model: "gemini-2.5-flash",
+                promptHash: "abc",
+                expireTime: Date().addingTimeInterval(300)
+            ),
+            for: conversationId
+        )
+
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { nil },
+            currentProviderProvider: { .gemini },
+            judgeLLMServiceFactory: { nil },
+            geminiPromptCache: promptCache,
+            scratchPadStore: makeScratchPadStore(nodeStore: nodeStore)
+        )
+
+        await vm.purgeGeminiHistoryCaches()
+
+        XCTAssertNil(promptCache.entry(for: conversationId))
     }
 
     func testSendCreatesConversationInsideSelectedProject() async throws {
@@ -79,7 +159,7 @@ final class ChatViewModelTests: XCTestCase {
         let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
         let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
         let scheduler = UserMemoryScheduler(service: userMemoryService)
-        let scratchPadStore = await MainActor.run { ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!) }
+        let scratchPadStore = await MainActor.run { makeScratchPadStore(nodeStore: nodeStore) }
 
         let vm = ChatViewModel(
             nodeStore: nodeStore,
@@ -105,6 +185,111 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertEqual(vm.currentNode?.projectId, project.id)
     }
 
+    func testLocalNoProviderErrorPersistsAssistantReply() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let scratchPadStore = await MainActor.run { makeScratchPadStore(nodeStore: nodeStore) }
+
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { nil },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: scratchPadStore
+        )
+
+        vm.inputText = "Help me think"
+        await vm.send()
+
+        let nodeId = try XCTUnwrap(vm.currentNode?.id)
+        let storedMessages = try nodeStore.fetchMessages(nodeId: nodeId)
+        let assistantMessage = try XCTUnwrap(storedMessages.last(where: { $0.role == .assistant }))
+
+        XCTAssertEqual(assistantMessage.content, "Please configure an LLM in Settings.")
+        XCTAssertEqual(vm.messages.last?.content, assistantMessage.content)
+    }
+
+    func testSendSurfacesPlanningFailureAsVisibleAssistantMessage() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let scratchPadStore = await MainActor.run { makeScratchPadStore(nodeStore: nodeStore) }
+
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { SingleReplyLLMService(output: "unused") },
+            currentProviderProvider: { .openrouter },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: scratchPadStore
+        )
+
+        vm.currentNode = NousNode(type: .conversation, title: "Ghost Chat")
+        vm.inputText = "Why no reply?"
+
+        await vm.send()
+
+        let assistantMessage = try XCTUnwrap(vm.messages.last)
+        XCTAssertEqual(assistantMessage.role, .assistant)
+        XCTAssertTrue(assistantMessage.content.hasPrefix("Error:"))
+        XCTAssertTrue(vm.currentResponse.isEmpty)
+        XCTAssertFalse(vm.isGenerating)
+    }
+
+    func testUnexpectedCancellationPersistsVisibleAssistantError() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let scratchPadStore = await MainActor.run { makeScratchPadStore(nodeStore: nodeStore) }
+
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { CancellationFailingLLMService() },
+            currentProviderProvider: { .openrouter },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: scratchPadStore
+        )
+
+        vm.inputText = "Please reply"
+        await vm.send()
+
+        let nodeId = try XCTUnwrap(vm.currentNode?.id)
+        let storedMessages = try nodeStore.fetchMessages(nodeId: nodeId)
+        let assistantMessage = try XCTUnwrap(storedMessages.last(where: { $0.role == .assistant }))
+
+        XCTAssertEqual(
+            assistantMessage.content,
+            "Error: The reply was interrupted before it finished. Please try again."
+        )
+        XCTAssertEqual(vm.messages.last?.content, assistantMessage.content)
+        XCTAssertTrue(vm.currentResponse.isEmpty)
+        XCTAssertFalse(vm.isGenerating)
+    }
+
     func testQuickActionConversationUsesSelectedProject() async throws {
         let nodeStore = try NodeStore(path: ":memory:")
         let vectorStore = VectorStore(nodeStore: nodeStore)
@@ -112,7 +297,7 @@ final class ChatViewModelTests: XCTestCase {
         let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
         let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
         let scheduler = UserMemoryScheduler(service: userMemoryService)
-        let scratchPadStore = await MainActor.run { ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!) }
+        let scratchPadStore = await MainActor.run { makeScratchPadStore(nodeStore: nodeStore) }
 
         let vm = ChatViewModel(
             nodeStore: nodeStore,
@@ -159,7 +344,7 @@ final class ChatViewModelTests: XCTestCase {
             llmServiceProvider: { llm },
             currentProviderProvider: { .local },
             judgeLLMServiceFactory: { nil },
-            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+            scratchPadStore: makeScratchPadStore(nodeStore: nodeStore)
         )
 
         await vm.beginQuickActionConversation(.direction)
@@ -195,7 +380,7 @@ final class ChatViewModelTests: XCTestCase {
             llmServiceProvider: { slowLLM },
             currentProviderProvider: { .local },
             judgeLLMServiceFactory: { nil },
-            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+            scratchPadStore: makeScratchPadStore(nodeStore: nodeStore)
         )
 
         vm.inputText = "Help me think"
@@ -236,7 +421,7 @@ final class ChatViewModelTests: XCTestCase {
             llmServiceProvider: { slowLLM },
             currentProviderProvider: { .local },
             judgeLLMServiceFactory: { nil },
-            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+            scratchPadStore: makeScratchPadStore(nodeStore: nodeStore)
         )
 
         vm.inputText = "first"
@@ -282,7 +467,7 @@ final class ChatViewModelTests: XCTestCase {
             currentProviderProvider: { .claude },
             judgeLLMServiceFactory: { nil },
             governanceTelemetry: telemetry,
-            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+            scratchPadStore: makeScratchPadStore(nodeStore: nodeStore)
         )
 
         vm.inputText = "Need help"
@@ -439,7 +624,7 @@ final class ChatViewModelTests: XCTestCase {
             llmServiceProvider: { llm },
             currentProviderProvider: { .local },
             judgeLLMServiceFactory: { nil },
-            scratchPadStore: ScratchPadStore(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+            scratchPadStore: makeScratchPadStore(nodeStore: nodeStore)
         )
 
         vm.inputText = "其实你觉得系未来 AI 时代系咪生孩子真系冇有嗰么必要？"
@@ -462,7 +647,8 @@ final class ChatViewModelTests: XCTestCase {
         let suiteName = "ChatViewModelTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
-        let store = ScratchPadStore(defaults: defaults)
+        let nodeStore = try! NodeStore(path: ":memory:")
+        let store = ScratchPadStore(nodeStore: nodeStore, defaults: defaults)
 
         let raw = """
         搞掂。
@@ -483,6 +669,7 @@ final class ChatViewModelTests: XCTestCase {
         </summary>
         """
         let conversationId = UUID()
+        try? nodeStore.insertNode(NousNode(id: conversationId, type: .conversation, title: "Scratch Summary"))
         store.activate(conversationId: conversationId)
         let msg = Message(nodeId: conversationId, role: .assistant, content: raw)
         store.ingestAssistantMessage(

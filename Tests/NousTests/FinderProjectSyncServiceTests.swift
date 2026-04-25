@@ -115,4 +115,41 @@ final class FinderProjectSyncServiceTests: XCTestCase {
         )
         XCTAssertTrue(inboxNoteExport.contains("Still needs a project."))
     }
+
+    func testSyncOmitsAssistantThinkingWhenPreferenceIsOff() throws {
+        let conversation = NousNode(
+            id: UUID(uuidString: "55555555-5555-5555-5555-555555555555")!,
+            type: .conversation,
+            title: "Privacy chat",
+            content: ""
+        )
+        try store.insertNode(conversation)
+        try store.insertMessage(Message(nodeId: conversation.id, role: .user, content: "Think through this."))
+        try store.insertMessage(
+            Message(
+                nodeId: conversation.id,
+                role: .assistant,
+                content: "Here is the answer.",
+                thinkingContent: "Hidden reasoning"
+            )
+        )
+
+        let service = FinderProjectSyncService(
+            nodeStore: store,
+            rootURLProvider: { self.exportRootURL },
+            shouldExportAssistantThinking: { false }
+        )
+        service.syncNow()
+
+        let conversationExport = try String(
+            contentsOf: exportRootURL
+                .appendingPathComponent("Inbox [inbox]", isDirectory: true)
+                .appendingPathComponent("Conversations", isDirectory: true)
+                .appendingPathComponent("Privacy chat [55555555].md")
+        )
+
+        XCTAssertTrue(conversationExport.contains("Here is the answer."))
+        XCTAssertFalse(conversationExport.contains("### Thinking"))
+        XCTAssertFalse(conversationExport.contains("Hidden reasoning"))
+    }
 }

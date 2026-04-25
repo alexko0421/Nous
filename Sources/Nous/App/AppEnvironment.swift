@@ -93,24 +93,28 @@ final class AppEnvironment {
         let embeddingService = EmbeddingService()
         let localLLM = LocalLLMService()
         let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
-        let finderProjectSync = FinderProjectSyncService(nodeStore: nodeStore)
         let settingsVM = SettingsViewModel(
             embeddingService: embeddingService,
             localLLM: localLLM,
             nodeStore: nodeStore
+        )
+        let finderProjectSync = FinderProjectSyncService(
+            nodeStore: nodeStore,
+            shouldExportAssistantThinking: { settingsVM.assistantThinkingEnabled }
         )
         let conversationTitleBackfill = ConversationTitleBackfillService(
             nodeStore: nodeStore,
             llmServiceProvider: { settingsVM.makeLLMService() }
         )
         let governanceTelemetry = GovernanceTelemetryStore(nodeStore: nodeStore)
-        let scratchPadStore = ScratchPadStore()
+        let scratchPadStore = ScratchPadStore(nodeStore: nodeStore)
         let userMemoryService = UserMemoryService(
             nodeStore: nodeStore,
             llmServiceProvider: { settingsVM.makeLLMService() },
             governanceTelemetry: governanceTelemetry
         )
-        let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let scheduler = UserMemoryScheduler(service: userMemoryService.synthesizer)
+        let conversationSessionStore = ConversationSessionStore(nodeStore: nodeStore)
         let chatVM = ChatViewModel(
             nodeStore: nodeStore,
             vectorStore: vectorStore,
@@ -118,11 +122,14 @@ final class AppEnvironment {
             graphEngine: graphEngine,
             userMemoryService: userMemoryService,
             userMemoryScheduler: scheduler,
+            conversationSessionStore: conversationSessionStore,
             llmServiceProvider: { settingsVM.makeLLMService() },
             currentProviderProvider: { settingsVM.selectedProvider },
             judgeLLMServiceFactory: { settingsVM.makeJudgeLLMService() },
             governanceTelemetry: governanceTelemetry,
-            scratchPadStore: scratchPadStore
+            scratchPadStore: scratchPadStore,
+            shouldUseGeminiHistoryCache: { settingsVM.geminiHistoryCacheEnabled },
+            shouldPersistAssistantThinking: { settingsVM.assistantThinkingEnabled }
         )
         let noteVM = NoteViewModel(
             nodeStore: nodeStore,
@@ -134,11 +141,13 @@ final class AppEnvironment {
 
         // WeeklyReflectionService rollover closure. Called once per app launch
         // from ContentView.onAppear; idempotent via existsReflectionRun so
-        // repeated launches in the same week are no-ops. Requires Gemini —
-        // skips silently if the user hasn't configured a Gemini key (R4:
-        // Settings provider-picker surfaces the warning UI).
+        // repeated launches in the same week are no-ops. Always runs on Gemini
+        // 2.5 Pro regardless of the foreground provider — only requirement is
+        // a configured Gemini API key (Settings surfaces the warning UI when
+        // missing).
         let reflectionRollover: @Sendable () async -> Void = {
-            let key = settingsVM.geminiApiKey
+            guard settingsVM.backgroundAnalysisEnabled else { return }
+            let key = settingsVM.geminiApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !key.isEmpty else { return }
             guard let (weekStart, weekEnd) = WeeklyReflectionService.previousCompletedWeek(now: Date())
             else { return }

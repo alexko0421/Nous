@@ -33,6 +33,7 @@ targets:
       - package: mlx-swift-examples
         product: MLXEmbedders
       - sdk: Accelerate.framework
+      - sdk: Security.framework
       - sdk: SpriteKit.framework
   ProvocationFixtureRunner:
     type: tool

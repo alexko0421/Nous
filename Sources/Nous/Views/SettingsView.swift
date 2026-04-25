@@ -152,7 +152,7 @@ struct SettingsView: View {
     private var generalContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                pageHeader(title: "General", subtitle: "Choose the model provider Nous should use by default.")
+                pageHeader(title: "General", subtitle: "Choose the default AI and the privacy-sensitive automation Nous is allowed to run.")
 
                 settingsCard {
                     sectionLabel("Default provider")
@@ -161,7 +161,7 @@ struct SettingsView: View {
                             Text("LLM provider")
                                 .font(.system(size: 16, weight: .semibold, design: .rounded))
                                 .foregroundColor(AppColor.colaDarkText)
-                            Text("Nous uses this for all chat and judge tasks.")
+                            Text("Nous uses this for foreground chat and judge tasks.")
                                 .font(.system(size: 13, design: .rounded))
                                 .foregroundColor(AppColor.secondaryText)
                         }
@@ -171,14 +171,15 @@ struct SettingsView: View {
                             Text("Google Gemini").tag(LLMProvider.gemini)
                             Text("Anthropic Claude").tag(LLMProvider.claude)
                             Text("OpenAI").tag(LLMProvider.openai)
+                            Text("OpenRouter").tag(LLMProvider.openrouter)
                         }
                         .labelsHidden()
                         .pickerStyle(.menu)
                         .onChange(of: vm.selectedProvider) { _, _ in vm.savePreferences() }
                     }
 
-                    if vm.selectedProvider != .gemini {
-                        Text("Weekly reflections only run when Gemini is configured — the Sunday-night batch uses Gemini's structured-output path to stay on budget.")
+                    if vm.geminiApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text("Weekly reflections always run on Gemini 2.5 Pro. Add a Gemini API key below — even when the foreground provider is something else.")
                             .font(.system(size: 12, design: .rounded))
                             .foregroundColor(AppColor.secondaryText)
                             .fixedSize(horizontal: false, vertical: true)
@@ -193,7 +194,7 @@ struct SettingsView: View {
                             Text(apiKeyTitle)
                                 .font(.system(size: 16, weight: .semibold, design: .rounded))
                                 .foregroundColor(AppColor.colaDarkText)
-                            Text("Stored locally in macOS Keychain.")
+                            Text(vm.credentialStorageDescription)
                                 .font(.system(size: 13, design: .rounded))
                                 .foregroundColor(AppColor.secondaryText)
                         }
@@ -209,6 +210,9 @@ struct SettingsView: View {
                                 case .openai:
                                     SecureField("OpenAI API Key", text: $vm.openaiApiKey)
                                         .onSubmit { vm.savePreferences() }
+                                case .openrouter:
+                                    SecureField("OpenRouter API Key", text: $vm.openrouterApiKey)
+                                        .onSubmit { vm.savePreferences() }
                                 case .local:
                                     EmptyView()
                                 }
@@ -218,6 +222,30 @@ struct SettingsView: View {
                         }
                         helperCopy("Leave empty to keep Nous fully local.")
                     }
+                }
+
+                settingsCard {
+                    sectionLabel("Privacy-sensitive automation")
+                    toggleRow(
+                        title: "Finder export",
+                        subtitle: "Write notes and conversations as Markdown in Documents for Finder browsing. Assistant thinking only exports if the toggle below is on. Turning this off removes the generated export folder.",
+                        isOn: preferenceBinding(\.finderSyncEnabled)
+                    )
+                    toggleRow(
+                        title: "Background AI maintenance",
+                        subtitle: "Allow launch-time chat-title repair and weekly reflections. With cloud providers, this can send existing chats to the active model. Off by default.",
+                        isOn: preferenceBinding(\.backgroundAnalysisEnabled)
+                    )
+                    toggleRow(
+                        title: "Store assistant thinking",
+                        subtitle: "Keep assistant reasoning traces in local chat history and Finder export. Turning this off clears previously stored thinking from SQLite. Off by default.",
+                        isOn: preferenceBinding(\.assistantThinkingEnabled)
+                    )
+                    toggleRow(
+                        title: "Gemini history cache",
+                        subtitle: "Let Gemini create short-lived cached transcript prefixes on Google's servers for long chats. Only applies when Gemini is active and lasts up to 5 minutes. Off by default.",
+                        isOn: preferenceBinding(\.geminiHistoryCacheEnabled)
+                    )
                 }
             }
             .frame(maxWidth: 760, alignment: .leading)
@@ -231,7 +259,16 @@ struct SettingsView: View {
     private var modelsContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                pageHeader(title: "Models", subtitle: "Track local models and knowledge base size on this Mac.")
+                pageHeader(title: "Models", subtitle: "Inspect the exact models Nous runs and track the local model state on this Mac.")
+
+                settingsCard {
+                    sectionLabel("Actual models")
+                    VStack(alignment: .leading, spacing: 14) {
+                        ForEach(vm.runtimeModelSummaries) { summary in
+                            runtimeModelRow(summary)
+                        }
+                    }
+                }
 
                 settingsCard {
                     sectionLabel("On-device models")
@@ -258,10 +295,11 @@ struct SettingsView: View {
     // MARK: - Helpers
     private var apiKeyTitle: String {
         switch vm.selectedProvider {
-        case .gemini: return "Gemini API Key"
-        case .claude: return "Claude API Key"
-        case .openai: return "OpenAI API Key"
-        case .local:  return "API Key"
+        case .gemini:     return "Gemini API Key"
+        case .claude:     return "Claude API Key"
+        case .openai:     return "OpenAI API Key"
+        case .openrouter: return "OpenRouter API Key"
+        case .local:      return "API Key"
         }
     }
 
@@ -317,6 +355,38 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
+    private func runtimeModelRow(_ summary: SettingsViewModel.RuntimeModelSummary) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(summary.label)
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .foregroundColor(AppColor.colaDarkText)
+            Text(summary.model)
+                .font(.system(size: 15, weight: .medium, design: .monospaced))
+                .foregroundColor(AppColor.colaOrange)
+                .textSelection(.enabled)
+            Text(summary.detail)
+                .font(.system(size: 12, design: .rounded))
+                .foregroundColor(AppColor.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(AppColor.surfacePrimary)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(AppColor.panelStroke, lineWidth: 1))
+    }
+
+    private func preferenceBinding(_ keyPath: ReferenceWritableKeyPath<SettingsViewModel, Bool>) -> Binding<Bool> {
+        Binding(
+            get: { vm[keyPath: keyPath] },
+            set: { newValue in
+                vm[keyPath: keyPath] = newValue
+                vm.savePreferences()
+            }
+        )
+    }
+
+    @ViewBuilder
     private func statTile(title: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
@@ -332,6 +402,26 @@ struct SettingsView: View {
         .padding(16)
         .background(AppColor.surfacePrimary)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    @ViewBuilder
+    private func toggleRow(title: String, subtitle: String, isOn: Binding<Bool>) -> some View {
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .foregroundColor(AppColor.colaDarkText)
+                Text(subtitle)
+                    .font(.system(size: 13, design: .rounded))
+                    .foregroundColor(AppColor.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer()
+
+            Toggle("", isOn: isOn)
+                .labelsHidden()
+        }
     }
 
     @ViewBuilder
