@@ -5,11 +5,14 @@ enum LLMProvider: String, Codable, CaseIterable {
     case gemini = "Gemini"
     case claude = "Claude API"
     case openai = "OpenAI API"
+    case openrouter = "OpenRouter"
 }
 
 protocol LLMService {
     func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error>
 }
+
+typealias ThinkingDeltaHandler = @MainActor (String) async -> Void
 
 struct LLMMessage {
     let role: String // "user" or "assistant"
@@ -35,11 +38,94 @@ struct GeminiCachedContent: Equatable, Codable {
     let expireTime: Date?
 }
 
+enum ReasoningStreamEvent: Equatable {
+    case thinkingDelta(String)
+    case textDelta(String)
+}
+
+enum ClaudeSSEParser {
+    static func parseLine(_ line: String) -> [ReasoningStreamEvent] {
+        guard line.hasPrefix("data: ") else { return [] }
+        let data = String(line.dropFirst(6))
+        guard data != "[DONE]",
+              let jsonData = data.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+              let type = json["type"] as? String,
+              type == "content_block_delta",
+              let delta = json["delta"] as? [String: Any],
+              let deltaType = delta["type"] as? String else {
+            return []
+        }
+
+        switch deltaType {
+        case "thinking_delta":
+            guard let thinking = delta["thinking"] as? String, !thinking.isEmpty else { return [] }
+            return [.thinkingDelta(thinking)]
+        case "text_delta":
+            guard let text = delta["text"] as? String, !text.isEmpty else { return [] }
+            return [.textDelta(text)]
+        default:
+            return []
+        }
+    }
+}
+
+enum OpenRouterSSEParser {
+    static func parseLine(_ line: String) -> [ReasoningStreamEvent] {
+        guard line.hasPrefix("data: ") else { return [] }
+        let data = String(line.dropFirst(6))
+        guard data != "[DONE]",
+              let jsonData = data.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+              let choices = json["choices"] as? [[String: Any]],
+              let first = choices.first,
+              let delta = first["delta"] as? [String: Any] else {
+            return []
+        }
+
+        var events: [ReasoningStreamEvent] = []
+        if let reasoningDetails = delta["reasoning_details"] as? [[String: Any]] {
+            for detail in reasoningDetails {
+                guard let type = detail["type"] as? String else { continue }
+                switch type {
+                case "reasoning.text":
+                    if let text = detail["text"] as? String, !text.isEmpty {
+                        events.append(.thinkingDelta(text))
+                    }
+                case "reasoning.summary":
+                    if let summary = detail["summary"] as? String, !summary.isEmpty {
+                        events.append(.thinkingDelta(summary))
+                    }
+                default:
+                    continue
+                }
+            }
+        } else if let reasoning = delta["reasoning"] as? String, !reasoning.isEmpty {
+            events.append(.thinkingDelta(reasoning))
+        } else if let reasoning = delta["reasoning_content"] as? String, !reasoning.isEmpty {
+            events.append(.thinkingDelta(reasoning))
+        }
+
+        if let text = delta["content"] as? String, !text.isEmpty {
+            events.append(.textDelta(text))
+        }
+
+        return events
+    }
+}
+
 // MARK: - Claude API
 
 struct ClaudeLLMService: LLMService {
     let apiKey: String
     var model: String = "claude-sonnet-4-6-20250414"
+    var thinkingBudgetTokens: Int? = nil
+    var onThinkingDelta: ThinkingDeltaHandler? = nil
+    /// Slow-changing system prefix (e.g. anchor.md + persisted memories) that
+    /// should ride Anthropic's prompt cache. When set and matched as a prefix
+    /// of `system`, the request body emits two text blocks with a single
+    /// `cache_control: ephemeral` breakpoint at the end of the prefix.
+    var cacheableSystemPrefix: String? = nil
 
     func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
         let url = URL(string: "https://api.anthropic.com/v1/messages")!
@@ -49,17 +135,16 @@ struct ClaudeLLMService: LLMService {
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        var body: [String: Any] = [
-            "model": model,
-            "max_tokens": 8096,
-            "stream": true,
-            "messages": messages.map { ["role": $0.role, "content": $0.content] }
-        ]
-        if let system {
-            body["system"] = system
-        }
+        let body = Self.buildRequestBody(
+            model: model,
+            messages: messages,
+            system: system,
+            cacheableSystemPrefix: cacheableSystemPrefix,
+            thinkingBudgetTokens: thinkingBudgetTokens
+        )
 
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let capturedOnThinkingDelta = onThinkingDelta
 
         return AsyncThrowingStream { continuation in
             let producer = Task {
@@ -75,22 +160,15 @@ struct ClaudeLLMService: LLMService {
                     }
 
                     for try await line in bytes.lines {
-                        guard line.hasPrefix("data: ") else { continue }
-                        let data = String(line.dropFirst(6))
-                        guard data != "[DONE]" else { break }
-
-                        guard
-                            let jsonData = data.data(using: .utf8),
-                            let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
-                            let type = json["type"] as? String,
-                            type == "content_block_delta",
-                            let delta = json["delta"] as? [String: Any],
-                            let deltaType = delta["type"] as? String,
-                            deltaType == "text_delta",
-                            let text = delta["text"] as? String
-                        else { continue }
-
-                        continuation.yield(text)
+                        let events = ClaudeSSEParser.parseLine(line)
+                        for event in events {
+                            switch event {
+                            case .thinkingDelta(let text):
+                                if let cb = capturedOnThinkingDelta { await cb(text) }
+                            case .textDelta(let text):
+                                continuation.yield(text)
+                            }
+                        }
                     }
                     continuation.finish()
                 } catch is CancellationError {
@@ -103,6 +181,75 @@ struct ClaudeLLMService: LLMService {
                 producer.cancel()
             }
         }
+    }
+
+    static func buildRequestBody(
+        model: String,
+        messages: [LLMMessage],
+        system: String?,
+        cacheableSystemPrefix: String?,
+        thinkingBudgetTokens: Int?
+    ) -> [String: Any] {
+        var body: [String: Any] = [
+            "model": model,
+            "max_tokens": 8096,
+            "stream": true,
+            "messages": messages.map { ["role": $0.role, "content": $0.content] }
+        ]
+        if let systemBlocks = systemBlocksWithCacheControl(
+            system: system,
+            cacheableSystemPrefix: cacheableSystemPrefix
+        ) {
+            body["system"] = systemBlocks
+        } else if let system, !system.isEmpty {
+            body["system"] = system
+        }
+        if let thinkingBudgetTokens {
+            body["thinking"] = [
+                "type": "enabled",
+                "budget_tokens": thinkingBudgetTokens
+            ]
+        }
+        return body
+    }
+
+    static func systemBlocksWithCacheControl(
+        system: String?,
+        cacheableSystemPrefix: String?
+    ) -> [[String: Any]]? {
+        guard let prefix = cacheableSystemPrefix?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !prefix.isEmpty
+        else { return nil }
+
+        let cachedBlock: [String: Any] = [
+            "type": "text",
+            "text": prefix,
+            "cache_control": ["type": "ephemeral"]
+        ]
+
+        guard let system, !system.isEmpty else {
+            return [cachedBlock]
+        }
+
+        if system == prefix {
+            return [cachedBlock]
+        }
+
+        guard system.hasPrefix(prefix) else {
+            // Defensive: prefix doesn't match. Fall back to plain string system
+            // so we never silently drop part of the prompt.
+            return nil
+        }
+
+        let remainder = String(system.dropFirst(prefix.count))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if remainder.isEmpty {
+            return [cachedBlock]
+        }
+        return [
+            cachedBlock,
+            ["type": "text", "text": remainder]
+        ]
     }
 }
 
@@ -161,6 +308,82 @@ struct OpenAILLMService: LLMService {
                         else { continue }
 
                         continuation.yield(text)
+                    }
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish(throwing: CancellationError())
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in
+                producer.cancel()
+            }
+        }
+    }
+}
+
+// MARK: - OpenRouter API
+
+struct OpenRouterLLMService: LLMService {
+    let apiKey: String
+    var model: String = "anthropic/claude-sonnet-4.6"
+    var reasoningBudgetTokens: Int? = nil
+    var onThinkingDelta: ThinkingDeltaHandler? = nil
+
+    func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
+        let url = URL(string: "https://openrouter.ai/api/v1/chat/completions")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("https://nous.app", forHTTPHeaderField: "HTTP-Referer")
+        request.setValue("Nous", forHTTPHeaderField: "X-Title")
+
+        var allMessages: [[String: String]] = []
+        if let system {
+            allMessages.append(["role": "system", "content": system])
+        }
+        allMessages.append(contentsOf: messages.map { ["role": $0.role, "content": $0.content] })
+
+        let body: [String: Any] = [
+            "model": model,
+            "stream": true,
+            "messages": allMessages
+        ]
+        var requestBody = body
+        if let reasoningBudgetTokens {
+            requestBody["reasoning"] = [
+                "max_tokens": reasoningBudgetTokens
+            ]
+        }
+
+        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+        let capturedOnThinkingDelta = onThinkingDelta
+
+        return AsyncThrowingStream { continuation in
+            let producer = Task {
+                do {
+                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                    guard let httpResponse = response as? HTTPURLResponse else {
+                        continuation.finish(throwing: LLMError.invalidResponse)
+                        return
+                    }
+                    guard httpResponse.statusCode == 200 else {
+                        continuation.finish(throwing: LLMError.httpError(httpResponse.statusCode))
+                        return
+                    }
+
+                    for try await line in bytes.lines {
+                        let events = OpenRouterSSEParser.parseLine(line)
+                        for event in events {
+                            switch event {
+                            case .thinkingDelta(let text):
+                                if let cb = capturedOnThinkingDelta { await cb(text) }
+                            case .textDelta(let text):
+                                continuation.yield(text)
+                            }
+                        }
                     }
                     continuation.finish()
                 } catch is CancellationError {
@@ -273,14 +496,15 @@ struct GeminiLLMService: LLMService {
     // state updates with the SSE parse loop and guarantees the final budget-exhausted
     // signal has landed on MainActor before `continuation.finish()` is called, so
     // any consumer reading the flag after the stream ends sees the final value.
-    var onThinkingDelta: (@MainActor (String) -> Void)? = nil
-    var onBudgetExhausted: (@MainActor () -> Void)? = nil
-    var onUsageMetadata: (@MainActor (GeminiUsageMetadata) -> Void)? = nil
+    var onThinkingDelta: (@MainActor (String) async -> Void)? = nil
+    var onBudgetExhausted: (@MainActor () async -> Void)? = nil
+    var onUsageMetadata: (@MainActor (GeminiUsageMetadata) async -> Void)? = nil
 
     func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
-        let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):streamGenerateContent?alt=sse&key=\(apiKey)")!
+        let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):streamGenerateContent?alt=sse")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         var contents: [[String: Any]] = []
@@ -377,9 +601,10 @@ struct GeminiLLMService: LLMService {
         responseSchema: [String: Any],
         temperature: Double = 0.7
     ) async throws -> (text: String, usage: GeminiUsageMetadata?) {
-        let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(apiKey)")!
+        let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         var contents: [[String: Any]] = []
@@ -441,9 +666,10 @@ struct GeminiLLMService: LLMService {
         ttlSeconds: Int = 300,
         displayName: String? = nil
     ) async throws -> GeminiCachedContent {
-        let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/cachedContents?key=\(apiKey)")!
+        let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/cachedContents")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         var body: [String: Any] = [
@@ -487,12 +713,13 @@ struct GeminiLLMService: LLMService {
 
     func deleteCachedContent(name: String) async throws {
         guard let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
-              let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/\(encoded)?key=\(apiKey)") else {
+              let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/\(encoded)") else {
             throw LLMError.invalidResponse
         }
 
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
+        request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
 
         let (_, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {

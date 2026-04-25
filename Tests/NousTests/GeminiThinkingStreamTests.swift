@@ -129,3 +129,130 @@ final class GeminiThinkingStreamTests: XCTestCase {
         )
     }
 }
+
+@objcMembers
+final class ProviderThinkingStreamTests: XCTestCase {
+
+    private func parseClaude(_ lines: [String]) -> [ReasoningStreamEvent] {
+        lines.flatMap { ClaudeSSEParser.parseLine($0) }
+    }
+
+    private func parseOpenRouter(_ lines: [String]) -> [ReasoningStreamEvent] {
+        lines.flatMap { OpenRouterSSEParser.parseLine($0) }
+    }
+
+    func testClaudeParserEmitsThinkingAndTextWithoutSignatureNoise() {
+        let lines = [
+            #"event: content_block_delta"#,
+            #"data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Let me reason this through.\n"}}"#,
+            #"data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"abc123"}}"#,
+            #"data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Final answer."}}"#
+        ]
+
+        let events = parseClaude(lines)
+
+        XCTAssertEqual(
+            events,
+            [
+                .thinkingDelta("Let me reason this through.\n"),
+                .textDelta("Final answer.")
+            ]
+        )
+    }
+
+    func testOpenRouterParserPrefersReasoningDetailsAndDoesNotDuplicateFallbackReasoning() {
+        let lines = [
+            #"data: {"choices":[{"delta":{"content":"","role":"assistant","reasoning":"p","reasoning_details":[{"type":"reasoning.text","text":"p","format":"anthropic-claude-v1","index":0}]}}]}"#,
+            #"data: {"choices":[{"delta":{"content":"","role":"assistant","reasoning_details":[{"type":"reasoning.text","signature":"opaque","format":"anthropic-claude-v1","index":0}]}}]}"#,
+            #"data: {"choices":[{"delta":{"content":"pong","role":"assistant"}}]}"#
+        ]
+
+        let events = parseOpenRouter(lines)
+
+        XCTAssertEqual(
+            events,
+            [
+                .thinkingDelta("p"),
+                .textDelta("pong")
+            ]
+        )
+    }
+
+    func testOpenRouterParserFallsBackToPlainReasoningField() {
+        let lines = [
+            #"data: {"choices":[{"delta":{"content":"","role":"assistant","reasoning":"thinking..."}}]}"#
+        ]
+
+        let events = parseOpenRouter(lines)
+
+        XCTAssertEqual(events, [.thinkingDelta("thinking...")])
+    }
+
+    func testClaudeBodyEmitsCacheControlWhenStablePrefixMatches() {
+        let stable = "ANCHOR + persisted memory"
+        let volatile = "PER-TURN focus block"
+        let combined = stable + "\n\n" + volatile
+
+        let body = ClaudeLLMService.buildRequestBody(
+            model: "claude-sonnet-4-6",
+            messages: [LLMMessage(role: "user", content: "hi")],
+            system: combined,
+            cacheableSystemPrefix: stable,
+            thinkingBudgetTokens: nil
+        )
+
+        guard let blocks = body["system"] as? [[String: Any]] else {
+            XCTFail("system should be content-block array when cacheableSystemPrefix is set")
+            return
+        }
+        XCTAssertEqual(blocks.count, 2)
+        XCTAssertEqual(blocks[0]["type"] as? String, "text")
+        XCTAssertEqual(blocks[0]["text"] as? String, stable)
+        XCTAssertEqual(blocks[0]["cache_control"] as? [String: String], ["type": "ephemeral"])
+        XCTAssertEqual(blocks[1]["type"] as? String, "text")
+        XCTAssertEqual(blocks[1]["text"] as? String, volatile)
+        XCTAssertNil(blocks[1]["cache_control"])
+    }
+
+    func testClaudeBodyFallsBackToStringSystemWhenNoCachePrefix() {
+        let body = ClaudeLLMService.buildRequestBody(
+            model: "claude-sonnet-4-6",
+            messages: [LLMMessage(role: "user", content: "hi")],
+            system: "plain system",
+            cacheableSystemPrefix: nil,
+            thinkingBudgetTokens: nil
+        )
+        XCTAssertEqual(body["system"] as? String, "plain system")
+    }
+
+    func testClaudeBodyFallsBackToStringSystemWhenPrefixDoesNotMatch() {
+        // Defensive case: prefix doesn't appear at start of system. Fall back
+        // to plain string so we never silently drop part of the prompt.
+        let body = ClaudeLLMService.buildRequestBody(
+            model: "claude-sonnet-4-6",
+            messages: [LLMMessage(role: "user", content: "hi")],
+            system: "different prompt entirely",
+            cacheableSystemPrefix: "expected stable prefix",
+            thinkingBudgetTokens: nil
+        )
+        XCTAssertEqual(body["system"] as? String, "different prompt entirely")
+    }
+
+    func testClaudeBodyEmitsSingleCachedBlockWhenSystemEqualsPrefix() {
+        let stable = "JUST ANCHOR"
+        let body = ClaudeLLMService.buildRequestBody(
+            model: "claude-sonnet-4-6",
+            messages: [LLMMessage(role: "user", content: "hi")],
+            system: stable,
+            cacheableSystemPrefix: stable,
+            thinkingBudgetTokens: nil
+        )
+        guard let blocks = body["system"] as? [[String: Any]] else {
+            XCTFail("expected content-block array")
+            return
+        }
+        XCTAssertEqual(blocks.count, 1)
+        XCTAssertEqual(blocks[0]["text"] as? String, stable)
+        XCTAssertEqual(blocks[0]["cache_control"] as? [String: String], ["type": "ephemeral"])
+    }
+}
