@@ -20,6 +20,7 @@ final class SettingsViewModel {
         static let openAIForeground = "gpt-4o"
         static let openAIJudge = "gpt-4o-mini"
         static let openRouterForeground = "anthropic/claude-sonnet-4.6"
+        static let openRouterJudge = "anthropic/claude-sonnet-4.6"
     }
 
     // MARK: - Provider selection
@@ -223,7 +224,8 @@ final class SettingsViewModel {
             guard !openaiApiKey.isEmpty else { return nil }
             return OpenAILLMService(apiKey: openaiApiKey, model: ModelCatalog.openAIJudge)
         case .openrouter:
-            return nil
+            guard !openrouterApiKey.isEmpty else { return nil }
+            return OpenRouterLLMService(apiKey: openrouterApiKey, model: ModelCatalog.openRouterJudge)
         }
     }
 
@@ -272,7 +274,7 @@ final class SettingsViewModel {
         case .openai:
             return ModelCatalog.openAIJudge
         case .openrouter:
-            return "Disabled"
+            return ModelCatalog.openRouterJudge
         }
     }
 
@@ -287,7 +289,7 @@ final class SettingsViewModel {
         case .openai:
             return "Separate lightweight judge model for retrieval and provocation decisions."
         case .openrouter:
-            return "Judge tasks are temporarily disabled on OpenRouter so slow judge calls cannot block the main reply."
+            return "Separate judge model for retrieval and provocation decisions, also routed through OpenRouter."
         }
     }
 

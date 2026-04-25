@@ -114,8 +114,8 @@ final class SettingsViewModelTests: XCTestCase {
                 ),
                 .init(
                     label: "Judge tasks",
-                    model: "Disabled",
-                    detail: "Judge tasks are temporarily disabled on OpenRouter so slow judge calls cannot block the main reply."
+                    model: "anthropic/claude-sonnet-4.6",
+                    detail: "Separate judge model for retrieval and provocation decisions, also routed through OpenRouter."
                 ),
                 .init(
                     label: "Weekly reflections",
@@ -126,10 +126,18 @@ final class SettingsViewModelTests: XCTestCase {
         )
     }
 
-    func testMakeJudgeLLMServiceReturnsNilForOpenRouter() {
+    func testMakeJudgeLLMServiceReturnsOpenRouterServiceWhenKeyPresent() {
         let vm = makeViewModel()
         vm.selectedProvider = .openrouter
         vm.openrouterApiKey = "test-key"
+
+        XCTAssertNotNil(vm.makeJudgeLLMService() as? OpenRouterLLMService)
+    }
+
+    func testMakeJudgeLLMServiceReturnsNilForOpenRouterWithoutKey() {
+        let vm = makeViewModel()
+        vm.selectedProvider = .openrouter
+        vm.openrouterApiKey = ""
 
         XCTAssertNil(vm.makeJudgeLLMService())
     }
