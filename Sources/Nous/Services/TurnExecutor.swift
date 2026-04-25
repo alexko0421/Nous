@@ -63,7 +63,8 @@ final class TurnExecutor {
                 sink: sink,
                 state: state,
                 captureThinking: true,
-                cacheableSystemPrefix: resolvedCacheEntry == nil ? plan.turnSlice.stable : nil
+                cacheableSystemPrefix: resolvedCacheEntry == nil ? plan.turnSlice.stable : nil,
+                mode: plan.effectiveMode
             ).generate(
                 messages: requestMessages,
                 system: requestSystem
@@ -188,7 +189,8 @@ final class TurnExecutor {
         sink: TurnSequencedEventSink,
         state: TurnExecutionStreamState,
         captureThinking: Bool,
-        cacheableSystemPrefix: String?
+        cacheableSystemPrefix: String?,
+        mode: ChatMode
     ) -> any LLMService {
         if var gemini = llm as? GeminiLLMService {
             gemini.onUsageMetadata = { [recordGeminiUsage] usage in
@@ -211,7 +213,7 @@ final class TurnExecutor {
         if var claude = llm as? ClaudeLLMService {
             claude.cacheableSystemPrefix = cacheableSystemPrefix
             guard captureThinking else { return claude }
-            claude.thinkingBudgetTokens = 1024
+            claude.thinkingBudgetTokens = mode.thinkingBudgetTokens
             claude.onThinkingDelta = { delta in
                 await state.appendThinking(delta)
                 await sink.emit(.thinkingDelta(delta))

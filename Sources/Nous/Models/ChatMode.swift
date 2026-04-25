@@ -41,4 +41,13 @@ enum ChatMode: String, Codable, CaseIterable {
             """
         }
     }
+
+    var thinkingBudgetTokens: Int {
+        switch self {
+        case .companion:
+            return 2048
+        case .strategist:
+            return 8192
+        }
+    }
 }
