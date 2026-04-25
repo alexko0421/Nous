@@ -149,6 +149,15 @@ Per-node K=2 cap (applied during derivation, not just render):
   Implementation note: Constellation.memberNodeIds is the post-cap set.
   A node N appears in at most 2 Constellation.memberNodeIds across the
   whole returned list.
+
+Second prune after cap:
+  The K=2 per-node cap can shrink a constellation's member set below 2.
+  Example: A={N1,N2,N3,N4} conf 0.9, B={N1,N2} conf 0.7, C={N1,N2} conf 0.5.
+  Per-node cap on N1, N2 keeps {A,B}, drops C. Result: C ends up empty.
+  After applying the cap, re-filter constellations: drop any with
+  memberNodeIds.count < 2. One additional pass is sufficient — pruning
+  one constellation cannot grow another (cap removes from, never adds to,
+  membership), so no fixed-point iteration is needed.
 ```
 
 ### 3.4 Embedding-NN bridging (in-memory ephemeral)
@@ -276,30 +285,44 @@ Verified during implementation: if the index is already present, this is a no-op
 3. Pass nodes + edges + constellations + positions into GalaxySceneContainer
 ```
 
-Reflection completion notification: reuse the existing `nousNodesDidChange` notification surface (the rest of the app already routes node-related state changes through it). `WeeklyReflectionService` posts on successful `ReflectionRun`; `GalaxyViewModel` already subscribes for unrelated reasons. Add a small predicate so the existing subscription handler also calls `constellationService.clearEphemeral()` + `loadActiveConstellations()` when the change reason is "reflection success."
+Reflection completion notification: introduce a **dedicated `Notification.Name`** rather than routing through stringly-typed `userInfo` on the existing `nousNodesDidChange`:
 
-If `nousNodesDidChange` does not currently encode a "reason" field: add a minimal `userInfo` payload (`["reason": "reflection_success"]`) only on the reflection completion path. Other senders unchanged.
+```swift
+extension Notification.Name {
+    static let reflectionRunCompleted = Notification.Name("nous.reflectionRunCompleted")
+}
+```
+
+Codex flagged that overloading `nousNodesDidChange` with `userInfo["reason"]` is fragile — typos in the reason key fail silently and other senders gain no obligation to fill it in. A dedicated name is type-safe and discoverable (call sites grep cleanly).
+
+`WeeklyReflectionService` posts `.reflectionRunCompleted` on successful `ReflectionRun`. `GalaxyViewModel` subscribes specifically to that notification and triggers ephemeral clear + reload. The existing `nousNodesDidChange` is left alone for unrelated state changes.
+
+```swift
+// WeeklyReflectionService, on success:
+NotificationCenter.default.post(name: .reflectionRunCompleted, object: nil)
+
+// GalaxyViewModel:
+NotificationCenter.default.addObserver(
+    forName: .reflectionRunCompleted, object: nil, queue: .main
+) { [weak self] _ in
+    self?.constellationService.clearEphemeral()
+    self?.constellations = (try? self?.constellationService.loadActiveConstellations()) ?? []
+}
+```
 
 Polling/timer refresh is explicitly rejected — too coarse and would rebuild constellations unnecessarily.
-
-```
-On ReflectionRun.status = .success:
-  notify .nousNodesDidChange with userInfo: ["reason": "reflection_success"]
-GalaxyViewModel.handler:
-  if reason == reflection_success:
-    constellationService.clearEphemeral()
-  constellations = constellationService.loadActiveConstellations()
-```
 
 ### 4.4 ReflectionValidator change: ≥2 distinct conversations
 
 `Sources/Nous/Services/ReflectionValidator.swift` currently treats "≥2 evidence messages" as the active-claim minimum. Change to **"≥2 evidence messages whose conversations (nodeIds) are distinct."**
 
+**Separation of concerns**: `ReflectionValidator` does NOT own `NodeStore`. The caller (`WeeklyReflectionService`) resolves `[messageId: nodeId]` once via `NodeStore.conversationNodeIds(forMessageIds:)` (§4.2) and passes the dictionary into the validator. The validator stays a pure function over the inputs it's given. Same pattern at the cascade-orphan-check site (the cascade handler in `NodeStore` resolves and passes in).
+
 Two touchpoints:
 
-1. **New-claim validation** (when `WeeklyReflectionService` validates a fresh LLM-produced claim): resolve its evidence messageIds to nodeIds via `NodeStore.conversationNodeIds` (§4.2). If `Set(nodeIds).count < 2`, reject the claim with a new `ReflectionRejectionReason.singleConversationEvidence` (extend the enum).
+1. **New-claim validation** (when `WeeklyReflectionService` validates a fresh LLM-produced claim): caller passes `[messageId: nodeId]` for the claim's evidence into the validator. If `Set(values).count < 2`, validator rejects with a new `ReflectionRejectionReason.singleConversationEvidence` (extend the enum).
 
-2. **Cascade orphan check** (when a message delete drops evidence count): after the cascade, recompute the remaining evidence's distinct nodeIds. If <2, flip claim status to `.orphaned`. Today the check is `count(evidence) < 2`; new check is `distinct(conversation nodeIds in evidence) < 2`. Same code path, different counting predicate.
+2. **Cascade orphan check** (when a message delete drops evidence count): after the cascade, the cascade handler resolves remaining evidence's `[messageId: nodeId]` and recomputes distinct nodeIds. If `<2`, flip claim status to `.orphaned`. Today the check is `count(evidence) < 2`; new check is `distinct(conversation nodeIds in evidence) < 2`. Same code path, different counting predicate, same locus.
 
 Forward-only: existing `.active` claims that pre-date this change are not retroactively re-checked. Galaxy derivation independently filters by ≥2 distinct nodeIds (§3.3), so stale single-conversation active claims simply do not surface in Galaxy. They remain available to the memory retrieval layer (which never required distinct-conversation evidence in the first place).
 
@@ -324,7 +347,15 @@ Two-mode rasterization on the `SKEffectNode` itself:
 
 The effect node's filter is set to a no-op compositing filter (or omitted entirely; pre-blurred sprites carry the blur). Blur radius is encoded in the texture, not applied at render time.
 
-Cap: at most **8 visible halos** simultaneously (1 dominant + tap-revealed up to 2 + toggle-revealed remainder). If a user has >8 active constellations and toggles full reveal, lowest-confidence halos beyond 8 do not render. Captured as a knob, not user-facing for v1.
+Cap: at most **8 visible halos** simultaneously. Priority resolution when more than 8 would render:
+
+1. **Always-render tier** (no cap applies): tap-revealed halos (up to 2, the constellations the tapped node belongs to under K=2). User explicit intent overrides everything.
+2. **Reserved tier**: dominant ambient halo (1 slot, if a dominant exists). Reserved even when toggle is off.
+3. **Toggle-revealed tier**: remaining slots (8 minus tier-1 minus tier-2) filled with toggle-revealed halos in `claim.confidence` descending order. Lowest-confidence halos beyond capacity simply do not render.
+
+In practice: with 0 selection + toggle on + 12 constellations, render = 1 dominant + 7 next-confidence = 8. With selection on a 2-membership node + toggle on + 12 constellations, render = 2 (tap) + 1 dominant + 5 next = 8. With selection but no toggle, render = 2 (tap) + 1 dominant = 3.
+
+Captured as a knob (`maxVisibleHalos = 8`), not user-facing for v1.
 
 ### 5.2 Palette
 
@@ -354,7 +385,11 @@ When tap-revealed:
 When toggle-revealed:
 - Each halo shows a small floating label at the centroid of its members.
 - Label is **a derived short label**, not a truncation of the verbatim claim. Reflection's `claim.claim` text is corpus-scoped and often opens with phrases like "Across four conversations, Alex returns to..." — truncating to 22 characters yields meaningless fragments ("Across four conversa…").
-- Derived label algorithm (deterministic, no extra LLM call): scan `claim.claim` for the first quoted phrase in `「」` or `""`, or the first noun phrase after a colon. Fall back to the first 22 characters only if neither pattern matches. Implementation lives in `Constellation.derivedShortLabel` (computed once per constellation).
+- Derived label algorithm (deterministic, simple string ops, no NLP / LLM):
+  1. **Pattern A — first quoted phrase**: scan for the first match of `「(.+?)」` or `"(.+?)"` in `claim.claim`. If matched and the inner text is ≤ 22 chars, use it. (Reflection prompts already encourage quote-marking signature phrases per existing memory rules, so this hits often.)
+  2. **Pattern B — phrase after first colon/dash**: split on the first `：`, `:`, `——`, or `—` and take the substring after, trim whitespace, truncate at first `，`/`。`/`,`/`.` or 22 chars (whichever first).
+  3. **Fallback**: first 22 chars of the trimmed `claim.claim`, ellipsis if truncated.
+  Implementation lives in `Constellation.derivedShortLabel` (computed once per constellation, at derivation time).
 - Labels deliberately small (10pt) — they are hints, not headings; the bottom sheet remains the place for the full caption.
 
 ---
@@ -486,9 +521,14 @@ The scene runs at `preferredFramesPerSecond = 120` (`GalaxySceneContainer.swift:
 The `nodes` table has no `x/y` columns. Adding them is out of scope for this redesign. Instead, persist a session-wide layout snapshot in `UserDefaults`:
 
 ```
-Key: "com.nous.galaxy.positionSnapshot.v1"
+Key: "com.nous.galaxy.positionSnapshot.v1.<storeId>"
+  where <storeId> is the SQLite database file's basename (or a stored
+  UUID created at first DB init), so layout state never leaks across
+  workspaces / DB resets.
 Value: JSON-encoded [String: [Float]]  // nodeId.uuidString → [x, y]
 ```
+
+If the SQLite store is reset / replaced (different `<storeId>`), the snapshot key no longer matches and Galaxy starts from scratch — which is exactly what we want.
 
 - `writePositionSnapshot(_ positions: [UUID: GraphPosition])` runs on a background dispatch queue (utility QoS). UserDefaults writes are not free at scale, but for ≤500 entries the write is well under 5ms and tolerates async.
 - `readPositionSnapshot() -> [UUID: GraphPosition]` runs on Galaxy load (already on background as part of `GalaxyViewModel.load()`).
