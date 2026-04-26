@@ -162,6 +162,7 @@
 		3111C08E57FC4ECBAA022BD3 /* ConstellationDerivedLabelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D79B4B30A534CF8B0523C01 /* ConstellationDerivedLabelTests.swift */; };
 		386677FDF3844E77BCB112A2 /* ConstellationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24243DF6127C4B7BAA2EF775 /* ConstellationService.swift */; };
 		4DA78530975543D281264F42 /* ConstellationServiceSkeletonTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB93B3BE3C034874AF36CF06 /* ConstellationServiceSkeletonTests.swift */; };
+		EDCA55CD20FA91C8C70C2C7E /* ConstellationDerivationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 794D993F81E0845D56E69D3E /* ConstellationDerivationTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -324,6 +325,7 @@
 		2D79B4B30A534CF8B0523C01 /* ConstellationDerivedLabelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConstellationDerivedLabelTests.swift; sourceTree = "<group>"; };
 		24243DF6127C4B7BAA2EF775 /* ConstellationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConstellationService.swift; sourceTree = "<group>"; };
 		EB93B3BE3C034874AF36CF06 /* ConstellationServiceSkeletonTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConstellationServiceSkeletonTests.swift; sourceTree = "<group>"; };
+		794D993F81E0845D56E69D3E /* ConstellationDerivationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConstellationDerivationTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -559,6 +561,7 @@
 			children = (
 				2D79B4B30A534CF8B0523C01 /* ConstellationDerivedLabelTests.swift */,
 				EB93B3BE3C034874AF36CF06 /* ConstellationServiceSkeletonTests.swift */,
+				794D993F81E0845D56E69D3E /* ConstellationDerivationTests.swift */,
 				3074D3F24DDD3F020A52F9BA /* ChatViewModelTests.swift */,
 				475D19B8C6EA339A5D31688A /* CitableEntryPoolTests.swift */,
 				69184F11E49CB01A84551833 /* ClarificationCardParserTests.swift */,
@@ -941,6 +944,7 @@
 				B46503B8420A0C79794E8A15 /* WeeklyReflectionServiceTests.swift in Sources */,
 				3111C08E57FC4ECBAA022BD3 /* ConstellationDerivedLabelTests.swift in Sources */,
 				4DA78530975543D281264F42 /* ConstellationServiceSkeletonTests.swift in Sources */,
+				EDCA55CD20FA91C8C70C2C7E /* ConstellationDerivationTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

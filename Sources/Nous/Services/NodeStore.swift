@@ -1771,6 +1771,73 @@ extension NodeStore {
         return reflectionRunFrom(stmt)
     }
 
+    /// All active reflection claims across every projectId, in
+    /// `created_at DESC` order. Used by `ConstellationService` derivation,
+    /// where the Galaxy is project-agnostic (a constellation may span
+    /// runs from any scope).
+    ///
+    /// For per-project retrieval pools (citable-entry slice), use
+    /// `fetchActiveReflectionClaims(projectId:)` instead.
+    func fetchActiveReflectionClaims() throws -> [ReflectionClaim] {
+        let stmt = try db.prepare("""
+            SELECT id, run_id, claim, confidence, why_non_obvious,
+                   status, created_at
+            FROM reflection_claim
+            WHERE status = 'active'
+            ORDER BY created_at DESC;
+        """)
+        var results: [ReflectionClaim] = []
+        while try stmt.step() {
+            results.append(reflectionClaimFrom(stmt))
+        }
+        return results
+    }
+
+    /// Bulk fetch evidence rows for a list of claim ids. One round-trip
+    /// per chunk of ≤900 ids (mirrors `conversationNodeIds` chunking
+    /// against the SQLite parameter limit).
+    func fetchEvidence(forClaimIds claimIds: [UUID]) throws -> [ReflectionEvidence] {
+        guard !claimIds.isEmpty else { return [] }
+        var results: [ReflectionEvidence] = []
+        let chunkSize = 900
+        for chunk in claimIds.chunked(into: chunkSize) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ", ")
+            let stmt = try db.prepare("""
+                SELECT reflection_id, message_id
+                FROM reflection_evidence
+                WHERE reflection_id IN (\(placeholders));
+            """)
+            for (offset, id) in chunk.enumerated() {
+                try stmt.bind(id.uuidString, at: Int32(offset + 1))
+            }
+            while try stmt.step() {
+                guard let rRaw = stmt.text(at: 0),
+                      let mRaw = stmt.text(at: 1),
+                      let rUUID = UUID(uuidString: rRaw),
+                      let mUUID = UUID(uuidString: mRaw)
+                else { continue }
+                results.append(ReflectionEvidence(reflectionId: rUUID, messageId: mUUID))
+            }
+        }
+        return results
+    }
+
+    /// Most recent successful `ReflectionRun` across every projectId, ordered
+    /// by `ranAt DESC`. Used by `ConstellationService` to scope dominant
+    /// selection. Returns nil if no successful run has ever landed.
+    func fetchLatestReflectionRun() throws -> ReflectionRun? {
+        let stmt = try db.prepare("""
+            SELECT id, project_id, week_start, week_end, ran_at, status,
+                   rejection_reason, cost_cents
+            FROM reflection_runs
+            WHERE status = 'success'
+            ORDER BY ran_at DESC
+            LIMIT 1;
+        """)
+        guard try stmt.step() else { return nil }
+        return reflectionRunFrom(stmt)
+    }
+
     /// Active reflections for a scope. Pulls claims whose parent run matches
     /// `projectId` (including NULL = free-chat scope) and whose `status =
     /// 'active'`. Used by retrieval when building the Self-reflection slice

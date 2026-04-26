@@ -26,9 +26,137 @@ final class ConstellationService {
     /// per-node cap then a second prune for constellations whose
     /// membership dropped below 2.
     ///
-    /// Stub implementation in this task; filled in by Task 11.
+    /// See spec §3.3, §4.1, §4.2. The 9-step pipeline is preserved in
+    /// numbered comments below — keep them in order on edits.
     func loadActiveConstellations() throws -> [Constellation] {
-        return []
+        // 1. Pull active claims (across all projectIds — Galaxy is scope-agnostic).
+        let claims = try nodeStore.fetchActiveReflectionClaims()
+        guard !claims.isEmpty else { return [] }
+
+        // 2. Bulk fetch evidence rows + bulk resolve messageId → conversation
+        // nodeId. Both round-trips chunked at ≤900 ids inside NodeStore.
+        let evidence = try nodeStore.fetchEvidence(forClaimIds: claims.map { $0.id })
+        let evidenceByClaim: [UUID: [ReflectionEvidence]] =
+            Dictionary(grouping: evidence, by: { $0.reflectionId })
+        let messageToNode = try nodeStore.conversationNodeIds(
+            forMessageIds: evidence.map { $0.messageId }
+        )
+
+        // 3. Build per-claim distinct nodeId sets. Drop claims whose evidence
+        // collapses below 2 distinct nodeIds (no visualization value — surfaces
+        // a single bubble, not a constellation). Pre-validator-change residue
+        // can leave such claims behind.
+        struct PreCap {
+            let claim: ReflectionClaim
+            var members: [UUID]
+        }
+        var preCap: [PreCap] = []
+        for claim in claims {
+            let claimEv = evidenceByClaim[claim.id] ?? []
+            let nodeIds = claimEv.compactMap { messageToNode[$0.messageId] }
+            let distinct = Array(Set(nodeIds))
+            if distinct.count >= 2 {
+                preCap.append(PreCap(claim: claim, members: distinct))
+            }
+        }
+        guard !preCap.isEmpty else { return [] }
+
+        // 4. K=2 per-node cap. Sort claims by confidence desc; for each member,
+        // track membership count. Members already at K=2 are excluded from
+        // the current claim's set.
+        let sortedDescByConfidence = preCap.sorted {
+            $0.claim.confidence > $1.claim.confidence
+        }
+        var perNodeCount: [UUID: Int] = [:]
+        var afterCap: [PreCap] = []
+        for var c in sortedDescByConfidence {
+            c.members = c.members.filter { perNodeCount[$0, default: 0] < 2 }
+            for m in c.members { perNodeCount[m, default: 0] += 1 }
+            afterCap.append(c)
+        }
+
+        // 5. Second prune: drop constellations whose post-cap membership <2.
+        // The cap can shrink a set below 2 (e.g., its lowest-confidence members
+        // got capped out elsewhere). One pass suffices — pruning never grows
+        // another set (cap removes from, never adds to, membership).
+        let pruned = afterCap.filter { $0.members.count >= 2 }
+        guard !pruned.isEmpty else { return [] }
+
+        // 6. Centroid embedding (best-effort; nil if any member is missing
+        // an embedding or member dimensions disagree).
+        func centroid(for nodeIds: [UUID]) throws -> [Float]? {
+            guard !nodeIds.isEmpty else { return nil }
+            var sum: [Float]? = nil
+            for nid in nodeIds {
+                guard let emb = try fetchEmbedding(forNodeId: nid) else {
+                    return nil
+                }
+                if sum == nil {
+                    sum = emb
+                } else {
+                    guard sum!.count == emb.count else { return nil }
+                    for i in 0..<sum!.count { sum![i] += emb[i] }
+                }
+            }
+            guard var s = sum else { return nil }
+            let n = Float(nodeIds.count)
+            for i in 0..<s.count { s[i] /= n }
+            return s
+        }
+
+        // 7. Dominant selection: latest run + highest-confidence + 14-day
+        // freshness guard. An old "dominant" lingering for weeks misrepresents
+        // current emotional weather — better silence than stale signal.
+        let latestRun = try nodeStore.fetchLatestReflectionRun()
+        let fourteenDays: TimeInterval = 86_400 * 14
+        var dominantId: UUID? = nil
+        if let lr = latestRun, Date().timeIntervalSince(lr.ranAt) < fourteenDays {
+            let candidates = pruned.filter { $0.claim.runId == lr.id }
+            dominantId = candidates
+                .max(by: { $0.claim.confidence < $1.claim.confidence })?
+                .claim.id
+        }
+
+        // 8. Snapshot ephemeral attachments under the lock. We re-check the
+        // K=2 cap globally before merging so a node already at 2 evidence-side
+        // memberships isn't pushed past the cap by ephemeral bridging.
+        ephemeralLock.lock()
+        let ephemeralCopy = ephemeralByConstellationId
+        ephemeralLock.unlock()
+
+        // 9. Build final Constellation values.
+        var result: [Constellation] = []
+        for p in pruned {
+            var members = p.members
+            if let extra = ephemeralCopy[p.claim.id] {
+                for nid in extra {
+                    if !members.contains(nid),
+                       perNodeCount[nid, default: 0] < 2 {
+                        members.append(nid)
+                        perNodeCount[nid, default: 0] += 1
+                    }
+                }
+            }
+            let cent = try centroid(for: members)
+            result.append(Constellation(
+                id: p.claim.id,
+                claimId: p.claim.id,
+                label: p.claim.claim,
+                derivedShortLabel: Constellation.derivedShortLabel(from: p.claim.claim),
+                confidence: p.claim.confidence,
+                memberNodeIds: members,
+                centroidEmbedding: cent,
+                isDominant: (p.claim.id == dominantId)
+            ))
+        }
+        return result
+    }
+
+    /// Fetches a node's embedding via NodeStore (the canonical source —
+    /// `nodes.embedding` blob is the single owner of node-level embeddings).
+    /// Returns nil if the node is missing or has no embedding yet.
+    private func fetchEmbedding(forNodeId nodeId: UUID) throws -> [Float]? {
+        return try nodeStore.fetchNode(id: nodeId)?.embedding
     }
 
     /// Computes cosine similarity of a node's embedding against each
