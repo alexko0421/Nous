@@ -45,13 +45,14 @@ struct GalaxySceneContainer: NSViewRepresentable {
     }
 
     private func configure(scene: GalaxyScene, in view: SKView, coordinator: Coordinator) {
+        let toggleChanged = coordinator.lastToggleAllVisible != toggleAllVisible
         let needsFullRebuild =
             scene.graphNodes.map(\.id) != graphNodes.map(\.id) ||
             scene.graphEdges.map(\.id) != graphEdges.map(\.id) ||
             scene.selectedNodeId != selectedNodeId ||
             coordinator.lastConstellations != constellations ||
             coordinator.lastDominantConstellationId != dominantConstellationId ||
-            coordinator.lastToggleAllVisible != toggleAllVisible
+            toggleChanged
 
         scene.scaleMode = .resizeFill
         scene.size = view.bounds.size
@@ -68,6 +69,7 @@ struct GalaxySceneContainer: NSViewRepresentable {
 
         if needsFullRebuild || scene.children.isEmpty {
             scene.rebuildScene()
+            scene.updateHaloAlphas(staggered: toggleChanged)
         } else if coordinator.lastRevealedConstellationIds != revealedConstellationIds {
             scene.updateHaloAlphas()
         } else {

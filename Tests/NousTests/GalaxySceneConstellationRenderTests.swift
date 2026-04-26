@@ -58,7 +58,7 @@ final class GalaxySceneConstellationRenderTests: XCTestCase {
 
         XCTAssertEqual(haloEffectNodeCount(scene), 1)
         let effect = scene.children.first(where: { $0 is SKEffectNode }) as? SKEffectNode
-        XCTAssertEqual(Double(effect?.alpha ?? 0), 0.08, accuracy: 0.001)
+        XCTAssertEqual(Double(scene.haloAlpha(for: c.id)), 0.08, accuracy: 0.001)
         XCTAssertEqual(effect?.children.count, 3)  // 3 member sprites
     }
 
@@ -66,8 +66,7 @@ final class GalaxySceneConstellationRenderTests: XCTestCase {
         let (c, positions) = makeConstellation(memberCount: 2)
         let scene = makeScene(constellations: [c], positions: positions, revealed: [c.id])
 
-        let effect = scene.children.first(where: { $0 is SKEffectNode }) as? SKEffectNode
-        XCTAssertEqual(Double(effect?.alpha ?? 0), 0.55, accuracy: 0.001)
+        XCTAssertEqual(Double(scene.haloAlpha(for: c.id)), 0.55, accuracy: 0.001)
     }
 
     func test_toggleAllVisibleRendersAllAtToggleAlpha() {
@@ -77,9 +76,8 @@ final class GalaxySceneConstellationRenderTests: XCTestCase {
         let scene = makeScene(constellations: [c1, c2], positions: positions, toggleAll: true)
 
         XCTAssertEqual(haloEffectNodeCount(scene), 2)
-        for child in scene.children where child is SKEffectNode {
-            XCTAssertEqual(Double(child.alpha), 0.35, accuracy: 0.001)
-        }
+        XCTAssertEqual(Double(scene.haloAlpha(for: c1.id)), 0.35, accuracy: 0.001)
+        XCTAssertEqual(Double(scene.haloAlpha(for: c2.id)), 0.35, accuracy: 0.001)
     }
 
     func test_rasterizeIsTrueWhenSimAsleep() {

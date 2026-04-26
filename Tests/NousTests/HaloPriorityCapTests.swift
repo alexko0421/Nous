@@ -61,13 +61,8 @@ final class HaloPriorityCapTests: XCTestCase {
         let tapIds: Set<UUID> = [consts[10].id, consts[11].id]
         let scene = makeScene(constellations: consts, positions: positions, revealed: tapIds, toggleAll: true)
         XCTAssertEqual(haloCount(scene), 8)
-        // Verify the tap-revealed are among the rendered set
-        let rendered = scene.children.compactMap { $0 as? SKEffectNode }
-        XCTAssertEqual(rendered.count, 8)
-        // (Identity check would require exposing constellation→effect mapping;
-        // confirming count + tap presence via alpha tier is sufficient — at
-        // least 2 halos should be at 0.55, the rest at 0.35.)
-        let tapAlphaCount = rendered.filter { abs(Double($0.alpha) - 0.55) < 0.001 }.count
+        // Verify the tap-revealed are at full alpha tier (0.55) via haloAlpha function.
+        let tapAlphaCount = tapIds.filter { abs(Double(scene.haloAlpha(for: $0)) - 0.55) < 0.001 }.count
         XCTAssertEqual(tapAlphaCount, 2)
     }
 
@@ -80,13 +75,16 @@ final class HaloPriorityCapTests: XCTestCase {
             dominantId: dominantId, revealed: [tapId], toggleAll: true
         )
         XCTAssertEqual(haloCount(scene), 8)
-        let rendered = scene.children.compactMap { $0 as? SKEffectNode }
         // tap (1 at 0.55) + dominant (1 at 0.08) + toggle (6 at 0.35) = 8
-        let tapAlphaCount = rendered.filter { abs(Double($0.alpha) - 0.55) < 0.001 }.count
-        let dominantAlphaCount = rendered.filter { abs(Double($0.alpha) - 0.08) < 0.001 }.count
-        let toggleAlphaCount = rendered.filter { abs(Double($0.alpha) - 0.35) < 0.001 }.count
-        XCTAssertEqual(tapAlphaCount, 1)
-        XCTAssertEqual(dominantAlphaCount, 1)
+        // Assert via haloAlpha(for:) rather than rendered alpha (animation in-flight).
+        XCTAssertEqual(Double(scene.haloAlpha(for: tapId)), 0.55, accuracy: 0.001)
+        XCTAssertEqual(Double(scene.haloAlpha(for: dominantId)), 0.08, accuracy: 0.001)
+        // Remaining 6 rendered halos are toggle-tier: verify via count
+        let toggleAlphaCount = consts
+            .filter { $0.id != dominantId && $0.id != tapId }
+            .prefix(6)
+            .filter { abs(Double(scene.haloAlpha(for: $0.id)) - 0.35) < 0.001 }
+            .count
         XCTAssertEqual(toggleAlphaCount, 6)
     }
 }

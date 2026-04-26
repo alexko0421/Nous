@@ -22,7 +22,11 @@ struct GalaxyView: View {
             headerCluster
         }
         .overlay(alignment: .topTrailing) {
-            projectMenu
+            HStack(spacing: 10) {
+                toggleConstellationsButton
+                projectMenu
+            }
+            .padding(22)
         }
         .overlay(alignment: .bottom) {
             if let node = vm.selectedNode {
@@ -57,7 +61,7 @@ struct GalaxyView: View {
                     constellations: vm.constellations,
                     dominantConstellationId: vm.dominantConstellationId,
                     revealedConstellationIds: vm.revealedConstellationIds,
-                    toggleAllVisible: false,         // Task 21 will hook this up
+                    toggleAllVisible: vm.showAllConstellations,
                     positions: vm.positions,
                     selectedNodeId: vm.selectedNodeId,
                     onNodeTapped: handleNodeTap,
@@ -93,6 +97,28 @@ struct GalaxyView: View {
         .padding(.horizontal, 18)
         .padding(.vertical, 14)
         .padding(22)
+    }
+
+    private var toggleConstellationsButton: some View {
+        Button {
+            vm.toggleAllConstellations()
+        } label: {
+            HStack(spacing: 9) {
+                Image(systemName: vm.showAllConstellations ? "sparkles" : "sparkles.tv")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(GalaxyPaperPalette.olive)
+                Text(vm.showAllConstellations ? "Hide Motifs" : "Show Motifs")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(GalaxyPaperPalette.primaryText)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 42)
+        }
+        .buttonStyle(.plain)
+        .background {
+            paperSurface(cornerRadius: 18, opacity: 0.30)
+        }
     }
 
     private var projectMenu: some View {
@@ -140,7 +166,6 @@ struct GalaxyView: View {
         .background {
             paperSurface(cornerRadius: 18, opacity: 0.30)
         }
-        .padding(22)
     }
 
     private var quietMetrics: some View {

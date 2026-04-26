@@ -32,6 +32,7 @@ final class GalaxyViewModel {
     private(set) var constellations: [Constellation] = []
     private(set) var dominantConstellationId: UUID? = nil
     private(set) var revealedConstellationIds: Set<UUID> = []
+    private(set) var showAllConstellations: Bool = false
 
     private let nodeStore: NodeStore
     private let graphEngine: GraphEngine
@@ -144,6 +145,10 @@ final class GalaxyViewModel {
         DispatchQueue.global(qos: .utility).async {
             store.write(positions: positions)
         }
+    }
+
+    func toggleAllConstellations() {
+        showAllConstellations.toggle()
     }
 
     func setProjectFilter(_ projectId: UUID?) {

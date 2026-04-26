@@ -177,7 +177,7 @@ final class GalaxyScene: SKScene {
     ///     the toggle tier
     ///   - toggle-revealed: 0.35
     ///   - hidden: 0.0
-    private func haloAlpha(for constellationId: UUID) -> CGFloat {
+    func haloAlpha(for constellationId: UUID) -> CGFloat {
         if revealedConstellationIds.contains(constellationId) { return 0.55 }
         if dominantConstellationId == constellationId { return 0.08 }
         if toggleAllVisible { return 0.35 }
@@ -199,7 +199,7 @@ final class GalaxyScene: SKScene {
             // frame, rasterization would re-cache constantly and waste GPU).
             effect.shouldRasterize = !isSimActive
             effect.zPosition = -2  // beneath edges (-1) and nodes
-            effect.alpha = haloAlpha(for: c.id)
+            effect.alpha = 0  // start at 0; updateHaloAlphas() animates to target
 
             var sprites: [SKSpriteNode] = []
             for nid in c.memberNodeIds {
@@ -218,21 +218,48 @@ final class GalaxyScene: SKScene {
     }
 
     /// Animates halo alpha to the current state's target alpha (per
-    /// haloAlpha) over 0.6s ease-in-out. Used when revealed/toggle state
-    /// changes without changing the visible halo set — avoids the full
-    /// sprite teardown that rebuildHalos performs.
+    /// haloAlpha) over 0.6s ease-in-out. Used both after rebuildScene()
+    /// (to animate from alpha 0 to target) and when revealed/toggle state
+    /// changes without changing the visible halo set.
+    ///
+    /// When `staggered` is true, halos fade in sequentially by distance
+    /// from scene center (closest first, 80ms between each) — like dusk
+    /// star-rise. Used on toggleAllVisible transitions.
     ///
     /// If the visible set changes (a halo appears or disappears), call
-    /// rebuildScene() instead — that path constructs/destroys SKEffectNodes
-    /// as needed.
-    func updateHaloAlphas() {
-        for (cid, effect) in haloEffectNodes {
+    /// rebuildScene() first, then call this to animate into view.
+    func updateHaloAlphas(staggered: Bool = false) {
+        let visible = visibleHaloIds()
+
+        // Sort by distance from scene center so closer halos fade in first.
+        let sortedIds: [UUID] = staggered
+            ? visible.sorted { distanceFromCenter(constellationId: $0) < distanceFromCenter(constellationId: $1) }
+            : visible
+
+        for (idx, cid) in sortedIds.enumerated() {
+            guard let effect = haloEffectNodes[cid] else { continue }
             let target = haloAlpha(for: cid)
+            let delay = staggered ? Double(idx) * 0.08 : 0
             effect.removeAction(forKey: "haloAlpha")
-            let action = SKAction.fadeAlpha(to: target, duration: 0.6)
-            action.timingMode = .easeInEaseOut
+            let fade = SKAction.fadeAlpha(to: target, duration: 0.6)
+            fade.timingMode = .easeInEaseOut
+            let action = SKAction.sequence([
+                .wait(forDuration: delay),
+                fade
+            ])
             effect.run(action, withKey: "haloAlpha")
         }
+    }
+
+    private func distanceFromCenter(constellationId: UUID) -> CGFloat {
+        guard let c = constellations.first(where: { $0.id == constellationId }) else {
+            return .greatestFiniteMagnitude
+        }
+        let positions = c.memberNodeIds.compactMap { self.positions[$0] }
+        guard !positions.isEmpty else { return .greatestFiniteMagnitude }
+        let mx = positions.map { CGFloat($0.x) }.reduce(0, +) / CGFloat(positions.count)
+        let my = positions.map { CGFloat($0.y) }.reduce(0, +) / CGFloat(positions.count)
+        return sqrt(mx * mx + my * my)
     }
 
     private func drawEdges() {
