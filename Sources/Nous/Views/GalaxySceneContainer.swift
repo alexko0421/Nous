@@ -6,6 +6,10 @@ struct GalaxySceneContainer: NSViewRepresentable {
     let scene: GalaxyScene
     let graphNodes: [NousNode]
     let graphEdges: [NodeEdge]
+    let constellations: [Constellation]
+    let dominantConstellationId: UUID?
+    let revealedConstellationIds: Set<UUID>
+    let toggleAllVisible: Bool
     let positions: [UUID: GraphPosition]
     let selectedNodeId: UUID?
     let onNodeTapped: ((UUID) -> Void)?
@@ -39,6 +43,10 @@ struct GalaxySceneContainer: NSViewRepresentable {
         scene.size = view.bounds.size
         scene.graphNodes = graphNodes
         scene.graphEdges = graphEdges
+        scene.constellations = constellations
+        scene.dominantConstellationId = dominantConstellationId
+        scene.revealedConstellationIds = revealedConstellationIds
+        scene.toggleAllVisible = toggleAllVisible
         scene.positions = positions
         scene.selectedNodeId = selectedNodeId
         scene.onNodeTapped = onNodeTapped

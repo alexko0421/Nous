@@ -169,6 +169,8 @@
 		C3D4E5F6A7B8C9D0E1F2A3B5 /* PositionSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F3 /* PositionSnapshotStore.swift */; };
 		D4E5F6A7B8C9D0E1F2A3B4C6 /* PositionSnapshotPersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F6A7B8C9D0E1F2A4 /* PositionSnapshotPersistenceTests.swift */; };
 		E896A197A7BA410AB6007CCC /* HaloTexture.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5882024C4744673A9093342 /* HaloTexture.swift */; };
+		A5B6C7D8E9F0A1B2C3D4E5F6 /* GalaxySceneConstellationRenderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6C7D8E9F0A1B2C3D4E5F6A7 /* GalaxySceneConstellationRenderTests.swift */; };
+		C7D8E9F0A1B2C3D4E5F6A7B8 /* HaloPriorityCapTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8E9F0A1B2C3D4E5F6A7B8C9 /* HaloPriorityCapTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -338,6 +340,8 @@
 		A1B2C3D4E5F6A7B8C9D0E1F3 /* PositionSnapshotStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PositionSnapshotStore.swift; sourceTree = "<group>"; };
 		B2C3D4E5F6A7B8C9D0E1F2A4 /* PositionSnapshotPersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PositionSnapshotPersistenceTests.swift; sourceTree = "<group>"; };
 		C5882024C4744673A9093342 /* HaloTexture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HaloTexture.swift; sourceTree = "<group>"; };
+		B6C7D8E9F0A1B2C3D4E5F6A7 /* GalaxySceneConstellationRenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalaxySceneConstellationRenderTests.swift; sourceTree = "<group>"; };
+		D8E9F0A1B2C3D4E5F6A7B8C9 /* HaloPriorityCapTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HaloPriorityCapTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -580,6 +584,8 @@
 				E2D3C4B5A6978899A0B1C2D3 /* GalaxyViewModelConstellationLoadTests.swift */,
 				C3D4E5F6A7B8C9D0E1F2A3B4 /* ConstellationDominantUnderFilterTests.swift */,
 				B2C3D4E5F6A7B8C9D0E1F2A4 /* PositionSnapshotPersistenceTests.swift */,
+				B6C7D8E9F0A1B2C3D4E5F6A7 /* GalaxySceneConstellationRenderTests.swift */,
+				D8E9F0A1B2C3D4E5F6A7B8C9 /* HaloPriorityCapTests.swift */,
 				3074D3F24DDD3F020A52F9BA /* ChatViewModelTests.swift */,
 				475D19B8C6EA339A5D31688A /* CitableEntryPoolTests.swift */,
 				69184F11E49CB01A84551833 /* ClarificationCardParserTests.swift */,
@@ -969,6 +975,8 @@
 				F1A2B3C4D5E6F7A8B9C0D1E2 /* GalaxyViewModelConstellationLoadTests.swift in Sources */,
 				D4E5F6A7B8C9D0E1F2A3B4C5 /* ConstellationDominantUnderFilterTests.swift in Sources */,
 				D4E5F6A7B8C9D0E1F2A3B4C6 /* PositionSnapshotPersistenceTests.swift in Sources */,
+				A5B6C7D8E9F0A1B2C3D4E5F6 /* GalaxySceneConstellationRenderTests.swift in Sources */,
+				C7D8E9F0A1B2C3D4E5F6A7B8 /* HaloPriorityCapTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

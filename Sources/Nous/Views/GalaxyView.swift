@@ -54,6 +54,10 @@ struct GalaxyView: View {
                     scene: scene,
                     graphNodes: vm.nodes,
                     graphEdges: vm.edges,
+                    constellations: vm.constellations,
+                    dominantConstellationId: vm.dominantConstellationId,
+                    revealedConstellationIds: [],   // Task 20 will hook this up
+                    toggleAllVisible: false,         // Task 21 will hook this up
                     positions: vm.positions,
                     selectedNodeId: vm.selectedNodeId,
                     onNodeTapped: handleNodeTap,

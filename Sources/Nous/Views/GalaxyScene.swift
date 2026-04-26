@@ -58,6 +58,25 @@ final class GalaxyScene: SKScene {
     var onNodeTapped: ((UUID) -> Void)?
     var onNodeMoved: ((UUID, GraphPosition) -> Void)?
 
+    var constellations: [Constellation] = []
+    var dominantConstellationId: UUID?
+    var revealedConstellationIds: Set<UUID> = []
+    var toggleAllVisible: Bool = false
+
+    /// Soft cap on simultaneously-visible halos — see priority tiers in
+    /// visibleHaloIds(). Tap-revealed always renders even past this cap;
+    /// dominant gets a reserved slot when present; remainder fills with
+    /// toggle-revealed halos by confidence desc.
+    var maxVisibleHalos: Int = 8
+
+    // Drag-physics state placeholder. Set true while user is dragging
+    // or simulation is settling; flipped back to false on sleep.
+    // Task 23 wires the actual state machine.
+    var isSimActive: Bool = false
+
+    private var haloEffectNodes: [UUID: SKEffectNode] = [:]
+    private var haloMemberSprites: [UUID: [SKSpriteNode]] = [:]
+
     private var cameraNode: SKCameraNode = SKCameraNode()
     private var draggedNode: SKNode?
     private var draggedNodeId: UUID?
@@ -91,9 +110,12 @@ final class GalaxyScene: SKScene {
         nodeSprites.removeAll()
         nodeLabels.removeAll()
         nodeHitRadii.removeAll()
+        haloEffectNodes.removeAll()
+        haloMemberSprites.removeAll()
 
         drawEdges()
         drawNodes()
+        rebuildHalos()
         updateLabelVisibility()
     }
 
@@ -104,7 +126,95 @@ final class GalaxyScene: SKScene {
         }
 
         updateEdgePaths()
+
+        // Reflow halo sprite positions to follow their member nodes
+        for (cid, sprites) in haloMemberSprites {
+            guard let c = constellations.first(where: { $0.id == cid }) else { continue }
+            for (idx, nid) in c.memberNodeIds.enumerated() where idx < sprites.count {
+                guard let pos = positions[nid] else { continue }
+                sprites[idx].position = CGPoint(x: CGFloat(pos.x), y: CGFloat(pos.y))
+            }
+        }
+
         updateLabelVisibility()
+    }
+
+    // MARK: - Halo Rendering
+
+    /// Resolves which constellations to render halos for, respecting the
+    /// 8-cap with priority tiers:
+    ///   1. Tap-revealed (no cap applies — user explicit intent overrides everything)
+    ///   2. Dominant ambient (reserved 1 slot if exists)
+    ///   3. Toggle-revealed remainder (fills slots in claim.confidence desc)
+    private func visibleHaloIds() -> [UUID] {
+        let tap = revealedConstellationIds  // tier 1: always renders
+        var pinned = Array(tap)
+
+        // tier 2: dominant reserved slot (if not already in tap)
+        if let dom = dominantConstellationId, !tap.contains(dom) {
+            pinned.append(dom)
+        }
+
+        // tier 3: toggle-revealed remainder by confidence
+        let pinnedSet = Set(pinned)
+        var remainder: [Constellation] = []
+        if toggleAllVisible {
+            remainder = constellations
+                .filter { !pinnedSet.contains($0.id) }
+                .sorted { $0.confidence > $1.confidence }
+        }
+
+        let slotsLeft = max(0, maxVisibleHalos - pinned.count)
+        let take = remainder.prefix(slotsLeft).map(\.id)
+        return pinned + take
+    }
+
+    /// Alpha tier for a halo based on current scene state.
+    /// Tiers (per spec §5.3):
+    ///   - tap-revealed: 0.55
+    ///   - dominant ambient (reserved slot): 0.08 — even in toggle-all mode,
+    ///     dominant keeps its ambient alpha so it reads visually distinct from
+    ///     the toggle tier
+    ///   - toggle-revealed: 0.35
+    ///   - hidden: 0.0
+    private func haloAlpha(for constellationId: UUID) -> CGFloat {
+        if revealedConstellationIds.contains(constellationId) { return 0.55 }
+        if dominantConstellationId == constellationId { return 0.08 }
+        if toggleAllVisible { return 0.35 }
+        return 0
+    }
+
+    private func rebuildHalos() {
+        // Tear down existing halos
+        for (_, effect) in haloEffectNodes { effect.removeFromParent() }
+        haloEffectNodes.removeAll()
+        haloMemberSprites.removeAll()
+
+        let visibleIds = Set(visibleHaloIds())
+
+        for c in constellations where visibleIds.contains(c.id) {
+            let effect = SKEffectNode()
+            // Rasterize when sim is asleep (sprite positions stable, cheap to
+            // composite); turn off during active drag sim (sprites move per
+            // frame, rasterization would re-cache constantly and waste GPU).
+            effect.shouldRasterize = !isSimActive
+            effect.zPosition = -2  // beneath edges (-1) and nodes
+            effect.alpha = haloAlpha(for: c.id)
+
+            var sprites: [SKSpriteNode] = []
+            for nid in c.memberNodeIds {
+                guard let pos = positions[nid] else { continue }
+                let sprite = SKSpriteNode(texture: HaloTexture.cached)
+                sprite.position = CGPoint(x: CGFloat(pos.x), y: CGFloat(pos.y))
+                sprite.size = HaloTexture.cached.size()
+                effect.addChild(sprite)
+                sprites.append(sprite)
+            }
+
+            haloEffectNodes[c.id] = effect
+            haloMemberSprites[c.id] = sprites
+            addChild(effect)
+        }
     }
 
     private func drawEdges() {
