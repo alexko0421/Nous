@@ -87,6 +87,43 @@ final class GalaxyScene: SKScene {
     ///     hands settled positions to the ViewModel)
     var simulationOwnsPositions: Bool = false
 
+    // MARK: - Live drag-physics state
+
+    /// Per-node velocity for the live sim. Zeroed on sleep (Codex round-1
+    /// review: defends against floating-point jitter at the velocity floor).
+    private var nodeVelocities: [UUID: GraphPosition] = [:]
+
+    /// The dragged node's id while user is holding mouse down. The sim
+    /// loop skips applying velocity to this node — its position is
+    /// kinematic (mouse-driven). Reset to nil on mouseUp.
+    private var kinematicNodeId: UUID?
+
+    /// Sleep watchdog frame counters (Codex round-1 issue):
+    ///   - softWatchdog: count of consecutive frames with max(|v|) below
+    ///     threshold. Triggers sleep at softWatchdogFrames.
+    ///   - hardWatchdog: count of frames since mouseUp. Triggers sleep at
+    ///     hardTimeoutFrames regardless of velocity (defends against
+    ///     pathological jitter).
+    private var framesUnderVelocityThreshold: Int = 0
+    private var framesSinceMouseUp: Int = 0
+
+    /// Tunables (mirror GraphEngine.computeLayout defaults).
+    private let simRepulsion: Float = 12000
+    private let simAttraction: Float = 0.004
+    private let simDamping: Float = 0.86
+    /// Constellation pairwise attraction = 0.2× semantic edge strength
+    /// (spec §7.3 "weak attraction").
+    private let constellationAttractionFactor: Float = 0.2
+    private let velocityThreshold: Float = 0.5
+    private let softWatchdogFrames: Int = 30
+    private let hardTimeoutFrames: Int = 90
+
+    /// Called when the sleep watchdog flips isSimActive false. Receives the
+    /// final settled positions; consumer (GalaxyViewModel) persists via
+    /// PositionSnapshotStore. Invoked on the main thread (SpriteKit's
+    /// update(_:) callback already runs on main).
+    var onSimulationSettled: (([UUID: GraphPosition]) -> Void)?
+
     private var haloEffectNodes: [UUID: SKEffectNode] = [:]
     private var haloMemberSprites: [UUID: [SKSpriteNode]] = [:]
 
@@ -150,6 +187,131 @@ final class GalaxyScene: SKScene {
         }
 
         updateLabelVisibility()
+    }
+
+    // MARK: - Live Drag Physics
+
+    override func update(_ currentTime: TimeInterval) {
+        guard isSimActive else { return }
+
+        let nodeIds = Array(positions.keys)
+        let kinematic = kinematicNodeId
+
+        // 1. Repulsion (O(N²)) — every pair of nodes pushes apart inversely
+        //    proportional to distance squared.
+        for i in 0..<nodeIds.count {
+            for j in (i + 1)..<nodeIds.count {
+                let idA = nodeIds[i]
+                let idB = nodeIds[j]
+                guard let pA = positions[idA], let pB = positions[idB] else { continue }
+                let dx = pA.x - pB.x
+                let dy = pA.y - pB.y
+                let distSq = max(dx * dx + dy * dy, 1.0)
+                let force = simRepulsion / distSq
+                let dist = sqrt(distSq)
+                let fx = force * dx / dist
+                let fy = force * dy / dist
+                nodeVelocities[idA, default: GraphPosition(x: 0, y: 0)].x += fx
+                nodeVelocities[idA, default: GraphPosition(x: 0, y: 0)].y += fy
+                nodeVelocities[idB, default: GraphPosition(x: 0, y: 0)].x -= fx
+                nodeVelocities[idB, default: GraphPosition(x: 0, y: 0)].y -= fy
+            }
+        }
+
+        // 2. Edge attraction (manual + semantic; .shared was deleted in Task 1+3).
+        for edge in graphEdges {
+            guard let pA = positions[edge.sourceId], let pB = positions[edge.targetId] else { continue }
+            let dx = pA.x - pB.x
+            let dy = pA.y - pB.y
+            let fx = simAttraction * edge.strength * dx
+            let fy = simAttraction * edge.strength * dy
+            nodeVelocities[edge.sourceId, default: GraphPosition(x: 0, y: 0)].x -= fx
+            nodeVelocities[edge.sourceId, default: GraphPosition(x: 0, y: 0)].y -= fy
+            nodeVelocities[edge.targetId, default: GraphPosition(x: 0, y: 0)].x += fx
+            nodeVelocities[edge.targetId, default: GraphPosition(x: 0, y: 0)].y += fy
+        }
+
+        // 3. Constellation pairwise weak attraction (post-K=2 cap by §3.3).
+        //    Strength = 0.3 (matches the spec's "moderate" virtual strength)
+        //    × constellationAttractionFactor (0.2× semantic) = 0.06 effective.
+        let constellationStrength: Float = 0.3
+        for c in constellations {
+            let members = c.memberNodeIds
+            guard members.count >= 2 else { continue }
+            for i in 0..<members.count {
+                for j in (i + 1)..<members.count {
+                    let idA = members[i]
+                    let idB = members[j]
+                    guard let pA = positions[idA], let pB = positions[idB] else { continue }
+                    let dx = pA.x - pB.x
+                    let dy = pA.y - pB.y
+                    let fx = simAttraction * constellationAttractionFactor * constellationStrength * dx
+                    let fy = simAttraction * constellationAttractionFactor * constellationStrength * dy
+                    nodeVelocities[idA, default: GraphPosition(x: 0, y: 0)].x -= fx
+                    nodeVelocities[idA, default: GraphPosition(x: 0, y: 0)].y -= fy
+                    nodeVelocities[idB, default: GraphPosition(x: 0, y: 0)].x += fx
+                    nodeVelocities[idB, default: GraphPosition(x: 0, y: 0)].y += fy
+                }
+            }
+        }
+
+        // 4. Apply velocity (skip kinematic node — mouse drives its position).
+        var maxVelMagnitude: Float = 0
+        for id in nodeIds {
+            if id == kinematic {
+                nodeVelocities[id] = GraphPosition(x: 0, y: 0)
+                continue
+            }
+            var v = nodeVelocities[id, default: GraphPosition(x: 0, y: 0)]
+            v.x *= simDamping
+            v.y *= simDamping
+            nodeVelocities[id] = v
+            positions[id]!.x += v.x
+            positions[id]!.y += v.y
+            let mag = sqrt(v.x * v.x + v.y * v.y)
+            if mag > maxVelMagnitude { maxVelMagnitude = mag }
+        }
+
+        // 5. Reflect new positions in sprite/halo positions.
+        syncPositions()
+
+        // 6. Sleep watchdog — only after mouseUp (while user is dragging,
+        //    don't try to settle).
+        if kinematicNodeId == nil {
+            framesSinceMouseUp += 1
+            if maxVelMagnitude < velocityThreshold {
+                framesUnderVelocityThreshold += 1
+            } else {
+                framesUnderVelocityThreshold = 0
+            }
+            if framesUnderVelocityThreshold >= softWatchdogFrames || framesSinceMouseUp >= hardTimeoutFrames {
+                putSimToSleep()
+            }
+        } else {
+            framesSinceMouseUp = 0
+        }
+    }
+
+    private func putSimToSleep() {
+        // Zero velocities (Codex jitter guard)
+        for k in nodeVelocities.keys {
+            nodeVelocities[k] = GraphPosition(x: 0, y: 0)
+        }
+        isSimActive = false
+        framesUnderVelocityThreshold = 0
+        framesSinceMouseUp = 0
+
+        // Hand settled positions to the consumer (Task 25 wires this into
+        // GalaxyViewModel.handleSimulationSettled).
+        onSimulationSettled?(positions)
+
+        // Release ownership so SwiftUI rerenders can copy in again.
+        simulationOwnsPositions = false
+
+        // Re-enable rasterization on halos (Task 19 ties this to isSimActive).
+        for (_, effect) in haloEffectNodes {
+            effect.shouldRasterize = true
+        }
     }
 
     // MARK: - Halo Rendering
@@ -664,6 +826,19 @@ final class GalaxyScene: SKScene {
             draggedNodeOriginalZPosition = sprite.zPosition
             sprite.zPosition = 8
             dragStartPosition = point
+
+            // Wake the live sim. update(_:) starts running per-frame
+            // physics; the dragged node is kinematic (mouse-driven), other
+            // nodes feel forces and reflow.
+            kinematicNodeId = id
+            isSimActive = true
+            simulationOwnsPositions = true
+            framesUnderVelocityThreshold = 0
+            framesSinceMouseUp = 0
+            // Halos must un-rasterize while sprites move per frame.
+            for (_, effect) in haloEffectNodes {
+                effect.shouldRasterize = false
+            }
         }
     }
 
@@ -689,6 +864,7 @@ final class GalaxyScene: SKScene {
         guard let dragged = draggedNode else {
             draggedNodeId = nil
             dragLatestPosition = nil
+            kinematicNodeId = nil
             return
         }
 
@@ -704,14 +880,27 @@ final class GalaxyScene: SKScene {
         draggedNodeId = nil
         dragLatestPosition = nil
 
+        // Clear kinematic but keep the sim running — the watchdog inside
+        // update(_:) will settle and call onSimulationSettled. We
+        // intentionally do NOT call rebuildScene() while the sim is
+        // active: that would tear down halo SKEffectNodes mid-animation.
+        kinematicNodeId = nil
+        framesSinceMouseUp = 0
+        framesUnderVelocityThreshold = 0
+
         if distance < 5, let releasedNodeId {
             onNodeTapped?(releasedNodeId)
+            // Tap, not drag. The sim hasn't accumulated meaningful velocity
+            // (kinematic node was pinned to cursor with ~0 motion). Skip
+            // running the watchdog and settle instantly to avoid a quarter-
+            // second of dead air after a tap.
+            putSimToSleep()
             rebuildScene()
-        } else {
-            if let releasedNodeId, let finalPosition {
-                onNodeMoved?(releasedNodeId, finalPosition)
-            }
-            rebuildScene()
+        } else if let releasedNodeId, let finalPosition {
+            onNodeMoved?(releasedNodeId, finalPosition)
+            // Sim continues to run; rebuildScene will be triggered by the
+            // SwiftUI rerender after onSimulationSettled hands settled
+            // positions back to the ViewModel (Task 25 wires this).
         }
     }
 
