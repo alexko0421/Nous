@@ -106,6 +106,13 @@ final class GalaxyScene: SKScene {
     ///     pathological jitter).
     private var framesUnderVelocityThreshold: Int = 0
     private var framesSinceMouseUp: Int = 0
+    /// Absolute frame counter since sim wake. Forces sleep regardless of
+    /// kinematic / velocity state if the sim runs longer than the cap —
+    /// safety net against scenarios where mouseUp never fires (e.g.,
+    /// release outside the SKView, lost focus, drag canceled by the OS)
+    /// that would otherwise leave isSimActive stuck true and the main
+    /// thread starved by 120fps O(N²) physics.
+    private var totalSimFrames: Int = 0
 
     /// Tunables (mirror GraphEngine.computeLayout defaults).
     private let simRepulsion: Float = 12000
@@ -117,6 +124,8 @@ final class GalaxyScene: SKScene {
     private let velocityThreshold: Float = 0.5
     private let softWatchdogFrames: Int = 30
     private let hardTimeoutFrames: Int = 90
+    /// Absolute cap, ~5s at 120fps. Prevents stuck-on sim no matter what.
+    private let absoluteMaxSimFrames: Int = 600
 
     /// Called when the sleep watchdog flips isSimActive false. Receives the
     /// final settled positions; consumer (GalaxyViewModel) persists via
@@ -193,6 +202,16 @@ final class GalaxyScene: SKScene {
 
     override func update(_ currentTime: TimeInterval) {
         guard isSimActive else { return }
+
+        // Absolute safety: never let the sim run longer than absoluteMaxSimFrames
+        // regardless of kinematic / velocity state. Defends against scenarios
+        // where mouseUp never fires (release outside SKView, focus loss, OS
+        // drag cancel) which would otherwise leave the main thread starved.
+        totalSimFrames += 1
+        if totalSimFrames >= absoluteMaxSimFrames {
+            putSimToSleep()
+            return
+        }
 
         let nodeIds = Array(positions.keys)
         let kinematic = kinematicNodeId
@@ -297,9 +316,13 @@ final class GalaxyScene: SKScene {
         for k in nodeVelocities.keys {
             nodeVelocities[k] = GraphPosition(x: 0, y: 0)
         }
+        // Defensive: clear kinematic too in case sleep was forced via the
+        // absolute timeout while a drag was somehow still in flight.
+        kinematicNodeId = nil
         isSimActive = false
         framesUnderVelocityThreshold = 0
         framesSinceMouseUp = 0
+        totalSimFrames = 0
 
         // Hand settled positions to the consumer (Task 25 wires this into
         // GalaxyViewModel.handleSimulationSettled).
@@ -835,6 +858,7 @@ final class GalaxyScene: SKScene {
             simulationOwnsPositions = true
             framesUnderVelocityThreshold = 0
             framesSinceMouseUp = 0
+            totalSimFrames = 0
             // Halos must un-rasterize while sprites move per frame.
             for (_, effect) in haloEffectNodes {
                 effect.shouldRasterize = false
