@@ -28,6 +28,7 @@ final class NodeStore {
     init(path: String) throws {
         db = try Database(path: path)
         try createTables()
+        try runGalaxyRedesignMigration()
     }
 
     // MARK: - Schema
@@ -303,6 +304,20 @@ final class NodeStore {
             }
         }
         try db.exec(alterSQL)
+    }
+
+    /// One-shot Galaxy-redesign migration:
+    ///   - Sweeps stale `shared` edge rows that pre-date EdgeType.shared removal.
+    ///   - Adds idx_reflection_evidence_message for inverse-direction joins
+    ///     used by ConstellationService and the orphan reconciliation query.
+    ///
+    /// Idempotent — safe to call on every app launch.
+    func runGalaxyRedesignMigration() throws {
+        try db.exec("DELETE FROM edges WHERE type = 'shared';")
+        try db.exec("""
+            CREATE INDEX IF NOT EXISTS idx_reflection_evidence_message
+                ON reflection_evidence(message_id);
+        """)
     }
 
     private func notifyNodesDidChange() {
