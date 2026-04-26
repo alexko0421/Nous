@@ -1,5 +1,9 @@
 import Foundation
 
+extension Notification.Name {
+    static let reflectionRunCompleted = Notification.Name("nous.reflectionRunCompleted")
+}
+
 /// Sunday-night batch reflection. Given a (projectId, week) scope, reads the
 /// week's messages, asks Gemini for up-to-2 non-obvious patterns, validates
 /// the output, and persists either active claims or a rejected/failed row.
@@ -234,11 +238,16 @@ final class WeeklyReflectionService {
         let cost = Self.estimatedCostCents(usage: usage)
 
         // Guard #3: validator. Malformed JSON → `.failed`/`.apiError` row.
+        let messageIdToNodeId: [String: UUID] = Dictionary(
+            fixture.flatMap { row in row.messages.map { ($0.id.uuidString, row.nodeId) } },
+            uniquingKeysWith: { first, _ in first }
+        )
         let validation: ReflectionValidator.Output
         do {
             validation = try ReflectionValidator.validate(
                 rawJSON: rawText,
                 validMessageIds: validMessageIds,
+                messageIdToNodeId: messageIdToNodeId,
                 runId: runId,
                 now: now()
             )
@@ -296,6 +305,7 @@ final class WeeklyReflectionService {
             costCents: cost
         )
         try nodeStore.persistReflectionRun(run, claims: validation.claims, evidence: evidence)
+        NotificationCenter.default.post(name: .reflectionRunCompleted, object: nil)
         return RunResult(run: run, claims: validation.claims, evidence: evidence)
     }
 

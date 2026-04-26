@@ -162,6 +162,129 @@ final class ReflectionCascadeOrphanTests: XCTestCase {
                       "two evidence rows remain — claim must still be active")
     }
 
+    // MARK: - Distinct-nodeId reconcile rule
+
+    func test_orphansClaimWhenEvidenceCollapsesToSingleConversation() throws {
+        // Setup: a claim with 3 evidence messages spanning 2 conversations.
+        // Surgically remove the nodeB evidence row via raw SQL (bypassing
+        // deleteNode's built-in auto-reconcile) so that reconcile() itself
+        // is the thing under test here.
+        // After removal, evidence collapses to 2 messages all in nodeA
+        // → COUNT(DISTINCT m.nodeId) = 1 < 2 → reconcile must flip the claim.
+        let nodeA = NousNode(type: .conversation, title: "nodeA")
+        let nodeB = NousNode(type: .conversation, title: "nodeB")
+        try store.insertNode(nodeA)
+        try store.insertNode(nodeB)
+
+        let mA1 = Message(nodeId: nodeA.id, role: .user, content: "a1")
+        let mA2 = Message(nodeId: nodeA.id, role: .user, content: "a2")
+        let mB1 = Message(nodeId: nodeB.id, role: .user, content: "b1")
+        try store.insertMessage(mA1)
+        try store.insertMessage(mA2)
+        try store.insertMessage(mB1)
+
+        let run = ReflectionRun(
+            projectId: nil,
+            weekStart: Date(timeIntervalSince1970: 0),
+            weekEnd: Date(timeIntervalSince1970: 100),
+            ranAt: Date(timeIntervalSince1970: 100),
+            status: .success,
+            rejectionReason: nil,
+            costCents: 0
+        )
+        let claim = ReflectionClaim(
+            runId: run.id,
+            claim: "distinct-node collapse",
+            confidence: 0.9,
+            whyNonObvious: "why",
+            status: .active
+        )
+        try store.persistReflectionRun(
+            run,
+            claims: [claim],
+            evidence: [
+                ReflectionEvidence(reflectionId: claim.id, messageId: mA1.id),
+                ReflectionEvidence(reflectionId: claim.id, messageId: mA2.id),
+                ReflectionEvidence(reflectionId: claim.id, messageId: mB1.id)
+            ]
+        )
+
+        // Precondition: claim is active spanning 2 nodeIds.
+        XCTAssertTrue(try store.fetchActiveReflectionClaims(projectId: nil)
+            .contains { $0.id == claim.id })
+
+        // Surgically delete only the evidence row for mB1 — simulates what
+        // a CASCADE from a deleted message leaves behind, without invoking
+        // deleteNode() which would auto-reconcile before we get to test it.
+        try store.executeRawForTest("""
+            DELETE FROM reflection_evidence WHERE message_id = '\(mB1.id.uuidString)';
+        """)
+
+        // Now only nodeA evidence remains (2 messages, 1 nodeId).
+        let flipped = try store.reconcileOrphanedReflectionClaims()
+        XCTAssertEqual(flipped, [claim.id],
+                       "claim must orphan: evidence collapsed to single conversation")
+        XCTAssertFalse(try store.fetchActiveReflectionClaims(projectId: nil)
+            .contains { $0.id == claim.id })
+    }
+
+    func test_keepsClaimActiveWhenEvidenceStillSpansTwoConversations() throws {
+        // Setup: a claim with 3 evidence rows spanning 3 nodes (nA, nA2, nB).
+        // Surgically remove the nA2 evidence row (same approach as the orphan
+        // test — raw SQL to avoid deleteNode's built-in auto-reconcile).
+        // Remaining evidence: nA + nB → still 2 distinct nodeIds → stays active.
+        let nA = NousNode(type: .conversation, title: "nA")
+        let nA2 = NousNode(type: .conversation, title: "nA2")
+        let nB = NousNode(type: .conversation, title: "nB")
+        try store.insertNode(nA)
+        try store.insertNode(nA2)
+        try store.insertNode(nB)
+
+        let mA = Message(nodeId: nA.id, role: .user, content: "a")
+        let mA2 = Message(nodeId: nA2.id, role: .user, content: "a2")
+        let mB = Message(nodeId: nB.id, role: .user, content: "b")
+        try store.insertMessage(mA)
+        try store.insertMessage(mA2)
+        try store.insertMessage(mB)
+
+        let run = ReflectionRun(
+            projectId: nil,
+            weekStart: Date(timeIntervalSince1970: 0),
+            weekEnd: Date(timeIntervalSince1970: 100),
+            ranAt: Date(timeIntervalSince1970: 100),
+            status: .success,
+            rejectionReason: nil,
+            costCents: 0
+        )
+        let claim = ReflectionClaim(
+            runId: run.id,
+            claim: "stays active",
+            confidence: 0.9,
+            whyNonObvious: "why",
+            status: .active
+        )
+        try store.persistReflectionRun(
+            run,
+            claims: [claim],
+            evidence: [
+                ReflectionEvidence(reflectionId: claim.id, messageId: mA.id),
+                ReflectionEvidence(reflectionId: claim.id, messageId: mA2.id),
+                ReflectionEvidence(reflectionId: claim.id, messageId: mB.id)
+            ]
+        )
+
+        // Remove nA2 evidence — mA (nA) + mB (nB) remain → 2 distinct nodeIds.
+        try store.executeRawForTest("""
+            DELETE FROM reflection_evidence WHERE message_id = '\(mA2.id.uuidString)';
+        """)
+
+        let flipped = try store.reconcileOrphanedReflectionClaims()
+        XCTAssertTrue(flipped.isEmpty,
+                      "claim must stay active: evidence still spans nA and nB")
+        XCTAssertTrue(try store.fetchActiveReflectionClaims(projectId: nil)
+            .contains { $0.id == claim.id })
+    }
+
     // MARK: - Helpers
 
     @discardableResult

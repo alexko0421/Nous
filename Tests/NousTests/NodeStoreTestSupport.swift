@@ -1,0 +1,63 @@
+import Foundation
+@testable import Nous
+
+extension NodeStore {
+    static func inMemoryForTesting() throws -> NodeStore {
+        return try NodeStore(path: ":memory:")
+    }
+
+    func insertNodeForTest(id: UUID, projectId: UUID? = nil) throws {
+        let n = NousNode(
+            id: id, type: .conversation, title: "test",
+            content: "", emoji: nil,
+            projectId: projectId,
+            isFavorite: false, createdAt: Date(), updatedAt: Date()
+        )
+        try insertNode(n)
+    }
+
+    func insertProjectForTest(id: UUID, title: String = "test project") throws {
+        let p = Project(id: id, title: title)
+        try insertProject(p)
+    }
+
+    func executeRawForTest(_ sql: String) throws {
+        try rawDatabase.exec(sql)
+    }
+
+    func runSharedEdgeRemovalMigrationForTest() throws {
+        try runGalaxyRedesignMigration()
+    }
+
+    func countRowsForTest(table: String) throws -> Int {
+        let stmt = try rawDatabase.prepare("SELECT COUNT(*) FROM \(table);")
+        guard try stmt.step() else { return 0 }
+        return stmt.int(at: 0)
+    }
+
+    func indexExistsForTest(name: String) throws -> Bool {
+        let stmt = try rawDatabase.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name=?;")
+        try stmt.bind(name, at: 1)
+        return try stmt.step()
+    }
+
+    func insertMessageForTest(id: UUID, nodeId: UUID, role: String = "user", content: String = "test") throws {
+        try rawDatabase.exec("""
+            INSERT INTO messages (id, nodeId, role, content, timestamp)
+            VALUES ('\(id.uuidString)', '\(nodeId.uuidString)', '\(role)', '\(content)', \(Date().timeIntervalSince1970));
+        """)
+    }
+
+    /// Same as insertNodeForTest but also stores an embedding via the
+    /// nodes.embedding BLOB column (persisted through NousNode.init).
+    func insertNodeForTestWithEmbedding(id: UUID, embedding: [Float]) throws {
+        let n = NousNode(
+            id: id, type: .conversation, title: "test",
+            content: "", emoji: nil,
+            embedding: embedding,
+            projectId: nil,
+            isFavorite: false, createdAt: Date(), updatedAt: Date()
+        )
+        try insertNode(n)
+    }
+}

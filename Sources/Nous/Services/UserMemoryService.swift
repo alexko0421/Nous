@@ -477,6 +477,17 @@ final class UserMemoryCore {
             .joined(separator: "\n---\n")
 
         guard !userTurns.isEmpty else { return }
+
+        let assistantMessages = messages.filter { $0.role == .assistant }
+        let signaturePhrases = Self.extractSignatureMoments(from: assistantMessages)
+        let signatureMomentsBlock: String
+        if signaturePhrases.isEmpty {
+            signatureMomentsBlock = "[none]"
+        } else {
+            signatureMomentsBlock = signaturePhrases
+                .map { "- \"\($0)\"" }
+                .joined(separator: "\n")
+        }
         guard let llm = llmServiceProvider() else { return }
 
         let existing = currentConversation(nodeId: nodeId) ?? ""
@@ -493,7 +504,55 @@ final class UserMemoryCore {
         - What is Alex trying to do in this chat?
         - What has he told me that I should remember while this chat continues?
         - Do NOT include general facts about Alex — those belong in other memory layers.
-        - Keep under 6 bullet points. Markdown only.
+
+        Signature moments flagged by Nous earlier in this conversation (text-only quotes — no Nous prose, so the self-confirmation guard is preserved; preservation-critical — MUST appear verbatim in a bullet, quoted in 「」):
+        \(signatureMomentsBlock)
+
+        IMAGERY PRESERVATION:
+        - Every phrase in the signature moments list above MUST appear verbatim in a bullet (quote in 「」). If the list is [none], skip this rule.
+        - When Alex's turns contain specific details (concrete numbers, objects, sensory imagery), an original metaphor, or non-obvious phrasing, preserve that specificity. Do NOT substitute abstract categories.
+        - For other concrete imagery (not flagged), paraphrase with specifics — keep the vivid detail, not just the abstract pattern.
+        - Generic content (routine Q&A, acknowledgments) compresses normally.
+
+        PRIORITY: Preserve imagery > hit bullet count.
+
+        Bullet budget: up to 8 bullets. Prefer fewer when content allows, but extend to 8 before flattening imagery.
+
+        EXAMPLE PAIRS — study the difference between flat ❌ and texture-preserving ✅:
+
+        1. Idea-exploration:
+           ❌ 品味 = 基于大量经验同失败而建立起嚟嘅判断系统
+           ✅ 品味 = 「睇过一千幅画，试过一百种咖啡，失败过十次」之后形成嘅 judgment
+
+        2. Problem-solving:
+           ❌ 修复咗 authentication 嘅 bug
+           ✅ 修咗 login bug：session cookie 响 Safari 被当作 third-party，改咗 SameSite=Lax 之后 work
+
+        3. Emotional-processing:
+           ❌ Alex 处理紧关于工作嘅挫败感
+           ✅ Alex 讲：「我觉得自己系响隧道入面跑，但冇人话我终点响边」——感到 direction 缺失
+
+        4. Planning:
+           ❌ 讨论咗下季度嘅优先事项
+           ✅ 决定 Q2 聚焦 retention 而非 growth，理由：「先把漏斗底补实，再落更多水」
+
+        5. Teaching / learning:
+           ❌ 学咗点用 Swift concurrency
+           ✅ Aha: async let 同 TaskGroup 嘅分别——「async let 系兵，TaskGroup 系将」
+
+        6. Venting:
+           ❌ 对 meeting overload 感到 frustration
+           ✅ Alex 讲：「我嘅 calendar 系别人 agenda 嘅投影」——冇 mental space 做 deep work
+
+        7. Abstract vs concrete (general):
+           ❌ Alex describe 咗一个复杂嘅想法
+           ✅ Alex describe：思考就系「响脑入面开咗十个 tab，但闩唔到其中任何一个」
+
+        8. Routine (not every turn needs preservation):
+           ❌ Alex 问问题、得到答案
+           ✅ Alex 问点 set up Xcode scheme（basic dev question，唔需要特别 preserve）
+
+        Markdown only.
         """
 
         do {
@@ -1157,6 +1216,41 @@ final class UserMemoryCore {
 
     /// Removes markdown blockquote lines (`> …` or `>> …`) from content.
     /// Used to drop quoted assistant text that Alex pastes into his next turn.
+    static func extractSignatureMoments(from assistantMessages: [Message]) -> [String] {
+        let blockPattern = #"<signature_moments>([\s\S]*?)</signature_moments>"#
+        let textPattern = #"text:\s*"([^"]*)""#
+
+        guard
+            let blockRegex = try? NSRegularExpression(pattern: blockPattern),
+            let textRegex = try? NSRegularExpression(pattern: textPattern)
+        else {
+            return []
+        }
+
+        var phrases: [String] = []
+        for message in assistantMessages {
+            let content = message.content
+            let range = NSRange(content.startIndex..., in: content)
+            let blockMatches = blockRegex.matches(in: content, range: range)
+            for blockMatch in blockMatches {
+                guard blockMatch.numberOfRanges >= 2,
+                      let inner = Range(blockMatch.range(at: 1), in: content) else { continue }
+                let body = String(content[inner])
+                let bodyRange = NSRange(body.startIndex..., in: body)
+                let textMatches = textRegex.matches(in: body, range: bodyRange)
+                for textMatch in textMatches {
+                    guard textMatch.numberOfRanges >= 2,
+                          let textRange = Range(textMatch.range(at: 1), in: body) else { continue }
+                    let phrase = String(body[textRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !phrase.isEmpty {
+                        phrases.append(phrase)
+                    }
+                }
+            }
+        }
+        return phrases
+    }
+
     static func stripQuoteBlocks(_ content: String) -> String {
         content
             .components(separatedBy: .newlines)

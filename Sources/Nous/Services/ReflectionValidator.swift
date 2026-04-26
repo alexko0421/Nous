@@ -39,11 +39,15 @@ enum ReflectionValidator {
     ///   - validMessageIds: the set of message IDs that were present in the
     ///     fixture passed to Gemini. Supporting turn IDs outside this set are
     ///     filtered out (the model hallucinated them).
+    ///   - messageIdToNodeId: maps each message ID to its conversation node UUID.
+    ///     Used to enforce the distinct-conversation rule: evidence must span
+    ///     ≥2 distinct nodeIds. Pass `[:]` to defer resolution to Task 8.
     ///   - runId: the `ReflectionRun.id` these claims belong to.
     ///   - now: injected for deterministic tests.
     static func validate(
         rawJSON: String,
         validMessageIds: Set<String>,
+        messageIdToNodeId: [String: UUID],
         runId: UUID,
         now: Date = Date()
     ) throws -> Output {
@@ -63,6 +67,7 @@ enum ReflectionValidator {
         var passed: [ReflectionClaim] = []
         var droppedForLowConfidence = 0
         var droppedForUngrounded = 0
+        var droppedForSingleConversation = 0
 
         for raw in envelope.claims {
             let trimmed = raw.claim.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -92,6 +97,15 @@ enum ReflectionValidator {
                 continue
             }
 
+            // Distinct-conversation rule: evidence must span ≥2 distinct
+            // conversation nodeIds. A claim grounded only in a single
+            // conversation is not a cross-session pattern.
+            let distinctNodeIds = Set(deduped.compactMap { messageIdToNodeId[$0] })
+            if distinctNodeIds.count < 2 {
+                droppedForSingleConversation += 1
+                continue
+            }
+
             let clampedConfidence = max(0.0, min(1.0, raw.confidence))
 
             passed.append(ReflectionClaim(
@@ -108,13 +122,16 @@ enum ReflectionValidator {
             return Output(claims: passed, rejectionReason: nil)
         }
 
-        // All claims dropped — pick the dominant reason. Low-confidence beats
-        // ungrounded because "model itself wasn't confident" is a stronger
-        // signal than "model cited bad turns"; a confident-but-ungrounded
-        // claim is more often a citation bug than a confidence issue.
-        let reason: ReflectionRejectionReason = droppedForLowConfidence >= droppedForUngrounded
-            ? .lowConfidence
-            : .unsupported
+        // All claims dropped — pick the dominant reason.
+        // Order: lowConfidence > ungrounded > singleConversationEvidence.
+        let reason: ReflectionRejectionReason
+        if droppedForLowConfidence >= droppedForUngrounded && droppedForLowConfidence >= droppedForSingleConversation {
+            reason = .lowConfidence
+        } else if droppedForUngrounded >= droppedForSingleConversation {
+            reason = .unsupported
+        } else {
+            reason = .singleConversationEvidence
+        }
         return Output(claims: [], rejectionReason: reason)
     }
 

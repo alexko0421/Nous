@@ -17,6 +17,7 @@ struct ScratchPadStateRecord: Equatable {
 final class NodeStore {
 
     private let db: Database
+    private let dbPath: String
     /// Serializes multi-statement transactions on the single SQLite connection.
     /// SQLite's connection-level mutex serializes individual calls, but
     /// `BEGIN ... COMMIT` pairs are not atomic as a group: two overlapping
@@ -25,9 +26,20 @@ final class NodeStore {
     /// v2.2b dual-writes don't silently drop entries under concurrent refreshes.
     private let transactionLock = NSLock()
 
+    /// A stable identifier for this database, used to scope per-store
+    /// UserDefaults state (e.g., position snapshots). Derived from the
+    /// database file's basename for on-disk stores; returns "memory" for
+    /// in-memory test stores.
+    var storeIdentity: String {
+        if dbPath == ":memory:" { return "memory" }
+        return (dbPath as NSString).lastPathComponent
+    }
+
     init(path: String) throws {
+        dbPath = path
         db = try Database(path: path)
         try createTables()
+        try runGalaxyRedesignMigration()
     }
 
     // MARK: - Schema
@@ -303,6 +315,20 @@ final class NodeStore {
             }
         }
         try db.exec(alterSQL)
+    }
+
+    /// One-shot Galaxy-redesign migration:
+    ///   - Sweeps stale `shared` edge rows that pre-date EdgeType.shared removal.
+    ///   - Adds idx_reflection_evidence_message for inverse-direction joins
+    ///     used by ConstellationService and the orphan reconciliation query.
+    ///
+    /// Idempotent — safe to call on every app launch.
+    func runGalaxyRedesignMigration() throws {
+        try db.exec("DELETE FROM edges WHERE type = 'shared';")
+        try db.exec("""
+            CREATE INDEX IF NOT EXISTS idx_reflection_evidence_message
+                ON reflection_evidence(message_id);
+        """)
     }
 
     private func notifyNodesDidChange() {
@@ -647,6 +673,37 @@ final class NodeStore {
         """)
         try stmt.step()
         notifyNodesDidChange()
+    }
+
+    /// Bulk resolves message IDs to their owning conversation node IDs.
+    /// One round-trip per chunk of ≤900 ids (SQLite parameter limit defense).
+    /// Unknown messageIds are simply omitted from the result.
+    func conversationNodeIds(forMessageIds messageIds: [UUID]) throws -> [UUID: UUID] {
+        guard !messageIds.isEmpty else { return [:] }
+
+        var result: [UUID: UUID] = [:]
+        let chunkSize = 900  // safely under SQLite's 999 default
+        for chunk in messageIds.chunked(into: chunkSize) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ", ")
+            let stmt = try db.prepare("""
+                SELECT id, nodeId
+                FROM messages
+                WHERE id IN (\(placeholders));
+            """)
+            for (offset, id) in chunk.enumerated() {
+                try stmt.bind(id.uuidString, at: Int32(offset + 1))
+            }
+            while try stmt.step() {
+                guard
+                    let mRaw = stmt.text(at: 0),
+                    let nRaw = stmt.text(at: 1),
+                    let mUUID = UUID(uuidString: mRaw),
+                    let nUUID = UUID(uuidString: nRaw)
+                else { continue }
+                result[mUUID] = nUUID
+            }
+        }
+        return result
     }
 
     // MARK: - Memory scopes (v2.1)
@@ -1336,7 +1393,9 @@ final class NodeStore {
         try stmt.bind(nodeId.uuidString, at: 2)
         var results: [NodeEdge] = []
         while try stmt.step() {
-            results.append(edgeFrom(stmt))
+            if let edge = edgeFrom(stmt) {
+                results.append(edge)
+            }
         }
         return results
     }
@@ -1347,7 +1406,9 @@ final class NodeStore {
         """)
         var results: [NodeEdge] = []
         while try stmt.step() {
-            results.append(edgeFrom(stmt))
+            if let edge = edgeFrom(stmt) {
+                results.append(edge)
+            }
         }
         return results
     }
@@ -1362,12 +1423,14 @@ final class NodeStore {
         try stmt.step()
     }
 
-    private func edgeFrom(_ stmt: Statement) -> NodeEdge {
+    private func edgeFrom(_ stmt: Statement) -> NodeEdge? {
         let id = UUID(uuidString: stmt.text(at: 0) ?? "") ?? UUID()
         let sourceId = UUID(uuidString: stmt.text(at: 1) ?? "") ?? UUID()
         let targetId = UUID(uuidString: stmt.text(at: 2) ?? "") ?? UUID()
         let strength = Float(stmt.double(at: 3))
-        let type = EdgeType(rawValue: stmt.text(at: 4) ?? "") ?? .semantic
+        guard let type = EdgeType(rawValue: stmt.text(at: 4) ?? "") else {
+            return nil
+        }
         return NodeEdge(id: id, sourceId: sourceId, targetId: targetId, strength: strength, type: type)
     }
 }
@@ -1719,6 +1782,73 @@ extension NodeStore {
         return reflectionRunFrom(stmt)
     }
 
+    /// All active reflection claims across every projectId, in
+    /// `created_at DESC` order. Used by `ConstellationService` derivation,
+    /// where the Galaxy is project-agnostic (a constellation may span
+    /// runs from any scope).
+    ///
+    /// For per-project retrieval pools (citable-entry slice), use
+    /// `fetchActiveReflectionClaims(projectId:)` instead.
+    func fetchActiveReflectionClaims() throws -> [ReflectionClaim] {
+        let stmt = try db.prepare("""
+            SELECT id, run_id, claim, confidence, why_non_obvious,
+                   status, created_at
+            FROM reflection_claim
+            WHERE status = 'active'
+            ORDER BY created_at DESC;
+        """)
+        var results: [ReflectionClaim] = []
+        while try stmt.step() {
+            results.append(reflectionClaimFrom(stmt))
+        }
+        return results
+    }
+
+    /// Bulk fetch evidence rows for a list of claim ids. One round-trip
+    /// per chunk of ≤900 ids (mirrors `conversationNodeIds` chunking
+    /// against the SQLite parameter limit).
+    func fetchEvidence(forClaimIds claimIds: [UUID]) throws -> [ReflectionEvidence] {
+        guard !claimIds.isEmpty else { return [] }
+        var results: [ReflectionEvidence] = []
+        let chunkSize = 900
+        for chunk in claimIds.chunked(into: chunkSize) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ", ")
+            let stmt = try db.prepare("""
+                SELECT reflection_id, message_id
+                FROM reflection_evidence
+                WHERE reflection_id IN (\(placeholders));
+            """)
+            for (offset, id) in chunk.enumerated() {
+                try stmt.bind(id.uuidString, at: Int32(offset + 1))
+            }
+            while try stmt.step() {
+                guard let rRaw = stmt.text(at: 0),
+                      let mRaw = stmt.text(at: 1),
+                      let rUUID = UUID(uuidString: rRaw),
+                      let mUUID = UUID(uuidString: mRaw)
+                else { continue }
+                results.append(ReflectionEvidence(reflectionId: rUUID, messageId: mUUID))
+            }
+        }
+        return results
+    }
+
+    /// Most recent successful `ReflectionRun` across every projectId, ordered
+    /// by `ranAt DESC`. Used by `ConstellationService` to scope dominant
+    /// selection. Returns nil if no successful run has ever landed.
+    func fetchLatestReflectionRun() throws -> ReflectionRun? {
+        let stmt = try db.prepare("""
+            SELECT id, project_id, week_start, week_end, ran_at, status,
+                   rejection_reason, cost_cents
+            FROM reflection_runs
+            WHERE status = 'success'
+            ORDER BY ran_at DESC
+            LIMIT 1;
+        """)
+        guard try stmt.step() else { return nil }
+        return reflectionRunFrom(stmt)
+    }
+
     /// Active reflections for a scope. Pulls claims whose parent run matches
     /// `projectId` (including NULL = free-chat scope) and whose `status =
     /// 'active'`. Used by retrieval when building the Self-reflection slice
@@ -1776,13 +1906,18 @@ extension NodeStore {
     /// Returns the claim IDs that were flipped (useful for tests + debug UI).
     @discardableResult
     func reconcileOrphanedReflectionClaims() throws -> [UUID] {
+        // Distinct-conversation rule: a claim is active iff its remaining
+        // evidence spans ≥2 distinct conversation nodeIds (was: ≥2 messages).
+        // Aligns with ReflectionValidator's new gating (see §4.4 of the
+        // galaxy-relations-redesign design doc).
         let stmt = try db.prepare("""
             SELECT c.id
             FROM reflection_claim c
             LEFT JOIN reflection_evidence e ON e.reflection_id = c.id
+            LEFT JOIN messages m ON m.id = e.message_id
             WHERE c.status = 'active'
             GROUP BY c.id
-            HAVING COUNT(e.message_id) < 2;
+            HAVING COUNT(DISTINCT m.nodeId) < 2;
         """)
         var flipped: [UUID] = []
         while try stmt.step() {
@@ -1887,5 +2022,21 @@ extension NodeStore {
             status: status,
             createdAt: createdAt
         )
+    }
+}
+
+// MARK: - Array utility
+
+fileprivate extension Array {
+    func chunked(into size: Int) -> [[Element]] {
+        guard size > 0 else { return [self] }
+        var result: [[Element]] = []
+        var index = 0
+        while index < count {
+            let end = Swift.min(index + size, count)
+            result.append(Array(self[index..<end]))
+            index = end
+        }
+        return result
     }
 }

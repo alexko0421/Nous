@@ -8,6 +8,12 @@ final class ReflectionValidatorTests: XCTestCase {
 
     private func validIds(_ ids: String...) -> Set<String> { Set(ids) }
 
+    /// Returns a [messageId: UUID] map where each ID maps to a unique UUID,
+    /// so every claim trivially satisfies the distinct-conversation rule.
+    private func syntheticNodeMap(_ ids: Set<String>) -> [String: UUID] {
+        Dictionary(uniqueKeysWithValues: ids.map { ($0, UUID()) })
+    }
+
     // MARK: - Shape errors
 
     func testMalformedJSONThrowsMalformed() {
@@ -15,6 +21,7 @@ final class ReflectionValidatorTests: XCTestCase {
             try ReflectionValidator.validate(
                 rawJSON: "not json at all",
                 validMessageIds: [],
+                messageIdToNodeId: [:],
                 runId: runId,
                 now: now
             )
@@ -30,6 +37,7 @@ final class ReflectionValidatorTests: XCTestCase {
             try ReflectionValidator.validate(
                 rawJSON: #"{"other": []}"#,
                 validMessageIds: [],
+                messageIdToNodeId: [:],
                 runId: runId,
                 now: now
             )
@@ -46,6 +54,7 @@ final class ReflectionValidatorTests: XCTestCase {
         let out = try ReflectionValidator.validate(
             rawJSON: #"{"claims": []}"#,
             validMessageIds: [],
+            messageIdToNodeId: [:],
             runId: runId,
             now: now
         )
@@ -63,6 +72,7 @@ final class ReflectionValidatorTests: XCTestCase {
         let out = try ReflectionValidator.validate(
             rawJSON: json,
             validMessageIds: validIds("a", "b"),
+            messageIdToNodeId: [:],
             runId: runId,
             now: now
         )
@@ -80,6 +90,7 @@ final class ReflectionValidatorTests: XCTestCase {
         let out = try ReflectionValidator.validate(
             rawJSON: json,
             validMessageIds: validIds("a", "b"),
+            messageIdToNodeId: [:],
             runId: runId,
             now: now
         )
@@ -98,6 +109,7 @@ final class ReflectionValidatorTests: XCTestCase {
         let out = try ReflectionValidator.validate(
             rawJSON: json,
             validMessageIds: validIds("a", "b"),
+            messageIdToNodeId: [:],
             runId: runId,
             now: now
         )
@@ -113,9 +125,11 @@ final class ReflectionValidatorTests: XCTestCase {
           {"claim": "  padded claim  ", "confidence": 1.5, "supporting_turn_ids": ["a","b","c"], "why_non_obvious": "  w  "}
         ]}
         """#
+        let ids = validIds("a", "b", "c")
         let out = try ReflectionValidator.validate(
             rawJSON: json,
-            validMessageIds: validIds("a", "b", "c"),
+            validMessageIds: ids,
+            messageIdToNodeId: syntheticNodeMap(ids),
             runId: runId,
             now: now
         )
@@ -137,9 +151,11 @@ final class ReflectionValidatorTests: XCTestCase {
           {"claim": "c", "confidence": 0.8, "supporting_turn_ids": ["a","a","b"], "why_non_obvious": "w"}
         ]}
         """#
+        let ids = validIds("a", "b")
         let out = try ReflectionValidator.validate(
             rawJSON: json,
-            validMessageIds: validIds("a", "b"),
+            validMessageIds: ids,
+            messageIdToNodeId: syntheticNodeMap(ids),
             runId: runId,
             now: now
         )
@@ -157,6 +173,7 @@ final class ReflectionValidatorTests: XCTestCase {
         let out = try ReflectionValidator.validate(
             rawJSON: json,
             validMessageIds: validIds("a", "b"),
+            messageIdToNodeId: [:],
             runId: runId,
             now: now
         )
@@ -172,9 +189,11 @@ final class ReflectionValidatorTests: XCTestCase {
           {"claim": "real one", "confidence": 0.9, "supporting_turn_ids": ["a","b"], "why_non_obvious": "w"}
         ]}
         """#
+        let ids = validIds("a", "b")
         let out = try ReflectionValidator.validate(
             rawJSON: json,
-            validMessageIds: validIds("a", "b"),
+            validMessageIds: ids,
+            messageIdToNodeId: syntheticNodeMap(ids),
             runId: runId,
             now: now
         )
@@ -190,9 +209,11 @@ final class ReflectionValidatorTests: XCTestCase {
           {"claim": "drop ungrounded", "confidence": 0.9, "supporting_turn_ids": ["fake"], "why_non_obvious": "w"}
         ]}
         """#
+        let ids = validIds("a", "b")
         let out = try ReflectionValidator.validate(
             rawJSON: json,
-            validMessageIds: validIds("a", "b"),
+            validMessageIds: ids,
+            messageIdToNodeId: syntheticNodeMap(ids),
             runId: runId,
             now: now
         )

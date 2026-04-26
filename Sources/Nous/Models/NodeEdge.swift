@@ -3,7 +3,6 @@ import Foundation
 enum EdgeType: String, Codable {
     case semantic
     case manual
-    case shared
 }
 
 struct NodeEdge: Identifiable, Codable {

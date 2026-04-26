@@ -593,7 +593,7 @@ final class ChatViewModelTests: XCTestCase {
         // It should still carry concrete header vocab for each supported language so the model
         // knows what to emit when the conversation is in that language.
         XCTAssertTrue(slice.stable.contains("下一步"), "Should include Chinese header vocabulary.")
-        XCTAssertTrue(slice.stable.contains("Next steps"), "Should include English header vocabulary.")
+        XCTAssertTrue(slice.stable.contains("Next Steps"), "Should include English header vocabulary.")
         XCTAssertTrue(
             slice.stable.contains("Do not translate Cantonese into Mandarin"),
             "Stable system prompt must preserve Cantonese titles instead of flattening them into Mandarin."
@@ -681,5 +681,67 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertNotNil(store.latestSummary)
         XCTAssertTrue(store.latestSummary!.markdown.hasPrefix("# 今次倾咗乜"))
         XCTAssertEqual(store.latestSummary!.sourceMessageId, msg.id)
+    }
+
+    func testQuestionDisciplineCapsVisibleQuestionMarksToOne() {
+        let input = """
+        你点解会咁睇？
+
+        你觉得佢会解决到咩问题？
+
+        同时又会带嚟边啲新问题？
+        """
+
+        let output = TurnExecutor.enforceQuestionDiscipline(on: input)
+
+        XCTAssertEqual(output.filter { $0 == "?" || $0 == "？" }.count, 1)
+        XCTAssertTrue(output.contains("你点解会咁睇？"))
+        XCTAssertTrue(output.contains("你觉得佢会解决到咩问题。"))
+        XCTAssertTrue(output.contains("同时又会带嚟边啲新问题。"))
+    }
+
+    func testQuestionDisciplinePreservesClarifyingOptionException() {
+        let input = "咩令你有呢个念头？系觉得 school 嘥时间，定系有其他原因？"
+
+        let output = TurnExecutor.enforceQuestionDiscipline(on: input)
+
+        XCTAssertEqual(output, input)
+        XCTAssertEqual(output.filter { $0 == "?" || $0 == "？" }.count, 2)
+    }
+
+    func testQuestionDisciplinePreservesTrailingSignatureMomentsVerbatim() {
+        let input = """
+        你点解会咁睇？
+        你想行边条路？
+        <signature_moments>
+        - source: user
+          text: "我想留住呢两个问号？真系原样。"
+        </signature_moments>
+        """
+
+        let output = TurnExecutor.enforceQuestionDiscipline(on: input)
+
+        XCTAssertEqual(output.filter { $0 == "?" || $0 == "？" }.count, 2)
+        XCTAssertTrue(output.contains("你点解会咁睇？"))
+        XCTAssertTrue(output.contains("你想行边条路？") == false)
+        XCTAssertTrue(output.contains("你想行边条路。"))
+        XCTAssertTrue(output.contains(#"text: "我想留住呢两个问号？真系原样。""#))
+    }
+
+    func testQuestionDisciplineDoesNotMutateQuestionMarksInsideCode() {
+        let input = """
+        你想要边种行为？
+
+        Swift optional 仍然系 `String?`，regex lazy quantifier 仍然系 `.*?`。
+
+        你而家真系想改嘅，其实系 output tone？
+        """
+
+        let output = TurnExecutor.enforceQuestionDiscipline(on: input)
+
+        XCTAssertTrue(output.contains("你想要边种行为？"))
+        XCTAssertTrue(output.contains("`String?`"))
+        XCTAssertTrue(output.contains("`.*?`"))
+        XCTAssertTrue(output.contains("你而家真系想改嘅，其实系 output tone。"))
     }
 }

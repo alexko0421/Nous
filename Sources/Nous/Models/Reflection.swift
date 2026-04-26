@@ -11,6 +11,7 @@ enum ReflectionRejectionReason: String, Codable {
     case unsupported
     case lowConfidence = "low_confidence"
     case apiError = "api_error"
+    case singleConversationEvidence = "single_conversation_evidence"
 }
 
 enum ReflectionClaimStatus: String, Codable {

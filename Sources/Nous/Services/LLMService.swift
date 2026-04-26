@@ -192,7 +192,7 @@ struct ClaudeLLMService: LLMService {
     ) -> [String: Any] {
         var body: [String: Any] = [
             "model": model,
-            "max_tokens": 8096,
+            "max_tokens": 16384,
             "stream": true,
             "messages": messages.map { ["role": $0.role, "content": $0.content] }
         ]

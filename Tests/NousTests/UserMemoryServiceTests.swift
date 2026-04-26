@@ -1434,6 +1434,33 @@ final class UserMemoryServiceTests: XCTestCase {
         XCTAssertTrue(service.confirmMemoryEntry(id: entry.id))
         XCTAssertEqual(telemetry.value(for: .memoryPrecision), 1)
     }
+
+    // MARK: - extractSignatureMoments
+
+    func testExtractSignatureMomentsFromSingleBlock() {
+        let message = Message(nodeId: UUID(), role: .assistant, content: """
+        你讲得好。
+        <signature_moments>
+        - source: user
+          text: "睇过一千幅画，试过一百种咖啡，失败过十次"
+        </signature_moments>
+        """)
+        let phrases = UserMemoryService.extractSignatureMoments(from: [message])
+        XCTAssertEqual(phrases, ["睇过一千幅画，试过一百种咖啡，失败过十次"])
+    }
+
+    func testExtractSignatureMomentsFromMultipleBlocksAcrossMessages() {
+        let m1 = Message(nodeId: UUID(), role: .assistant, content: "Hi. <signature_moments>\n- source: user\n  text: \"phrase one\"\n</signature_moments>")
+        let m2 = Message(nodeId: UUID(), role: .assistant, content: "Hey. <signature_moments>\n- source: nous\n  text: \"phrase two\"\n- source: user\n  text: \"phrase three\"\n</signature_moments>")
+        let phrases = UserMemoryService.extractSignatureMoments(from: [m1, m2])
+        XCTAssertEqual(phrases, ["phrase one", "phrase two", "phrase three"])
+    }
+
+    func testExtractSignatureMomentsReturnsEmptyWhenNoBlocks() {
+        let message = Message(nodeId: UUID(), role: .assistant, content: "Just a regular reply with no tags.")
+        let phrases = UserMemoryService.extractSignatureMoments(from: [message])
+        XCTAssertEqual(phrases, [])
+    }
 }
 
 // MARK: - Test doubles

@@ -200,4 +200,8 @@ final class UserMemoryService: MemorySynthesizing, @unchecked Sendable {
     static func tokenJaccard(_ a: String, _ b: String) -> Double {
         UserMemoryCore.tokenJaccard(a, b)
     }
+
+    static func extractSignatureMoments(from assistantMessages: [Message]) -> [String] {
+        UserMemoryCore.extractSignatureMoments(from: assistantMessages)
+    }
 }

@@ -19,6 +19,7 @@ final class GraphEngine {
 
     /// Compute force-directed layout for all nodes. Returns positions keyed by node ID.
     func computeLayout(
+        seedPositions: [UUID: GraphPosition] = [:],
         iterations: Int = 180,
         repulsion: Float = 12000,
         attraction: Float = 0.004,
@@ -32,7 +33,7 @@ final class GraphEngine {
         var positions: [UUID: GraphPosition] = [:]
         var velocities: [UUID: GraphPosition] = [:]
         for node in nodes {
-            positions[node.id] = GraphPosition(
+            positions[node.id] = seedPositions[node.id] ?? GraphPosition(
                 x: Float.random(in: -200...200),
                 y: Float.random(in: -200...200)
             )
@@ -109,24 +110,8 @@ final class GraphEngine {
         }
     }
 
-    func generateSharedEdges(for node: NousNode) throws {
-        guard let projectId = node.projectId else { return }
-        try nodeStore.deleteEdges(nodeId: node.id, type: .shared)
-        let siblings = try nodeStore.fetchNodes(projectId: projectId)
-        for sibling in siblings where sibling.id != node.id {
-            let edge = NodeEdge(
-                sourceId: node.id,
-                targetId: sibling.id,
-                strength: 0.3,
-                type: .shared
-            )
-            try nodeStore.insertEdge(edge)
-        }
-    }
-
     func regenerateEdges(for node: NousNode) throws {
         try generateSemanticEdges(for: node)
-        try generateSharedEdges(for: node)
     }
 
     private func normalize(_ positions: [UUID: GraphPosition]) -> [UUID: GraphPosition] {

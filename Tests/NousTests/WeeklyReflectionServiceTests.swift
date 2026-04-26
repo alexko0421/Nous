@@ -147,18 +147,26 @@ final class WeeklyReflectionServiceTests: XCTestCase {
     func testHappyPathPersistsSuccessClaimsAndEvidence() async throws {
         let weekStart = makeDate(2026, 4, 13)
         let weekEnd = makeDate(2026, 4, 20)
-        let messageIds = (0..<12).map { _ in UUID() }
+
+        // Seed two separate conversations so the claim's evidence spans ≥2 distinct nodeIds,
+        // satisfying the distinct-conversation rule added in Task 7.
+        let msgIdsA = (0..<6).map { _ in UUID() }
+        let msgIdsB = (0..<6).map { _ in UUID() }
         try seedConversation(
             projectId: nil,
-            timestamps: messageIds.enumerated().map { i, _ in
-                weekStart.addingTimeInterval(TimeInterval(i) * 3600)
-            },
-            messageIds: messageIds
+            timestamps: msgIdsA.enumerated().map { i, _ in weekStart.addingTimeInterval(TimeInterval(i) * 3600) },
+            messageIds: msgIdsA
+        )
+        try seedConversation(
+            projectId: nil,
+            timestamps: msgIdsB.enumerated().map { i, _ in weekStart.addingTimeInterval(TimeInterval(i + 6) * 3600) },
+            messageIds: msgIdsB
         )
 
-        let id0 = messageIds[0].uuidString
-        let id1 = messageIds[1].uuidString
-        let id2 = messageIds[2].uuidString
+        // Evidence drawn from two different conversations (nodeA and nodeB).
+        let id0 = msgIdsA[0].uuidString   // nodeA
+        let id1 = msgIdsA[1].uuidString   // nodeA
+        let id2 = msgIdsB[0].uuidString   // nodeB — crosses the conversation boundary
         llm.nextOutcome = .success(
             text: #"""
             {"claims":[
@@ -190,6 +198,41 @@ final class WeeklyReflectionServiceTests: XCTestCase {
         let fetched = try store.fetchActiveReflectionClaims(projectId: nil)
         XCTAssertEqual(fetched.count, 1)
         XCTAssertEqual(fetched[0].claim, "real pattern")
+    }
+
+    func test_postsReflectionRunCompletedNotificationOnSuccess() async throws {
+        let weekStart = makeDate(2026, 4, 13)
+        let weekEnd   = makeDate(2026, 4, 20)
+
+        let msgIdsA = (0..<6).map { _ in UUID() }
+        let msgIdsB = (0..<6).map { _ in UUID() }
+        try seedConversation(
+            projectId: nil,
+            timestamps: msgIdsA.enumerated().map { i, _ in weekStart.addingTimeInterval(TimeInterval(i) * 3600) },
+            messageIds: msgIdsA
+        )
+        try seedConversation(
+            projectId: nil,
+            timestamps: msgIdsB.enumerated().map { i, _ in weekStart.addingTimeInterval(TimeInterval(i + 6) * 3600) },
+            messageIds: msgIdsB
+        )
+
+        let id0 = msgIdsA[0].uuidString
+        let id1 = msgIdsA[1].uuidString
+        let id2 = msgIdsB[0].uuidString
+        llm.nextOutcome = .success(
+            text: #"""
+            {"claims":[
+              {"claim":"notification test","confidence":0.9,"supporting_turn_ids":["\#(id0)","\#(id1)","\#(id2)"],"why_non_obvious":"reason"}
+            ]}
+            """#,
+            usage: nil
+        )
+
+        let exp = expectation(forNotification: .reflectionRunCompleted, object: nil, handler: nil)
+        let service = WeeklyReflectionService(nodeStore: store, llm: llm, now: { self.now })
+        _ = try await service.runForWeek(projectId: nil, weekStart: weekStart, weekEnd: weekEnd)
+        await fulfillment(of: [exp], timeout: 5.0)
     }
 
     // MARK: Guard #2 — LLM failure

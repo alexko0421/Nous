@@ -127,25 +127,31 @@ struct ProjectIcon: View {
 struct NavIconButton<Icon: View>: View {
     let icon: Icon
     let label: String
+    let isActive: Bool
     let action: () -> Void
     @State private var isHovered = false
     
     var body: some View {
         Button(action: action) {
             VStack(spacing: 6) {
-                NativeGlassPanel(cornerRadius: 18, tintColor: AppColor.glassTint) {
+                NativeGlassPanel(
+                    cornerRadius: 18,
+                    tintColor: isActive
+                        ? NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.22)
+                        : AppColor.glassTint
+                ) {
                     EmptyView()
                 }
                 .frame(width: 36, height: 36)
                 .overlay(
                     Circle()
-                        .stroke(AppColor.panelStroke, lineWidth: 1)
+                        .stroke(isActive ? AppColor.colaOrange.opacity(0.35) : AppColor.panelStroke, lineWidth: 1)
                 )
                 .overlay(icon)
                 
                 Text(label)
                     .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .foregroundColor(AppColor.secondaryText)
+                    .foregroundColor(isActive ? AppColor.colaOrange : AppColor.secondaryText)
             }
         }
         .buttonStyle(.plain)
@@ -255,14 +261,25 @@ struct LeftSidebar: View {
 
                 HStack(spacing: 12) {
                     NavIconButton(
-                        icon: GalaxyIcon(color: AppColor.colaDarkText.opacity(0.8)),
+                        icon: GalaxyIcon(color: selectedTab == .galaxy ? AppColor.colaOrange : AppColor.colaDarkText.opacity(0.8)),
                         label: "Galaxy",
-                        action: { selectedTab = .galaxy }
+                        isActive: selectedTab == .galaxy,
+                        action: {
+                            showProjectList = false
+                            selectedTab = .galaxy
+                        }
                     )
                     NavIconButton(
-                        icon: ProjectIcon(color: AppColor.colaDarkText.opacity(0.8)),
+                        icon: ProjectIcon(color: showProjectList || selectedProjectId != nil ? AppColor.colaOrange : AppColor.colaDarkText.opacity(0.8)),
                         label: "Project",
-                        action: { showProjectList.toggle() }
+                        isActive: showProjectList || selectedProjectId != nil,
+                        action: {
+                            let nextValue = !showProjectList
+                            showProjectList = nextValue
+                            if nextValue {
+                                selectedTab = .galaxy
+                            }
+                        }
                     )
                 }
                 .frame(maxWidth: .infinity, alignment: .center)
@@ -296,7 +313,14 @@ struct LeftSidebar: View {
                     .padding(.bottom, 14)
 
                 if showProjectList {
-                    ProjectListView(nodeStore: nodeStore, selectedProjectId: $selectedProjectId)
+                    ProjectListView(
+                        nodeStore: nodeStore,
+                        selectedProjectId: $selectedProjectId,
+                        onProjectSelected: {
+                            showProjectList = false
+                            selectedTab = .galaxy
+                        }
+                    )
                 } else {
                     ScrollView(.vertical, showsIndicators: false) {
                         VStack(alignment: .leading, spacing: 28) {
@@ -385,7 +409,7 @@ struct LeftSidebar: View {
                 .padding(.bottom, 16)
             }
         }
-        .frame(width: 154)
+        .frame(width: 172)
         .onAppear { loadData() }
         .onReceive(
             NotificationCenter.default.publisher(

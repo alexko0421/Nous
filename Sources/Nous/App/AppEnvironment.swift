@@ -93,6 +93,7 @@ final class AppEnvironment {
         let embeddingService = EmbeddingService()
         let localLLM = LocalLLMService()
         let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let constellationService = ConstellationService(nodeStore: nodeStore, vectorStore: vectorStore)
         let settingsVM = SettingsViewModel(
             embeddingService: embeddingService,
             localLLM: localLLM,
@@ -123,6 +124,7 @@ final class AppEnvironment {
             userMemoryService: userMemoryService,
             userMemoryScheduler: scheduler,
             conversationSessionStore: conversationSessionStore,
+            constellationService: constellationService,
             llmServiceProvider: { settingsVM.makeLLMService() },
             currentProviderProvider: { settingsVM.selectedProvider },
             judgeLLMServiceFactory: { settingsVM.makeJudgeLLMService() },
@@ -137,7 +139,7 @@ final class AppEnvironment {
             embeddingService: embeddingService,
             graphEngine: graphEngine
         )
-        let galaxyVM = GalaxyViewModel(nodeStore: nodeStore, graphEngine: graphEngine)
+        let galaxyVM = GalaxyViewModel(nodeStore: nodeStore, graphEngine: graphEngine, constellationService: constellationService)
 
         // WeeklyReflectionService rollover closure. Called once per app launch
         // from ContentView.onAppear; idempotent via existsReflectionRun so

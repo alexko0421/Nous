@@ -63,7 +63,8 @@ final class TurnExecutor {
                 sink: sink,
                 state: state,
                 captureThinking: true,
-                cacheableSystemPrefix: resolvedCacheEntry == nil ? plan.turnSlice.stable : nil
+                cacheableSystemPrefix: resolvedCacheEntry == nil ? plan.turnSlice.stable : nil,
+                mode: plan.effectiveMode
             ).generate(
                 messages: requestMessages,
                 system: requestSystem
@@ -111,7 +112,9 @@ final class TurnExecutor {
         persistedThinking: String?,
         didHitBudgetExhaustion: Bool
     ) -> TurnExecutionResult {
-        let assistantContent = ClarificationCardParser.stripChatTitle(from: rawAssistantContent)
+        let assistantContent = Self.enforceQuestionDiscipline(
+            on: ClarificationCardParser.stripChatTitle(from: rawAssistantContent)
+        )
         let conversationTitle = Self.sanitizedConversationTitle(
             from: ClarificationCardParser.extractChatTitle(from: rawAssistantContent)
         )
@@ -188,7 +191,8 @@ final class TurnExecutor {
         sink: TurnSequencedEventSink,
         state: TurnExecutionStreamState,
         captureThinking: Bool,
-        cacheableSystemPrefix: String?
+        cacheableSystemPrefix: String?,
+        mode: ChatMode
     ) -> any LLMService {
         if var gemini = llm as? GeminiLLMService {
             gemini.onUsageMetadata = { [recordGeminiUsage] usage in
@@ -211,7 +215,7 @@ final class TurnExecutor {
         if var claude = llm as? ClaudeLLMService {
             claude.cacheableSystemPrefix = cacheableSystemPrefix
             guard captureThinking else { return claude }
-            claude.thinkingBudgetTokens = 1024
+            claude.thinkingBudgetTokens = mode.thinkingBudgetTokens
             claude.onThinkingDelta = { delta in
                 await state.appendThinking(delta)
                 await sink.emit(.thinkingDelta(delta))
@@ -250,6 +254,130 @@ final class TurnExecutor {
 
         \(userContent)
         """
+    }
+
+    /// Prompt-only question discipline has proven too soft in production: the model
+    /// can still drift into interview mode and end every sentence with `?`. Enforce
+    /// a minimal post-generation cap on visible reply text while leaving hidden tags
+    /// intact. This mirrors the approved prompt rule (`max one ?`, with a narrow
+    /// clarify-options exception) without touching `anchor.md`, which is frozen.
+    static func enforceQuestionDiscipline(on text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return trimmed }
+        guard !trimmed.hasPrefix("Error:") else { return trimmed }
+        guard ClarificationCardParser.extractSummary(from: trimmed) == nil else { return trimmed }
+        guard trimmed.range(of: "<clarify>", options: [.caseInsensitive]) == nil else { return trimmed }
+
+        let protected = protectBlocks(
+            in: trimmed,
+            patterns: [
+                #"```[\s\S]*?```"#,
+                #"`[^`\n]+`"#,
+                #"<signature_moments>[\s\S]*?</signature_moments>\s*$"#,
+                #"<signature_moments>[\s\S]*$"#
+            ]
+        )
+        let visible = protected.text
+
+        let questionIndices = visible.indices.filter {
+            visible[$0] == "?" || visible[$0] == "？"
+        }
+        guard questionIndices.count > 1 else { return trimmed }
+
+        let allowedQuestions = hasClarifyingOptionsException(in: visible, questionIndices: questionIndices) ? 2 : 1
+        var normalized = ""
+        var questionCount = 0
+        normalized.reserveCapacity(visible.count)
+
+        for character in visible {
+            if character == "?" || character == "？" {
+                questionCount += 1
+                if questionCount <= allowedQuestions {
+                    normalized.append(character)
+                } else {
+                    normalized.append(character == "？" ? "。" : ".")
+                }
+            } else {
+                normalized.append(character)
+            }
+        }
+
+        return restoreProtectedBlocks(in: normalized, replacements: protected.replacements)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func protectBlocks(
+        in text: String,
+        patterns: [String]
+    ) -> (text: String, replacements: [String: String]) {
+        var working = text
+        var replacements: [String: String] = [:]
+
+        for pattern in patterns {
+            guard
+                let regex = try? NSRegularExpression(
+                    pattern: pattern,
+                    options: [.caseInsensitive, .dotMatchesLineSeparators]
+                )
+            else {
+                continue
+            }
+
+            while let range = nsRange(for: working),
+                  let match = regex.firstMatch(in: working, options: [], range: range),
+                  let matchRange = Range(match.range, in: working) {
+                let token = "__NOUS_PROTECTED_\(replacements.count)__"
+                replacements[token] = String(working[matchRange])
+                working.replaceSubrange(matchRange, with: token)
+            }
+        }
+
+        return (working, replacements)
+    }
+
+    private static func restoreProtectedBlocks(
+        in text: String,
+        replacements: [String: String]
+    ) -> String {
+        replacements.reduce(into: text) { result, entry in
+            result = result.replacingOccurrences(of: entry.key, with: entry.value)
+        }
+    }
+
+    private static func hasClarifyingOptionsException(
+        in text: String,
+        questionIndices: [String.Index]
+    ) -> Bool {
+        guard questionIndices.count >= 2 else { return false }
+
+        let firstQuestion = questionIndices[0]
+        let secondQuestion = questionIndices[1]
+        let start = text.index(after: firstQuestion)
+        guard start < secondQuestion else { return false }
+
+        let between = text[start..<secondQuestion]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !between.isEmpty else { return false }
+
+        let optionPrefixes = [
+            "系",
+            "係",
+            "定系",
+            "定係",
+            "还是",
+            "還是",
+            "or ",
+            "is it ",
+            "do you mean "
+        ]
+
+        return optionPrefixes.contains { prefix in
+            between.lowercased().hasPrefix(prefix.lowercased())
+        }
+    }
+
+    private static func nsRange(for text: String) -> NSRange? {
+        NSRange(text.startIndex..<text.endIndex, in: text)
     }
 
     private static func sanitizedConversationTitle(from raw: String?) -> String? {
