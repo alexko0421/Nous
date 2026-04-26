@@ -234,11 +234,16 @@ final class WeeklyReflectionService {
         let cost = Self.estimatedCostCents(usage: usage)
 
         // Guard #3: validator. Malformed JSON → `.failed`/`.apiError` row.
+        let messageIdToNodeId: [String: UUID] = Dictionary(
+            fixture.flatMap { row in row.messages.map { ($0.id.uuidString, row.nodeId) } },
+            uniquingKeysWith: { first, _ in first }
+        )
         let validation: ReflectionValidator.Output
         do {
             validation = try ReflectionValidator.validate(
                 rawJSON: rawText,
                 validMessageIds: validMessageIds,
+                messageIdToNodeId: messageIdToNodeId,
                 runId: runId,
                 now: now()
             )

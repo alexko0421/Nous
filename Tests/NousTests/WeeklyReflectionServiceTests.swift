@@ -147,18 +147,26 @@ final class WeeklyReflectionServiceTests: XCTestCase {
     func testHappyPathPersistsSuccessClaimsAndEvidence() async throws {
         let weekStart = makeDate(2026, 4, 13)
         let weekEnd = makeDate(2026, 4, 20)
-        let messageIds = (0..<12).map { _ in UUID() }
+
+        // Seed two separate conversations so the claim's evidence spans ≥2 distinct nodeIds,
+        // satisfying the distinct-conversation rule added in Task 7.
+        let msgIdsA = (0..<6).map { _ in UUID() }
+        let msgIdsB = (0..<6).map { _ in UUID() }
         try seedConversation(
             projectId: nil,
-            timestamps: messageIds.enumerated().map { i, _ in
-                weekStart.addingTimeInterval(TimeInterval(i) * 3600)
-            },
-            messageIds: messageIds
+            timestamps: msgIdsA.enumerated().map { i, _ in weekStart.addingTimeInterval(TimeInterval(i) * 3600) },
+            messageIds: msgIdsA
+        )
+        try seedConversation(
+            projectId: nil,
+            timestamps: msgIdsB.enumerated().map { i, _ in weekStart.addingTimeInterval(TimeInterval(i + 6) * 3600) },
+            messageIds: msgIdsB
         )
 
-        let id0 = messageIds[0].uuidString
-        let id1 = messageIds[1].uuidString
-        let id2 = messageIds[2].uuidString
+        // Evidence drawn from two different conversations (nodeA and nodeB).
+        let id0 = msgIdsA[0].uuidString   // nodeA
+        let id1 = msgIdsA[1].uuidString   // nodeA
+        let id2 = msgIdsB[0].uuidString   // nodeB — crosses the conversation boundary
         llm.nextOutcome = .success(
             text: #"""
             {"claims":[
