@@ -168,6 +168,7 @@
 		D4E5F6A7B8C9D0E1F2A3B4C5 /* ConstellationDominantUnderFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3D4E5F6A7B8C9D0E1F2A3B4 /* ConstellationDominantUnderFilterTests.swift */; };
 		C3D4E5F6A7B8C9D0E1F2A3B5 /* PositionSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F3 /* PositionSnapshotStore.swift */; };
 		D4E5F6A7B8C9D0E1F2A3B4C6 /* PositionSnapshotPersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F6A7B8C9D0E1F2A4 /* PositionSnapshotPersistenceTests.swift */; };
+		E896A197A7BA410AB6007CCC /* HaloTexture.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5882024C4744673A9093342 /* HaloTexture.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -336,6 +337,7 @@
 		C3D4E5F6A7B8C9D0E1F2A3B4 /* ConstellationDominantUnderFilterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConstellationDominantUnderFilterTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E1F3 /* PositionSnapshotStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PositionSnapshotStore.swift; sourceTree = "<group>"; };
 		B2C3D4E5F6A7B8C9D0E1F2A4 /* PositionSnapshotPersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PositionSnapshotPersistenceTests.swift; sourceTree = "<group>"; };
+		C5882024C4744673A9093342 /* HaloTexture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HaloTexture.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -496,6 +498,7 @@
 			children = (
 				29A9E0EFFECF3C48A6B1D69F /* anchor.md */,
 				2F1BAD8D8505E5E3CEA6F47D /* Assets.xcassets */,
+				C5882024C4744673A9093342 /* HaloTexture.swift */,
 				38B7D56F90C5FFE216C57E1A /* nous_logo_transparent.png */,
 			);
 			path = Resources;
@@ -913,6 +916,7 @@
 				1B5D735B7314425995E84D29 /* Constellation.swift in Sources */,
 				386677FDF3844E77BCB112A2 /* ConstellationService.swift in Sources */,
 				C3D4E5F6A7B8C9D0E1F2A3B5 /* PositionSnapshotStore.swift in Sources */,
+				E896A197A7BA410AB6007CCC /* HaloTexture.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
