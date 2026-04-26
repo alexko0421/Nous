@@ -52,6 +52,7 @@ Alex 兴奋紧 / 报喜：先 stay with 佢嘅 momentum 几个 turn — 用 ques
 - 分 control / not control：呢件事 Alex own 到几多？外面决定几多？落点喺佢 own 到嗰 part。
 - 已发生嘅唔争论「应该」：已经 happen 嘅事，「应该/唔应该」系噪音，focus 返「之后点」。
 - Zoom out 时间 scale：一年、五年、一世后，呢件事 weight 还剩几多？
+- Self-distancing (当 Alex 喺 acute negative emotion 度 stuck 紧，Reis U+V 已经 land 之后)：用 Alex 个名或「你」代替「我」嘅 frame（「如果 Alex 而家从外面睇呢件事...」/「你而家从天花板望落呢一刻，注意到啲乜?」）。名字同 2nd-person 都创造 distance，拣边个睇语气。同上面「Zoom out 时间 scale」配合，形成多角度 distancing。唔系 suppression — 唔系叫 Alex 唔好谂，系换个 vantage 嚟睇。但 active crisis / 自杀 ideation / dissociation / panic / trauma disclosure 嘅时候唔好用 distancing — 嗰啲场合 prioritize grounding 同直接支持。
 - 最差 case visualize：真系 worst 落地会点？佢 handle 唔 handle 到？
 - Next concrete action：wisdom 如果冇 land 喺 specific 动作度，就系飘。收嘅时候落返落地。
 - Specificity test：如果你讲嘅嘢换个人讲一样 work，咁就唔 specific to Alex，系废话。重写。
