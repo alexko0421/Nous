@@ -158,6 +158,8 @@
 		FB90A9F437200B44C52367F1 /* ChatViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3074D3F24DDD3F020A52F9BA /* ChatViewModelTests.swift */; };
 		FCE2542CF4E2A112E7653AE2 /* WeeklyReflectionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A2FA2F104CB9B8CF401CE9D /* WeeklyReflectionService.swift */; };
 		FDC8395EF67EC2653BFEB098 /* ChatTurnRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7AF1E92835F058CCE712DAE /* ChatTurnRunner.swift */; };
+		1B5D735B7314425995E84D29 /* Constellation.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA92375E03CD4FC0AFBD4AB0 /* Constellation.swift */; };
+		3111C08E57FC4ECBAA022BD3 /* ConstellationDerivedLabelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D79B4B30A534CF8B0523C01 /* ConstellationDerivedLabelTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -316,6 +318,8 @@
 		FEADD90223D5DCBFDE74F5DE /* Accelerate.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Accelerate.framework; path = System/Library/Frameworks/Accelerate.framework; sourceTree = SDKROOT; };
 		FFA7FC708EEBC903409D5DD9 /* WindowConfigurator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowConfigurator.swift; sourceTree = "<group>"; };
 		FFCC2D10AF6C5C8999DC1127 /* SafetyGuardrails.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafetyGuardrails.swift; sourceTree = "<group>"; };
+		CA92375E03CD4FC0AFBD4AB0 /* Constellation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Constellation.swift; sourceTree = "<group>"; };
+		2D79B4B30A534CF8B0523C01 /* ConstellationDerivedLabelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConstellationDerivedLabelTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -445,6 +449,7 @@
 		9B019E586E06D77D88B2E06A /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				CA92375E03CD4FC0AFBD4AB0 /* Constellation.swift */,
 				404B6377A2EDDF0C97784FD2 /* AttachedFileContext.swift */,
 				36615399488E000DB4500E82 /* BehaviorProfile.swift */,
 				C2521A241BB593FF07230FE0 /* ChatMode.swift */,
@@ -547,6 +552,7 @@
 		DED692321AF0E89666946424 /* NousTests */ = {
 			isa = PBXGroup;
 			children = (
+				2D79B4B30A534CF8B0523C01 /* ConstellationDerivedLabelTests.swift */,
 				3074D3F24DDD3F020A52F9BA /* ChatViewModelTests.swift */,
 				475D19B8C6EA339A5D31688A /* CitableEntryPoolTests.swift */,
 				69184F11E49CB01A84551833 /* ClarificationCardParserTests.swift */,
@@ -880,6 +886,7 @@
 				FCE2542CF4E2A112E7653AE2 /* WeeklyReflectionService.swift in Sources */,
 				07FFF1026087C07958572C54 /* WelcomeView.swift in Sources */,
 				3A38D50339D27DC72856B618 /* WindowConfigurator.swift in Sources */,
+				1B5D735B7314425995E84D29 /* Constellation.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -925,6 +932,7 @@
 				A748AF89848A812AA68E9C00 /* UserMemoryServiceTests.swift in Sources */,
 				D707ED9BF3B1B7CD5C6A6CB0 /* VectorStoreTests.swift in Sources */,
 				B46503B8420A0C79794E8A15 /* WeeklyReflectionServiceTests.swift in Sources */,
+				3111C08E57FC4ECBAA022BD3 /* ConstellationDerivedLabelTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
