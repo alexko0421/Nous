@@ -56,10 +56,25 @@ struct JudgeFeedbackLoop: Equatable {
 struct MonitorSummary: Codable, Equatable {
     let state: String
     let confidenceEvidenceGap: String
+    let positiveEventShare: Bool?
+
+    init(state: String, confidenceEvidenceGap: String, positiveEventShare: Bool? = nil) {
+        self.state = state
+        self.confidenceEvidenceGap = confidenceEvidenceGap
+        self.positiveEventShare = positiveEventShare
+    }
 
     enum CodingKeys: String, CodingKey {
         case state
         case confidenceEvidenceGap = "confidence_evidence_gap"
+        case positiveEventShare = "positive_event_share"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.state = try c.decode(String.self, forKey: .state)
+        self.confidenceEvidenceGap = try c.decode(String.self, forKey: .confidenceEvidenceGap)
+        self.positiveEventShare = try c.decodeIfPresent(Bool.self, forKey: .positiveEventShare)
     }
 }
 
