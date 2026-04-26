@@ -35,4 +35,11 @@ extension NodeStore {
         try stmt.bind(name, at: 1)
         return try stmt.step()
     }
+
+    func insertMessageForTest(id: UUID, nodeId: UUID, role: String = "user", content: String = "test") throws {
+        try rawDatabase.exec("""
+            INSERT INTO messages (id, nodeId, role, content, timestamp)
+            VALUES ('\(id.uuidString)', '\(nodeId.uuidString)', '\(role)', '\(content)', \(Date().timeIntervalSince1970));
+        """)
+    }
 }

@@ -664,6 +664,37 @@ final class NodeStore {
         notifyNodesDidChange()
     }
 
+    /// Bulk resolves message IDs to their owning conversation node IDs.
+    /// One round-trip per chunk of ≤900 ids (SQLite parameter limit defense).
+    /// Unknown messageIds are simply omitted from the result.
+    func conversationNodeIds(forMessageIds messageIds: [UUID]) throws -> [UUID: UUID] {
+        guard !messageIds.isEmpty else { return [:] }
+
+        var result: [UUID: UUID] = [:]
+        let chunkSize = 900  // safely under SQLite's 999 default
+        for chunk in messageIds.chunked(into: chunkSize) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ", ")
+            let stmt = try db.prepare("""
+                SELECT id, nodeId
+                FROM messages
+                WHERE id IN (\(placeholders));
+            """)
+            for (offset, id) in chunk.enumerated() {
+                try stmt.bind(id.uuidString, at: Int32(offset + 1))
+            }
+            while try stmt.step() {
+                guard
+                    let mRaw = stmt.text(at: 0),
+                    let nRaw = stmt.text(at: 1),
+                    let mUUID = UUID(uuidString: mRaw),
+                    let nUUID = UUID(uuidString: nRaw)
+                else { continue }
+                result[mUUID] = nUUID
+            }
+        }
+        return result
+    }
+
     // MARK: - Memory scopes (v2.1)
 
     // --- Global ---
@@ -1908,5 +1939,21 @@ extension NodeStore {
             status: status,
             createdAt: createdAt
         )
+    }
+}
+
+// MARK: - Array utility
+
+fileprivate extension Array {
+    func chunked(into size: Int) -> [[Element]] {
+        guard size > 0 else { return [self] }
+        var result: [[Element]] = []
+        var index = 0
+        while index < count {
+            let end = Swift.min(index + size, count)
+            result.append(Array(self[index..<end]))
+            index = end
+        }
+        return result
     }
 }
