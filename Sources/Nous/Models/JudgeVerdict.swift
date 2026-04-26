@@ -53,9 +53,20 @@ struct JudgeFeedbackLoop: Equatable {
     }
 }
 
+struct MonitorSummary: Codable, Equatable {
+    let state: String
+    let confidenceEvidenceGap: String
+
+    enum CodingKeys: String, CodingKey {
+        case state
+        case confidenceEvidenceGap = "confidence_evidence_gap"
+    }
+}
+
 struct JudgeVerdict: Codable, Equatable {
     let tensionExists: Bool
     let userState: UserState
+    let monitorSummary: MonitorSummary?
     let shouldProvoke: Bool
     let entryId: String?
     let reason: String
@@ -65,6 +76,7 @@ struct JudgeVerdict: Codable, Equatable {
     init(
         tensionExists: Bool,
         userState: UserState,
+        monitorSummary: MonitorSummary? = nil,
         shouldProvoke: Bool,
         entryId: String?,
         reason: String,
@@ -73,6 +85,7 @@ struct JudgeVerdict: Codable, Equatable {
     ) {
         self.tensionExists = tensionExists
         self.userState = userState
+        self.monitorSummary = monitorSummary
         self.shouldProvoke = shouldProvoke
         self.entryId = entryId
         self.reason = reason
@@ -83,6 +96,7 @@ struct JudgeVerdict: Codable, Equatable {
     enum CodingKeys: String, CodingKey {
         case tensionExists = "tension_exists"
         case userState = "user_state"
+        case monitorSummary = "monitor_summary"
         case shouldProvoke = "should_provoke"
         case entryId = "entry_id"
         case reason
@@ -94,6 +108,7 @@ struct JudgeVerdict: Codable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.tensionExists = try c.decode(Bool.self, forKey: .tensionExists)
         self.userState = try c.decode(UserState.self, forKey: .userState)
+        self.monitorSummary = try c.decodeIfPresent(MonitorSummary.self, forKey: .monitorSummary)
         self.shouldProvoke = try c.decode(Bool.self, forKey: .shouldProvoke)
         self.entryId = try c.decodeIfPresent(String.self, forKey: .entryId)
         self.reason = try c.decode(String.self, forKey: .reason)
