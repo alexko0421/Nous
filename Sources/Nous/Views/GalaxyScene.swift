@@ -578,7 +578,11 @@ final class GalaxyScene: SKScene {
                 isConnected: isConnectedToFocus
             )
             circle.lineWidth = isFocused ? 1.25 : isConnectedToFocus || node.isFavorite ? 0.95 : 0.6
-            circle.glowWidth = 0
+            // Subtle outer glow gives every node a soft aura — no hard edge
+            // against the dark background. Lonely planets stay glow-less so
+            // they read as quieter / smaller. Focused nodes get a slightly
+            // stronger glow as part of selection feedback.
+            circle.glowWidth = isLonely ? 0 : (isFocused ? 1.4 : 0.6)
             circle.alpha = isDimmed ? 0.24 : 1
             circle.name = node.id.uuidString
             circle.zPosition = isFocused ? 6 : isConnectedToFocus ? 4 : isLonely ? 1 : 2

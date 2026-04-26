@@ -1,5 +1,7 @@
 import SpriteKit
 import AppKit
+import CoreImage
+import CoreImage.CIFilterBuiltins
 
 /// Soft Morandi cloud patches drawn behind everything else in the Galaxy
 /// scene. Atmosphere only — fades in as the user zooms out, fades to
@@ -19,17 +21,26 @@ enum NebulaLayer {
     static let radialGradientTexture: SKTexture = makeRadialGradientTexture()
 
     /// Texture radius in pixels — sprites scale x/y from this base.
-    private static let textureRadius: CGFloat = 256
+    /// Higher resolution (was 256) gives smoother filtering when sprites
+    /// are stretched to large ellipses on screen.
+    private static let textureRadius: CGFloat = 512
+
+    /// Post-gradient Gaussian blur radius. The 4-stop curve already gives
+    /// shape; this softens the discrete stops into a continuous falloff
+    /// without visible "rings". Mirrors HaloTexture's approach.
+    private static let postGradientBlur: CGFloat = 24
 
     private static func makeRadialGradientTexture() -> SKTexture {
         let size = CGSize(width: textureRadius * 2, height: textureRadius * 2)
-        let image = NSImage(size: size)
-        image.lockFocusFlipped(false)
+
+        // Step 1 — render the 4-stop radial gradient
+        let gradientImage = NSImage(size: size)
+        gradientImage.lockFocusFlipped(false)
         if let ctx = NSGraphicsContext.current?.cgContext {
             let center = CGPoint(x: textureRadius, y: textureRadius)
             let stops: [CGFloat] = [0.0, 0.35, 0.65, 1.0]
             let colors = [
-                NSColor(white: 1, alpha: 1.00).cgColor,   // peak
+                NSColor(white: 1, alpha: 1.00).cgColor,
                 NSColor(white: 1, alpha: 0.65).cgColor,
                 NSColor(white: 1, alpha: 0.20).cgColor,
                 NSColor(white: 1, alpha: 0.00).cgColor,
@@ -44,8 +55,36 @@ enum NebulaLayer {
                 )
             }
         }
-        image.unlockFocus()
-        return SKTexture(image: image)
+        gradientImage.unlockFocus()
+
+        // Step 2 — Gaussian blur the gradient for extra softness. The discrete
+        // 4-stop curve gives the falloff; blur erases any visible ring banding
+        // and adds atmospheric softness.
+        guard
+            let tiff = gradientImage.tiffRepresentation,
+            let bitmap = NSBitmapImageRep(data: tiff),
+            let cg = bitmap.cgImage
+        else {
+            return SKTexture(image: gradientImage)
+        }
+        let ciImage = CIImage(cgImage: cg)
+        let blur = CIFilter.gaussianBlur()
+        blur.inputImage = ciImage
+        blur.radius = Float(postGradientBlur)
+
+        let context = CIContext(options: nil)
+        // Clip to original extent so the blur doesn't bleed past the texture
+        // bounds (would otherwise inflate sprite size invisibly).
+        guard
+            let output = blur.outputImage,
+            let blurredCG = context.createCGImage(output, from: ciImage.extent)
+        else {
+            return SKTexture(image: gradientImage)
+        }
+        let blurred = NSImage(cgImage: blurredCG, size: size)
+        let texture = SKTexture(image: blurred)
+        texture.filteringMode = .linear
+        return texture
     }
 
     /// The texture's diameter in points — useful when sizing sprites.
