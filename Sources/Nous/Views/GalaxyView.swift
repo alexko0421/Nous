@@ -226,8 +226,24 @@ struct GalaxyView: View {
         .padding(.bottom, 18)
         .frame(maxWidth: 760)
         .background {
-            paperSurface(cornerRadius: 32, opacity: 0.88)
-                .shadow(color: Color.black.opacity(0.30), radius: 24, x: 0, y: -8)
+            ZStack {
+                paperSurface(cornerRadius: 32, opacity: 0.88)
+                    .shadow(color: Color.black.opacity(0.30), radius: 24, x: 0, y: -8)
+                Canvas { ctx, size in
+                    let pixelCount = 600
+                    let seed: UInt64 = 0xC0FFEE
+                    var rng = SplitMix64(state: seed)
+                    for _ in 0..<pixelCount {
+                        let x = CGFloat(rng.next() % 10_000) / 10_000 * size.width
+                        let y = CGFloat(rng.next() % 10_000) / 10_000 * size.height
+                        let rect = CGRect(x: x, y: y, width: 1, height: 1)
+                        ctx.fill(Path(rect), with: .color(.white.opacity(0.04)))
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
+                .blendMode(.overlay)
+                .allowsHitTesting(false)
+            }
         }
         .padding(.horizontal, 24)
         .padding(.bottom, 20)
@@ -480,6 +496,18 @@ struct GalaxyView: View {
                 .foregroundStyle(GalaxyPaperPalette.secondaryText)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// Deterministic pseudo-random for stable bottom-sheet grain noise.
+private struct SplitMix64 {
+    var state: UInt64
+    mutating func next() -> UInt64 {
+        state &+= 0x9E3779B97F4A7C15
+        var z = state
+        z = (z ^ (z &>> 30)) &* 0xBF58476D1CE4E5B9
+        z = (z ^ (z &>> 27)) &* 0x94D049BB133111EB
+        return z ^ (z &>> 31)
     }
 }
 

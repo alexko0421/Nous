@@ -135,6 +135,7 @@ final class GalaxyScene: SKScene {
 
     private var haloEffectNodes: [UUID: SKEffectNode] = [:]
     private var haloMemberSprites: [UUID: [SKSpriteNode]] = [:]
+    private var nebulaContainer: SKNode?
 
     private var cameraNode: SKCameraNode = SKCameraNode()
     private var draggedNode: SKNode?
@@ -178,7 +179,9 @@ final class GalaxyScene: SKScene {
         nodeHitRadii.removeAll()
         haloEffectNodes.removeAll()
         haloMemberSprites.removeAll()
+        nebulaContainer = nil
 
+        drawNebula()
         drawEdges()
         drawNodes()
         rebuildHalos()
@@ -465,6 +468,42 @@ final class GalaxyScene: SKScene {
         let mx = positions.map { CGFloat($0.x) }.reduce(0, +) / CGFloat(positions.count)
         let my = positions.map { CGFloat($0.y) }.reduce(0, +) / CGFloat(positions.count)
         return sqrt(mx * mx + my * my)
+    }
+
+    private func drawNebula() {
+        let container = SKNode()
+        container.zPosition = -3  // beneath halos (-2) and edges (-1)
+        container.alpha = NebulaLayer.alphaForZoom(cameraScale: cameraNode.xScale)
+        nebulaContainer = container
+
+        // extent radius = larger of (sceneWidth/2, sceneHeight/2), or fallback
+        let extent = max(size.width, size.height) * 0.5
+        let safeExtent = extent > 0 ? extent : 400
+
+        let patches = NebulaLayer.freeDistributionPatches(
+            nodeCount: graphNodes.count,
+            extentRadius: safeExtent
+        )
+        for patch in patches {
+            for layer in patch.layers {
+                // Soft ellipse with radial alpha falloff. SpriteKit doesn't have
+                // a built-in radial gradient shape, so approximate via stacked
+                // SKShapeNode ellipses with descending alpha — cheaper than
+                // CIFilter for a static atmospheric layer.
+                let ellipseRect = CGRect(
+                    x: -layer.radiusX, y: -layer.radiusY,
+                    width: layer.radiusX * 2, height: layer.radiusY * 2
+                )
+                let shape = SKShapeNode(ellipseIn: ellipseRect)
+                shape.position = CGPoint(x: patch.centerX + layer.offsetX, y: patch.centerY + layer.offsetY)
+                shape.zRotation = layer.rotation
+                shape.fillColor = layer.color
+                shape.strokeColor = .clear
+                shape.alpha = layer.peakOpacity
+                container.addChild(shape)
+            }
+        }
+        addChild(container)
     }
 
     private func drawEdges() {
@@ -774,6 +813,8 @@ final class GalaxyScene: SKScene {
                 label.alpha = isZoomedOut ? 0.0 : 0.50
             }
         }
+
+        nebulaContainer?.alpha = NebulaLayer.alphaForZoom(cameraScale: cameraNode.xScale)
     }
 
     private func truncated(_ text: String, maxLen: Int) -> String {
@@ -855,6 +896,10 @@ final class GalaxyScene: SKScene {
             draggedNode = sprite
             draggedNodeOriginalZPosition = sprite.zPosition
             sprite.zPosition = 8
+            sprite.removeAction(forKey: "dragScale")
+            let scaleUp = SKAction.scale(to: 1.18, duration: 0.20)
+            scaleUp.timingMode = .easeOut
+            sprite.run(scaleUp, withKey: "dragScale")
             dragStartPosition = point
 
             // Wake the live sim. update(_:) starts running per-frame
@@ -930,6 +975,10 @@ final class GalaxyScene: SKScene {
         let releasedNodeId = draggedNodeId ?? dragged.name.flatMap(UUID.init(uuidString:))
         let finalPosition = dragLatestPosition
 
+        dragged.removeAction(forKey: "dragScale")
+        let scaleDown = SKAction.scale(to: 1.0, duration: 0.20)
+        scaleDown.timingMode = .easeIn
+        dragged.run(scaleDown, withKey: "dragScale")
         dragged.zPosition = draggedNodeOriginalZPosition
         draggedNode = nil
         draggedNodeId = nil

@@ -173,6 +173,7 @@
 		C7D8E9F0A1B2C3D4E5F6A7B8 /* HaloPriorityCapTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8E9F0A1B2C3D4E5F6A7B8C9 /* HaloPriorityCapTests.swift */; };
 		E9F0A1B2C3D4E5F6A7B8C9D0 /* OwnershipHandoffTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A1B2C3D4E5F6A7B8C9D0E1 /* OwnershipHandoffTests.swift */; };
 		1A2B3C4D5E6F7A8B9C0D1E20 /* SimulationSleepWatchdogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A8B9C0D1E2F30 /* SimulationSleepWatchdogTests.swift */; };
+		97216472ABCE47EAB33D90D0 /* NebulaLayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0EAAB741E4B4A079B2EFA20 /* NebulaLayer.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -346,6 +347,7 @@
 		D8E9F0A1B2C3D4E5F6A7B8C9 /* HaloPriorityCapTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HaloPriorityCapTests.swift; sourceTree = "<group>"; };
 		F0A1B2C3D4E5F6A7B8C9D0E1 /* OwnershipHandoffTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OwnershipHandoffTests.swift; sourceTree = "<group>"; };
 		2B3C4D5E6F7A8B9C0D1E2F30 /* SimulationSleepWatchdogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimulationSleepWatchdogTests.swift; sourceTree = "<group>"; };
+		D0EAAB741E4B4A079B2EFA20 /* NebulaLayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NebulaLayer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -647,6 +649,7 @@
 				54D7B196613E93EAF2C72EF8 /* GalaxyScene.swift */,
 				F929EE116210CE8825174593 /* GalaxySceneContainer.swift */,
 				26B0833FF90A3381A73858CE /* GalaxyView.swift */,
+				D0EAAB741E4B4A079B2EFA20 /* NebulaLayer.swift */,
 				A47BC60463D5E92044AFDB86 /* LeftSidebar.swift */,
 				1F9B36E91542F665788AD7A4 /* MemoryDebugInspector.swift */,
 				783585E09595EF502C060F91 /* NoteEditor.swift */,
@@ -866,6 +869,7 @@
 				0A543A16EE7B4C96E7893DD2 /* GalaxyScene.swift in Sources */,
 				00590D3A6EED1746D81A6921 /* GalaxySceneContainer.swift in Sources */,
 				D67AE98AD27B27D71D9962AE /* GalaxyView.swift in Sources */,
+				97216472ABCE47EAB33D90D0 /* NebulaLayer.swift in Sources */,
 				0A5C2CC50D2675DD28826232 /* GalaxyViewModel.swift in Sources */,
 				A74E8A4C0A840D1C66791E5B /* GeminiPromptCacheService.swift in Sources */,
 				C0393EDD02962EBFFE26A0DA /* GovernanceTelemetryStore.swift in Sources */,
