@@ -1,5 +1,9 @@
 import Foundation
 
+extension Notification.Name {
+    static let reflectionRunCompleted = Notification.Name("nous.reflectionRunCompleted")
+}
+
 /// Sunday-night batch reflection. Given a (projectId, week) scope, reads the
 /// week's messages, asks Gemini for up-to-2 non-obvious patterns, validates
 /// the output, and persists either active claims or a rejected/failed row.
@@ -301,6 +305,7 @@ final class WeeklyReflectionService {
             costCents: cost
         )
         try nodeStore.persistReflectionRun(run, claims: validation.claims, evidence: evidence)
+        NotificationCenter.default.post(name: .reflectionRunCompleted, object: nil)
         return RunResult(run: run, claims: validation.claims, evidence: evidence)
     }
 
