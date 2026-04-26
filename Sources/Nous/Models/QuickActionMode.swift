@@ -59,8 +59,8 @@ enum QuickActionMode: String, CaseIterable {
             I need space to talk this through gently and honestly.
             Don't over-diagnose or pretend certainty.
             Help me:
-            1. name what I may be feeling, with enough specifics that I know you actually got what I described (not generic empathy),
-            2. make the feeling make sense given the situation before analyzing what's driving it (validation, not agreement with my conclusions),
+            1. name what I may be feeling,
+            2. see what may be driving it,
             3. separate what needs care now from what can wait,
             4. take one small next step if I'm ready.
             If something sounds serious, say that clearly and carefully.
