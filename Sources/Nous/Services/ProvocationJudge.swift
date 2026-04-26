@@ -134,10 +134,6 @@ final class ProvocationJudge {
         {
           "tension_exists": true | false,
           "user_state": "deciding" | "exploring" | "venting",
-          "monitor_summary": {
-            "state": "<one short clause about confidence, clarity, momentum, or receptivity>",
-            "confidence_evidence_gap": "none" | "high-conviction-thin-grounding" | "low-confidence-strong-evidence"
-          },
           "should_provoke": true | false,
           "entry_id": "<id from citable entries>" | null,
           "reason": "<short natural-language reason>",
@@ -151,7 +147,6 @@ final class ProvocationJudge {
         Prefer CONTINUITY with the previous turn — only switch if the user's register clearly shifted (e.g. casual-emotional → structured-analytical, or vice versa). Small drift within one register is NOT a switch.
 
         RULES (must hold in your output)
-        - should_provoke = true must be entailed by monitor_summary + CITABLE ENTRIES. If the monitoring read does not support intervention (e.g., monitor_summary state suggests opening / muddled / receptive but should_provoke ignores that), set should_provoke = false. Confidence ≠ accuracy: high conviction is not by itself a reason to defer; thin grounding is not by itself a reason to provoke.
         - should_provoke = true REQUIRES: tension_exists = true, user_state != "venting", and entry_id is a real id from CITABLE ENTRIES below.
         - user_state = "venting" FORCES should_provoke = false regardless of any tension. Venting is not a moment to challenge.
         - entry_id MUST be copied verbatim from the `id=` field of one CITABLE ENTRY. Do not invent.
