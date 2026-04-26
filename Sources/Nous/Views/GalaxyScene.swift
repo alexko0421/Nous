@@ -74,6 +74,19 @@ final class GalaxyScene: SKScene {
     // Task 23 wires the actual state machine.
     var isSimActive: Bool = false
 
+    /// True while the in-scene physics simulation is the source of truth
+    /// for node positions. While true, GalaxySceneContainer suppresses its
+    /// usual `scene.positions = vm.positions` copy so SwiftUI rerenders
+    /// (selection changes, sheet open) cannot snap nodes back to a stale
+    /// view-model snapshot mid-drag.
+    ///
+    /// Lifecycle (Task 23):
+    ///   - mouseDown on a node → set true
+    ///   - update(_:) runs the sim while true
+    ///   - sleep watchdog flips back to false (after onSimulationSettled
+    ///     hands settled positions to the ViewModel)
+    var simulationOwnsPositions: Bool = false
+
     private var haloEffectNodes: [UUID: SKEffectNode] = [:]
     private var haloMemberSprites: [UUID: [SKSpriteNode]] = [:]
 

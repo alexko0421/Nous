@@ -62,7 +62,9 @@ struct GalaxySceneContainer: NSViewRepresentable {
         scene.dominantConstellationId = dominantConstellationId
         scene.revealedConstellationIds = revealedConstellationIds
         scene.toggleAllVisible = toggleAllVisible
-        scene.positions = positions
+        if !scene.simulationOwnsPositions {
+            scene.positions = positions
+        }
         scene.selectedNodeId = selectedNodeId
         scene.onNodeTapped = onNodeTapped
         scene.onNodeMoved = onNodeMoved

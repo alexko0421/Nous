@@ -171,6 +171,7 @@
 		E896A197A7BA410AB6007CCC /* HaloTexture.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5882024C4744673A9093342 /* HaloTexture.swift */; };
 		A5B6C7D8E9F0A1B2C3D4E5F6 /* GalaxySceneConstellationRenderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6C7D8E9F0A1B2C3D4E5F6A7 /* GalaxySceneConstellationRenderTests.swift */; };
 		C7D8E9F0A1B2C3D4E5F6A7B8 /* HaloPriorityCapTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8E9F0A1B2C3D4E5F6A7B8C9 /* HaloPriorityCapTests.swift */; };
+		E9F0A1B2C3D4E5F6A7B8C9D0 /* OwnershipHandoffTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A1B2C3D4E5F6A7B8C9D0E1 /* OwnershipHandoffTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -342,6 +343,7 @@
 		C5882024C4744673A9093342 /* HaloTexture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HaloTexture.swift; sourceTree = "<group>"; };
 		B6C7D8E9F0A1B2C3D4E5F6A7 /* GalaxySceneConstellationRenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalaxySceneConstellationRenderTests.swift; sourceTree = "<group>"; };
 		D8E9F0A1B2C3D4E5F6A7B8C9 /* HaloPriorityCapTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HaloPriorityCapTests.swift; sourceTree = "<group>"; };
+		F0A1B2C3D4E5F6A7B8C9D0E1 /* OwnershipHandoffTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OwnershipHandoffTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -586,6 +588,7 @@
 				B2C3D4E5F6A7B8C9D0E1F2A4 /* PositionSnapshotPersistenceTests.swift */,
 				B6C7D8E9F0A1B2C3D4E5F6A7 /* GalaxySceneConstellationRenderTests.swift */,
 				D8E9F0A1B2C3D4E5F6A7B8C9 /* HaloPriorityCapTests.swift */,
+				F0A1B2C3D4E5F6A7B8C9D0E1 /* OwnershipHandoffTests.swift */,
 				3074D3F24DDD3F020A52F9BA /* ChatViewModelTests.swift */,
 				475D19B8C6EA339A5D31688A /* CitableEntryPoolTests.swift */,
 				69184F11E49CB01A84551833 /* ClarificationCardParserTests.swift */,
@@ -977,6 +980,7 @@
 				D4E5F6A7B8C9D0E1F2A3B4C6 /* PositionSnapshotPersistenceTests.swift in Sources */,
 				A5B6C7D8E9F0A1B2C3D4E5F6 /* GalaxySceneConstellationRenderTests.swift in Sources */,
 				C7D8E9F0A1B2C3D4E5F6A7B8 /* HaloPriorityCapTests.swift in Sources */,
+				E9F0A1B2C3D4E5F6A7B8C9D0 /* OwnershipHandoffTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
