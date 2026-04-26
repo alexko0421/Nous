@@ -62,11 +62,6 @@ final class WeeklyReflectionService {
       specific metrics) in favor of feelings and vibes. This may be how
       you prefer to explore ideas with me, not a general preference for
       abstraction — you may analyze granularly in contexts I can't see."
-    - "Across two ship moments this week, you reported feeling relieved that
-      nothing broke rather than proud that you finished. This may reflect how
-      you process wins inside our chats — you may experience pride elsewhere
-      I can't see." (Patterns about how you respond to positive events / 报喜
-      moments are valid claims, not only struggle/decision patterns.)
 
     If a claim cannot be stated as a corpus claim without becoming a trivial
     summary, return fewer claims rather than force it.
