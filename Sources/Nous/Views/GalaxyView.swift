@@ -21,13 +21,6 @@ struct GalaxyView: View {
         .overlay(alignment: .topLeading) {
             headerCluster
         }
-        .overlay(alignment: .topTrailing) {
-            HStack(spacing: 10) {
-                toggleConstellationsButton
-                projectMenu
-            }
-            .padding(22)
-        }
         .overlay(alignment: .bottom) {
             if let node = vm.selectedNode {
                 selectedNodeSheet(node)
@@ -102,75 +95,6 @@ struct GalaxyView: View {
         .padding(.horizontal, 18)
         .padding(.vertical, 14)
         .padding(22)
-    }
-
-    private var toggleConstellationsButton: some View {
-        Button {
-            vm.toggleAllConstellations()
-        } label: {
-            HStack(spacing: 9) {
-                Image(systemName: vm.showAllConstellations ? "sparkles" : "sparkles.tv")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(GalaxyPaperPalette.olive)
-                Text(vm.showAllConstellations ? "Hide Motifs" : "Show Motifs")
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .foregroundStyle(GalaxyPaperPalette.primaryText)
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 14)
-            .frame(height: 42)
-        }
-        .buttonStyle(.plain)
-        .background {
-            paperSurface(cornerRadius: 18, opacity: 0.30)
-        }
-    }
-
-    private var projectMenu: some View {
-        Menu {
-            Button {
-                vm.setProjectFilter(nil)
-            } label: {
-                Label("Whole Galaxy", systemImage: vm.filterProjectId == nil ? "checkmark" : "circle")
-            }
-
-            if !vm.projectSummaries.isEmpty {
-                Divider()
-            }
-
-            ForEach(vm.projectSummaries) { summary in
-                Button {
-                    vm.setProjectFilter(summary.project.id)
-                } label: {
-                    Label(
-                        "\(summary.project.emoji) \(summary.project.title)",
-                        systemImage: vm.filterProjectId == summary.project.id ? "checkmark" : "circle"
-                    )
-                }
-            }
-        } label: {
-            HStack(spacing: 9) {
-                Image(systemName: "scope")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(GalaxyPaperPalette.olive)
-
-                Text(projectMenuTitle)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .foregroundStyle(GalaxyPaperPalette.primaryText)
-                    .lineLimit(1)
-
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(GalaxyPaperPalette.secondaryText.opacity(0.72))
-            }
-            .padding(.horizontal, 14)
-            .frame(height: 42)
-        }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .background {
-            paperSurface(cornerRadius: 18, opacity: 0.30)
-        }
     }
 
     private var quietMetrics: some View {
@@ -512,14 +436,6 @@ struct GalaxyView: View {
     private var currentScopeTitle: String {
         if let project = vm.selectedProject {
             return project.goal.isEmpty ? "\(project.emoji) \(project.title)" : project.goal
-        }
-
-        return "Whole Galaxy"
-    }
-
-    private var projectMenuTitle: String {
-        if let project = vm.selectedProject {
-            return "\(project.emoji) \(project.title)"
         }
 
         return "Whole Galaxy"
