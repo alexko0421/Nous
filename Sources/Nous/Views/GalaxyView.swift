@@ -65,7 +65,12 @@ struct GalaxyView: View {
                     positions: vm.positions,
                     selectedNodeId: vm.selectedNodeId,
                     onNodeTapped: handleNodeTap,
-                    onNodeMoved: handleNodeMove
+                    onNodeMoved: handleNodeMove,
+                    onSimulationSettled: { settled in
+                        Task { @MainActor in
+                            vm.handleSimulationSettled(positions: settled)
+                        }
+                    }
                 )
                 .ignoresSafeArea()
             }

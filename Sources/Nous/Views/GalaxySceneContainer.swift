@@ -14,6 +14,7 @@ struct GalaxySceneContainer: NSViewRepresentable {
     let selectedNodeId: UUID?
     let onNodeTapped: ((UUID) -> Void)?
     let onNodeMoved: ((UUID, GraphPosition) -> Void)?
+    var onSimulationSettled: (([UUID: GraphPosition]) -> Void)?
 
     final class Coordinator {
         var lastConstellations: [Constellation] = []
@@ -68,6 +69,7 @@ struct GalaxySceneContainer: NSViewRepresentable {
         scene.selectedNodeId = selectedNodeId
         scene.onNodeTapped = onNodeTapped
         scene.onNodeMoved = onNodeMoved
+        scene.onSimulationSettled = onSimulationSettled
 
         if needsFullRebuild || scene.children.isEmpty {
             scene.rebuildScene()
