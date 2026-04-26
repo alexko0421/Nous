@@ -29,13 +29,33 @@ final class GalaxyViewModel {
     var isLoading: Bool = false
     var projects: [Project] = []
     var projectSummaries: [GalaxyProjectSummary] = []
+    private(set) var constellations: [Constellation] = []
+    private(set) var dominantConstellationId: UUID? = nil
 
     private let nodeStore: NodeStore
     private let graphEngine: GraphEngine
+    private let constellationService: ConstellationService
+    private var observers: [NSObjectProtocol] = []
 
-    init(nodeStore: NodeStore, graphEngine: GraphEngine) {
+    init(nodeStore: NodeStore, graphEngine: GraphEngine, constellationService: ConstellationService) {
         self.nodeStore = nodeStore
         self.graphEngine = graphEngine
+        self.constellationService = constellationService
+
+        let observer = NotificationCenter.default.addObserver(
+            forName: .reflectionRunCompleted,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.handleReflectionCompleted()
+            }
+        }
+        observers.append(observer)
+    }
+
+    deinit {
+        for o in observers { NotificationCenter.default.removeObserver(o) }
     }
 
     func load() {
@@ -65,6 +85,17 @@ final class GalaxyViewModel {
                     nodes: allNodes
                 )
 
+                let loadedConstellations: [Constellation]
+                let loadedDominantId: UUID?
+                do {
+                    loadedConstellations = try constellationService.loadActiveConstellations()
+                    loadedDominantId = loadedConstellations.first(where: \.isDominant)?.id
+                } catch {
+                    loadedConstellations = []
+                    loadedDominantId = nil
+                    // Best-effort — Galaxy still works without halos
+                }
+
                 await MainActor.run {
                     self.projects = allProjects
                     self.projectSummaries = projectSummaries
@@ -72,6 +103,8 @@ final class GalaxyViewModel {
                     self.edges = filteredEdges
                     self.positions = filteredPositions
                     self.selectedNodeId = nextSelectedNodeId
+                    self.constellations = loadedConstellations
+                    self.dominantConstellationId = loadedDominantId
                     self.isLoading = false
                 }
             } catch {
@@ -79,6 +112,17 @@ final class GalaxyViewModel {
                     self.isLoading = false
                 }
             }
+        }
+    }
+
+    @MainActor
+    private func handleReflectionCompleted() {
+        constellationService.clearEphemeral()
+        do {
+            self.constellations = try constellationService.loadActiveConstellations()
+            self.dominantConstellationId = constellations.first(where: \.isDominant)?.id
+        } catch {
+            // Keep previous state on error
         }
     }
 

@@ -139,7 +139,7 @@ final class AppEnvironment {
             embeddingService: embeddingService,
             graphEngine: graphEngine
         )
-        let galaxyVM = GalaxyViewModel(nodeStore: nodeStore, graphEngine: graphEngine)
+        let galaxyVM = GalaxyViewModel(nodeStore: nodeStore, graphEngine: graphEngine, constellationService: constellationService)
 
         // WeeklyReflectionService rollover closure. Called once per app launch
         // from ContentView.onAppear; idempotent via existsReflectionRun so
