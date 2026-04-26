@@ -17,6 +17,7 @@ struct ScratchPadStateRecord: Equatable {
 final class NodeStore {
 
     private let db: Database
+    private let dbPath: String
     /// Serializes multi-statement transactions on the single SQLite connection.
     /// SQLite's connection-level mutex serializes individual calls, but
     /// `BEGIN ... COMMIT` pairs are not atomic as a group: two overlapping
@@ -25,7 +26,17 @@ final class NodeStore {
     /// v2.2b dual-writes don't silently drop entries under concurrent refreshes.
     private let transactionLock = NSLock()
 
+    /// A stable identifier for this database, used to scope per-store
+    /// UserDefaults state (e.g., position snapshots). Derived from the
+    /// database file's basename for on-disk stores; returns "memory" for
+    /// in-memory test stores.
+    var storeIdentity: String {
+        if dbPath == ":memory:" { return "memory" }
+        return (dbPath as NSString).lastPathComponent
+    }
+
     init(path: String) throws {
+        dbPath = path
         db = try Database(path: path)
         try createTables()
         try runGalaxyRedesignMigration()

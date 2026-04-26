@@ -36,11 +36,13 @@ final class GalaxyViewModel {
     private let graphEngine: GraphEngine
     private let constellationService: ConstellationService
     private var observers: [NSObjectProtocol] = []
+    private let positionSnapshotStore: PositionSnapshotStore
 
     init(nodeStore: NodeStore, graphEngine: GraphEngine, constellationService: ConstellationService) {
         self.nodeStore = nodeStore
         self.graphEngine = graphEngine
         self.constellationService = constellationService
+        self.positionSnapshotStore = PositionSnapshotStore(storeId: nodeStore.storeIdentity)
 
         let observer = NotificationCenter.default.addObserver(
             forName: .reflectionRunCompleted,
@@ -77,7 +79,8 @@ final class GalaxyViewModel {
                     visibleIds.contains($0.sourceId) && visibleIds.contains($0.targetId)
                 }
 
-                let allPositions = try graphEngine.computeLayout(seedPositions: positions)
+                let seedPositions = positionSnapshotStore.read()
+                let allPositions = try graphEngine.computeLayout(seedPositions: seedPositions)
                 let filteredPositions = allPositions.filter { visibleIds.contains($0.key) }
                 let nextSelectedNodeId = selectedNodeId.flatMap { visibleIds.contains($0) ? $0 : nil }
                 let projectSummaries = Self.makeProjectSummaries(
@@ -128,6 +131,18 @@ final class GalaxyViewModel {
 
     func updateNodePosition(_ nodeId: UUID, x: Float, y: Float) {
         positions[nodeId] = GraphPosition(x: x, y: y)
+    }
+
+    /// Called by GalaxyScene's onSimulationSettled callback after live drag
+    /// physics settle. Updates in-memory positions and persists the snapshot
+    /// to UserDefaults asynchronously on a background queue (off main thread).
+    @MainActor
+    func handleSimulationSettled(positions: [UUID: GraphPosition]) {
+        self.positions = positions
+        let store = positionSnapshotStore
+        DispatchQueue.global(qos: .utility).async {
+            store.write(positions: positions)
+        }
     }
 
     func setProjectFilter(_ projectId: UUID?) {
