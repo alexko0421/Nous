@@ -140,6 +140,13 @@ final class GalaxyScene: SKScene {
     private var draggedNode: SKNode?
     private var draggedNodeId: UUID?
     private var dragStartPosition: CGPoint = .zero
+
+    /// Camera-pan state: true while the user is dragging on empty space
+    /// (no node hit) to translate the camera. Mutually exclusive with
+    /// node drag; mouseDown picks one based on whether the cursor hit
+    /// a node.
+    private var isPanning: Bool = false
+    private var panLastWindowLocation: CGPoint = .zero
     private var edgeSprites: [UUID: SKShapeNode] = [:]
     private var nodeSprites: [UUID: SKShapeNode] = [:]
     private var nodeLabels: [UUID: SKLabelNode] = [:]
@@ -863,10 +870,29 @@ final class GalaxyScene: SKScene {
             for (_, effect) in haloEffectNodes {
                 effect.shouldRasterize = false
             }
+        } else {
+            // Empty-space click → start camera pan. Track in window
+            // coordinates so deltas stay correct as the camera moves
+            // (scene-coord deltas would shift mid-drag).
+            isPanning = true
+            panLastWindowLocation = event.locationInWindow
         }
     }
 
     override func mouseDragged(with event: NSEvent) {
+        if isPanning {
+            // Translate camera by the inverse of the cursor delta (scaled by
+            // camera zoom) so the world appears to follow the cursor.
+            let now = event.locationInWindow
+            let dx = now.x - panLastWindowLocation.x
+            let dy = now.y - panLastWindowLocation.y
+            panLastWindowLocation = now
+            let scale = cameraNode.xScale
+            cameraNode.position.x -= dx * scale
+            cameraNode.position.y -= dy * scale
+            return
+        }
+
         guard let draggedNodeId else { return }
         let point = clampedScenePoint(scenePoint(from: event))
         let position = GraphPosition(x: Float(point.x), y: Float(point.y))
@@ -885,6 +911,11 @@ final class GalaxyScene: SKScene {
     }
 
     override func mouseUp(with event: NSEvent) {
+        if isPanning {
+            isPanning = false
+            return
+        }
+
         guard let dragged = draggedNode else {
             draggedNodeId = nil
             dragLatestPosition = nil
