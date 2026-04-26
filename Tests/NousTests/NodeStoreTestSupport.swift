@@ -42,4 +42,17 @@ extension NodeStore {
             VALUES ('\(id.uuidString)', '\(nodeId.uuidString)', '\(role)', '\(content)', \(Date().timeIntervalSince1970));
         """)
     }
+
+    /// Same as insertNodeForTest but also stores an embedding via the
+    /// nodes.embedding BLOB column (persisted through NousNode.init).
+    func insertNodeForTestWithEmbedding(id: UUID, embedding: [Float]) throws {
+        let n = NousNode(
+            id: id, type: .conversation, title: "test",
+            content: "", emoji: nil,
+            embedding: embedding,
+            projectId: nil,
+            isFavorite: false, createdAt: Date(), updatedAt: Date()
+        )
+        try insertNode(n)
+    }
 }

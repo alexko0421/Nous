@@ -35,6 +35,7 @@ final class ChatViewModel {
     @ObservationIgnored private let explicitTurnExecutor: TurnExecutor?
     @ObservationIgnored private let explicitContextContinuationService: ContextContinuationService?
     @ObservationIgnored private let explicitTurnHousekeepingService: TurnHousekeepingService?
+    private let constellationService: ConstellationService?
     private let llmServiceProvider: () -> (any LLMService)?
     private let currentProviderProvider: () -> LLMProvider
     private let judgeLLMServiceFactory: () -> (any LLMService)?
@@ -164,6 +165,7 @@ final class ChatViewModel {
             geminiPromptCache: geminiPromptCache,
             llmServiceProvider: llmServiceProvider,
             shouldUseGeminiHistoryCache: shouldUseGeminiHistoryCache,
+            constellationService: constellationService,
             onConversationNodeUpdated: { [weak self] refreshedNode in
                 guard let self, self.currentNode?.id == refreshedNode.id else { return }
                 self.currentNode = refreshedNode
@@ -188,6 +190,7 @@ final class ChatViewModel {
         turnExecutor: TurnExecutor? = nil,
         contextContinuationService: ContextContinuationService? = nil,
         turnHousekeepingService: TurnHousekeepingService? = nil,
+        constellationService: ConstellationService? = nil,
         llmServiceProvider: @escaping () -> (any LLMService)?,
         currentProviderProvider: @escaping () -> LLMProvider,
         judgeLLMServiceFactory: @escaping () -> (any LLMService)?,
@@ -221,6 +224,7 @@ final class ChatViewModel {
         self.explicitTurnExecutor = turnExecutor
         self.explicitContextContinuationService = contextContinuationService
         self.explicitTurnHousekeepingService = turnHousekeepingService
+        self.constellationService = constellationService
     }
 
     // MARK: - Conversation Management

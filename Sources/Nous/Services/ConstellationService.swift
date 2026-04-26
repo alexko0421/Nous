@@ -159,14 +159,58 @@ final class ConstellationService {
         return try nodeStore.fetchNode(id: nodeId)?.embedding
     }
 
-    /// Computes cosine similarity of a node's embedding against each
-    /// active constellation centroid; records ephemeral attachments
-    /// in memory for those above threshold (top-2 by similarity).
-    /// Idempotent.
+    /// Considers a node for ephemeral attachment to active constellations
+    /// based on cosine similarity of the node's embedding against each
+    /// constellation's centroid. Records ephemeral attachments to the
+    /// top-2 constellations above the 0.7 threshold.
     ///
-    /// Stub implementation in this task; filled in by Task 12.
+    /// In-memory only; cleared by clearEphemeral() on reflection completion
+    /// and on app restart (since this is process-local state).
     func considerNodeForEphemeralBridging(_ node: NousNode) throws {
-        // Implemented in Task 12
+        guard let nodeEmb = node.embedding else { return }
+
+        let snapshot = try loadActiveConstellations()
+        guard !snapshot.isEmpty else { return }
+
+        struct Score {
+            let constellationId: UUID
+            let similarity: Float
+        }
+        var scores: [Score] = []
+        for c in snapshot {
+            guard let cent = c.centroidEmbedding else { continue }
+            // Skip constellations the node is already an evidence-side member of.
+            if c.memberNodeIds.contains(node.id) { continue }
+            let sim = Self.cosineSimilarity(nodeEmb, cent)
+            if sim >= 0.7 {
+                scores.append(Score(constellationId: c.id, similarity: sim))
+            }
+        }
+        let topTwo = scores.sorted { $0.similarity > $1.similarity }.prefix(2)
+        guard !topTwo.isEmpty else { return }
+
+        ephemeralLock.lock()
+        defer { ephemeralLock.unlock() }
+        for s in topTwo {
+            var current = ephemeralByConstellationId[s.constellationId] ?? Set<UUID>()
+            current.insert(node.id)
+            ephemeralByConstellationId[s.constellationId] = current
+        }
+    }
+
+    private static func cosineSimilarity(_ a: [Float], _ b: [Float]) -> Float {
+        guard a.count == b.count, !a.isEmpty else { return 0 }
+        var dot: Float = 0
+        var na: Float = 0
+        var nb: Float = 0
+        for i in 0..<a.count {
+            dot += a[i] * b[i]
+            na += a[i] * a[i]
+            nb += b[i] * b[i]
+        }
+        let denom = sqrt(na) * sqrt(nb)
+        guard denom > 0 else { return 0 }
+        return dot / denom
     }
 
     /// Drops any ephemeral attachments referencing this nodeId.

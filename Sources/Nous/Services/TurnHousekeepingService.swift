@@ -10,6 +10,7 @@ final class TurnHousekeepingService {
     private let llmServiceProvider: () -> (any LLMService)?
     private let shouldUseGeminiHistoryCache: () -> Bool
     private let onConversationNodeUpdated: @MainActor (NousNode) -> Void
+    private let constellationService: ConstellationService?
     private var geminiCacheRefreshTasks: [UUID: Task<Void, Never>] = [:]
     private var geminiCacheRefreshTokens: [UUID: UUID] = [:]
 
@@ -21,6 +22,7 @@ final class TurnHousekeepingService {
         geminiPromptCache: GeminiPromptCacheService,
         llmServiceProvider: @escaping () -> (any LLMService)?,
         shouldUseGeminiHistoryCache: @escaping () -> Bool,
+        constellationService: ConstellationService? = nil,
         onConversationNodeUpdated: @escaping @MainActor (NousNode) -> Void = { _ in }
     ) {
         self.nodeStore = nodeStore
@@ -30,6 +32,7 @@ final class TurnHousekeepingService {
         self.geminiPromptCache = geminiPromptCache
         self.llmServiceProvider = llmServiceProvider
         self.shouldUseGeminiHistoryCache = shouldUseGeminiHistoryCache
+        self.constellationService = constellationService
         self.onConversationNodeUpdated = onConversationNodeUpdated
     }
 
@@ -252,12 +255,14 @@ final class TurnHousekeepingService {
         let nodeStore = self.nodeStore
         let graphEngine = self.graphEngine
 
+        let constellationService = self.constellationService
         Task.detached(priority: .background) {
             if let embedding = try? embeddingService.embed(fullContent) {
                 try? vectorStore.storeEmbedding(embedding, for: nodeId)
                 if var updatedNode = try? nodeStore.fetchNode(id: nodeId) {
                     updatedNode.embedding = embedding
                     try? graphEngine.regenerateEdges(for: updatedNode)
+                    try? constellationService?.considerNodeForEphemeralBridging(updatedNode)
                 }
             }
         }

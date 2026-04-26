@@ -93,6 +93,7 @@ final class AppEnvironment {
         let embeddingService = EmbeddingService()
         let localLLM = LocalLLMService()
         let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let constellationService = ConstellationService(nodeStore: nodeStore, vectorStore: vectorStore)
         let settingsVM = SettingsViewModel(
             embeddingService: embeddingService,
             localLLM: localLLM,
@@ -123,6 +124,7 @@ final class AppEnvironment {
             userMemoryService: userMemoryService,
             userMemoryScheduler: scheduler,
             conversationSessionStore: conversationSessionStore,
+            constellationService: constellationService,
             llmServiceProvider: { settingsVM.makeLLMService() },
             currentProviderProvider: { settingsVM.selectedProvider },
             judgeLLMServiceFactory: { settingsVM.makeJudgeLLMService() },
