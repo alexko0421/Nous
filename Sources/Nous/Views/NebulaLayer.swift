@@ -129,21 +129,27 @@ enum NebulaLayer {
     static func freeDistributionPatches(nodeCount: Int, extentRadius: CGFloat) -> [Patch] {
         let seed = max(nodeCount, 1)
         let patchCount = seed % 2 == 0 ? 3 : 4
-        let baseRadius = extentRadius * 0.6  // each patch reaches ~60% of extent
+        // Smaller individual patches (was 0.6) so they read as distinct
+        // atmospheric pockets instead of merging into one center blob.
+        let baseRadius = extentRadius * 0.32
 
-        // Fixed relative placements (mirrors §21.8 placements array).
+        // Wider scatter (was ±0.3, now ±0.7 of extent) — patches spread
+        // across the visible canvas rather than clustering near origin.
+        // Plus 0.18 jitter (was 0.08) gives more organic, less-deterministic
+        // placement at each fixed slot.
         let placements: [(rx: CGFloat, ry: CGFloat, scale: CGFloat)] = [
-            (-0.2, -0.15, 1.2),
-            ( 0.25,  0.2, 1.0),
-            (-0.1,  0.3, 0.85),
-            ( 0.3, -0.25, 0.9),
+            (-0.55, -0.45, 1.2),
+            ( 0.65,  0.50, 1.0),
+            (-0.35,  0.65, 0.85),
+            ( 0.55, -0.60, 0.9),
         ]
+        let jitter: CGFloat = 0.18
 
         var patches: [Patch] = []
         for p in 0..<patchCount {
             let pl = placements[p]
-            let cx = extentRadius * pl.rx + extentRadius * 0.08 * (seededRandom(seed: seed, i: p * 7) - 0.5)
-            let cy = extentRadius * pl.ry + extentRadius * 0.08 * (seededRandom(seed: seed, i: p * 13) - 0.5)
+            let cx = extentRadius * pl.rx + extentRadius * jitter * (seededRandom(seed: seed, i: p * 7) - 0.5)
+            let cy = extentRadius * pl.ry + extentRadius * jitter * (seededRandom(seed: seed, i: p * 13) - 0.5)
             let baseColor = palette[p % palette.count]
             let secondaryColor = palette[(p + 3) % palette.count]
             let r = baseRadius * pl.scale
