@@ -166,6 +166,8 @@
 		A1B2C3D4E5F6A7B8C9D0E1F2 /* EphemeralBridgingInMemoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F6A7B8C9D0E1F2A3 /* EphemeralBridgingInMemoryTests.swift */; };
 		F1A2B3C4D5E6F7A8B9C0D1E2 /* GalaxyViewModelConstellationLoadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2D3C4B5A6978899A0B1C2D3 /* GalaxyViewModelConstellationLoadTests.swift */; };
 		D4E5F6A7B8C9D0E1F2A3B4C5 /* ConstellationDominantUnderFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3D4E5F6A7B8C9D0E1F2A3B4 /* ConstellationDominantUnderFilterTests.swift */; };
+		C3D4E5F6A7B8C9D0E1F2A3B5 /* PositionSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F3 /* PositionSnapshotStore.swift */; };
+		D4E5F6A7B8C9D0E1F2A3B4C6 /* PositionSnapshotPersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F6A7B8C9D0E1F2A4 /* PositionSnapshotPersistenceTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -332,6 +334,8 @@
 		B2C3D4E5F6A7B8C9D0E1F2A3 /* EphemeralBridgingInMemoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EphemeralBridgingInMemoryTests.swift; sourceTree = "<group>"; };
 		E2D3C4B5A6978899A0B1C2D3 /* GalaxyViewModelConstellationLoadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalaxyViewModelConstellationLoadTests.swift; sourceTree = "<group>"; };
 		C3D4E5F6A7B8C9D0E1F2A3B4 /* ConstellationDominantUnderFilterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConstellationDominantUnderFilterTests.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6A7B8C9D0E1F3 /* PositionSnapshotStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PositionSnapshotStore.swift; sourceTree = "<group>"; };
+		B2C3D4E5F6A7B8C9D0E1F2A4 /* PositionSnapshotPersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PositionSnapshotPersistenceTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -537,6 +541,7 @@
 				5B93C993AA118825C12F999B /* VectorStore.swift */,
 				7A2FA2F104CB9B8CF401CE9D /* WeeklyReflectionService.swift */,
 				24243DF6127C4B7BAA2EF775 /* ConstellationService.swift */,
+				A1B2C3D4E5F6A7B8C9D0E1F3 /* PositionSnapshotStore.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -571,6 +576,7 @@
 				B2C3D4E5F6A7B8C9D0E1F2A3 /* EphemeralBridgingInMemoryTests.swift */,
 				E2D3C4B5A6978899A0B1C2D3 /* GalaxyViewModelConstellationLoadTests.swift */,
 				C3D4E5F6A7B8C9D0E1F2A3B4 /* ConstellationDominantUnderFilterTests.swift */,
+				B2C3D4E5F6A7B8C9D0E1F2A4 /* PositionSnapshotPersistenceTests.swift */,
 				3074D3F24DDD3F020A52F9BA /* ChatViewModelTests.swift */,
 				475D19B8C6EA339A5D31688A /* CitableEntryPoolTests.swift */,
 				69184F11E49CB01A84551833 /* ClarificationCardParserTests.swift */,
@@ -906,6 +912,7 @@
 				3A38D50339D27DC72856B618 /* WindowConfigurator.swift in Sources */,
 				1B5D735B7314425995E84D29 /* Constellation.swift in Sources */,
 				386677FDF3844E77BCB112A2 /* ConstellationService.swift in Sources */,
+				C3D4E5F6A7B8C9D0E1F2A3B5 /* PositionSnapshotStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -957,6 +964,7 @@
 				A1B2C3D4E5F6A7B8C9D0E1F2 /* EphemeralBridgingInMemoryTests.swift in Sources */,
 				F1A2B3C4D5E6F7A8B9C0D1E2 /* GalaxyViewModelConstellationLoadTests.swift in Sources */,
 				D4E5F6A7B8C9D0E1F2A3B4C5 /* ConstellationDominantUnderFilterTests.swift in Sources */,
+				D4E5F6A7B8C9D0E1F2A3B4C6 /* PositionSnapshotPersistenceTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
