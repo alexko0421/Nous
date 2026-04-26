@@ -1828,13 +1828,18 @@ extension NodeStore {
     /// Returns the claim IDs that were flipped (useful for tests + debug UI).
     @discardableResult
     func reconcileOrphanedReflectionClaims() throws -> [UUID] {
+        // Distinct-conversation rule: a claim is active iff its remaining
+        // evidence spans ≥2 distinct conversation nodeIds (was: ≥2 messages).
+        // Aligns with ReflectionValidator's new gating (see §4.4 of the
+        // galaxy-relations-redesign design doc).
         let stmt = try db.prepare("""
             SELECT c.id
             FROM reflection_claim c
             LEFT JOIN reflection_evidence e ON e.reflection_id = c.id
+            LEFT JOIN messages m ON m.id = e.message_id
             WHERE c.status = 'active'
             GROUP BY c.id
-            HAVING COUNT(e.message_id) < 2;
+            HAVING COUNT(DISTINCT m.nodeId) < 2;
         """)
         var flipped: [UUID] = []
         while try stmt.step() {
