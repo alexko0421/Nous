@@ -1,13 +1,56 @@
 import SpriteKit
+import AppKit
 
 /// Soft Morandi cloud patches drawn behind everything else in the Galaxy
 /// scene. Atmosphere only — fades in as the user zooms out, fades to
 /// near-zero when zoomed in. Deterministic per node-count seed so the
 /// pattern stays stable across renders.
 ///
-/// Source: ported from Principia's GalaxyMapViewPhysics nebula code
-/// (§8 + §21.7 + §21.8 of the Principia design spec).
+/// Implementation: each layer is one SKSpriteNode tinted to its Morandi
+/// color, sharing a precomputed circular radial-gradient texture with a
+/// 4-stop alpha falloff (peak / peak·0.65 / peak·0.2 / 0). Ellipse shape
+/// comes from non-uniform sprite scaling (xScale/yScale). Mirrors
+/// Principia's canvas createRadialGradient approach (file:1413-1418
+/// of GalaxyMapViewPhysics.tsx).
 enum NebulaLayer {
+    /// One-time radial-gradient texture: white pixel with alpha falloff
+    /// 1.0 → 0.65 (at 35%) → 0.20 (at 65%) → 0 (at edge). Sprites tint
+    /// this with their Morandi color via colorBlendFactor.
+    static let radialGradientTexture: SKTexture = makeRadialGradientTexture()
+
+    /// Texture radius in pixels — sprites scale x/y from this base.
+    private static let textureRadius: CGFloat = 256
+
+    private static func makeRadialGradientTexture() -> SKTexture {
+        let size = CGSize(width: textureRadius * 2, height: textureRadius * 2)
+        let image = NSImage(size: size)
+        image.lockFocusFlipped(false)
+        if let ctx = NSGraphicsContext.current?.cgContext {
+            let center = CGPoint(x: textureRadius, y: textureRadius)
+            let stops: [CGFloat] = [0.0, 0.35, 0.65, 1.0]
+            let colors = [
+                NSColor(white: 1, alpha: 1.00).cgColor,   // peak
+                NSColor(white: 1, alpha: 0.65).cgColor,
+                NSColor(white: 1, alpha: 0.20).cgColor,
+                NSColor(white: 1, alpha: 0.00).cgColor,
+            ] as CFArray
+            let space = CGColorSpaceCreateDeviceRGB()
+            if let grad = CGGradient(colorsSpace: space, colors: colors, locations: stops) {
+                ctx.drawRadialGradient(
+                    grad,
+                    startCenter: center, startRadius: 0,
+                    endCenter: center, endRadius: textureRadius,
+                    options: []
+                )
+            }
+        }
+        image.unlockFocus()
+        return SKTexture(image: image)
+    }
+
+    /// The texture's diameter in points — useful when sizing sprites.
+    static var textureDiameter: CGFloat { textureRadius * 2 }
+
     /// Seven Morandi cloud colors (RGB 0-255).
     private static let palette: [(r: CGFloat, g: CGFloat, b: CGFloat)] = [
         (168, 147, 124),  // Dusty Camel
@@ -114,9 +157,19 @@ enum NebulaLayer {
     }
 
     /// Alpha multiplier based on camera zoom. cameraScale is `cameraNode.xScale`.
-    /// 1.0 (default) → 0% (invisible). 2.8 (max out) → 100%. Clamped.
+    /// Mirrors Principia's smoothstep curve over the 0.85→0.35 vis-network
+    /// scale range (≈ 1.18→2.86 in SpriteKit camera scale, since vis-network
+    /// scale is the inverse of SpriteKit camera scale).
+    ///
+    /// At cameraScale ≤ 1.18 → 0% (invisible at default zoom).
+    /// At cameraScale ≥ 2.86 → 100% (fully visible at max zoom-out).
+    /// Smoothstep between gives a gentler ease than the previous linear
+    /// curve — no abrupt onset right after the user starts zooming out.
     static func alphaForZoom(cameraScale: CGFloat) -> CGFloat {
-        let t = (cameraScale - 1.0) / (2.8 - 1.0)
-        return max(0, min(1, t))
+        let lo: CGFloat = 1.18
+        let hi: CGFloat = 2.86
+        let t = max(0, min(1, (cameraScale - lo) / (hi - lo)))
+        // smoothstep: t² × (3 - 2t)
+        return t * t * (3 - 2 * t)
     }
 }

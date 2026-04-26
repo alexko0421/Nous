@@ -484,23 +484,27 @@ final class GalaxyScene: SKScene {
             nodeCount: graphNodes.count,
             extentRadius: safeExtent
         )
+        // Each layer = one sprite tinted to its Morandi color, scaled to the
+        // ellipse aspect ratio. Sprite shares the precomputed 4-stop radial
+        // gradient texture (NebulaLayer.radialGradientTexture). This matches
+        // Principia's createRadialGradient with stops at 0/0.35/0.65/1.0 and
+        // gives a true soft falloff — much smoother than the prior stacked-
+        // SKShapeNode approximation.
+        let textureRadius = NebulaLayer.textureDiameter * 0.5
         for patch in patches {
             for layer in patch.layers {
-                // Soft ellipse with radial alpha falloff. SpriteKit doesn't have
-                // a built-in radial gradient shape, so approximate via stacked
-                // SKShapeNode ellipses with descending alpha — cheaper than
-                // CIFilter for a static atmospheric layer.
-                let ellipseRect = CGRect(
-                    x: -layer.radiusX, y: -layer.radiusY,
-                    width: layer.radiusX * 2, height: layer.radiusY * 2
-                )
-                let shape = SKShapeNode(ellipseIn: ellipseRect)
-                shape.position = CGPoint(x: patch.centerX + layer.offsetX, y: patch.centerY + layer.offsetY)
-                shape.zRotation = layer.rotation
-                shape.fillColor = layer.color
-                shape.strokeColor = .clear
-                shape.alpha = layer.peakOpacity
-                container.addChild(shape)
+                let sprite = SKSpriteNode(texture: NebulaLayer.radialGradientTexture)
+                sprite.position = CGPoint(x: patch.centerX + layer.offsetX, y: patch.centerY + layer.offsetY)
+                sprite.zRotation = layer.rotation
+                // Aspect ellipse via non-uniform scaling
+                sprite.xScale = layer.radiusX / textureRadius
+                sprite.yScale = layer.radiusY / textureRadius
+                // Tint the white-alpha texture with the Morandi color
+                sprite.color = layer.color
+                sprite.colorBlendFactor = 1.0
+                sprite.alpha = layer.peakOpacity
+                sprite.blendMode = .alpha
+                container.addChild(sprite)
             }
         }
         addChild(container)
@@ -579,14 +583,19 @@ final class GalaxyScene: SKScene {
             circle.name = node.id.uuidString
             circle.zPosition = isFocused ? 6 : isConnectedToFocus ? 4 : isLonely ? 1 : 2
 
-            if isFocused || isConnectedToFocus || node.isFavorite {
-                let ring = SKShapeNode(circleOfRadius: CGFloat(radius + (isFocused ? 7 : 4)))
+            // Minimal selection: no outer ring on focused / connected nodes
+            // (the focused-terracotta stroke + connected fill brightening
+            // already communicate selection cleanly without extra circles
+            // around every node). Favorite still gets its small ring as a
+            // distinct, persistent signal — different concept from selection.
+            if node.isFavorite {
+                let ring = SKShapeNode(circleOfRadius: CGFloat(radius + 4))
                 ring.strokeColor = ringColor(
                     baseColor: color,
-                    isFocused: isFocused,
-                    isConnected: isConnectedToFocus
+                    isFocused: false,
+                    isConnected: false
                 )
-                ring.lineWidth = isFocused ? 1.0 : 0.7
+                ring.lineWidth = 0.7
                 ring.fillColor = .clear
                 ring.alpha = isDimmed ? 0.18 : 1
                 ring.zPosition = -0.2
