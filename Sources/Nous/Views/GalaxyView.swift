@@ -56,7 +56,7 @@ struct GalaxyView: View {
                     graphEdges: vm.edges,
                     constellations: vm.constellations,
                     dominantConstellationId: vm.dominantConstellationId,
-                    revealedConstellationIds: [],   // Task 20 will hook this up
+                    revealedConstellationIds: vm.revealedConstellationIds,
                     toggleAllVisible: false,         // Task 21 will hook this up
                     positions: vm.positions,
                     selectedNodeId: vm.selectedNodeId,
@@ -255,6 +255,13 @@ struct GalaxyView: View {
                 }
             }
 
+            let motifs = motifsForSelectedNode()
+            if !motifs.isEmpty {
+                motifStrip(motifs)
+                Divider()
+                    .overlay(GalaxyPaperPalette.paperStroke)
+            }
+
             Divider()
                 .overlay(GalaxyPaperPalette.paperStroke)
 
@@ -270,6 +277,41 @@ struct GalaxyView: View {
         }
         .padding(.horizontal, 24)
         .padding(.bottom, 20)
+    }
+
+    private func motifsForSelectedNode() -> [Constellation] {
+        guard let id = vm.selectedNodeId else { return [] }
+        return vm.visibleConstellations
+            .filter { $0.visibleMembers.contains(id) }
+            .map { $0.constellation }
+    }
+
+    private func motifStrip(_ motifs: [Constellation]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("MOTIFS")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .tracking(0.8)
+                    .foregroundStyle(GalaxyPaperPalette.secondaryText)
+                Spacer()
+                Text("\(motifs.count)")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(GalaxyPaperPalette.olive)
+            }
+            ForEach(motifs) { motif in
+                HStack(alignment: .top, spacing: 10) {
+                    Circle()
+                        .fill(Color(red: 155 / 255, green: 142 / 255, blue: 196 / 255))
+                        .frame(width: 7, height: 7)
+                        .padding(.top, 5)
+                    Text(motif.label)
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(GalaxyPaperPalette.bodyText)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
     }
 
     private func connectionStrip(_ connections: [GalaxyConnection]) -> some View {

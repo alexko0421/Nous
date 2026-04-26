@@ -15,6 +15,17 @@ struct GalaxySceneContainer: NSViewRepresentable {
     let onNodeTapped: ((UUID) -> Void)?
     let onNodeMoved: ((UUID, GraphPosition) -> Void)?
 
+    final class Coordinator {
+        var lastConstellations: [Constellation] = []
+        var lastDominantConstellationId: UUID? = nil
+        var lastToggleAllVisible: Bool = false
+        var lastRevealedConstellationIds: Set<UUID> = []
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
     func makeNSView(context: Context) -> InteractiveGalaxySKView {
         let view = InteractiveGalaxySKView()
         view.allowsTransparency = true
@@ -22,7 +33,7 @@ struct GalaxySceneContainer: NSViewRepresentable {
         view.shouldCullNonVisibleNodes = false
         view.preferredFramesPerSecond = 120
         view.presentScene(scene)
-        configure(scene: scene, in: view)
+        configure(scene: scene, in: view, coordinator: context.coordinator)
         return view
     }
 
@@ -30,14 +41,17 @@ struct GalaxySceneContainer: NSViewRepresentable {
         if view.scene !== scene {
             view.presentScene(scene)
         }
-        configure(scene: scene, in: view)
+        configure(scene: scene, in: view, coordinator: context.coordinator)
     }
 
-    private func configure(scene: GalaxyScene, in view: SKView) {
-        let shouldRebuild =
+    private func configure(scene: GalaxyScene, in view: SKView, coordinator: Coordinator) {
+        let needsFullRebuild =
             scene.graphNodes.map(\.id) != graphNodes.map(\.id) ||
             scene.graphEdges.map(\.id) != graphEdges.map(\.id) ||
-            scene.selectedNodeId != selectedNodeId
+            scene.selectedNodeId != selectedNodeId ||
+            coordinator.lastConstellations != constellations ||
+            coordinator.lastDominantConstellationId != dominantConstellationId ||
+            coordinator.lastToggleAllVisible != toggleAllVisible
 
         scene.scaleMode = .resizeFill
         scene.size = view.bounds.size
@@ -52,11 +66,18 @@ struct GalaxySceneContainer: NSViewRepresentable {
         scene.onNodeTapped = onNodeTapped
         scene.onNodeMoved = onNodeMoved
 
-        if shouldRebuild || scene.children.isEmpty {
+        if needsFullRebuild || scene.children.isEmpty {
             scene.rebuildScene()
+        } else if coordinator.lastRevealedConstellationIds != revealedConstellationIds {
+            scene.updateHaloAlphas()
         } else {
             scene.syncPositions()
         }
+
+        coordinator.lastConstellations = constellations
+        coordinator.lastDominantConstellationId = dominantConstellationId
+        coordinator.lastToggleAllVisible = toggleAllVisible
+        coordinator.lastRevealedConstellationIds = revealedConstellationIds
     }
 }
 

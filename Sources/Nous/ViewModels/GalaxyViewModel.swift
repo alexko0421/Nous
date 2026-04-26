@@ -31,6 +31,7 @@ final class GalaxyViewModel {
     var projectSummaries: [GalaxyProjectSummary] = []
     private(set) var constellations: [Constellation] = []
     private(set) var dominantConstellationId: UUID? = nil
+    private(set) var revealedConstellationIds: Set<UUID> = []
 
     private let nodeStore: NodeStore
     private let graphEngine: GraphEngine
@@ -154,6 +155,15 @@ final class GalaxyViewModel {
 
     func selectNode(_ id: UUID?) {
         selectedNodeId = id
+        if let id = id {
+            revealedConstellationIds = Set(
+                visibleConstellations
+                    .filter { $0.visibleMembers.contains(id) }
+                    .map { $0.constellation.id }
+            )
+        } else {
+            revealedConstellationIds = []
+        }
     }
 
     func nodeForId(_ id: UUID) -> NousNode? {

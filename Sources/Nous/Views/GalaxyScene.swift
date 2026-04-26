@@ -217,6 +217,24 @@ final class GalaxyScene: SKScene {
         }
     }
 
+    /// Animates halo alpha to the current state's target alpha (per
+    /// haloAlpha) over 0.6s ease-in-out. Used when revealed/toggle state
+    /// changes without changing the visible halo set — avoids the full
+    /// sprite teardown that rebuildHalos performs.
+    ///
+    /// If the visible set changes (a halo appears or disappears), call
+    /// rebuildScene() instead — that path constructs/destroys SKEffectNodes
+    /// as needed.
+    func updateHaloAlphas() {
+        for (cid, effect) in haloEffectNodes {
+            let target = haloAlpha(for: cid)
+            effect.removeAction(forKey: "haloAlpha")
+            let action = SKAction.fadeAlpha(to: target, duration: 0.6)
+            action.timingMode = .easeInEaseOut
+            effect.run(action, withKey: "haloAlpha")
+        }
+    }
+
     private func drawEdges() {
         let focusedNodeId = draggedNodeId ?? selectedNodeId
 
