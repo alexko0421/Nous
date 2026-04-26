@@ -47,19 +47,4 @@ final class GraphEngineTests: XCTestCase {
         XCTAssertGreaterThan(edges[0].strength, 0.75)
     }
 
-    func testGenerateSharedEdges() throws {
-        let project = Project(title: "P1")
-        try nodeStore.insertProject(project)
-        let n1 = NousNode(type: .note, title: "A", projectId: project.id)
-        let n2 = NousNode(type: .note, title: "B", projectId: project.id)
-        let n3 = NousNode(type: .note, title: "C")
-        try nodeStore.insertNode(n1)
-        try nodeStore.insertNode(n2)
-        try nodeStore.insertNode(n3)
-
-        try engine.generateSharedEdges(for: n1)
-        let edges = try nodeStore.fetchEdges(nodeId: n1.id)
-        XCTAssertEqual(edges.count, 1)
-        XCTAssertEqual(edges[0].type, .shared)
-    }
 }

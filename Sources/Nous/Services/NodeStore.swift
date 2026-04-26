@@ -1336,7 +1336,9 @@ final class NodeStore {
         try stmt.bind(nodeId.uuidString, at: 2)
         var results: [NodeEdge] = []
         while try stmt.step() {
-            results.append(edgeFrom(stmt))
+            if let edge = edgeFrom(stmt) {
+                results.append(edge)
+            }
         }
         return results
     }
@@ -1347,7 +1349,9 @@ final class NodeStore {
         """)
         var results: [NodeEdge] = []
         while try stmt.step() {
-            results.append(edgeFrom(stmt))
+            if let edge = edgeFrom(stmt) {
+                results.append(edge)
+            }
         }
         return results
     }
@@ -1362,12 +1366,14 @@ final class NodeStore {
         try stmt.step()
     }
 
-    private func edgeFrom(_ stmt: Statement) -> NodeEdge {
+    private func edgeFrom(_ stmt: Statement) -> NodeEdge? {
         let id = UUID(uuidString: stmt.text(at: 0) ?? "") ?? UUID()
         let sourceId = UUID(uuidString: stmt.text(at: 1) ?? "") ?? UUID()
         let targetId = UUID(uuidString: stmt.text(at: 2) ?? "") ?? UUID()
         let strength = Float(stmt.double(at: 3))
-        let type = EdgeType(rawValue: stmt.text(at: 4) ?? "") ?? .semantic
+        guard let type = EdgeType(rawValue: stmt.text(at: 4) ?? "") else {
+            return nil
+        }
         return NodeEdge(id: id, sourceId: sourceId, targetId: targetId, strength: strength, type: type)
     }
 }

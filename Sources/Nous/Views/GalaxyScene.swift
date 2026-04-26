@@ -72,9 +72,6 @@ final class GalaxyScene: SKScene {
             case .manual:
                 line.strokeColor = SKColor(red: 243/255, green: 131/255, blue: 53/255, alpha: isSelectedEdge ? 0.24 : 0.14)
                 line.lineWidth = isSelectedEdge ? 1.1 : 0.9
-            case .shared:
-                line.strokeColor = SKColor(red: 243/255, green: 131/255, blue: 53/255, alpha: isSelectedEdge ? 0.16 : 0.05 + strength * 0.05)
-                line.lineWidth = isSelectedEdge ? 0.95 : 0.65
             case .semantic:
                 line.strokeColor = isSelectedEdge
                     ? SKColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.18 + strength * 0.06)

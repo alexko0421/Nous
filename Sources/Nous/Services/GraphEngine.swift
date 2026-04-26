@@ -109,24 +109,8 @@ final class GraphEngine {
         }
     }
 
-    func generateSharedEdges(for node: NousNode) throws {
-        guard let projectId = node.projectId else { return }
-        try nodeStore.deleteEdges(nodeId: node.id, type: .shared)
-        let siblings = try nodeStore.fetchNodes(projectId: projectId)
-        for sibling in siblings where sibling.id != node.id {
-            let edge = NodeEdge(
-                sourceId: node.id,
-                targetId: sibling.id,
-                strength: 0.3,
-                type: .shared
-            )
-            try nodeStore.insertEdge(edge)
-        }
-    }
-
     func regenerateEdges(for node: NousNode) throws {
         try generateSemanticEdges(for: node)
-        try generateSharedEdges(for: node)
     }
 
     private func normalize(_ positions: [UUID: GraphPosition]) -> [UUID: GraphPosition] {
