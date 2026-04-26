@@ -1,189 +1,511 @@
-import SwiftUI
+import Foundation
 import SpriteKit
+import SwiftUI
 
 struct GalaxyView: View {
     @Bindable var vm: GalaxyViewModel
-    var onNodeSelected: ((NousNode) -> Void)?
+    var onOpenNode: ((NousNode) -> Void)?
     @State private var scene = GalaxyScene()
 
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return formatter
+    }()
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            header
-
-            ZStack {
-                canvasBackground
-
-                if vm.isLoading {
-                    loadingView
-                } else if vm.nodes.isEmpty {
-                    emptyStateView
-                } else {
-                    GalaxySceneContainer(
-                        scene: scene,
-                        graphNodes: vm.nodes,
-                        graphEdges: vm.edges,
-                        positions: vm.positions,
-                        selectedNodeId: vm.selectedNodeId,
-                        onNodeTapped: handleNodeTap,
-                        onNodeMoved: handleNodeMove
-                    )
-                    .ignoresSafeArea()
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 28, style: .continuous)
-                    .stroke(AppColor.panelStroke, lineWidth: 1)
-                    .allowsHitTesting(false)
+        ZStack {
+            galaxyBackground
+            sceneLayer
+        }
+        .overlay(alignment: .topLeading) {
+            headerCluster
+        }
+        .overlay(alignment: .topTrailing) {
+            projectMenu
+        }
+        .overlay(alignment: .bottom) {
+            if let node = vm.selectedNode {
+                selectedNodeSheet(node)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(24)
-        .background(AppColor.colaBeige)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 36, style: .continuous)
-                .stroke(AppColor.panelStroke, lineWidth: 1)
+                .stroke(GalaxyPaperPalette.paperStroke.opacity(0.42), lineWidth: 1)
                 .allowsHitTesting(false)
         }
+        .animation(.easeInOut(duration: 0.36), value: vm.selectedNodeId)
         .onAppear {
             vm.load()
         }
     }
 
-    private func handleNodeTap(_ id: UUID) {
-        vm.selectedNodeId = id
-        if let node = vm.nodeForId(id) {
-            onNodeSelected?(node)
+    private var sceneLayer: some View {
+        ZStack {
+            if vm.isLoading {
+                loadingView
+            } else if vm.nodes.isEmpty {
+                emptyStateView
+            } else {
+                GalaxySceneContainer(
+                    scene: scene,
+                    graphNodes: vm.nodes,
+                    graphEdges: vm.edges,
+                    positions: vm.positions,
+                    selectedNodeId: vm.selectedNodeId,
+                    onNodeTapped: handleNodeTap,
+                    onNodeMoved: handleNodeMove
+                )
+                .ignoresSafeArea()
+            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var galaxyBackground: some View {
+        Color.black
+            .ignoresSafeArea()
+    }
+
+    private var headerCluster: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Text("KNOWLEDGE GALAXY")
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .tracking(1.0)
+                    .foregroundStyle(GalaxyPaperPalette.secondaryText)
+
+                connectionMark
+            }
+
+            Text(currentScopeTitle)
+                .font(.system(size: 18, weight: .semibold, design: .rounded))
+                .foregroundStyle(GalaxyPaperPalette.primaryText)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
+        .padding(22)
+    }
+
+    private var projectMenu: some View {
+        Menu {
+            Button {
+                vm.setProjectFilter(nil)
+            } label: {
+                Label("Whole Galaxy", systemImage: vm.filterProjectId == nil ? "checkmark" : "circle")
+            }
+
+            if !vm.projectSummaries.isEmpty {
+                Divider()
+            }
+
+            ForEach(vm.projectSummaries) { summary in
+                Button {
+                    vm.setProjectFilter(summary.project.id)
+                } label: {
+                    Label(
+                        "\(summary.project.emoji) \(summary.project.title)",
+                        systemImage: vm.filterProjectId == summary.project.id ? "checkmark" : "circle"
+                    )
+                }
+            }
+        } label: {
+            HStack(spacing: 9) {
+                Image(systemName: "scope")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(GalaxyPaperPalette.olive)
+
+                Text(projectMenuTitle)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(GalaxyPaperPalette.primaryText)
+                    .lineLimit(1)
+
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(GalaxyPaperPalette.secondaryText.opacity(0.72))
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 42)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .background {
+            paperSurface(cornerRadius: 18, opacity: 0.30)
+        }
+        .padding(22)
+    }
+
+    private var quietMetrics: some View {
+        HStack(spacing: 8) {
+            metricPill(value: "\(vm.nodes.count)", label: "nodes")
+            metricPill(value: "\(vm.edges.count)", label: "links")
+            metricPill(value: "\(vm.visibleConversationCount)", label: "chats")
+            metricPill(value: "\(vm.visibleNoteCount)", label: "notes")
+        }
+        .padding(22)
+    }
+
+    private var connectionMark: some View {
+        HStack(spacing: 3) {
+            Circle()
+                .fill(GalaxyPaperPalette.camel)
+                .frame(width: 5, height: 5)
+
+            Rectangle()
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            GalaxyPaperPalette.camel.opacity(0.78),
+                            GalaxyPaperPalette.sage.opacity(0.55)
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .frame(width: 24, height: 1)
+
+            Circle()
+                .fill(GalaxyPaperPalette.sage.opacity(0.78))
+                .frame(width: 5, height: 5)
+        }
+        .opacity(0.88)
+    }
+
+    private func selectedNodeSheet(_ node: NousNode) -> some View {
+        let project = vm.projectForId(node.projectId)
+        let connections = vm.selectedConnections
+
+        return VStack(alignment: .leading, spacing: 15) {
+            HStack {
+                Spacer()
+                Capsule()
+                    .fill(GalaxyPaperPalette.secondaryText.opacity(0.26))
+                    .frame(width: 42, height: 4)
+                Spacer()
+            }
+
+            HStack(alignment: .top, spacing: 16) {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 8) {
+                        typeTag(node.type)
+
+                        if let project {
+                            projectTag(project)
+                        }
+
+                        Text(relativeDateString(node.updatedAt))
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(GalaxyPaperPalette.secondaryText)
+                            .lineLimit(1)
+                    }
+
+                    Text(node.title.isEmpty ? "Untitled" : node.title)
+                        .font(.system(size: 25, weight: .semibold, design: .rounded))
+                        .foregroundStyle(GalaxyPaperPalette.primaryText)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Text(nodeExcerpt(node))
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(GalaxyPaperPalette.bodyText)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 20)
+
+                VStack(alignment: .trailing, spacing: 10) {
+                    Button {
+                        vm.selectNode(nil)
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(GalaxyPaperPalette.secondaryText)
+                            .frame(width: 32, height: 32)
+                    }
+                    .buttonStyle(.plain)
+                    .background(Color.black.opacity(0.18), in: Circle())
+                    .overlay {
+                        Circle()
+                            .stroke(GalaxyPaperPalette.paperStroke.opacity(0.60), lineWidth: 1)
+                    }
+
+                    Button {
+                        openNode(node)
+                    } label: {
+                        Label(
+                            node.type == .conversation ? "Open Chat" : "Open Note",
+                            systemImage: node.type == .conversation ? "bubble.left.and.text.bubble.right.fill" : "doc.text.fill"
+                        )
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(GalaxyPaperPalette.ink)
+                        .padding(.horizontal, 14)
+                        .frame(height: 36)
+                        .background(GalaxyPaperPalette.primaryText, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            Divider()
+                .overlay(GalaxyPaperPalette.paperStroke)
+
+            connectionStrip(connections)
+        }
+        .padding(.top, 10)
+        .padding(.horizontal, 22)
+        .padding(.bottom, 18)
+        .frame(maxWidth: 760)
+        .background {
+            paperSurface(cornerRadius: 32, opacity: 0.88)
+                .shadow(color: Color.black.opacity(0.30), radius: 24, x: 0, y: -8)
+        }
+        .padding(.horizontal, 24)
+        .padding(.bottom, 20)
+    }
+
+    private func connectionStrip(_ connections: [GalaxyConnection]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("CONNECTED")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .tracking(0.8)
+                    .foregroundStyle(GalaxyPaperPalette.secondaryText)
+
+                Spacer()
+
+                Text("\(connections.count)")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(GalaxyPaperPalette.olive)
+            }
+
+            if connections.isEmpty {
+                Text("No direct links yet.")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(GalaxyPaperPalette.secondaryText)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(connections.prefix(8)) { connection in
+                            connectionChip(connection)
+                        }
+                    }
+                    .padding(.vertical, 1)
+                }
+            }
+        }
+    }
+
+    private func connectionChip(_ connection: GalaxyConnection) -> some View {
+        Button {
+            vm.selectNode(connection.node.id)
+        } label: {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(edgeTint(connection.edge.type))
+                    .frame(width: 7, height: 7)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(connection.node.title.isEmpty ? "Untitled" : connection.node.title)
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(GalaxyPaperPalette.primaryText)
+                        .lineLimit(1)
+
+                    Text(connectionLabel(connection))
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .foregroundStyle(GalaxyPaperPalette.secondaryText)
+                        .lineLimit(1)
+                }
+            }
+            .padding(.horizontal, 11)
+            .frame(height: 46)
+            .background(Color.black.opacity(0.14), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(edgeTint(connection.edge.type).opacity(0.28), lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func metricPill(value: String, label: String) -> some View {
+        HStack(spacing: 7) {
+            Text(value)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(GalaxyPaperPalette.primaryText)
+
+            Text(label)
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(GalaxyPaperPalette.secondaryText)
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 34)
+        .background {
+            paperSurface(cornerRadius: 15, opacity: 0.58)
+        }
+    }
+
+    private func typeTag(_ type: NodeType) -> some View {
+        Label(
+            type == .conversation ? "CHAT" : "NOTE",
+            systemImage: type == .conversation ? "bubble.left.and.text.bubble.right.fill" : "doc.text.fill"
+        )
+        .font(.system(size: 10, weight: .semibold, design: .rounded))
+        .tracking(0.6)
+        .foregroundStyle(type == .conversation ? GalaxyPaperPalette.ink : GalaxyPaperPalette.primaryText)
+        .padding(.horizontal, 10)
+        .frame(height: 26)
+        .background(type == .conversation ? GalaxyPaperPalette.sand : GalaxyPaperPalette.slate, in: Capsule())
+    }
+
+    private func projectTag(_ project: Project) -> some View {
+        Text("\(project.emoji) \(project.title)")
+            .font(.system(size: 11, weight: .semibold, design: .rounded))
+            .foregroundStyle(GalaxyPaperPalette.primaryText)
+            .lineLimit(1)
+            .padding(.horizontal, 10)
+            .frame(height: 26)
+            .background(Color.black.opacity(0.16), in: Capsule())
+            .overlay {
+                Capsule()
+                    .stroke(GalaxyPaperPalette.paperStroke.opacity(0.58), lineWidth: 1)
+            }
+    }
+
+    private func paperSurface(cornerRadius: CGFloat, opacity: Double) -> some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(GalaxyPaperPalette.panel.opacity(opacity))
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(GalaxyPaperPalette.paperStroke.opacity(0.78), lineWidth: 1)
+            }
+    }
+
+    private func edgeTint(_ type: EdgeType) -> Color {
+        switch type {
+        case .manual:
+            return GalaxyPaperPalette.camel
+        case .semantic:
+            return GalaxyPaperPalette.sage
+        }
+    }
+
+    private func connectionLabel(_ connection: GalaxyConnection) -> String {
+        switch connection.edge.type {
+        case .manual:
+            return "manual"
+        case .semantic:
+            return "\(Int(connection.edge.strength * 100)) semantic"
+        }
+    }
+
+    private func handleNodeTap(_ id: UUID) {
+        vm.selectNode(id)
     }
 
     private func handleNodeMove(_ id: UUID, _ position: GraphPosition) {
         vm.updateNodePosition(id, x: position.x, y: position.y)
     }
 
-    // MARK: - Header
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Galaxy")
-                    .font(.system(size: 30, weight: .semibold, design: .rounded))
-                    .foregroundStyle(AppColor.colaDarkText)
-
-                Text("Chats and notes should feel like one calm map, not a separate mode.")
-                    .font(.system(size: 14, design: .rounded))
-                    .foregroundStyle(AppColor.secondaryText)
-            }
-
-            HStack(spacing: 8) {
-                legendChip(label: "Notes", tint: AppColor.colaDarkText.opacity(0.78))
-                legendChip(label: "Chats", tint: AppColor.colaOrange.opacity(0.82))
-
-                Spacer()
-
-                hintChip(
-                    icon: "hand.draw",
-                    text: "Drag nodes. Scroll to zoom."
-                )
-            }
-        }
+    private func openNode(_ node: NousNode) {
+        onOpenNode?(node)
     }
 
-    // MARK: - Background
+    private func nodeExcerpt(_ node: NousNode) -> String {
+        let trimmed = node.content
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
 
-    private var canvasBackground: some View {
-        ZStack {
-            AppColor.surfaceSecondary.opacity(0.72)
-
-            Circle()
-                .fill(AppColor.colaOrange.opacity(0.05))
-                .frame(width: 280, height: 280)
-                .blur(radius: 120)
-                .offset(x: -260, y: -170)
-
-            Circle()
-                .fill(Color.white.opacity(0.22))
-                .frame(width: 240, height: 240)
-                .blur(radius: 140)
-                .offset(x: 220, y: 160)
+        if trimmed.isEmpty {
+            return node.type == .conversation
+                ? "This conversation has no visible summary yet."
+                : "This note has no body text yet."
         }
-        .ignoresSafeArea()
+
+        return String(trimmed.prefix(220))
     }
 
-    private func legendChip(label: String, tint: Color) -> some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(tint)
-                .frame(width: 8, height: 8)
-
-            Text(label)
-                .font(.system(size: 12, weight: .medium, design: .rounded))
-                .foregroundStyle(AppColor.colaDarkText.opacity(0.72))
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(AppColor.surfacePrimary)
-        .clipShape(Capsule())
-        .overlay {
-            Capsule()
-                .stroke(AppColor.panelStroke, lineWidth: 1)
-        }
+    private func relativeDateString(_ date: Date) -> String {
+        Self.relativeFormatter.localizedString(for: date, relativeTo: Date())
     }
 
-    private func hintChip(icon: String, text: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: icon)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(AppColor.secondaryText)
+    private var currentScopeTitle: String {
+        if let project = vm.selectedProject {
+            return project.goal.isEmpty ? "\(project.emoji) \(project.title)" : project.goal
+        }
 
-            Text(text)
-                .font(.system(size: 12, weight: .medium, design: .rounded))
-                .foregroundStyle(AppColor.secondaryText)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(AppColor.surfacePrimary)
-        .clipShape(Capsule())
-        .overlay {
-            Capsule()
-                .stroke(AppColor.panelStroke, lineWidth: 1)
-        }
+        return "Whole Galaxy"
     }
 
-    // MARK: - Empty State
+    private var projectMenuTitle: String {
+        if let project = vm.selectedProject {
+            return "\(project.emoji) \(project.title)"
+        }
+
+        return "Whole Galaxy"
+    }
 
     private var emptyStateView: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "point.3.connected.trianglepath.dotted")
-                .font(.system(size: 42, weight: .light))
-                .foregroundStyle(AppColor.secondaryText)
+        VStack(spacing: 15) {
+            ZStack {
+                Circle()
+                    .fill(Color.black.opacity(0.16))
+                    .frame(width: 64, height: 64)
+                    .overlay {
+                        Circle()
+                            .stroke(GalaxyPaperPalette.paperStroke.opacity(0.55), lineWidth: 1)
+                    }
 
-            Text("Galaxy is empty")
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(AppColor.colaDarkText)
+                Image(systemName: "point.3.connected.trianglepath.dotted")
+                    .font(.system(size: 25, weight: .light))
+                    .foregroundStyle(GalaxyPaperPalette.olive)
+            }
 
-            Text("Start a conversation or create a note\nto reveal the first connections.")
-                .font(.subheadline)
-                .foregroundStyle(AppColor.secondaryText)
-                .multilineTextAlignment(.center)
+            Text("Create your knowledge galaxy")
+                .font(.system(size: 18, weight: .semibold, design: .rounded))
+                .foregroundStyle(GalaxyPaperPalette.primaryText)
+
+            Text("Conversations and notes will form a quiet map here.")
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .foregroundStyle(GalaxyPaperPalette.secondaryText)
         }
+        .multilineTextAlignment(.center)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-
-    // MARK: - Loading
 
     private var loadingView: some View {
         VStack(spacing: 12) {
             ProgressView()
                 .progressViewStyle(.circular)
-                .tint(AppColor.colaOrange)
+                .tint(GalaxyPaperPalette.olive)
 
-            Text("Mapping your connections…")
-                .font(.subheadline)
-                .foregroundStyle(AppColor.secondaryText)
+            Text("Mapping connections")
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .foregroundStyle(GalaxyPaperPalette.secondaryText)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+}
+
+private enum GalaxyPaperPalette {
+    static let panel = Color(red: 28/255, green: 28/255, blue: 28/255)
+    static let paperStroke = Color(red: 231/255, green: 212/255, blue: 179/255).opacity(0.22)
+
+    static let ink = Color(red: 28/255, green: 28/255, blue: 28/255)
+    static let primaryText = Color(red: 231/255, green: 212/255, blue: 179/255)
+    static let bodyText = Color(red: 209/255, green: 177/255, blue: 153/255)
+    static let secondaryText = Color(red: 184/255, green: 154/255, blue: 122/255)
+
+    static let camel = Color(red: 164/255, green: 130/255, blue: 96/255)
+    static let sand = Color(red: 215/255, green: 185/255, blue: 150/255)
+    static let brown = Color(red: 92/255, green: 74/255, blue: 50/255)
+    static let sage = Color(red: 129/255, green: 154/255, blue: 132/255)
+    static let olive = Color(red: 103/255, green: 119/255, blue: 87/255)
+    static let slate = Color(red: 104/255, green: 111/255, blue: 126/255)
+    static let stoneBlue = Color(red: 112/255, green: 145/255, blue: 161/255)
+
 }

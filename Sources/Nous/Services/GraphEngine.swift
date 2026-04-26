@@ -19,6 +19,7 @@ final class GraphEngine {
 
     /// Compute force-directed layout for all nodes. Returns positions keyed by node ID.
     func computeLayout(
+        seedPositions: [UUID: GraphPosition] = [:],
         iterations: Int = 180,
         repulsion: Float = 12000,
         attraction: Float = 0.004,
@@ -32,7 +33,7 @@ final class GraphEngine {
         var positions: [UUID: GraphPosition] = [:]
         var velocities: [UUID: GraphPosition] = [:]
         for node in nodes {
-            positions[node.id] = GraphPosition(
+            positions[node.id] = seedPositions[node.id] ?? GraphPosition(
                 x: Float.random(in: -200...200),
                 y: Float.random(in: -200...200)
             )

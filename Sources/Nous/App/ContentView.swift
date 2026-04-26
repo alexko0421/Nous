@@ -95,7 +95,7 @@ struct ContentView: View {
                 case .galaxy:
                     GalaxyView(
                         vm: dependencies.galaxyVM,
-                        onNodeSelected: { node in navigateToNode(node, dependencies: dependencies) }
+                        onOpenNode: { node in navigateToNode(node, dependencies: dependencies) }
                     )
                 case .settings:
                     SettingsView(
@@ -130,6 +130,7 @@ struct ContentView: View {
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isSidebarVisible)
         .task {
             dependencies.chatVM.defaultProjectId = selectedProjectId
+            dependencies.galaxyVM.filterProjectId = selectedProjectId
             handleFinderSyncPreferenceChange(dependencies: dependencies, isEnabled: dependencies.settingsVM.finderSyncEnabled)
             if !Self.isRunningUnitTests {
                 await dependencies.settingsVM.loadEmbeddingModel()
@@ -142,6 +143,9 @@ struct ContentView: View {
                 object: dependencies.nodeStore
             )
         ) { _ in
+            if selectedTab == .galaxy {
+                dependencies.galaxyVM.load()
+            }
             guard dependencies.settingsVM.finderSyncEnabled else { return }
             dependencies.finderProjectSync.scheduleSync()
         }
@@ -167,6 +171,11 @@ struct ContentView: View {
         }
         .onChange(of: selectedProjectId) { _, newValue in
             dependencies.chatVM.defaultProjectId = newValue
+            dependencies.galaxyVM.setProjectFilter(newValue)
+        }
+        .onChange(of: selectedTab) { _, newValue in
+            guard newValue == .galaxy else { return }
+            dependencies.galaxyVM.load()
         }
     }
 

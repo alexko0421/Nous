@@ -54,6 +54,7 @@ struct GalaxySceneContainer: NSViewRepresentable {
 
 final class InteractiveGalaxySKView: SKView {
     override var acceptsFirstResponder: Bool { true }
+    override var mouseDownCanMoveWindow: Bool { false }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         true
