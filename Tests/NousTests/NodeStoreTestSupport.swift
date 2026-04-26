@@ -6,14 +6,19 @@ extension NodeStore {
         return try NodeStore(path: ":memory:")
     }
 
-    func insertNodeForTest(id: UUID) throws {
+    func insertNodeForTest(id: UUID, projectId: UUID? = nil) throws {
         let n = NousNode(
             id: id, type: .conversation, title: "test",
             content: "", emoji: nil,
-            projectId: nil,
+            projectId: projectId,
             isFavorite: false, createdAt: Date(), updatedAt: Date()
         )
         try insertNode(n)
+    }
+
+    func insertProjectForTest(id: UUID, title: String = "test project") throws {
+        let p = Project(id: id, title: title)
+        try insertProject(p)
     }
 
     func executeRawForTest(_ sql: String) throws {

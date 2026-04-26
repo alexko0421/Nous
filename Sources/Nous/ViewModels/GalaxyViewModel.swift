@@ -166,6 +166,41 @@ final class GalaxyViewModel {
         nodes.filter { $0.type == .note }.count
     }
 
+    /// Constellations after applying the current `filterProjectId` view.
+    /// Members outside the filter are hidden; constellations with <2 visible
+    /// members are excluded entirely. Dominant is recomputed within the
+    /// visible set (highest confidence among candidates).
+    ///
+    /// Returns tuples of (constellation, isDominant, visibleMembers) so
+    /// downstream consumers (Galaxy halo render, MOTIFS section) see a
+    /// consistent snapshot derived from the same filter pass.
+    var visibleConstellations: [(constellation: Constellation, isDominant: Bool, visibleMembers: [UUID])] {
+        let visibleNodeIds: Set<UUID>
+        if let filter = filterProjectId {
+            visibleNodeIds = Set(nodes.filter { $0.projectId == filter }.map(\.id))
+        } else {
+            visibleNodeIds = Set(nodes.map(\.id))
+        }
+
+        var candidates: [(Constellation, [UUID])] = []
+        for c in constellations {
+            let visible = c.memberNodeIds.filter { visibleNodeIds.contains($0) }
+            if visible.count >= 2 {
+                candidates.append((c, visible))
+            }
+        }
+
+        // Recompute dominant against filtered candidates: highest-confidence wins.
+        // (Spec §6.4: latest-run scoping is captured at derivation time via
+        // Constellation.isDominant, but filter changes can hide that constellation,
+        // so re-pick from the visible set by confidence.)
+        let domId = candidates.max(by: { $0.0.confidence < $1.0.confidence })?.0.id
+
+        return candidates.map { (c, vis) in
+            (constellation: c, isDominant: c.id == domId, visibleMembers: vis)
+        }
+    }
+
     var selectedConnections: [GalaxyConnection] {
         guard let selectedNodeId else { return [] }
 
