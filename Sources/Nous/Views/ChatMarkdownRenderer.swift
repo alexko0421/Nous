@@ -10,6 +10,40 @@ enum Segment: Equatable {
 
 enum ChatMarkdownRenderer {
 
+    private static let boldPairRegex = try! NSRegularExpression(pattern: #"\*\*([^\*]+)\*\*"#)
+    private static let italicAsteriskRegex = try! NSRegularExpression(
+        pattern: #"(?<!\*)\*([^\*\s][^\*]*?)\*(?!\*)"#
+    )
+    private static let inlineCodeRegex = try! NSRegularExpression(pattern: #"`([^`]+)`"#)
+    private static let orderedListPrefixRegex = try! NSRegularExpression(pattern: #"^\d+\.\s+"#)
+    private static let quotePrefixRegex = try! NSRegularExpression(pattern: #"^>\s+"#)
+
+    /// Strips unsupported markdown delimiters from a single line of prose.
+    /// Underscores are NEVER touched (preserves snake_case_var, __init__).
+    private static func sanitizeProse(_ line: String) -> String {
+        var result = line
+
+        // Line-start prefixes first (always strip).
+        result = applyRegex(orderedListPrefixRegex, to: result, replacement: "")
+        result = applyRegex(quotePrefixRegex, to: result, replacement: "")
+
+        // Balanced-pair stripping.
+        result = applyRegex(boldPairRegex, to: result, replacement: "$1")
+        result = applyRegex(italicAsteriskRegex, to: result, replacement: "$1")
+        result = applyRegex(inlineCodeRegex, to: result, replacement: "$1")
+
+        return result
+    }
+
+    private static func applyRegex(
+        _ regex: NSRegularExpression,
+        to input: String,
+        replacement: String
+    ) -> String {
+        let range = NSRange(input.startIndex..., in: input)
+        return regex.stringByReplacingMatches(in: input, range: range, withTemplate: replacement)
+    }
+
     private static func isFenceOpen(_ line: String) -> Bool {
         // Triple backtick at line start, possibly followed by language tag.
         return line.hasPrefix("```")
@@ -56,7 +90,7 @@ enum ChatMarkdownRenderer {
                     // Unclosed fence: bare ``` line as prose; captured content re-parsed
                     // by main loop on subsequent iterations (no recursion needed — just
                     // continue past the ``` line and let normal parsing handle the rest).
-                    segments.append(.prose(line))
+                    segments.append(.prose(sanitizeProse(line)))
                     i += 1
                     continue
                 }
@@ -70,7 +104,7 @@ enum ChatMarkdownRenderer {
             if isBulletLine(line) {
                 var bullets: [String] = []
                 while i < lines.count, isBulletLine(lines[i]) {
-                    bullets.append(bulletContent(lines[i]))
+                    bullets.append(sanitizeProse(bulletContent(lines[i])))
                     i += 1
                 }
                 segments.append(.bulletBlock(bullets))
@@ -81,7 +115,7 @@ enum ChatMarkdownRenderer {
                 i = nextIndex
                 continue  // `i` advanced to nextIndex by parseTable; do not increment here.
             }
-            segments.append(.prose(line))
+            segments.append(.prose(sanitizeProse(line)))
             i += 1
         }
         return segments

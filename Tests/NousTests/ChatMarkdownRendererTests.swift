@@ -233,4 +233,102 @@ final class ChatMarkdownRendererTests: XCTestCase {
             [.verbatim("let x = 1")]
         )
     }
+
+    // MARK: - Sanitization (balanced pairs only, no underscores)
+
+    func testBoldStripped() {
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse("**bold** text"),
+            [.prose("bold text")]
+        )
+    }
+
+    func testItalicAsteriskStripped() {
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse("*italic* text"),
+            [.prose("italic text")]
+        )
+    }
+
+    func testInlineCodeStripped() {
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse("use `cmd` here"),
+            [.prose("use cmd here")]
+        )
+    }
+
+    func testOrderedListPrefixStripped() {
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse("1. first\n2. second"),
+            [.prose("first"), .prose("second")]
+        )
+    }
+
+    func testQuotePrefixStripped() {
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse("> quoted"),
+            [.prose("quoted")]
+        )
+    }
+
+    // Preservation cases — must NOT be touched
+
+    func testUnbalancedAsteriskPreserved() {
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse("int *p = NULL"),
+            [.prose("int *p = NULL")]
+        )
+    }
+
+    func testWildcardAsteriskPreserved() {
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse("rg '*.swift'"),
+            [.prose("rg '*.swift'")]
+        )
+    }
+
+    func testMultiplicationPreserved() {
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse("3 * 4 = 12"),
+            [.prose("3 * 4 = 12")]
+        )
+    }
+
+    func testUnderscoreItalicPreserved() {
+        // v1 explicitly does not strip underscores.
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse("snake_case_var"),
+            [.prose("snake_case_var")]
+        )
+    }
+
+    func testDoubleUnderscorePreserved() {
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse("__init__ method"),
+            [.prose("__init__ method")]
+        )
+    }
+
+    func testUnbalancedBacktickPreserved() {
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse("the ` symbol alone"),
+            [.prose("the ` symbol alone")]
+        )
+    }
+
+    func testHeadingTextNotSanitized() {
+        // Sanitization applies only to prose segments, not heading text.
+        // (Heading content rarely needs sanitization in practice; documenting current behavior.)
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse("# **bold** title"),
+            [.heading(level: 1, text: "**bold** title")]
+        )
+    }
+
+    func testBulletContentSanitized() {
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse("- **item**"),
+            [.bulletBlock(["item"])]
+        )
+    }
 }
