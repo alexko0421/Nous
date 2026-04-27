@@ -133,6 +133,18 @@ struct ChatArea: View {
                                                     }
                                                 }
 
+                                                if vm.canRegenerateAssistantMessage(msg.id) {
+                                                    AssistantFeedbackButton(
+                                                        symbolName: "arrow.clockwise",
+                                                        isSelected: false,
+                                                        helpText: "Regenerate response"
+                                                    ) {
+                                                        Task {
+                                                            await vm.regenerateLatestAssistant()
+                                                        }
+                                                    }
+                                                }
+
                                                 CopyButton(text: msg.content)
                                             }
                                             .font(.footnote)

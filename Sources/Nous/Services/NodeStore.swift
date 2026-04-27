@@ -613,6 +613,13 @@ final class NodeStore {
         notifyNodesDidChange()
     }
 
+    func deleteMessage(id: UUID) throws {
+        let stmt = try db.prepare("DELETE FROM messages WHERE id = ?;")
+        try stmt.bind(id.uuidString, at: 1)
+        try stmt.step()
+        notifyNodesDidChange()
+    }
+
     func fetchMessages(nodeId: UUID) throws -> [Message] {
         let stmt = try db.prepare("""
             SELECT id, nodeId, role, content, timestamp, thinking_content
@@ -1470,6 +1477,14 @@ extension NodeStore {
         """)
         try stmt.bind(messageId.uuidString, at: 1)
         try stmt.bind(eventId.uuidString, at: 2)
+        try stmt.step()
+    }
+
+    func clearJudgeEventMessageId(messageId: UUID) throws {
+        let stmt = try db.prepare("""
+            UPDATE judge_events SET messageId = NULL WHERE messageId = ?;
+        """)
+        try stmt.bind(messageId.uuidString, at: 1)
         try stmt.step()
     }
 

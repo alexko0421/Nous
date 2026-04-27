@@ -506,6 +506,40 @@ final class ChatViewModel {
     }
 
     @MainActor
+    func canRegenerateAssistantMessage(_ messageId: UUID) -> Bool {
+        guard !isGenerating,
+              let latestAssistant = messages.last,
+              latestAssistant.id == messageId,
+              latestAssistant.role == .assistant
+        else { return false }
+
+        return messages.dropLast().contains { $0.role == .user }
+    }
+
+    @MainActor
+    func regenerateLatestAssistant() async {
+        guard !isGenerating,
+              let latestAssistant = messages.last,
+              latestAssistant.role == .assistant,
+              messages.dropLast().contains(where: { $0.role == .user })
+        else { return }
+
+        let responseTaskId = UUID()
+        inFlightResponseAbortReason = nil
+        let responseTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.runRegenerateLatestAssistant(responseTaskId: responseTaskId)
+        }
+        inFlightResponseTask = responseTask
+        inFlightResponseTaskId = responseTaskId
+        await responseTask.value
+        clearInFlightResponseTaskIfOwned(responseTaskId)
+        if inFlightResponseTaskId == nil {
+            inFlightResponseAbortReason = nil
+        }
+    }
+
+    @MainActor
     private func runSend(attachments: [AttachedFileContext], responseTaskId: UUID) async {
         let query = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard (!query.isEmpty || !attachments.isEmpty), isActiveResponseTask(responseTaskId) else { return }
@@ -536,6 +570,77 @@ final class ChatViewModel {
 
         guard let completion = await turnRunner.run(
             request: turnRequest,
+            sink: eventSink,
+            abortReason: { [unowned self] in
+                self.responseAbortReason(for: responseTaskId)
+            }
+        ) else {
+            return
+        }
+        bumpJudgeFeedbackVersion()
+        await contextContinuationService.run(completion.continuationPlan)
+        turnHousekeepingService.run(completion.housekeepingPlan)
+    }
+
+    @MainActor
+    private func runRegenerateLatestAssistant(responseTaskId: UUID) async {
+        guard isActiveResponseTask(responseTaskId),
+              let node = currentNode,
+              let latestAssistant = messages.last,
+              latestAssistant.role == .assistant,
+              let userMessage = messages.dropLast().last(where: { $0.role == .user })
+        else { return }
+
+        let retainedMessages = Array(messages.dropLast())
+        let updatedNode: NousNode
+        do {
+            updatedNode = try conversationSessionStore.removeAssistantTurn(
+                nodeId: node.id,
+                assistantMessage: latestAssistant,
+                retainedMessages: retainedMessages
+            )
+        } catch {
+            presentAssistantFailure("Error: \(error.localizedDescription)")
+            return
+        }
+
+        currentNode = updatedNode
+        messages = retainedMessages
+        citations = []
+        currentResponse = ""
+        currentThinking = ""
+        didHitBudgetExhaustion = false
+
+        let request = TurnRequest(
+            turnId: responseTaskId,
+            snapshot: TurnSessionSnapshot(
+                currentNode: updatedNode,
+                messages: retainedMessages,
+                defaultProjectId: defaultProjectId,
+                activeChatMode: activeChatMode,
+                activeQuickActionMode: activeQuickActionMode
+            ),
+            inputText: userMessage.content,
+            attachments: [],
+            now: Date()
+        )
+        let prepared = PreparedConversationTurn(
+            node: updatedNode,
+            userMessage: userMessage,
+            messagesAfterUserAppend: retainedMessages
+        )
+        let eventSink = makeTurnEventSink(turnId: responseTaskId)
+
+        isGenerating = true
+        defer {
+            if isActiveResponseTask(responseTaskId) {
+                isGenerating = false
+            }
+        }
+
+        guard let completion = await turnRunner.runPreparedTurn(
+            prepared: prepared,
+            request: request,
             sink: eventSink,
             abortReason: { [unowned self] in
                 self.responseAbortReason(for: responseTaskId)

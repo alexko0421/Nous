@@ -46,6 +46,20 @@ final class ChatTurnRunner {
             return nil
         }
 
+        return await runPreparedTurn(
+            prepared: prepared,
+            request: request,
+            sink: sink,
+            abortReason: abortReason
+        )
+    }
+
+    func runPreparedTurn(
+        prepared: PreparedTurnSession,
+        request: TurnRequest,
+        sink: TurnSequencedEventSink,
+        abortReason: () -> TurnAbortReason
+    ) async -> TurnCompletion? {
         let plan: TurnPlan
         do {
             plan = try await turnPlanner.plan(from: prepared, request: request)
