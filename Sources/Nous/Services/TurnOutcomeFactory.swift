@@ -2,14 +2,15 @@ import Foundation
 
 struct TurnOutcomeFactory: Sendable {
     private let shouldPersistMemory: @Sendable ([Message], UUID?) -> Bool
-    private let resolveNextQuickActionMode: @Sendable (QuickActionMode?, String) -> QuickActionMode?
+    private let resolveNextQuickActionMode: @Sendable (QuickActionMode?, String, Int) -> QuickActionMode?
 
     init(
         shouldPersistMemory: @escaping @Sendable ([Message], UUID?) -> Bool,
-        resolveNextQuickActionMode: @escaping @Sendable (QuickActionMode?, String) -> QuickActionMode? = { currentMode, assistantContent in
+        resolveNextQuickActionMode: @escaping @Sendable (QuickActionMode?, String, Int) -> QuickActionMode? = { currentMode, assistantContent, turnIndex in
             guard let currentMode else { return nil }
             let parsed = ClarificationCardParser.parse(assistantContent)
-            return parsed.keepsQuickActionMode ? currentMode : nil
+            let directive = currentMode.agent().turnDirective(parsed: parsed, turnIndex: turnIndex)
+            return directive == .keepActive ? currentMode : nil
         }
     ) {
         self.shouldPersistMemory = shouldPersistMemory
@@ -71,6 +72,7 @@ struct TurnOutcomeFactory: Sendable {
             )
         )
 
+        let turnIndex = committed.messagesAfterAssistantAppend.lazy.filter { $0.role == .user }.count
         return TurnCompletion(
             turnId: turnId,
             node: committed.node,
@@ -78,7 +80,8 @@ struct TurnOutcomeFactory: Sendable {
             messagesAfterAssistantAppend: committed.messagesAfterAssistantAppend,
             nextQuickActionMode: resolveNextQuickActionMode(
                 nextQuickActionModeIfCompleted,
-                assistantContent
+                assistantContent,
+                turnIndex
             ),
             continuationPlan: continuationPlan,
             housekeepingPlan: housekeepingPlan

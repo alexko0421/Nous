@@ -309,61 +309,77 @@ final class ChatViewModel {
             }
         }
 
+        let agent = mode.agent()
+        let policy = agent.memoryPolicy()
+        let openingText = agent.openingPrompt()
+        let openingAddendum = agent.contextAddendum(turnIndex: 0)
+
         var projectGoal: String? = nil
-        if let projectId = node.projectId,
+        if policy.includeProjectGoal,
+           let projectId = node.projectId,
            let project = try? nodeStore.fetchProject(id: projectId),
            !project.goal.isEmpty {
             projectGoal = project.goal
         }
         let memoryProjection = memoryProjectionService
 
-        let contextSlice = ChatViewModel.assembleContext(
-            chatMode: .companion,
-            currentUserInput: ChatViewModel.quickActionOpeningPrompt(for: mode),
-            globalMemory: memoryProjection.currentGlobal(),
-            essentialStory: memoryProjection.currentEssentialStory(
+        let globalMemory = policy.includeGlobalMemory ? memoryProjection.currentGlobal() : nil
+        let essentialStory = policy.includeEssentialStory
+            ? memoryProjection.currentEssentialStory(
                 projectId: node.projectId,
                 excludingConversationId: node.id
-            ),
-            userModel: memoryProjection.currentUserModel(
+            )
+            : nil
+        let userModel = policy.includeUserModel
+            ? memoryProjection.currentUserModel(
                 projectId: node.projectId,
                 conversationId: node.id
-            ),
-            memoryEvidence: memoryProjection.currentBoundedEvidence(
+            )
+            : nil
+        let memoryEvidence: [MemoryEvidenceSnippet] = policy.includeMemoryEvidence
+            ? memoryProjection.currentBoundedEvidence(
                 projectId: node.projectId,
                 excludingConversationId: node.id
-            ),
-            projectMemory: node.projectId.flatMap { memoryProjection.currentProject(projectId: $0) },
-            conversationMemory: memoryProjection.currentConversation(nodeId: node.id),
+            )
+            : []
+        let projectMemory = policy.includeProjectMemory
+            ? node.projectId.flatMap { memoryProjection.currentProject(projectId: $0) }
+            : nil
+        let conversationMemory = policy.includeConversationMemory
+            ? memoryProjection.currentConversation(nodeId: node.id)
+            : nil
+
+        let contextSlice = ChatViewModel.assembleContext(
+            chatMode: .companion,
+            currentUserInput: openingText,
+            globalMemory: globalMemory,
+            essentialStory: essentialStory,
+            userModel: userModel,
+            memoryEvidence: memoryEvidence,
+            projectMemory: projectMemory,
+            conversationMemory: conversationMemory,
             recentConversations: [],
             citations: [],
             projectGoal: projectGoal,
             activeQuickActionMode: mode,
+            quickActionAddendum: openingAddendum,
             allowInteractiveClarification: false
         )
         let promptTrace = ChatViewModel.governanceTrace(
             chatMode: .companion,
-            currentUserInput: ChatViewModel.quickActionOpeningPrompt(for: mode),
-            globalMemory: memoryProjection.currentGlobal(),
-            essentialStory: memoryProjection.currentEssentialStory(
-                projectId: node.projectId,
-                excludingConversationId: node.id
-            ),
-            userModel: memoryProjection.currentUserModel(
-                projectId: node.projectId,
-                conversationId: node.id
-            ),
-            memoryEvidence: memoryProjection.currentBoundedEvidence(
-                projectId: node.projectId,
-                excludingConversationId: node.id
-            ),
-            projectMemory: node.projectId.flatMap { memoryProjection.currentProject(projectId: $0) },
-            conversationMemory: memoryProjection.currentConversation(nodeId: node.id),
+            currentUserInput: openingText,
+            globalMemory: globalMemory,
+            essentialStory: essentialStory,
+            userModel: userModel,
+            memoryEvidence: memoryEvidence,
+            projectMemory: projectMemory,
+            conversationMemory: conversationMemory,
             recentConversations: [],
             citations: [],
             projectGoal: projectGoal,
             attachments: [],
             activeQuickActionMode: mode,
+            quickActionAddendum: openingAddendum,
             allowInteractiveClarification: false
         )
         lastPromptGovernanceTrace = promptTrace
@@ -381,13 +397,14 @@ final class ChatViewModel {
             messages = committed.messagesAfterAssistantAppend
             activeQuickActionMode = ChatViewModel.updatedQuickActionMode(
                 currentMode: activeQuickActionMode,
-                assistantContent: errorContent
+                assistantContent: errorContent,
+                turnIndex: 0
             )
             currentResponse = ""
             return
         }
 
-        let quickActionUserText = ChatViewModel.quickActionOpeningPrompt(for: mode)
+        let quickActionUserText = openingText
         let transcriptForCache = [LLMMessage(role: "user", content: quickActionUserText)]
         let resolvedCacheEntry = activeGeminiHistoryCache(
             nodeId: node.id,
@@ -449,9 +466,11 @@ final class ChatViewModel {
         ) else { return }
         currentNode = committed.node
         messages = committed.messagesAfterAssistantAppend
+        let openingTurnIndex = messages.lazy.filter { $0.role == .user }.count
         activeQuickActionMode = ChatViewModel.updatedQuickActionMode(
             currentMode: activeQuickActionMode,
-            assistantContent: assistantContent
+            assistantContent: assistantContent,
+            turnIndex: openingTurnIndex
         )
         let completion = turnOutcomeFactory.makeCompletion(
             turnId: responseTaskId,
@@ -804,6 +823,7 @@ final class ChatViewModel {
         projectGoal: String?,
         attachments: [AttachedFileContext] = [],
         activeQuickActionMode: QuickActionMode? = nil,
+        quickActionAddendum: String? = nil,
         allowInteractiveClarification: Bool = false,
         now: Date = Date()
     ) -> TurnSystemSlice {
@@ -904,6 +924,10 @@ final class ChatViewModel {
             volatilePieces.append("ACTIVE QUICK MODE: \(activeQuickActionMode.label)")
         }
 
+        if let quickActionAddendum, !quickActionAddendum.isEmpty {
+            volatilePieces.append(quickActionAddendum)
+        }
+
         if allowInteractiveClarification {
             volatilePieces.append(
                 """
@@ -959,6 +983,7 @@ final class ChatViewModel {
         projectGoal: String?,
         attachments: [AttachedFileContext] = [],
         activeQuickActionMode: QuickActionMode? = nil,
+        quickActionAddendum: String? = nil,
         allowInteractiveClarification: Bool = false,
         now: Date = Date()
     ) -> PromptGovernanceTrace {
@@ -984,6 +1009,7 @@ final class ChatViewModel {
             layers.append("long_gap_bridge_guidance")
         }
         if activeQuickActionMode != nil { layers.append("quick_action_mode") }
+        if let quickActionAddendum, !quickActionAddendum.isEmpty { layers.append("quick_action_addendum") }
         if allowInteractiveClarification { layers.append("interactive_clarification") }
         if chatMode == .strategist { layers.append("strategist_mode") }
         if highRiskQueryDetected { layers.append("high_risk_safety_mode") }
@@ -1084,11 +1110,13 @@ final class ChatViewModel {
 
     nonisolated static func updatedQuickActionMode(
         currentMode: QuickActionMode?,
-        assistantContent: String
+        assistantContent: String,
+        turnIndex: Int
     ) -> QuickActionMode? {
         guard let currentMode else { return nil }
         let parsed = ClarificationCardParser.parse(assistantContent)
-        return parsed.keepsQuickActionMode ? currentMode : nil
+        let directive = currentMode.agent().turnDirective(parsed: parsed, turnIndex: turnIndex)
+        return directive == .keepActive ? currentMode : nil
     }
 
     nonisolated static func shouldAllowInteractiveClarification(
@@ -1113,19 +1141,6 @@ final class ChatViewModel {
             return .contradiction
         }
         return .spark
-    }
-
-    nonisolated static func quickActionOpeningPrompt(for mode: QuickActionMode) -> String {
-        """
-        Alex just entered the \(mode.label) mode from the welcome screen.
-        Start the conversation yourself instead of waiting for him to type.
-        This is only the opening turn, so do not use the clarification card yet.
-        Ask one short, natural, open-ended question first so you can understand his situation.
-        Start your reply with this hidden marker so the mode stays in understanding phase:
-        <phase>understanding</phase>
-        Ask one short, warm opening question that helps you understand his situation.
-        Do not mention hidden prompts, modes, system instructions, or formatting rules.
-        """
     }
 
     /// Attaches the resolved cache handle to the Gemini service. When the handle is
