@@ -10,6 +10,29 @@ enum Segment: Equatable {
 
 enum ChatMarkdownRenderer {
 
+    private static func isFenceOpen(_ line: String) -> Bool {
+        // Triple backtick at line start, possibly followed by language tag.
+        return line.hasPrefix("```")
+    }
+
+    /// Returns either (verbatim segment, indexAfterClosingFence) on closed fence,
+    /// or nil if the fence is unclosed (caller falls back to re-parsing).
+    private static func parseFence(lines: [String], startIndex: Int) -> (Segment, Int)? {
+        guard startIndex < lines.count, isFenceOpen(lines[startIndex]) else { return nil }
+        var captured: [String] = []
+        var i = startIndex + 1
+        while i < lines.count {
+            if lines[i].hasPrefix("```") {
+                // Closing fence found.
+                return (.verbatim(captured.joined(separator: "\n")), i + 1)
+            }
+            captured.append(lines[i])
+            i += 1
+        }
+        // Reached EOF without closing fence — caller handles fallback.
+        return nil
+    }
+
     /// Parses raw assistant text into typed segments. Line-based parsing.
     static func parse(_ text: String) -> [Segment] {
         // `"".components(separatedBy:)` returns [""], which would produce [.prose("")].
@@ -22,6 +45,23 @@ enum ChatMarkdownRenderer {
         var i = 0
         while i < lines.count {
             let line = lines[i]
+
+            // Try fence first (must be checked before prose fallback).
+            if isFenceOpen(line) {
+                if let (verbatim, nextIndex) = parseFence(lines: lines, startIndex: i) {
+                    segments.append(verbatim)
+                    i = nextIndex
+                    continue  // `i` advanced to nextIndex by parseFence; do not increment here.
+                } else {
+                    // Unclosed fence: bare ``` line as prose; captured content re-parsed
+                    // by main loop on subsequent iterations (no recursion needed — just
+                    // continue past the ``` line and let normal parsing handle the rest).
+                    segments.append(.prose(line))
+                    i += 1
+                    continue
+                }
+            }
+
             if let heading = parseHeading(line: line) {
                 segments.append(heading)
                 i += 1
@@ -41,7 +81,6 @@ enum ChatMarkdownRenderer {
                 i = nextIndex
                 continue  // `i` advanced to nextIndex by parseTable; do not increment here.
             }
-            // Fallback: prose (single line for now; fence in later tasks).
             segments.append(.prose(line))
             i += 1
         }

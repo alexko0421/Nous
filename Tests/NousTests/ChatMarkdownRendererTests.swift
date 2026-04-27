@@ -183,4 +183,54 @@ final class ChatMarkdownRendererTests: XCTestCase {
             [.prose("a | b"), .prose("--- | ---"), .prose("1 | 2")]
         )
     }
+
+    // MARK: - Code fences
+
+    func testClosedFenceProducesVerbatim() {
+        let input = "```\nint *p = `foo`;\n```"
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse(input),
+            [.verbatim("int *p = `foo`;")]
+        )
+    }
+
+    func testClosedFenceMultilineContent() {
+        let input = "```\nline1\nline2\nline3\n```"
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse(input),
+            [.verbatim("line1\nline2\nline3")]
+        )
+    }
+
+    func testFenceContentNotSanitized() {
+        // **bold** and *italic* inside fence must survive.
+        let input = "```\n**bold**\n*italic*\n```"
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse(input),
+            [.verbatim("**bold**\n*italic*")]
+        )
+    }
+
+    func testUnclosedFenceFallsBackToProseAndStructure() {
+        // Bare ``` line is prose; captured content re-fed to normal parsing.
+        let input = "```\nint *p\n# Header\n- bullet"
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse(input),
+            [
+                .prose("```"),
+                .prose("int *p"),
+                .heading(level: 1, text: "Header"),
+                .bulletBlock(["bullet"])
+            ]
+        )
+    }
+
+    func testFenceWithLanguageTagStillVerbatim() {
+        // ```swift opens a fence; language tag is dropped, content captured.
+        let input = "```swift\nlet x = 1\n```"
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse(input),
+            [.verbatim("let x = 1")]
+        )
+    }
 }
