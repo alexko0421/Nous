@@ -26,8 +26,8 @@ struct BrainstormAgent: QuickActionAgent {
         call out which feel alive vs which are probably noise. Do NOT narrow to a single
         answer.
 
-        格式：用 `-` bullet 列出 distinct directions，每条 bullet 系**短 label + 一句 trade-off**
-        （唔可以系完整段落），跟住一段**唔用 bullet 嘅 prose** 拆边样 feel alive、边样系噪音。
+        格式：用 `-` bullet 列出 distinct directions，每条 bullet 系「短 label + 一句 trade-off」
+        （唔可以系完整段落），跟住一段「唔用 bullet 嘅 prose」拆边样 feel alive、边样系噪音。
         Bullet block 唔可以等权列 options——读者一眼睇到嘅唔系「四个并列选项」，
         而系「四条方向加一段判断」。
 

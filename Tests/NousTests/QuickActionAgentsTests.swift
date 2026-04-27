@@ -126,8 +126,7 @@ final class BrainstormAgentTests: XCTestCase {
         XCTAssertTrue(body.contains("trade-off"), "addendum must mention trade-off")
         XCTAssertTrue(body.contains("非 bullet") || body.contains("唔用 bullet"),
                       "addendum must require non-bullet judgment prose")
-        XCTAssertTrue(body.contains("等权") == false ||
-                      body.contains("唔可以等权列 options") || body.contains("唔可以系完整段落"),
+        XCTAssertTrue(body.contains("唔可以等权列 options") || body.contains("唔可以系完整段落"),
                       "addendum must guard against equally-weighted options listicle")
     }
 }
