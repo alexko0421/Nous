@@ -430,6 +430,84 @@ final class ProvocationOrchestrationTests: XCTestCase {
     }
 
     @MainActor
+    func testStewardInferredBrainstormIsOneShotAndLean() async throws {
+        viewModel.inputText = "brainstorm a few directions from scratch"
+        await viewModel.send()
+
+        let system = try XCTUnwrap(
+            llm.receivedSystems.compactMap { $0 }.first {
+                $0.contains("ACTIVE QUICK MODE: Brainstorm")
+            }
+        )
+
+        XCTAssertTrue(system.contains("ACTIVE QUICK MODE: Brainstorm"))
+        XCTAssertTrue(system.contains("BRAINSTORM MODE PRODUCTION CONTRACT"))
+        XCTAssertTrue(system.contains("TURN STEWARD RESPONSE SHAPE"))
+        XCTAssertTrue(system.contains("Generate distinct directions"))
+        XCTAssertFalse(system.contains("INTERACTIVE CLARIFICATION UI"))
+        XCTAssertFalse(system.contains("BEHAVIOR:"),
+                       "lean brainstorm should not inject behavior profile")
+        XCTAssertNil(viewModel.activeQuickActionMode,
+                     "steward-inferred quick route must be one-shot")
+        XCTAssertEqual(viewModel.lastPromptGovernanceTrace?.turnSteward?.route, .brainstorm)
+        XCTAssertEqual(viewModel.lastPromptGovernanceTrace?.turnSteward?.memoryPolicy, .lean)
+    }
+
+    @MainActor
+    func testStewardSupportFirstSkipsJudgeFocus() async throws {
+        viewModel.inputText = "我好攰，感觉顶唔顺"
+        await viewModel.send()
+
+        let system = try XCTUnwrap(
+            llm.receivedSystems.compactMap { $0 }.first {
+                $0.contains("BEHAVIOR: SUPPORTIVE")
+            }
+        )
+
+        XCTAssertTrue(system.contains("BEHAVIOR: SUPPORTIVE"))
+        XCTAssertFalse(system.contains("RELEVANT PRIOR MEMORY"))
+        XCTAssertEqual(judge.previousModeHistory.count, 0,
+                       "support-first turns should skip the provocation judge")
+        XCTAssertEqual(viewModel.lastPromptGovernanceTrace?.turnSteward?.challengeStance, .supportFirst)
+
+        let events = telemetry.recentJudgeEvents(limit: 5, filter: .none)
+        XCTAssertEqual(events.first?.fallbackReason, .judgeUnavailable)
+    }
+
+    @MainActor
+    func testStewardInferredPlanIgnoresOldTranscriptLengthForAgentTurnIndex() async throws {
+        let node = NousNode(type: .conversation, title: "old thread")
+        try store.insertNode(node)
+        viewModel.currentNode = node
+        viewModel.messages = (0..<6).map { index in
+            Message(
+                nodeId: node.id,
+                role: .user,
+                content: "prior user turn \(index)"
+            )
+        }
+
+        viewModel.inputText = "help me plan this week"
+        await viewModel.send()
+
+        let system = try XCTUnwrap(
+            llm.receivedSystems.compactMap { $0 }.first {
+                $0.contains("ACTIVE QUICK MODE: Plan")
+            }
+        )
+
+        XCTAssertTrue(system.contains("ACTIVE QUICK MODE: Plan"))
+        XCTAssertTrue(system.contains("PLAN MODE PRODUCTION CONTRACT"))
+        XCTAssertFalse(system.contains("PLAN MODE — FINAL TURN"),
+                       "inferred one-shot plan must not use old transcript count as PlanAgent turn index")
+        XCTAssertFalse(system.contains("INTERACTIVE CLARIFICATION UI"))
+        XCTAssertNil(viewModel.activeQuickActionMode,
+                     "steward-inferred plan must not persist active quick mode")
+        XCTAssertEqual(viewModel.lastPromptGovernanceTrace?.turnSteward?.route, .plan)
+        XCTAssertEqual(viewModel.lastPromptGovernanceTrace?.turnSteward?.responseShape, .producePlan)
+    }
+
+    @MainActor
     func testPlanModeStopsClarifyingAfterSecondUserTurn() async throws {
         await assertQuickModeStopsClarifying(
             mode: .plan,

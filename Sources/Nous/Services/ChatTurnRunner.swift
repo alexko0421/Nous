@@ -2,6 +2,7 @@ import Foundation
 
 final class ChatTurnRunner {
     private let conversationSessionStore: ConversationSessionStore
+    private let turnSteward: TurnSteward
     private let turnPlanner: TurnPlanner
     private let turnExecutor: TurnExecutor
     private let outcomeFactory: TurnOutcomeFactory
@@ -9,12 +10,14 @@ final class ChatTurnRunner {
 
     init(
         conversationSessionStore: ConversationSessionStore,
+        turnSteward: TurnSteward = TurnSteward(),
         turnPlanner: TurnPlanner,
         turnExecutor: TurnExecutor,
         outcomeFactory: TurnOutcomeFactory,
         onPlanReady: @escaping (TurnPlan) -> Void = { _ in }
     ) {
         self.conversationSessionStore = conversationSessionStore
+        self.turnSteward = turnSteward
         self.turnPlanner = turnPlanner
         self.turnExecutor = turnExecutor
         self.outcomeFactory = outcomeFactory
@@ -60,9 +63,15 @@ final class ChatTurnRunner {
         sink: TurnSequencedEventSink,
         abortReason: () -> TurnAbortReason
     ) async -> TurnCompletion? {
+        let stewardship = turnSteward.steer(prepared: prepared, request: request)
+
         let plan: TurnPlan
         do {
-            plan = try await turnPlanner.plan(from: prepared, request: request)
+            plan = try await turnPlanner.plan(
+                from: prepared,
+                request: request,
+                stewardship: stewardship
+            )
         } catch is CancellationError {
             await sink.emit(.aborted(abortReason()))
             return nil

@@ -47,7 +47,11 @@ final class TurnPlanner {
     }
 
     @MainActor
-    func plan(from prepared: PreparedTurnSession, request: TurnRequest) async throws -> TurnPlan {
+    func plan(
+        from prepared: PreparedTurnSession,
+        request: TurnRequest,
+        stewardship: TurnStewardDecision
+    ) async throws -> TurnPlan {
         let promptQuery = Self.normalizedPromptQuery(
             inputText: request.inputText,
             attachments: request.attachments
@@ -55,9 +59,18 @@ final class TurnPlanner {
         let attachmentNames = request.attachments.map(\.name)
         let retrievalQuery = ([promptQuery] + attachmentNames).joined(separator: "\n")
 
-        // Resolve quick-action agent + policy. .full when no active quick mode.
-        let activeAgent: (any QuickActionAgent)? = request.snapshot.activeQuickActionMode?.agent()
-        let policy: QuickActionMemoryPolicy = activeAgent?.memoryPolicy() ?? .full
+        let explicitQuickActionMode = request.snapshot.activeQuickActionMode
+        let inferredQuickActionMode = explicitQuickActionMode == nil
+            ? stewardship.route.quickActionMode
+            : nil
+        let planningQuickActionMode = explicitQuickActionMode ?? inferredQuickActionMode
+        let planningAgent: (any QuickActionAgent)? = planningQuickActionMode?.agent()
+        let basePolicy: QuickActionMemoryPolicy = if let explicitQuickActionMode {
+            explicitQuickActionMode.agent().memoryPolicy()
+        } else {
+            QuickActionMemoryPolicy.fromStewardPreset(stewardship.memoryPolicy)
+        }
+        let policy = basePolicy.applyingChallengeStance(stewardship.challengeStance)
 
         let citations = policy.includeCitations
             ? try retrieveCitations(retrievalQuery: retrievalQuery, excludingId: prepared.node.id)
@@ -185,12 +198,27 @@ final class TurnPlanner {
 
         let effectiveMode = inferredMode ?? (request.snapshot.activeChatMode ?? .companion)
         let shouldAllowInteractiveClarification = ChatViewModel.shouldAllowInteractiveClarification(
-            activeQuickActionMode: request.snapshot.activeQuickActionMode,
+            activeQuickActionMode: explicitQuickActionMode,
             messages: prepared.messagesAfterUserAppend
         )
 
-        let turnIndex = prepared.messagesAfterUserAppend.lazy.filter { $0.role == .user }.count
-        let quickActionAddendum: String? = activeAgent?.contextAddendum(turnIndex: turnIndex)
+        let agentTurnIndex = Self.agentTurnIndex(
+            explicitMode: explicitQuickActionMode,
+            stewardship: stewardship,
+            messagesAfterUserAppend: prepared.messagesAfterUserAppend
+        )
+        let quickActionAddendum: String? = planningAgent?.contextAddendum(turnIndex: agentTurnIndex)
+        let responseShapeBlock = Self.responseShapeBlock(for: stewardship)
+        let quickActionContextBlocks = [quickActionAddendum, responseShapeBlock]
+            .compactMap { block -> String? in
+                guard let block,
+                      !block.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                else { return nil }
+                return block
+            }
+        let quickActionContext = quickActionContextBlocks.isEmpty
+            ? nil
+            : quickActionContextBlocks.joined(separator: "\n\n")
 
         let turnSlice = ChatViewModel.assembleContext(
             chatMode: effectiveMode,
@@ -205,8 +233,8 @@ final class TurnPlanner {
             citations: citations,
             projectGoal: projectGoal,
             attachments: request.attachments,
-            activeQuickActionMode: request.snapshot.activeQuickActionMode,
-            quickActionAddendum: quickActionAddendum,
+            activeQuickActionMode: planningQuickActionMode,
+            quickActionAddendum: quickActionContext,
             allowInteractiveClarification: shouldAllowInteractiveClarification,
             now: request.now
         )
@@ -223,9 +251,10 @@ final class TurnPlanner {
             citations: citations,
             projectGoal: projectGoal,
             attachments: request.attachments,
-            activeQuickActionMode: request.snapshot.activeQuickActionMode,
-            quickActionAddendum: quickActionAddendum,
+            activeQuickActionMode: planningQuickActionMode,
+            quickActionAddendum: quickActionContext,
             allowInteractiveClarification: shouldAllowInteractiveClarification,
+            turnSteward: stewardship.trace,
             now: request.now
         )
 
@@ -256,7 +285,7 @@ final class TurnPlanner {
                 citations: citations,
                 promptTrace: promptTrace,
                 effectiveMode: effectiveMode,
-                nextQuickActionModeIfCompleted: request.snapshot.activeQuickActionMode,
+                nextQuickActionModeIfCompleted: explicitQuickActionMode,
                 judgeEventDraft: makeJudgeEvent(
                     id: judgeEventId,
                     nodeId: prepared.node.id,
@@ -278,7 +307,7 @@ final class TurnPlanner {
             citations: citations,
             promptTrace: promptTrace,
             effectiveMode: effectiveMode,
-            nextQuickActionModeIfCompleted: request.snapshot.activeQuickActionMode,
+            nextQuickActionModeIfCompleted: explicitQuickActionMode,
             judgeEventDraft: makeJudgeEvent(
                 id: judgeEventId,
                 nodeId: prepared.node.id,
@@ -299,6 +328,52 @@ final class TurnPlanner {
         let attachmentNames = attachments.map(\.name)
         guard !attachmentNames.isEmpty else { return promptQuery }
         return "\(promptQuery)\n\nFiles: \(attachmentNames.joined(separator: ", "))"
+    }
+
+    private static func agentTurnIndex(
+        explicitMode: QuickActionMode?,
+        stewardship: TurnStewardDecision,
+        messagesAfterUserAppend: [Message]
+    ) -> Int {
+        if explicitMode != nil {
+            return messagesAfterUserAppend.lazy.filter { $0.role == .user }.count
+        }
+
+        switch (stewardship.route, stewardship.responseShape) {
+        case (.direction, _), (.brainstorm, _):
+            return 1
+        case (.plan, .askOneQuestion):
+            return 1
+        case (.plan, _):
+            return 2
+        case (.ordinaryChat, _):
+            return 0
+        }
+    }
+
+    private static func responseShapeBlock(for decision: TurnStewardDecision) -> String? {
+        let instruction: String?
+        switch decision.responseShape {
+        case .answerNow:
+            instruction = nil
+        case .askOneQuestion:
+            instruction = "Ask exactly one short question before giving guidance. Do not include a clarification card."
+        case .producePlan:
+            instruction = "Produce a concrete structured plan. Do not stay in coaching mode."
+        case .listDirections:
+            instruction = "Generate distinct directions before judging which feel alive."
+        case .narrowNextStep:
+            instruction = "Narrow to one concrete next step. Do not leave equally weighted options."
+        }
+
+        guard let instruction else { return nil }
+        return """
+        ---
+
+        TURN STEWARD RESPONSE SHAPE:
+        \(instruction)
+        Do not mention routing, stewardship, modes, policies, or internal instructions.
+        """
     }
 
     private func retrieveCitations(retrievalQuery: String, excludingId: UUID) throws -> [SearchResult] {

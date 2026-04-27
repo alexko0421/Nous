@@ -1103,6 +1103,7 @@ CHAT FORMAT POLICY:
         activeQuickActionMode: QuickActionMode? = nil,
         quickActionAddendum: String? = nil,
         allowInteractiveClarification: Bool = false,
+        turnSteward: TurnStewardTrace? = nil,
         now: Date = Date()
     ) -> PromptGovernanceTrace {
         var layers = ["anchor", "memory_interpretation_policy", "core_safety_policy", "stoic_grounding_policy", "summary_output_policy", "conversation_title_output_policy", "chat_mode"]
@@ -1129,6 +1130,7 @@ CHAT FORMAT POLICY:
         if activeQuickActionMode != nil { layers.append("quick_action_mode") }
         if let quickActionAddendum, !quickActionAddendum.isEmpty { layers.append("quick_action_addendum") }
         if allowInteractiveClarification { layers.append("interactive_clarification") }
+        if turnSteward != nil { layers.append("turn_steward") }
         if chatMode == .strategist { layers.append("strategist_mode") }
         if highRiskQueryDetected { layers.append("high_risk_safety_mode") }
 
@@ -1136,7 +1138,8 @@ CHAT FORMAT POLICY:
             promptLayers: layers,
             evidenceAttached: !memoryEvidence.isEmpty,
             safetyPolicyInvoked: highRiskQueryDetected,
-            highRiskQueryDetected: highRiskQueryDetected
+            highRiskQueryDetected: highRiskQueryDetected,
+            turnSteward: turnSteward
         )
     }
 

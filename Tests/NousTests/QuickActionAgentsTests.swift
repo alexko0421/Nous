@@ -289,6 +289,61 @@ final class QuickActionMemoryPolicyTests: XCTestCase {
     func testFullAndLeanAreDistinct() {
         XCTAssertNotEqual(QuickActionMemoryPolicy.full, QuickActionMemoryPolicy.lean)
     }
+
+    func testProjectOnlyPresetIncludesOnlyProjectLayersAndBehaviorProfile() {
+        let p = QuickActionMemoryPolicy.fromStewardPreset(.projectOnly)
+
+        XCTAssertFalse(p.includeGlobalMemory)
+        XCTAssertFalse(p.includeEssentialStory)
+        XCTAssertFalse(p.includeUserModel)
+        XCTAssertFalse(p.includeMemoryEvidence)
+        XCTAssertTrue(p.includeProjectMemory)
+        XCTAssertFalse(p.includeConversationMemory)
+        XCTAssertFalse(p.includeRecentConversations)
+        XCTAssertTrue(p.includeProjectGoal)
+        XCTAssertFalse(p.includeCitations)
+        XCTAssertFalse(p.includeContradictionRecall)
+        XCTAssertFalse(p.includeJudgeFocus)
+        XCTAssertTrue(p.includeBehaviorProfile)
+    }
+
+    func testConversationOnlyPresetIncludesOnlyConversationLayerAndBehaviorProfile() {
+        let p = QuickActionMemoryPolicy.fromStewardPreset(.conversationOnly)
+
+        XCTAssertFalse(p.includeGlobalMemory)
+        XCTAssertFalse(p.includeEssentialStory)
+        XCTAssertFalse(p.includeUserModel)
+        XCTAssertFalse(p.includeMemoryEvidence)
+        XCTAssertFalse(p.includeProjectMemory)
+        XCTAssertTrue(p.includeConversationMemory)
+        XCTAssertFalse(p.includeRecentConversations)
+        XCTAssertFalse(p.includeProjectGoal)
+        XCTAssertFalse(p.includeCitations)
+        XCTAssertFalse(p.includeContradictionRecall)
+        XCTAssertFalse(p.includeJudgeFocus)
+        XCTAssertTrue(p.includeBehaviorProfile)
+    }
+
+    func testSupportFirstDisablesContradictionRecallAndJudgeFocus() {
+        let p = QuickActionMemoryPolicy.full.applyingChallengeStance(.supportFirst)
+
+        XCTAssertTrue(p.includeGlobalMemory)
+        XCTAssertTrue(p.includeProjectGoal)
+        XCTAssertTrue(p.includeBehaviorProfile)
+        XCTAssertFalse(p.includeContradictionRecall)
+        XCTAssertFalse(p.includeJudgeFocus)
+    }
+
+    func testNonSupportChallengeStancesKeepPolicyUnchanged() {
+        XCTAssertEqual(
+            QuickActionMemoryPolicy.full.applyingChallengeStance(.useSilently),
+            .full
+        )
+        XCTAssertEqual(
+            QuickActionMemoryPolicy.full.applyingChallengeStance(.surfaceTension),
+            .full
+        )
+    }
 }
 
 final class QuickActionModeAgentExtensionTests: XCTestCase {

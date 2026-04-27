@@ -105,6 +105,87 @@ struct QuickActionMemoryPolicy: Equatable {
         includeJudgeFocus: false,
         includeBehaviorProfile: false
     )
+
+    func with(
+        includeGlobalMemory: Bool? = nil,
+        includeEssentialStory: Bool? = nil,
+        includeUserModel: Bool? = nil,
+        includeMemoryEvidence: Bool? = nil,
+        includeProjectMemory: Bool? = nil,
+        includeConversationMemory: Bool? = nil,
+        includeRecentConversations: Bool? = nil,
+        includeProjectGoal: Bool? = nil,
+        includeCitations: Bool? = nil,
+        includeContradictionRecall: Bool? = nil,
+        includeJudgeFocus: Bool? = nil,
+        includeBehaviorProfile: Bool? = nil
+    ) -> QuickActionMemoryPolicy {
+        QuickActionMemoryPolicy(
+            includeGlobalMemory: includeGlobalMemory ?? self.includeGlobalMemory,
+            includeEssentialStory: includeEssentialStory ?? self.includeEssentialStory,
+            includeUserModel: includeUserModel ?? self.includeUserModel,
+            includeMemoryEvidence: includeMemoryEvidence ?? self.includeMemoryEvidence,
+            includeProjectMemory: includeProjectMemory ?? self.includeProjectMemory,
+            includeConversationMemory: includeConversationMemory ?? self.includeConversationMemory,
+            includeRecentConversations: includeRecentConversations ?? self.includeRecentConversations,
+            includeProjectGoal: includeProjectGoal ?? self.includeProjectGoal,
+            includeCitations: includeCitations ?? self.includeCitations,
+            includeContradictionRecall: includeContradictionRecall ?? self.includeContradictionRecall,
+            includeJudgeFocus: includeJudgeFocus ?? self.includeJudgeFocus,
+            includeBehaviorProfile: includeBehaviorProfile ?? self.includeBehaviorProfile
+        )
+    }
+
+    static func fromStewardPreset(_ preset: TurnMemoryPolicyPreset) -> QuickActionMemoryPolicy {
+        switch preset {
+        case .full:
+            return .full
+        case .lean:
+            return .lean
+        case .projectOnly:
+            return QuickActionMemoryPolicy(
+                includeGlobalMemory: false,
+                includeEssentialStory: false,
+                includeUserModel: false,
+                includeMemoryEvidence: false,
+                includeProjectMemory: true,
+                includeConversationMemory: false,
+                includeRecentConversations: false,
+                includeProjectGoal: true,
+                includeCitations: false,
+                includeContradictionRecall: false,
+                includeJudgeFocus: false,
+                includeBehaviorProfile: true
+            )
+        case .conversationOnly:
+            return QuickActionMemoryPolicy(
+                includeGlobalMemory: false,
+                includeEssentialStory: false,
+                includeUserModel: false,
+                includeMemoryEvidence: false,
+                includeProjectMemory: false,
+                includeConversationMemory: true,
+                includeRecentConversations: false,
+                includeProjectGoal: false,
+                includeCitations: false,
+                includeContradictionRecall: false,
+                includeJudgeFocus: false,
+                includeBehaviorProfile: true
+            )
+        }
+    }
+
+    func applyingChallengeStance(_ stance: ChallengeStance) -> QuickActionMemoryPolicy {
+        switch stance {
+        case .supportFirst:
+            return with(
+                includeContradictionRecall: false,
+                includeJudgeFocus: false
+            )
+        case .useSilently, .surfaceTension:
+            return self
+        }
+    }
 }
 
 enum QuickActionTurnDirective: Equatable {
