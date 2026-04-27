@@ -138,6 +138,43 @@ final class ProvocationOrchestrationTests: XCTestCase {
         XCTAssertEqual(viewModel.messages.last?.content, finalGuidance)
     }
 
+    /// Asserts a quick mode that uses single-turn completion (Direction, Brainstorm).
+    /// After L2.5, these modes drop active state on the first user reply — no clarify
+    /// card phase, no second user turn under the active mode marker.
+    @MainActor
+    private func assertSingleTurnQuickModeCompletes(
+        mode: QuickActionMode,
+        openingReply: String,
+        userInput: String,
+        finalGuidance: String
+    ) async {
+        llm.replyOutput = openingReply
+        await viewModel.beginQuickActionConversation(mode)
+
+        llm.replyOutput = finalGuidance
+        viewModel.inputText = userInput
+        await viewModel.send()
+
+        let chatSystems = llm.receivedSystems.compactMap { $0 }.filter {
+            $0.contains("ACTIVE QUICK MODE: \(mode.label)")
+        }
+
+        // Single-turn: opening + 1 user reply = 2 LLM calls under the active mode marker.
+        XCTAssertEqual(chatSystems.count, 2,
+                       "single-turn mode should produce 2 systems with active marker (opening + final)")
+        // Opening turn: no clarify card UI (the agent has not seen any user context yet).
+        XCTAssertFalse(chatSystems[0].contains("INTERACTIVE CLARIFICATION UI"),
+                       "opening turn must not offer a clarify card")
+        // Final turn (first user reply): shouldAllowInteractiveClarification is still true
+        // (userTurnCount == 1), so the clarification block IS present in the system prompt.
+        // The mode drops via turnDirective after the response — not via prompt suppression.
+        XCTAssertTrue(chatSystems[1].contains("INTERACTIVE CLARIFICATION UI"),
+                      "final turn system prompt includes clarification block (userTurnCount == 1)")
+        XCTAssertNil(viewModel.activeQuickActionMode,
+                     "mode must drop after single-turn completion")
+        XCTAssertEqual(viewModel.messages.last?.content, finalGuidance)
+    }
+
     func testJudgeVerdictParsesInferredMode() throws {
         let json = """
         {
@@ -363,47 +400,31 @@ final class ProvocationOrchestrationTests: XCTestCase {
     }
 
     @MainActor
-    func testQuickModeStopsOfferingClarificationAfterSecondUserTurn() async throws {
-        await assertQuickModeStopsClarifying(
+    func testDirectionModeCompletesAfterFirstUserReply() async throws {
+        // Post-L2.5: Direction completes on first user reply, no clarify card phase.
+        // Renamed from testQuickModeStopsOfferingClarificationAfterSecondUserTurn.
+        await assertSingleTurnQuickModeCompletes(
             mode: .direction,
             openingReply: """
             <phase>understanding</phase>
             What feels most stuck right now?
             """,
-            clarificationReply: """
-            <phase>understanding</phase>
-            <clarify>
-            <question>Which kind of fork is this?</question>
-            <option>School</option>
-            <option>Work</option>
-            <option>Relationship</option>
-            </clarify>
-            """,
-            firstUserInput: "I'm choosing between two paths.",
-            secondUserInput: "It's mainly about school versus going all in.",
+            userInput: "I'm choosing between school and going all in on the startup.",
             finalGuidance: "Given what you've shared, choose the path that preserves optionality for one more semester."
         )
     }
 
     @MainActor
-    func testBrainstormModeStopsClarifyingAfterSecondUserTurn() async throws {
-        await assertQuickModeStopsClarifying(
+    func testBrainstormModeCompletesAfterFirstUserReply() async throws {
+        // Post-L2.5: Brainstorm completes on first user reply, no clarify card phase.
+        // Renamed from testBrainstormModeStopsClarifyingAfterSecondUserTurn.
+        await assertSingleTurnQuickModeCompletes(
             mode: .brainstorm,
             openingReply: """
             <phase>understanding</phase>
             What are you trying to open up right now?
             """,
-            clarificationReply: """
-            <phase>understanding</phase>
-            <clarify>
-            <question>What kind of thing are we brainstorming?</question>
-            <option>Startup idea</option>
-            <option>Feature direction</option>
-            <option>Life direction</option>
-            </clarify>
-            """,
-            firstUserInput: "I want to explore a few possible directions.",
-            secondUserInput: "It's mainly a startup idea I might build.",
+            userInput: "It's a startup idea I might build — exploring possible directions.",
             finalGuidance: "Three live directions: a narrow workflow tool, a premium personal assistant, or a founder ops product. Start with the narrow workflow tool because it is easiest to validate fast."
         )
     }
