@@ -55,58 +55,83 @@ final class TurnPlanner {
         let attachmentNames = request.attachments.map(\.name)
         let retrievalQuery = ([promptQuery] + attachmentNames).joined(separator: "\n")
 
-        let citations = try retrieveCitations(
-            retrievalQuery: retrievalQuery,
-            excludingId: prepared.node.id
-        )
-        let projectGoal = try projectGoal(for: prepared.node.projectId)
-        let recentConversations = try nodeStore.fetchRecentConversationMemories(
-            limit: 2,
-            excludingId: prepared.node.id
-        )
+        // Resolve quick-action agent + policy. .full when no active quick mode.
+        let activeAgent: (any QuickActionAgent)? = request.snapshot.activeQuickActionMode?.agent()
+        let policy: QuickActionMemoryPolicy = activeAgent?.memoryPolicy() ?? .full
 
-        let globalMemory = memoryProjectionService.currentGlobal()
-        let essentialStory = memoryProjectionService.currentEssentialStory(
-            projectId: prepared.node.projectId,
-            excludingConversationId: prepared.node.id
-        )
-        let userModel = memoryProjectionService.currentUserModel(
-            projectId: prepared.node.projectId,
-            conversationId: prepared.node.id
-        )
-        let memoryEvidence = memoryProjectionService.currentBoundedEvidence(
-            projectId: prepared.node.projectId,
-            excludingConversationId: prepared.node.id
-        )
-        let projectMemory = prepared.node.projectId.flatMap {
-            memoryProjectionService.currentProject(projectId: $0)
-        }
-        let conversationMemory = memoryProjectionService.currentConversation(nodeId: prepared.node.id)
+        let citations = policy.includeCitations
+            ? try retrieveCitations(retrievalQuery: retrievalQuery, excludingId: prepared.node.id)
+            : []
+        let projectGoal = policy.includeProjectGoal
+            ? try projectGoal(for: prepared.node.projectId)
+            : nil
+        let recentConversations: [(title: String, memory: String)] = policy.includeRecentConversations
+            ? try nodeStore.fetchRecentConversationMemories(limit: 2, excludingId: prepared.node.id)
+            : []
+
+        let globalMemory = policy.includeGlobalMemory
+            ? memoryProjectionService.currentGlobal()
+            : nil
+        let essentialStory = policy.includeEssentialStory
+            ? memoryProjectionService.currentEssentialStory(
+                projectId: prepared.node.projectId,
+                excludingConversationId: prepared.node.id
+            )
+            : nil
+        let userModel = policy.includeUserModel
+            ? memoryProjectionService.currentUserModel(
+                projectId: prepared.node.projectId,
+                conversationId: prepared.node.id
+            )
+            : nil
+        let memoryEvidence: [MemoryEvidenceSnippet] = policy.includeMemoryEvidence
+            ? memoryProjectionService.currentBoundedEvidence(
+                projectId: prepared.node.projectId,
+                excludingConversationId: prepared.node.id
+            )
+            : []
+        let projectMemory = policy.includeProjectMemory
+            ? prepared.node.projectId.flatMap {
+                memoryProjectionService.currentProject(projectId: $0)
+            }
+            : nil
+        let conversationMemory = policy.includeConversationMemory
+            ? memoryProjectionService.currentConversation(nodeId: prepared.node.id)
+            : nil
 
         let nodeHits = citations.map { $0.node.id }
-        let hardRecallFacts = try contradictionMemoryService.contradictionRecallFacts(
-            projectId: prepared.node.projectId,
-            conversationId: prepared.node.id
-        )
-        let contradictionCandidateIds = Set(
-            contradictionMemoryService
-                .annotateContradictionCandidates(
-                    currentMessage: promptQuery,
-                    facts: hardRecallFacts
-                )
-                .filter(\.isContradictionCandidate)
-                .map { $0.fact.id.uuidString }
-        )
-        let citablePool = try contradictionMemoryService.citableEntryPool(
-            projectId: prepared.node.projectId,
-            conversationId: prepared.node.id,
-            nodeHits: nodeHits,
-            hardRecallFacts: hardRecallFacts,
-            contradictionCandidateIds: contradictionCandidateIds
-        )
+        let hardRecallFacts: [MemoryFactEntry] = policy.includeContradictionRecall
+            ? try contradictionMemoryService.contradictionRecallFacts(
+                projectId: prepared.node.projectId,
+                conversationId: prepared.node.id
+            )
+            : []
+        let contradictionCandidateIds: Set<String> = policy.includeContradictionRecall
+            ? Set(
+                contradictionMemoryService
+                    .annotateContradictionCandidates(
+                        currentMessage: promptQuery,
+                        facts: hardRecallFacts
+                    )
+                    .filter(\.isContradictionCandidate)
+                    .map { $0.fact.id.uuidString }
+            )
+            : []
+        // citablePool is judge input + focus lookup. Build it only when at least one
+        // of those consumers is enabled. Skipping under .lean closes the reflection /
+        // recency leak surface and avoids wasted work.
+        let citablePool: [CitableEntry] = (policy.includeContradictionRecall || policy.includeJudgeFocus)
+            ? try contradictionMemoryService.citableEntryPool(
+                projectId: prepared.node.projectId,
+                conversationId: prepared.node.id,
+                nodeHits: nodeHits,
+                hardRecallFacts: hardRecallFacts,
+                contradictionCandidateIds: contradictionCandidateIds
+            )
+            : []
 
         let provider = currentProviderProvider()
-        let feedbackLoop = buildJudgeFeedbackLoop(now: request.now)
+        let feedbackLoop = policy.includeJudgeFocus ? buildJudgeFeedbackLoop(now: request.now) : nil
         let judgeEventId = UUID()
         var verdictForLog: JudgeVerdict?
         var fallbackReason: JudgeFallbackReason = .ok
@@ -114,7 +139,12 @@ final class TurnPlanner {
         var focusBlock: String?
         var inferredMode: ChatMode?
 
-        if provider == .local {
+        if !policy.includeJudgeFocus {
+            // Quick-action agents that opt out of judge focus (e.g. Brainstorm `.lean`)
+            // run without provocation analysis so the divergent contract is not biased
+            // by judge-derived focus or inferred-mode shifts.
+            fallbackReason = .judgeUnavailable
+        } else if provider == .local {
             fallbackReason = .providerLocal
         } else if let judgeLLM = judgeLLMServiceFactory() {
             let judge = provocationJudgeFactory(judgeLLM)
@@ -158,6 +188,10 @@ final class TurnPlanner {
             activeQuickActionMode: request.snapshot.activeQuickActionMode,
             messages: prepared.messagesAfterUserAppend
         )
+
+        let turnIndex = prepared.messagesAfterUserAppend.lazy.filter { $0.role == .user }.count
+        let quickActionAddendum: String? = activeAgent?.contextAddendum(turnIndex: turnIndex)
+
         let turnSlice = ChatViewModel.assembleContext(
             chatMode: effectiveMode,
             currentUserInput: promptQuery,
@@ -172,6 +206,7 @@ final class TurnPlanner {
             projectGoal: projectGoal,
             attachments: request.attachments,
             activeQuickActionMode: request.snapshot.activeQuickActionMode,
+            quickActionAddendum: quickActionAddendum,
             allowInteractiveClarification: shouldAllowInteractiveClarification,
             now: request.now
         )
@@ -189,11 +224,19 @@ final class TurnPlanner {
             projectGoal: projectGoal,
             attachments: request.attachments,
             activeQuickActionMode: request.snapshot.activeQuickActionMode,
+            quickActionAddendum: quickActionAddendum,
             allowInteractiveClarification: shouldAllowInteractiveClarification,
             now: request.now
         )
 
-        var volatilePartsForTurn: [String] = [turnSlice.volatile, profile.contextBlock]
+        var volatilePartsForTurn: [String] = [turnSlice.volatile]
+        if policy.includeBehaviorProfile {
+            // BehaviorProfile.contextBlock contains memory-related instructions
+            // ("Use retrieved memory silently" etc) that contradict a no-memory turn.
+            // Skip it under .lean so Brainstorm runs anchor + chatMode + ACTIVE QUICK MODE
+            // marker + agent addendum only.
+            volatilePartsForTurn.append(profile.contextBlock)
+        }
         if let focusBlock {
             volatilePartsForTurn.append(focusBlock)
         }
