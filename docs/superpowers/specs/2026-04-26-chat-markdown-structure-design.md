@@ -3,7 +3,7 @@
 **Date:** 2026-04-26
 **Branch context:** `alexko0421/quick-action-agents` (L2.5 baseline — 4 commits on top of `replace-mentalhealth-with-plan`)
 **Status:** Hard gate fix before Phase 1 (A+B) of strict-AI-agent phased plan
-**Spec version:** v4 (post-codex round 3 review — 4 P2 micro-fixes from v3)
+**Spec version:** v5 (post-codex round 4 — 3 spec-consistency fixes from v4)
 
 ## Context
 
@@ -16,6 +16,14 @@ Three failure layers were identified:
 3. **Prompt strength.** Even before the cap, the LLM (Sonnet 4.6 via OpenRouter) ignored "Produce a structured plan" across turns 2–4, kept emitting `<phase>understanding</phase>`, kept asking single follow-up questions. The current addendum is too soft.
 
 User feedback (2026-04-26): "Plan should produce a well-structured deliverable — what to do each Monday / Tuesday / Wednesday." Reference: a Claude.ai screenshot showing markdown headers, bullets, and a comparison table inside chat — the desired baseline. Confirmed scope: applies to all four modes (Direction / Brainstorm / Plan / default chat), not just Plan.
+
+### v5 changes from v4 (post-codex round 4)
+
+Round 4 found 3 spec-consistency issues (no new architecture problems). v5 fixes:
+
+- **Removed contradicted underscore regex bullets** from "Sanitization of unsupported markdown" — v4 declared underscore italic out of scope but the parsing-model section still listed `__...__` / `_..._` regexes. v5 deletes those lines so the spec is internally consistent.
+- **Clarified unclosed-fence fallback semantics.** v4 said "captured content renders as regular prose segments" but the test expected `# Header` / `- bullet` inside the captured content to render as structure. v5 specifies: captured content is **re-fed to normal line-parsing**, so headings / bullets / tables inside the orphaned fence ARE recognized as structure; only the bare opening `` ``` `` delimiter line falls through as a literal prose segment. Test expectation aligned.
+- **Corrected the SwiftUI single-parse claim.** v4 wrote "SwiftUI memoizes the computed property per body recompute" — this is false. Swift computed properties re-evaluate on every access; SwiftUI does not memoize them. v5 specifies an `AssistantBubbleContent` helper view that binds `let segments = ChatMarkdownRenderer.parse(displayText)` once inside its `body`, then passes `segments` to both the renderer and `.animation(value: segments.count)`. This guarantees a single parse per body recompute through Swift's `let` binding, not through any SwiftUI magic.
 
 ### v4 changes from v3 (post-codex round 3)
 
@@ -98,7 +106,7 @@ Code fence behavior (separate segment type — see `Segment.verbatim` below):
 
 - ```` ``` ```` opens a verbatim block. Inner content is captured **as-is** (no sanitization, no delimiter stripping) until the closing ```` ``` ````. Fence delimiter lines themselves are dropped from output. The verbatim segment renders in the same chat font as prose; no syntax highlighting.
 - Fenced content does NOT pass through the prose sanitizer — code examples like `` `foo` ``, `int *p`, `i++ * 2` survive verbatim inside fences.
-- **Unclosed fence (EOF before closing `` ``` ``):** parser falls back — the opening `` ``` `` line and all captured content render as **regular prose segments** (sanitized normally), not as `Segment.verbatim`. This is essential during streaming, when a partial response may have an open fence that hasn't been closed yet. Without this fallback, an in-progress fence would swallow all subsequent text into verbatim, breaking the live-rendered structure. The close-arrives-later transition (prose → verbatim) animates via segment-count change like any other structural shift.
+- **Unclosed fence (EOF before closing `` ``` ``):** parser falls back — the opening `` ``` `` line itself renders as a literal prose segment, and **the captured content is re-fed to normal line-parsing** (so headings, bullets, tables inside the orphaned fence ARE recognized as structure). This is essential during streaming, when a partial response may have an open fence that hasn't been closed yet. Without this fallback, an in-progress fence would swallow all subsequent text into verbatim, breaking the live-rendered structure. The close-arrives-later transition (re-parsed-as-structure → verbatim block) animates via segment-count change like any other structural shift.
 
 Rationale: an LLM under a Cantonese stoic voice contract will occasionally emit `**emphasis**` or `1. item` despite the soft 「」 rule. Showing raw `**` is a visible regression. Stripping only **balanced** delimiters preserves legitimate technical prose. Code fences as a verbatim segment guarantee the only safe place for code examples is intact.
 
@@ -140,41 +148,53 @@ enum Segment {
 
 Output is a `VStack(alignment: .leading)` of segment views with `assistantParagraphSpacing` (14) between segments. Each segment internally uses font 14, color `colaDarkText`, line spacing 8 (matching current assistant prose style).
 
-**Sanitization of unsupported markdown is balanced-pair only:**
+**Sanitization of unsupported markdown is balanced-pair only, and only for asterisk delimiters:**
 
-- Strip `**...**` and `__...__` only when both delimiters present in the same line: regex `\*\*([^\*]+)\*\*` → `$1`, `__([^_]+)__` → `$1`.
-- Strip `*...*` and `_..._` only when balanced (same line, content non-empty): `(?<!\*)\*([^\*\s][^\*]*?)\*(?!\*)` → `$1` (negative lookbehind/lookahead avoids interfering with `**bold**`). Same shape for `_`.
-- Strip `` `...` `` (inline code) only when balanced: `` `([^`]+)` `` → `$1`. Verify `int *p` (no balanced `*`), `*.swift` (`*` followed by non-`*`), `3 * 4` (spaces around `*`), `if (n > 0) {` (no `*`/`_`) all pass through unchanged.
+- Strip `**...**` only when both delimiters present in the same line: regex `\*\*([^\*]+)\*\*` → `$1`.
+- Strip `*...*` only when balanced (same line, content non-empty): `(?<!\*)\*([^\*\s][^\*]*?)\*(?!\*)` → `$1` (negative lookbehind/lookahead avoids interfering with `**bold**`).
+- Strip `` `...` `` (inline code) only when balanced: `` `([^`]+)` `` → `$1`. Verify `int *p` (no balanced `*`), `*.swift` (`*` followed by non-`*`), `3 * 4` (spaces around `*`), `if (n > 0) {` (no `*`) all pass through unchanged.
 - Strip line-start `^\d+\.\s+` and `^>\s+` unconditionally (these are positional markers, no balancing needed).
+- **Underscores `_` are NEVER stripped.** Per non-goals, underscore italic (`_text_`, `__text__`) is out of scope for v1 to preserve `snake_case_var`, `__init__`, etc. If the LLM emits underscores, they render literally.
 
 Verbatim segments skip sanitization entirely — fenced code renders as captured.
 
 #### `MessageBubble` integration
 
-`MessageBubble` (`Sources/Nous/Views/ChatArea.swift:532`) currently has a single computed property `paragraphTexts` (line 543) that runs `normalizedParagraphs` unconditionally before the user/assistant branch. **Split into three computed properties so parsing happens exactly once per body recompute:**
+`MessageBubble` (`Sources/Nous/Views/ChatArea.swift:532`) currently has a single computed property `paragraphTexts` (line 543) that runs `normalizedParagraphs` unconditionally before the user/assistant branch.
+
+**Refactor:** split user / assistant rendering into separate paths, and extract the assistant body into a helper view so a single `let segments` binding ensures one parse per body recompute.
 
 ```swift
-// User branch input — same as today
 private var userParagraphTexts: [String] {
-    Self.normalizedParagraphs(from: text)  // text is already the user's raw input
+    Self.normalizedParagraphs(from: text)
 }
 
-// Assistant branch parsed text (after ClarificationCardParser)
 private var assistantDisplayText: String {
     ClarificationCardParser.parse(text).displayText
 }
 
-// Assistant segments — single parse, reused by both renderer and animation value
-private var assistantSegments: [Segment] {
-    ChatMarkdownRenderer.parse(assistantDisplayText)
+// MessageBubble.body switches on isUser:
+// - isUser == true (line 557 area): unchanged — ForEach over userParagraphTexts rendering each via Text(...).
+// - isUser == false: render AssistantBubbleContent(displayText: assistantDisplayText)
+
+private struct AssistantBubbleContent: View {
+    let displayText: String
+
+    var body: some View {
+        // Single parse per body recompute — Swift `let` binding, no SwiftUI memoization assumed.
+        let segments = ChatMarkdownRenderer.parse(displayText)
+        return ChatMarkdownRenderer(segments: segments)
+            .frame(maxWidth: assistantTextMaxWidth, alignment: .leading)
+            .padding(.top, 6)
+            .padding(.bottom, 10)
+            .animation(.easeOut(duration: 0.15), value: segments.count)
+    }
 }
 ```
 
-The `body` switches on `isUser`:
+Why a helper view rather than a computed property: Swift computed properties re-evaluate on every access. SwiftUI does not memoize them. If `assistantSegments` were accessed in both the renderer and the `.animation(value:)` modifier, parsing would happen twice per body recompute. The helper view's `let segments = ...` binding inside `body` evaluates exactly once and is shared by both downstream references.
 
-- `isUser == true` (line 557 area): unchanged — `ForEach` over `userParagraphTexts` rendering each via `Text(...)`.
-- `isUser == false` (line 575 area): replace the `ForEach { Text(paragraph) }` with a single `ChatMarkdownRenderer(segments: assistantSegments)` call. The renderer takes parsed `[Segment]` directly, no internal re-parse. Existing `assistantTextMaxWidth: 690` and padding are preserved.
-- The `.animation(.easeOut(duration: 0.15), value: paragraphTexts)` at line 592 changes its `value:` parameter to `assistantSegments.count`. SwiftUI memoizes the computed property per body recompute, so this references the same parse already done for the renderer — no double parse. Streaming a single growing prose segment produces no animation churn (count stays 1); a new heading / bullet block / table appearing animates once when its segment is added.
+Existing `assistantTextMaxWidth: 690` and padding are preserved. Streaming a single growing prose segment produces no animation churn (count stays 1); a new heading / bullet block / table appearing animates once when its segment is added.
 
 Old `normalizedParagraphs` stays as a private static helper used only by `userParagraphTexts`.
 
@@ -284,7 +304,7 @@ After A+B+C land in one branch / one PR:
   - `1. item` strips leading `1. ` to `item`. `> quote` strips leading `> ` to `quote`.
   - **Preserves**: `int *p` (single `*`, unbalanced), `*.swift` (`*` not paired before whitespace), `3 * 4` (spaces around `*`), `if (n > 0)` (unbalanced `>`), `snake_case_var` (underscore italic NOT sanitized, identifier intact), `__init__` (double underscore NOT sanitized), `_leading_underscore` (literal), inline mention of literal `**` without text between (`a ** b` if `**` would have to cross word boundaries — depends on regex; explicit test).
   - Fenced code block content survives verbatim — input `` ```\nint *p = `foo`;\n``` `` produces a `Segment.verbatim("int *p = `foo`;")`, no stripping.
-  - **Unclosed fence fallback**: input `` ```\nint *p\n# Header\n- bullet `` (no closing fence) parses as **prose segments** (the literal `` ``` `` line, then `int *p`, then `# Header` as heading, then `- bullet` as bullet block) — NOT a single verbatim segment swallowing all 4 lines.
+  - **Unclosed fence fallback**: input `` ```\nint *p\n# Header\n- bullet `` (no closing fence) parses with the bare `` ``` `` line as a literal prose segment AND the captured content re-fed to normal line parsing — so `int *p` becomes a prose segment, `# Header` becomes a heading segment, `- bullet` becomes a bullet block segment. NOT a single verbatim segment swallowing all 4 lines.
 - `ChatMarkdownRendererTests` table strictness:
   - Standard `| a | b |\n| --- | --- |\n| 1 | 2 |` parses as table.
   - `| a | b |\n|---|---|\n| 1 | 2 |` (no inner whitespace) parses as table.
@@ -330,7 +350,7 @@ Add new memory `project_anchor_is_frozen`:
 - **Brainstorm voice regression risk.** Adding bullet format guidance is a mode-addendum edit, not anchor.md edit, so `feedback_anchor_count_ceiling` does not directly apply — but voice impact still possible. Live-test confirms.
 - **Sanitization over-strips.** A user's prose containing literal `*` in Cantonese context (rare but possible in technical discussion: "C 嘅 `int *p`") could lose its asterisk. Acceptable for v1 — emphasis is the dominant LLM use of `*`, and the bug is recoverable by the user re-quoting with backticks (which would also be stripped, but conveying intent).
 - **Cap-aware addendum still ignored.** If the LLM ignores even the FINAL urgent contract, we're back to silent degradation. Mitigation: live test specifically for cap behavior; backstop is the deferred true synthetic turn (option C).
-- **Animation value change.** Switching `.animation(value:)` to `assistantSegments.count` (computed property) makes animation fire only on segment count changes (new heading / bullet block / table appearing) — much fewer animations than v2's per-token approach. Single parse per body recompute (computed property memoized by SwiftUI). Test once with a long Plan response under streaming to confirm no janky flashes when a table block first appears.
+- **Animation value change.** Switching `.animation(value:)` to `segments.count` (bound by `let` inside the `AssistantBubbleContent` helper view) makes animation fire only on segment count changes (new heading / bullet block / table appearing) — much fewer animations than v2's per-token approach. Single parse per body recompute via Swift `let` binding (Swift computed properties are NOT memoized by SwiftUI; the helper-view + `let` pattern is what guarantees one parse). Test once with a long Plan response under streaming to confirm no janky flashes when a table block first appears.
 - **Sanitization regex backtracking.** Balanced-pair regexes with negative lookbehind/lookahead can hit catastrophic backtracking on adversarial input (e.g. very long lines of `*`). Add a fuzz test or input length cap (e.g. skip sanitization on lines > 4 KB) as defensive guardrail.
 - **`<summary>` interaction.** Long-form summaries that previously rendered as plain prose now render with markdown structure. This is a behavior change for the scratchpad-summary surface in chat. Tests cover the parse-through; manually verify a previously-summarized conversation still looks reasonable.
 
