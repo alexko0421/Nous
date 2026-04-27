@@ -21,10 +21,12 @@ final class UserMemoryCore {
     static let evidenceSnippetBudget = 180
     static let userModelFacetLimit = 3
     static let contradictionFactKinds: [MemoryKind] = [.decision, .boundary, .constraint]
+    private static let evidenceTimestampFormatter = ISO8601DateFormatter()
 
     private let nodeStore: NodeStore
     private let llmServiceProvider: () -> (any LLMService)?
     private let governanceTelemetry: GovernanceTelemetryStore?
+    private let embedFunction: (String) -> [Float]?
 
     struct AnnotatedContradictionFact: Equatable {
         let fact: MemoryFactEntry
@@ -35,11 +37,13 @@ final class UserMemoryCore {
     init(
         nodeStore: NodeStore,
         llmServiceProvider: @escaping () -> (any LLMService)?,
-        governanceTelemetry: GovernanceTelemetryStore? = nil
+        governanceTelemetry: GovernanceTelemetryStore? = nil,
+        embedFunction: @escaping (String) -> [Float]? = { _ in nil }
     ) {
         self.nodeStore = nodeStore
         self.llmServiceProvider = llmServiceProvider
         self.governanceTelemetry = governanceTelemetry
+        self.embedFunction = embedFunction
     }
 
     // MARK: - Read (used by ChatViewModel.assembleContext)
@@ -458,9 +462,9 @@ final class UserMemoryCore {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
 
-        let cleanedUserTurns: [String] = messages
+        let cleanedUserMessages: [Message] = messages
             .filter { $0.role == .user }
-            .compactMap { msg -> String? in
+            .compactMap { msg -> Message? in
                 let stripped = Self.stripQuoteBlocks(msg.content)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !stripped.isEmpty else { return nil }
@@ -469,10 +473,19 @@ final class UserMemoryCore {
                         return nil
                     }
                 }
-                return stripped
+                return Message(
+                    id: msg.id,
+                    nodeId: msg.nodeId,
+                    role: msg.role,
+                    content: stripped,
+                    timestamp: msg.timestamp,
+                    thinkingContent: nil
+                )
             }
 
-        let userTurns = cleanedUserTurns
+        let recentUserMessages = Array(cleanedUserMessages.suffix(8))
+        let userTurns = recentUserMessages
+            .map(\.content)
             .suffix(8)
             .joined(separator: "\n---\n")
 
@@ -534,7 +547,7 @@ final class UserMemoryCore {
             )
             await refreshConversationFacts(
                 nodeId: nodeId,
-                userTurns: userTurns,
+                userMessages: recentUserMessages,
                 now: now
             )
             if let projectId = projectId {
@@ -1006,16 +1019,104 @@ final class UserMemoryCore {
         let confidence: Double?
     }
 
+    private struct ExtractedDecisionChainPayload: Decodable {
+        let rejectedProposal: String?
+        let rejection: String?
+        let reasons: [String]?
+        let replacement: String?
+        let evidenceMessageId: String?
+        let evidenceQuote: String?
+        let confidence: Double?
+
+        enum CodingKeys: String, CodingKey {
+            case rejectedProposal = "rejected_proposal"
+            case rejection
+            case reasons
+            case replacement
+            case evidenceMessageId = "evidence_message_id"
+            case evidenceQuote = "evidence_quote"
+            case confidence
+        }
+    }
+
+    private struct ExtractedSemanticAtomPayload: Decodable {
+        let type: String
+        let statement: String?
+        let corrects: String?
+        let evidenceMessageId: String?
+        let evidenceQuote: String?
+        let confidence: Double?
+
+        enum CodingKeys: String, CodingKey {
+            case type
+            case statement
+            case corrects
+            case evidenceMessageId = "evidence_message_id"
+            case evidenceQuote = "evidence_quote"
+            case confidence
+        }
+    }
+
     private struct ExtractedFactEnvelope: Decodable {
-        let facts: [ExtractedFactPayload]
+        let facts: [ExtractedFactPayload]?
+        let decisionChains: [ExtractedDecisionChainPayload]?
+        let semanticAtoms: [ExtractedSemanticAtomPayload]?
+
+        enum CodingKeys: String, CodingKey {
+            case facts
+            case decisionChains = "decision_chains"
+            case semanticAtoms = "semantic_atoms"
+        }
+    }
+
+    private struct ExtractedDecisionChain {
+        let rejectedProposal: String
+        let rejection: String
+        let reasons: [String]
+        let replacement: String?
+        let evidenceMessageId: UUID?
+        let evidenceQuote: String?
+        let confidence: Double
+    }
+
+    private struct VerifiedDecisionChain {
+        let chain: ExtractedDecisionChain
+        let sourceMessage: Message
+    }
+
+    /// Semantic atoms (preference / belief / correction) live OUTSIDE the
+    /// burn-and-replace lifecycle that decision chains use. They are upserted
+    /// by normalized_key and survive refresh cycles that don't re-mention
+    /// them — otherwise a stable preference Alex stated last week would
+    /// disappear the moment this week's chat extracted a different topic.
+    private struct ExtractedSemanticAtom {
+        let type: MemoryAtomType
+        let statement: String
+        let correctsTarget: String?
+        let evidenceMessageId: UUID?
+        let evidenceQuote: String?
+        let confidence: Double
+    }
+
+    private struct VerifiedSemanticAtom {
+        let atom: ExtractedSemanticAtom
+        let sourceMessage: Message
+    }
+
+    private struct ExtractedMemoryPayload {
+        let facts: [(kind: MemoryKind, content: String, confidence: Double)]
+        let decisionChains: [ExtractedDecisionChain]
+        let semanticAtoms: [ExtractedSemanticAtom]
     }
 
     private func refreshConversationFacts(
         nodeId: UUID,
-        userTurns: String,
+        userMessages: [Message],
         now: Date
     ) async {
         guard let llm = llmServiceProvider() else { return }
+        let userTurns = Self.evidenceUserTurns(from: userMessages)
+        guard !userTurns.isEmpty else { return }
 
         let existingBlock = activeFactBlock(scope: .conversation, scopeRefId: nodeId)
         let prompt = """
@@ -1025,17 +1126,51 @@ final class UserMemoryCore {
         Recent things Alex said (ALEX ONLY — Nous's replies are intentionally omitted to avoid self-confirmation loops):
         \(userTurns)
 
-        Return a JSON array of the currently active contradiction-oriented facts for this chat.
-        Each item must be:
-        {"kind":"decision|boundary|constraint","content":"...","confidence":0.0-1.0}
+        Return strict JSON for the currently active memory artefacts for this chat:
+        {
+          "facts": [
+            {"kind":"decision|boundary|constraint","content":"...","confidence":0.0-1.0}
+          ],
+          "decision_chains": [
+            {
+              "rejected_proposal":"the option Alex rejected",
+              "rejection":"the explicit rejection/decision",
+              "reasons":["why it was rejected"],
+              "replacement":"the direction chosen instead, if any",
+              "evidence_message_id":"the message_id containing the evidence quote",
+              "evidence_quote":"short exact quote from Alex's message proving this chain",
+              "confidence":0.0-1.0
+            }
+          ],
+          "semantic_atoms": [
+            {
+              "type":"preference|belief|correction|goal|plan|rule|pattern",
+              "statement":"the durable claim in Alex's voice",
+              "corrects":"(only when type=correction) short paraphrase of the prior belief/preference/goal/plan/rule Alex is retracting, in the form Alex would have stated it before",
+              "evidence_message_id":"the message_id containing the evidence quote",
+              "evidence_quote":"short exact quote from Alex's message proving this atom",
+              "confidence":0.0-1.0
+            }
+          ]
+        }
 
         Rules:
         - decision = an explicit choice Alex made
         - boundary = a red line, do-not-cross rule, or operating principle
         - constraint = a real limitation or non-negotiable condition
+        - decision_chains are only for explicit reject/deny/not-this moments where Alex gives a reason or replacement direction
+        - preference = a durable like / dislike / want / don't-want Alex states
+        - belief = a judgement about the world or himself Alex states explicitly
+        - correction = an explicit retraction of a prior position ("I no longer ...", "I was wrong that ...")
+        - goal = an outcome Alex wants to achieve, with a clear endpoint or aspiration
+        - plan = the path or sequence Alex intends to follow toward an outcome
+        - rule = an operating principle Alex follows in his work or life — softer than a boundary, sharper than a preference
+        - pattern = a recurring behaviour or thought pattern Alex notices about himself
+        - For corrections that retract a specific prior belief / preference / goal / plan / rule, include `corrects` matching that prior claim's wording — omit the field when the retraction is generic
+        - Every decision_chain and every semantic_atom MUST include evidence_message_id and evidence_quote from one listed Alex message
         - Only keep facts Alex himself said or clearly implied
         - Only keep facts that still seem active for this chat
-        - If there are none, return []
+        - If there are none, return {"facts":[],"decision_chains":[],"semantic_atoms":[]}
         - JSON only. No Markdown, no commentary
         """
 
@@ -1043,9 +1178,9 @@ final class UserMemoryCore {
             let stream = try await llm.generate(
                 messages: [LLMMessage(role: "user", content: prompt)],
                 system: """
-                You extract contradiction-oriented memory facts for Nous.
-                Allowed kinds: decision, boundary, constraint.
-                Never emit identity, preference, relationship, or thread summaries.
+                You extract memory for Nous: contradiction-oriented facts (decision/boundary/constraint), \
+                decision chains, and semantic atoms (preference/belief/correction).
+                Never emit identity or relationship summaries — those belong to other layers.
                 Return strict JSON only.
                 """
             )
@@ -1058,7 +1193,14 @@ final class UserMemoryCore {
 
             if Task.isCancelled { return }
 
-            let facts = try Self.decodeFactPayloads(raw).map {
+            let extraction = try Self.decodeMemoryPayload(raw)
+            let verifiedDecisionChains = extraction.decisionChains.compactMap {
+                Self.verifiedDecisionChain($0, userMessages: userMessages)
+            }
+            let verifiedSemanticAtoms = extraction.semanticAtoms.compactMap {
+                Self.verifiedSemanticAtom($0, userMessages: userMessages)
+            }
+            let facts = extraction.facts.map {
                 MemoryFactEntry(
                     scope: .conversation,
                     scopeRefId: nodeId,
@@ -1076,6 +1218,8 @@ final class UserMemoryCore {
                 scope: .conversation,
                 scopeRefId: nodeId,
                 with: facts,
+                decisionChains: verifiedDecisionChains,
+                semanticAtoms: verifiedSemanticAtoms,
                 now: now
             )
         } catch {
@@ -1117,10 +1261,17 @@ final class UserMemoryCore {
         scope: MemoryScope,
         scopeRefId: UUID?,
         with entries: [MemoryFactEntry],
+        decisionChains: [VerifiedDecisionChain] = [],
+        semanticAtoms: [VerifiedSemanticAtom] = [],
         now: Date
     ) {
+        let embed = embedFunction
         Self.logPersistenceErrors("replaceActiveFacts(\(scope.rawValue))") {
             try nodeStore.inTransaction {
+                let writer = MemoryGraphWriter(nodeStore: nodeStore, embed: embed)
+                var atoms = try nodeStore.fetchMemoryAtoms()
+                var edges = try nodeStore.fetchMemoryEdges()
+                var writeResult = MemoryGraphWriteResult()
                 let existing = try nodeStore.fetchActiveMemoryFactEntries(
                     scope: scope,
                     scopeRefId: scopeRefId,
@@ -1131,11 +1282,87 @@ final class UserMemoryCore {
                     fact.updatedAt = now
                     try nodeStore.updateMemoryFactEntry(fact)
                 }
+                try archiveActiveExtractionAtoms(
+                    scope: scope,
+                    scopeRefId: scopeRefId,
+                    now: now
+                )
                 for entry in Self.dedupedFactEntries(entries) {
                     try nodeStore.insertMemoryFactEntry(entry)
+                    if let atom = Self.memoryAtom(from: entry, now: now) {
+                        _ = try writer.upsertAtom(atom, atoms: &atoms, result: &writeResult)
+                    }
+                }
+                for chain in decisionChains {
+                    try insertDecisionChainAtoms(
+                        chain,
+                        scope: scope,
+                        scopeRefId: scopeRefId,
+                        now: now,
+                        writer: writer,
+                        atoms: &atoms,
+                        edges: &edges,
+                        result: &writeResult
+                    )
+                }
+                for verified in semanticAtoms {
+                    let candidate = Self.semanticAtom(
+                        verified,
+                        scope: scope,
+                        scopeRefId: scopeRefId,
+                        now: now
+                    )
+                    let upserted = try writer.upsertAtom(
+                        candidate,
+                        atoms: &atoms,
+                        result: &writeResult
+                    )
+                    if verified.atom.type == .correction,
+                       let correctsText = verified.atom.correctsTarget {
+                        // Pattern atoms intentionally excluded — patterns
+                        // describe self-observation, not commitment, so they
+                        // fade by absence rather than being retracted.
+                        try writer.supersedeMatchingClaims(
+                            matching: correctsText,
+                            targetTypes: [.belief, .preference, .goal, .plan, .rule],
+                            superseder: upserted,
+                            confidence: verified.atom.confidence,
+                            now: now,
+                            atoms: &atoms,
+                            edges: &edges,
+                            result: &writeResult
+                        )
+                    }
                 }
             }
         }
+    }
+
+    private static func semanticAtom(
+        _ verified: VerifiedSemanticAtom,
+        scope: MemoryScope,
+        scopeRefId: UUID?,
+        now: Date
+    ) -> MemoryAtom {
+        let sourceNodeId = scope == .conversation ? scopeRefId : nil
+        return MemoryAtom(
+            type: verified.atom.type,
+            statement: verified.atom.statement,
+            normalizedKey: MemoryGraphWriter.normalizedKey(
+                type: verified.atom.type,
+                statement: verified.atom.statement
+            ),
+            scope: scope,
+            scopeRefId: scopeRefId,
+            status: .active,
+            confidence: verified.atom.confidence,
+            eventTime: verified.sourceMessage.timestamp,
+            createdAt: now,
+            updatedAt: now,
+            lastSeenAt: now,
+            sourceNodeId: sourceNodeId,
+            sourceMessageId: verified.sourceMessage.id
+        )
     }
 
     private func activeFactBlock(scope: MemoryScope, scopeRefId: UUID?) -> String {
@@ -1242,6 +1469,44 @@ final class UserMemoryCore {
         return String(trimmed[..<limit]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private static func evidenceUserTurns(from messages: [Message]) -> String {
+        messages
+            .map { message in
+                let timestamp = evidenceTimestampFormatter.string(from: message.timestamp)
+                return "[message_id=\(message.id.uuidString) timestamp=\(timestamp)] \(message.content)"
+            }
+            .joined(separator: "\n---\n")
+    }
+
+    private static func verifiedDecisionChain(
+        _ chain: ExtractedDecisionChain,
+        userMessages: [Message]
+    ) -> VerifiedDecisionChain? {
+        guard let match = MemoryGraphEvidenceMatcher.match(
+            evidenceMessageId: chain.evidenceMessageId,
+            evidenceQuote: chain.evidenceQuote,
+            messages: userMessages
+        ) else {
+            return nil
+        }
+
+        return VerifiedDecisionChain(chain: chain, sourceMessage: match.message)
+    }
+
+    private static func verifiedSemanticAtom(
+        _ atom: ExtractedSemanticAtom,
+        userMessages: [Message]
+    ) -> VerifiedSemanticAtom? {
+        guard let match = MemoryGraphEvidenceMatcher.match(
+            evidenceMessageId: atom.evidenceMessageId,
+            evidenceQuote: atom.evidenceQuote,
+            messages: userMessages
+        ) else {
+            return nil
+        }
+        return VerifiedSemanticAtom(atom: atom, sourceMessage: match.message)
+    }
+
     private static func normalizedLine(_ content: String) -> String {
         content
             .lowercased()
@@ -1251,22 +1516,32 @@ final class UserMemoryCore {
     }
 
     private static func decodeFactPayloads(_ raw: String) throws -> [(kind: MemoryKind, content: String, confidence: Double)] {
+        try decodeMemoryPayload(raw).facts
+    }
+
+    private static func decodeMemoryPayload(_ raw: String) throws -> ExtractedMemoryPayload {
         let decoder = JSONDecoder()
         let cleaned = stripJSONCodeFence(raw)
         guard let data = cleaned.data(using: .utf8) else {
             throw LLMError.invalidResponse
         }
 
-        let payloads: [ExtractedFactPayload]
+        let factPayloads: [ExtractedFactPayload]
+        let chainPayloads: [ExtractedDecisionChainPayload]
+        let semanticAtomPayloads: [ExtractedSemanticAtomPayload]
         if let direct = try? decoder.decode([ExtractedFactPayload].self, from: data) {
-            payloads = direct
+            factPayloads = direct
+            chainPayloads = []
+            semanticAtomPayloads = []
         } else if let wrapped = try? decoder.decode(ExtractedFactEnvelope.self, from: data) {
-            payloads = wrapped.facts
+            factPayloads = wrapped.facts ?? []
+            chainPayloads = wrapped.decisionChains ?? []
+            semanticAtomPayloads = wrapped.semanticAtoms ?? []
         } else {
             throw LLMError.invalidResponse
         }
 
-        return payloads.compactMap { payload in
+        let facts: [(kind: MemoryKind, content: String, confidence: Double)] = factPayloads.compactMap { payload in
             guard let kind = contradictionFactKind(from: payload.kind) else { return nil }
             let content = payload.content.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !content.isEmpty else { return nil }
@@ -1276,6 +1551,74 @@ final class UserMemoryCore {
                 confidence: clampConfidence(payload.confidence ?? 0.8)
             )
         }
+
+        let decisionChains = chainPayloads.compactMap { payload -> ExtractedDecisionChain? in
+            guard let rejectedProposal = payload.rejectedProposal?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !rejectedProposal.isEmpty,
+                  let rejection = payload.rejection?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !rejection.isEmpty
+            else {
+                return nil
+            }
+
+            let reasons = (payload.reasons ?? [])
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            let replacement = payload.replacement?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let evidenceQuote = payload.evidenceQuote?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let evidenceMessageId = payload.evidenceMessageId
+                .flatMap(UUID.init(uuidString:))
+
+            return ExtractedDecisionChain(
+                rejectedProposal: rejectedProposal,
+                rejection: rejection,
+                reasons: reasons,
+                replacement: replacement?.isEmpty == true ? nil : replacement,
+                evidenceMessageId: evidenceMessageId,
+                evidenceQuote: evidenceQuote?.isEmpty == true ? nil : evidenceQuote,
+                confidence: clampConfidence(payload.confidence ?? 0.8)
+            )
+        }
+
+        let semanticAtoms = semanticAtomPayloads.compactMap { payload -> ExtractedSemanticAtom? in
+            guard let type = semanticAtomType(from: payload.type) else { return nil }
+            let statement = payload.statement?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !statement.isEmpty else { return nil }
+            let evidenceQuote = payload.evidenceQuote?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let evidenceMessageId = payload.evidenceMessageId
+                .flatMap(UUID.init(uuidString:))
+            let correctsTarget = payload.corrects?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return ExtractedSemanticAtom(
+                type: type,
+                statement: statement,
+                correctsTarget: correctsTarget?.isEmpty == true ? nil : correctsTarget,
+                evidenceMessageId: evidenceMessageId,
+                evidenceQuote: evidenceQuote?.isEmpty == true ? nil : evidenceQuote,
+                confidence: clampConfidence(payload.confidence ?? 0.8)
+            )
+        }
+
+        return ExtractedMemoryPayload(
+            facts: facts,
+            decisionChains: decisionChains,
+            semanticAtoms: semanticAtoms
+        )
+    }
+
+    private static let semanticAtomTypes: Set<MemoryAtomType> = [
+        .preference, .belief, .correction,
+        .goal, .plan, .rule, .pattern
+    ]
+
+    private static func semanticAtomType(from raw: String) -> MemoryAtomType? {
+        let normalized = raw.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let type = MemoryAtomType(rawValue: normalized) else { return nil }
+        guard semanticAtomTypes.contains(type) else { return nil }
+        return type
     }
 
     private static func contradictionFactKind(from raw: String) -> MemoryKind? {
@@ -1358,11 +1701,195 @@ final class UserMemoryCore {
     }
 
     private static func factKey(kind: MemoryKind, content: String) -> String {
-        let normalized = content
-            .lowercased()
+        MemoryGraphAtomMapper.factNormalizedKey(kind: kind, content: content)
+    }
+
+    private static func memoryAtom(from entry: MemoryFactEntry, now: Date) -> MemoryAtom? {
+        MemoryGraphAtomMapper.atom(fromFact: entry, now: now)
+    }
+
+    private func insertDecisionChainAtoms(
+        _ verified: VerifiedDecisionChain,
+        scope: MemoryScope,
+        scopeRefId: UUID?,
+        now: Date,
+        writer: MemoryGraphWriter,
+        atoms: inout [MemoryAtom],
+        edges: inout [MemoryEdge],
+        result: inout MemoryGraphWriteResult
+    ) throws {
+        let sourceNodeId = scope == .conversation ? scopeRefId : nil
+        try writer.writeDecisionChain(
+            MemoryGraphDecisionChainInput(
+                rejectedProposal: verified.chain.rejectedProposal,
+                rejection: verified.chain.rejection,
+                reasons: verified.chain.reasons,
+                replacement: verified.chain.replacement,
+                confidence: verified.chain.confidence,
+                scope: scope,
+                scopeRefId: scopeRefId,
+                eventTime: verified.sourceMessage.timestamp,
+                sourceNodeId: sourceNodeId,
+                sourceMessageId: persistedSourceMessageId(verified.sourceMessage),
+                now: now
+            ),
+            atoms: &atoms,
+            edges: &edges,
+            result: &result
+        )
+    }
+
+    private func persistedSourceMessageId(_ message: Message) -> UUID? {
+        guard let messages = try? nodeStore.fetchMessages(nodeId: message.nodeId),
+              messages.contains(where: { $0.id == message.id })
+        else {
+            return nil
+        }
+        return message.id
+    }
+
+    private static let extractionGeneratedAtomTypes: Set<MemoryAtomType> = [
+        .decision,
+        .boundary,
+        .constraint,
+        .proposal,
+        .rejection,
+        .reason,
+        .currentPosition
+    ]
+
+    private func archiveActiveExtractionAtoms(scope: MemoryScope, scopeRefId: UUID?, now: Date) throws {
+        let atoms = try nodeStore.fetchMemoryAtoms(
+            types: Self.extractionGeneratedAtomTypes,
+            statuses: [.active],
+            scope: scope,
+            scopeRefId: scopeRefId,
+            eventTimeStart: nil,
+            eventTimeEnd: nil,
+            limit: nil
+        )
+
+        for var atom in atoms {
+            atom.status = .archived
+            atom.updatedAt = now
+            try nodeStore.updateMemoryAtom(atom)
+        }
+    }
+
+    func currentDecisionGraphRecall(
+        currentMessage: String,
+        projectId: UUID?,
+        conversationId: UUID,
+        limit: Int = 3,
+        now: Date = Date()
+    ) -> [String] {
+        MemoryQueryPlanner(nodeStore: nodeStore).recall(
+            currentMessage: currentMessage,
+            projectId: projectId,
+            conversationId: conversationId,
+            limit: limit,
+            allowedIntents: [.decisionHistory],
+            now: now
+        )
+    }
+
+    func currentGraphMemoryRecall(
+        currentMessage: String,
+        projectId: UUID?,
+        conversationId: UUID,
+        limit: Int = 4,
+        queryEmbedding: [Float]? = nil,
+        now: Date = Date()
+    ) -> [String] {
+        MemoryQueryPlanner(nodeStore: nodeStore).recall(
+            currentMessage: currentMessage,
+            projectId: projectId,
+            conversationId: conversationId,
+            limit: limit,
+            queryEmbedding: queryEmbedding,
+            now: now
+        )
+    }
+
+    private func isGraphRecallScope(_ atom: MemoryAtom, projectId: UUID?, conversationId: UUID) -> Bool {
+        switch atom.scope {
+        case .global:
+            return true
+        case .project:
+            return atom.scopeRefId == projectId
+        case .conversation:
+            // Cross-chat recall is the point of this graph layer: a direct
+            // "what did we reject before?" question should search old chats too.
+            return atom.scopeRefId != nil || atom.scopeRefId == conversationId
+        case .selfReflection:
+            return false
+        }
+    }
+
+    private func formatDecisionChainRecall(_ chain: MemoryDecisionChain) -> String {
+        let eventTime = chain.rejection.eventTime.map { Self.evidenceTimestampFormatter.string(from: $0) } ?? "unknown"
+        let sourceNode = chain.rejection.sourceNodeId?.uuidString ?? "unknown"
+        let sourceMessage = chain.rejection.sourceMessageId?.uuidString ?? "unknown"
+        let sourceQuote = sourceQuote(for: chain.rejection)
+        var parts = [
+            "- MEMORY_CHAIN atom_id=\(chain.rejection.id.uuidString) status=\(chain.rejection.status.rawValue) event_time=\(eventTime)",
+            "  source_node_id=\(sourceNode) source_message_id=\(sourceMessage)",
+            "  rejected_proposal: \(chain.rejectedProposal?.statement ?? "[unknown proposal]")",
+            "  rejection: \(chain.rejection.statement)"
+        ]
+        if !chain.reasons.isEmpty {
+            parts.append("  reason: \(chain.reasons.map(\.statement).joined(separator: " / "))")
+        }
+        if let replacement = chain.replacement {
+            parts.append("  replacement_current_direction: \(replacement.statement)")
+        }
+        if let sourceQuote {
+            parts.append("  source_quote: \(sourceQuote)")
+        }
+        return parts.joined(separator: "\n")
+    }
+
+    private func sourceQuote(for atom: MemoryAtom) -> String? {
+        guard let sourceNodeId = atom.sourceNodeId,
+              let sourceMessageId = atom.sourceMessageId,
+              let messages = try? nodeStore.fetchMessages(nodeId: sourceNodeId),
+              let message = messages.first(where: { $0.id == sourceMessageId })
+        else {
+            return nil
+        }
+        return Self.preview(Self.stripQuoteBlocks(message.content), maxChars: 140)
+    }
+
+    private static func shouldRecallDecisionGraph(for message: String) -> Bool {
+        let normalized = message.lowercased()
+        let historicalCues = [
+            "之前", "上次", "三周", "3周", "three weeks", "last time",
+            "remember", "memory", "以前", "之前有", "we had", "did we"
+        ]
+        let decisionCues = [
+            "否決", "否决", "否定", "reject", "rejected", "rejection",
+            "decision", "decide", "decided", "方案", "plan", "why",
+            "點解", "点解", "為什麼", "为什么", "原因"
+        ]
+
+        let hasHistoricalCue = historicalCues.contains { normalized.contains($0) }
+        let hasDecisionCue = decisionCues.contains { normalized.contains($0) }
+        return hasDecisionCue && (hasHistoricalCue || normalized.contains("否決") || normalized.contains("否决") || normalized.contains("reject"))
+    }
+
+    private static func graphRecallScore(query: String, text: String) -> Double {
+        let jaccard = tokenJaccard(query, text)
+        let normalizedQuery = normalizedLine(query)
+        let normalizedText = normalizedLine(text)
+        let queryTokens = normalizedQuery
             .split(whereSeparator: \.isWhitespace)
-            .joined(separator: " ")
-        return "\(kind.rawValue)|\(normalized)"
+            .map(String.init)
+            .filter { token in
+                token.count >= 3
+                    && !["what", "why", "when", "did", "the", "that", "this", "before"].contains(token)
+            }
+        let tokenHits = queryTokens.filter { normalizedText.contains($0) }.count
+        return jaccard + min(Double(tokenHits) * 0.08, 0.4)
     }
 }
 

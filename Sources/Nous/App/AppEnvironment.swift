@@ -13,10 +13,14 @@ struct AppDependencies {
     let embeddingService: EmbeddingService
     let localLLM: LocalLLMService
     let graphEngine: GraphEngine
+    let relationRefinementQueue: GalaxyRelationRefinementQueue
     let finderProjectSync: FinderProjectSyncService
     let conversationTitleBackfill: ConversationTitleBackfillService
+    let memoryGraphMessageBackfill: MemoryGraphMessageBackfillService
+    let memoryAtomEmbeddingBackfill: MemoryAtomEmbeddingBackfillService
     let userMemoryService: UserMemoryService
     let governanceTelemetry: GovernanceTelemetryStore
+    let galaxyRelationTelemetry: GalaxyRelationTelemetry
     let scratchPadStore: ScratchPadStore
     let settingsVM: SettingsViewModel
     let chatVM: ChatViewModel
@@ -89,14 +93,40 @@ final class AppEnvironment {
             throw AppBootstrapError.migrationFailed(name: "MemoryEntriesMigrator", underlying: error)
         }
 
+        do {
+            _ = try MemoryGraphBackfillService(nodeStore: nodeStore).runIfNeeded()
+        } catch {
+            throw AppBootstrapError.migrationFailed(name: "MemoryGraphBackfillService", underlying: error)
+        }
+
         let vectorStore = VectorStore(nodeStore: nodeStore)
         let embeddingService = EmbeddingService()
         let localLLM = LocalLLMService()
-        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
         let settingsVM = SettingsViewModel(
             embeddingService: embeddingService,
             localLLM: localLLM,
             nodeStore: nodeStore
+        )
+        let galaxyRelationTelemetry = GalaxyRelationTelemetry()
+        let graphEngine = GraphEngine(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            relationJudge: GalaxyRelationJudge(
+                telemetry: galaxyRelationTelemetry,
+                llmServiceProvider: {
+                    guard settingsVM.backgroundAnalysisEnabled else { return nil }
+                    return settingsVM.makeJudgeLLMService()
+                }
+            ),
+            telemetry: galaxyRelationTelemetry
+        )
+        let relationRefinementQueue = GalaxyRelationRefinementQueue(
+            refiner: graphEngine,
+            isEnabled: {
+                guard settingsVM.backgroundAnalysisEnabled else { return false }
+                return settingsVM.makeJudgeLLMService() != nil
+            },
+            telemetry: galaxyRelationTelemetry
         )
         let finderProjectSync = FinderProjectSyncService(
             nodeStore: nodeStore,
@@ -106,12 +136,27 @@ final class AppEnvironment {
             nodeStore: nodeStore,
             llmServiceProvider: { settingsVM.makeLLMService() }
         )
+        let memoryGraphMessageBackfill = MemoryGraphMessageBackfillService(
+            nodeStore: nodeStore,
+            llmServiceProvider: { settingsVM.makeLLMService() }
+        )
+        let memoryAtomEmbeddingBackfill = MemoryAtomEmbeddingBackfillService(
+            nodeStore: nodeStore,
+            embed: { [embeddingService] text in
+                guard embeddingService.isLoaded else { return nil }
+                return try? embeddingService.embed(text)
+            }
+        )
         let governanceTelemetry = GovernanceTelemetryStore(nodeStore: nodeStore)
         let scratchPadStore = ScratchPadStore(nodeStore: nodeStore)
         let userMemoryService = UserMemoryService(
             nodeStore: nodeStore,
             llmServiceProvider: { settingsVM.makeLLMService() },
-            governanceTelemetry: governanceTelemetry
+            governanceTelemetry: governanceTelemetry,
+            embedFunction: { [embeddingService] text in
+                guard embeddingService.isLoaded else { return nil }
+                return try? embeddingService.embed(text)
+            }
         )
         let scheduler = UserMemoryScheduler(service: userMemoryService.synthesizer)
         let conversationSessionStore = ConversationSessionStore(nodeStore: nodeStore)
@@ -120,6 +165,7 @@ final class AppEnvironment {
             vectorStore: vectorStore,
             embeddingService: embeddingService,
             graphEngine: graphEngine,
+            relationRefinementQueue: relationRefinementQueue,
             userMemoryService: userMemoryService,
             userMemoryScheduler: scheduler,
             conversationSessionStore: conversationSessionStore,
@@ -135,7 +181,8 @@ final class AppEnvironment {
             nodeStore: nodeStore,
             vectorStore: vectorStore,
             embeddingService: embeddingService,
-            graphEngine: graphEngine
+            graphEngine: graphEngine,
+            relationRefinementQueue: relationRefinementQueue
         )
         let galaxyVM = GalaxyViewModel(nodeStore: nodeStore, graphEngine: graphEngine)
 
@@ -172,10 +219,14 @@ final class AppEnvironment {
             embeddingService: embeddingService,
             localLLM: localLLM,
             graphEngine: graphEngine,
+            relationRefinementQueue: relationRefinementQueue,
             finderProjectSync: finderProjectSync,
             conversationTitleBackfill: conversationTitleBackfill,
+            memoryGraphMessageBackfill: memoryGraphMessageBackfill,
+            memoryAtomEmbeddingBackfill: memoryAtomEmbeddingBackfill,
             userMemoryService: userMemoryService,
             governanceTelemetry: governanceTelemetry,
+            galaxyRelationTelemetry: galaxyRelationTelemetry,
             scratchPadStore: scratchPadStore,
             settingsVM: settingsVM,
             chatVM: chatVM,

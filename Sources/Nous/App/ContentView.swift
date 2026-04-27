@@ -103,6 +103,7 @@ struct ContentView: View {
                         selectedTab: $selectedSettingsSection,
                         userMemoryService: dependencies.userMemoryService,
                         telemetry: dependencies.governanceTelemetry,
+                        galaxyRelationTelemetry: dependencies.galaxyRelationTelemetry,
                         onBack: { selectedTab = .chat }
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -206,6 +207,17 @@ struct ContentView: View {
 
         Task {
             await dependencies.conversationTitleBackfill.runIfNeeded()
+        }
+
+        Task {
+            _ = await dependencies.memoryGraphMessageBackfill.runIfNeeded(maxConversations: 4)
+        }
+
+        Task.detached(priority: .utility) {
+            // Embedding backfill is bounded per launch (default 64 atoms)
+            // so a fresh DB doesn't block on running the embedder
+            // hundreds of times in one go. Subsequent launches pick up.
+            _ = try? dependencies.memoryAtomEmbeddingBackfill.runIfNeeded()
         }
 
         if let rollover = dependencies.weeklyReflectionRollover {

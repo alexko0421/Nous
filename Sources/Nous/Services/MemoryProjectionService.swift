@@ -61,6 +61,40 @@ final class MemoryProjectionService {
         core.currentUserModel(projectId: projectId, conversationId: conversationId)
     }
 
+    func currentDecisionGraphRecall(
+        currentMessage: String,
+        projectId: UUID?,
+        conversationId: UUID,
+        limit: Int = 3,
+        now: Date = Date()
+    ) -> [String] {
+        core.currentDecisionGraphRecall(
+            currentMessage: currentMessage,
+            projectId: projectId,
+            conversationId: conversationId,
+            limit: limit,
+            now: now
+        )
+    }
+
+    func currentGraphMemoryRecall(
+        currentMessage: String,
+        projectId: UUID?,
+        conversationId: UUID,
+        limit: Int = 4,
+        queryEmbedding: [Float]? = nil,
+        now: Date = Date()
+    ) -> [String] {
+        core.currentGraphMemoryRecall(
+            currentMessage: currentMessage,
+            projectId: projectId,
+            conversationId: conversationId,
+            limit: limit,
+            queryEmbedding: queryEmbedding,
+            now: now
+        )
+    }
+
     func shouldPersistMemory(messages: [Message], projectId: UUID?) -> Bool {
         core.shouldPersistMemory(messages: messages, projectId: projectId)
     }

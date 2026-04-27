@@ -103,6 +103,26 @@ final class TurnPlanner {
                 excludingConversationId: prepared.node.id
             )
             : []
+        // Vector entry-point for memory recall: when the model is loaded,
+        // embed the user's promptQuery so the planner can fall back to
+        // cosine search whenever its keyword cue matcher misses. Keep
+        // this off the hot path when the embedder isn't ready — the
+        // planner will simply return only keyword-driven matches.
+        let queryEmbedding: [Float]? = {
+            guard policy.includeContradictionRecall,
+                  embeddingService.isLoaded
+            else { return nil }
+            return try? embeddingService.embed(promptQuery)
+        }()
+        let memoryGraphRecall: [String] = policy.includeContradictionRecall
+            ? memoryProjectionService.currentGraphMemoryRecall(
+                currentMessage: promptQuery,
+                projectId: prepared.node.projectId,
+                conversationId: prepared.node.id,
+                queryEmbedding: queryEmbedding,
+                now: request.now
+            )
+            : []
         let projectMemory = policy.includeProjectMemory
             ? prepared.node.projectId.flatMap {
                 memoryProjectionService.currentProject(projectId: $0)
@@ -227,6 +247,7 @@ final class TurnPlanner {
             essentialStory: essentialStory,
             userModel: userModel,
             memoryEvidence: memoryEvidence,
+            memoryGraphRecall: memoryGraphRecall,
             projectMemory: projectMemory,
             conversationMemory: conversationMemory,
             recentConversations: recentConversations,
@@ -245,6 +266,7 @@ final class TurnPlanner {
             essentialStory: essentialStory,
             userModel: userModel,
             memoryEvidence: memoryEvidence,
+            memoryGraphRecall: memoryGraphRecall,
             projectMemory: projectMemory,
             conversationMemory: conversationMemory,
             recentConversations: recentConversations,
