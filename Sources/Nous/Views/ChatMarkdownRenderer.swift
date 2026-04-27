@@ -34,7 +34,7 @@ enum ChatMarkdownRenderer {
                     i += 1
                 }
                 segments.append(.bulletBlock(bullets))
-                continue
+                continue  // `i` was advanced inside the inner while; do not increment here.
             }
             // Fallback: prose (single line for now; table/fence in later tasks).
             segments.append(.prose(line))
@@ -44,7 +44,7 @@ enum ChatMarkdownRenderer {
     }
 
     private static func isBulletLine(_ line: String) -> Bool {
-        // Must start with "- " (dash followed by at least one space).
+        // Must start with "- " (dash-space; content trimmed separately).
         return line.hasPrefix("- ")
     }
 

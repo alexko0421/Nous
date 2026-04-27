@@ -91,4 +91,18 @@ final class ChatMarkdownRendererTests: XCTestCase {
             [.bulletBlock(["indented bullet"])]
         )
     }
+
+    func testHeadingFollowedByBullets() {
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse("# Title\n- one\n- two"),
+            [.heading(level: 1, text: "Title"), .bulletBlock(["one", "two"])]
+        )
+    }
+
+    func testBulletsFollowedByHeading() {
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse("- one\n- two\n# Section"),
+            [.bulletBlock(["one", "two"]), .heading(level: 1, text: "Section")]
+        )
+    }
 }
