@@ -25,34 +25,67 @@ struct PlanAgent: QuickActionAgent {
         case 0:
             return nil
         case 1:
-            return """
-            ---
-
-            PLAN MODE — DECIDE OR ASK CONTRACT:
-            Alex has answered your opening question. Either:
-            (a) produce the structured plan now if you have enough on outcome, timeframe,
-                and his real capacity, OR
-            (b) ask exactly one more open-ended question if a critical piece is still missing.
-            If you ask, keep the <phase>understanding</phase> marker.
-            If you produce the plan, drop the marker.
-            """
+            return Self.decideOrAskAddendum
+        case Self.maxClarificationTurns...:
+            return Self.finalUrgentAddendum
         default:
-            return """
-            ---
-
-            PLAN MODE PRODUCTION CONTRACT:
-            Produce a structured plan:
-            - the actual outcome Alex is chasing (not the surface activity),
-            - the few moves that really matter, and what is just noise,
-            - what order makes sense given how Alex actually works,
-            - where Alex will likely stall and what catches him when he does,
-            - one concrete thing he can start today.
-            Use what you know about Alex from prior conversations and stored memory.
-            Stay specific. No generic productivity advice.
-            Drop the <phase>understanding</phase> marker once you commit to the plan.
-            """
+            return Self.normalProductionAddendum
         }
     }
+
+    private static let decideOrAskAddendum = """
+    ---
+
+    PLAN MODE — DECIDE OR ASK CONTRACT:
+    Alex has answered your opening question. Either:
+    (a) produce the structured plan now if you have enough on outcome, timeframe,
+        and his real capacity, OR
+    (b) ask exactly one more open-ended question if a critical piece is still missing.
+    If you ask, keep the <phase>understanding</phase> marker.
+    If you produce the plan, drop the marker.
+    """
+
+    private static let normalProductionAddendum = """
+    ---
+
+    PLAN MODE PRODUCTION CONTRACT:
+    Produce a structured plan using these markdown sections:
+
+    # Outcome
+    （one short paragraph — the actual outcome Alex is chasing, not the surface activity）
+
+    # Weekly schedule
+    | 周 | 重点 | 具体动作 |
+    |---|---|---|
+    | Week 1 | ... | ... |
+
+    # Where you'll stall
+    - ...
+    - ...
+
+    # Today's first step
+    （one concrete action）
+
+    Use what you know about Alex from prior conversations and stored memory.
+    Stay specific. No generic productivity advice.
+    Drop the <phase>understanding</phase> marker once you commit to the plan.
+    """
+
+    private static let finalUrgentAddendum = """
+    ---
+
+    PLAN MODE — FINAL TURN:
+    This is your last chance to produce the plan. Mode drops after this reply.
+    You may NOT ask another clarifying question. Output the four markdown sections
+    now using whatever you have learned so far:
+
+    # Outcome
+    # Weekly schedule (use the | table | format)
+    # Where you'll stall
+    # Today's first step
+
+    Drop the <phase>understanding</phase> marker. Stay specific.
+    """
 
     func memoryPolicy() -> QuickActionMemoryPolicy { .full }
 

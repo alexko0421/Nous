@@ -201,6 +201,56 @@ final class PlanAgentTests: XCTestCase {
         XCTAssertEqual(agent.turnDirective(parsed: parsed, turnIndex: 4), .complete)
         XCTAssertEqual(agent.turnDirective(parsed: parsed, turnIndex: 5), .complete)
     }
+
+    // MARK: - Cap-aware contextAddendum
+
+    func testAddendumTurnZeroIsNil() {
+        XCTAssertNil(agent.contextAddendum(turnIndex: 0))
+    }
+
+    func testAddendumTurnOneIsDecideOrAsk() {
+        let addendum = agent.contextAddendum(turnIndex: 1)
+        XCTAssertNotNil(addendum)
+        XCTAssertTrue(addendum!.contains("DECIDE OR ASK"))
+    }
+
+    func testAddendumTurnTwoIsNormalProductionWithFormatScaffold() {
+        let addendum = agent.contextAddendum(turnIndex: 2)
+        XCTAssertNotNil(addendum)
+        XCTAssertTrue(addendum!.contains("PLAN MODE PRODUCTION CONTRACT"))
+        XCTAssertTrue(addendum!.contains("# Outcome"))
+        XCTAssertTrue(addendum!.contains("# Weekly schedule"))
+        XCTAssertTrue(addendum!.contains("| 周 |"))
+        XCTAssertTrue(addendum!.contains("# Where you'll stall"))
+        XCTAssertTrue(addendum!.contains("# Today's first step"))
+    }
+
+    func testAddendumTurnThreeIsAlsoNormalProduction() {
+        let addendum = agent.contextAddendum(turnIndex: 3)
+        XCTAssertNotNil(addendum)
+        XCTAssertTrue(addendum!.contains("PLAN MODE PRODUCTION CONTRACT"))
+    }
+
+    func testAddendumAtCapIsFinalUrgent() {
+        // maxClarificationTurns = 4 currently.
+        let addendum = agent.contextAddendum(turnIndex: 4)
+        XCTAssertNotNil(addendum)
+        XCTAssertTrue(addendum!.contains("FINAL TURN"))
+        XCTAssertTrue(addendum!.contains("# Outcome"))
+        XCTAssertTrue(addendum!.contains("# Weekly schedule"))
+        XCTAssertFalse(addendum!.contains("PLAN MODE PRODUCTION CONTRACT"),
+                       "cap turn must use FINAL urgent variant, not normal production")
+    }
+
+    func testAddendumPastCapStillFinalUrgent_DefensiveRange() {
+        // Range pattern Self.maxClarificationTurns... must catch turn 5, 6, ...
+        for turn in [5, 6, 10] {
+            let addendum = agent.contextAddendum(turnIndex: turn)
+            XCTAssertNotNil(addendum, "turn \(turn) should have addendum")
+            XCTAssertTrue(addendum!.contains("FINAL TURN"),
+                          "turn \(turn) should use FINAL urgent (defensive range)")
+        }
+    }
 }
 
 final class QuickActionMemoryPolicyTests: XCTestCase {
