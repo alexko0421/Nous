@@ -12,6 +12,9 @@ enum ChatMarkdownRenderer {
 
     /// Parses raw assistant text into typed segments. Line-based parsing.
     static func parse(_ text: String) -> [Segment] {
+        // `"".components(separatedBy:)` returns [""], which would produce [.prose("")].
+        // Blank-line rendering policy is deferred to Task 7; guard here to preserve
+        // the Task 1 contract that parse("") returns [].
         guard !text.isEmpty else { return [] }
         var segments: [Segment] = []
         let lines = text.components(separatedBy: "\n")

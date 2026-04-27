@@ -40,6 +40,13 @@ final class ChatMarkdownRendererTests: XCTestCase {
         )
     }
 
+    func testDoubleHashWithoutSpaceIsNotHeading() {
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse("##NotAHeading"),
+            [.prose("##NotAHeading")]
+        )
+    }
+
     func testHeadingTextTrimsTrailingWhitespace() {
         XCTAssertEqual(
             ChatMarkdownRenderer.parse("# Title   "),
