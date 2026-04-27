@@ -609,4 +609,21 @@ final class RAGPipelineTests: XCTestCase {
         XCTAssertTrue(prompt.contains("do not use the structured clarification card"))
         XCTAssertTrue(prompt.contains("<phase>understanding</phase>"))
     }
+
+    func testAssembleContextIncludesChatFormatPolicy() {
+        let context = ChatViewModel.assembleContext(
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        ).combined
+        XCTAssertTrue(context.contains("CHAT FORMAT POLICY"),
+                      "assembleContext must include the chat format policy block")
+        XCTAssertTrue(context.contains("# 标题"),
+                      "policy must list markdown structure tokens")
+        XCTAssertTrue(context.contains("「」"),
+                      "policy must reference 「」 emphasis convention")
+    }
 }

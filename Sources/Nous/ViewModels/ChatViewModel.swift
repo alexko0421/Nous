@@ -883,6 +883,18 @@ final class ChatViewModel {
         // Volatile: per-turn signals. The judge re-infers chat mode each turn, citations
         // come from fresh RAG, attachments are turn-specific, etc. Keeping these out of
         // the cache costs ~300 tokens/turn in re-send but keeps hit rate near 100%.
+
+        // FIRST volatile piece: format policy grants markdown structure permission across
+        // all 4 modes (Direction / Brainstorm / Plan / default chat). Must appear before
+        // all other volatile pieces so it has highest LLM weight.
+        volatilePieces.append("""
+---
+
+CHAT FORMAT POLICY:
+当内容有 distinct items / 周期 schedule / 数据对比，可以用 markdown 结构（`# 标题`、
+`- bullet`、`| table |`）呈现。Emphasis 仍然用「」，唔好用 `**bold**` / `*italic*` / 倒勾。
+""")
+
         volatilePieces.append(activeChatModeBlock(chatMode))
 
         if SafetyGuardrails.isHighRiskQuery(currentUserInput) {
