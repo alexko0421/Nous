@@ -196,3 +196,93 @@ enum ChatMarkdownRenderer {
         return nil
     }
 }
+
+struct ChatMarkdownView: View {
+
+    let segments: [Segment]
+
+    private let bodyFont: Font = .system(size: 14, weight: .regular)
+    private let h1Font: Font = .system(size: 16, weight: .semibold)
+    private let h2Font: Font = .system(size: 15, weight: .semibold)
+    private let bodyLineSpacing: CGFloat = 8
+    private let segmentSpacing: CGFloat = 14
+    private let bulletIndent: CGFloat = 4
+    private let bulletGap: CGFloat = 8
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: segmentSpacing) {
+            ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                segmentView(segment)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func segmentView(_ segment: Segment) -> some View {
+        switch segment {
+        case .heading(let level, let text):
+            Text(text)
+                .font(level == 1 ? h1Font : h2Font)
+                .foregroundColor(AppColor.colaDarkText)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+
+        case .bulletBlock(let bullets):
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(Array(bullets.enumerated()), id: \.offset) { _, bullet in
+                    HStack(alignment: .firstTextBaseline, spacing: bulletGap) {
+                        Text("•")
+                            .font(bodyFont)
+                            .foregroundColor(AppColor.colaDarkText)
+                        Text(bullet)
+                            .font(bodyFont)
+                            .foregroundColor(AppColor.colaDarkText)
+                            .lineSpacing(bodyLineSpacing)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+                    .padding(.leading, bulletIndent)
+                }
+            }
+
+        case .table(let headers, let rows):
+            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 16, verticalSpacing: 6) {
+                GridRow {
+                    ForEach(Array(headers.enumerated()), id: \.offset) { _, header in
+                        Text(header)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(AppColor.colaDarkText)
+                            .textSelection(.enabled)
+                    }
+                }
+                Divider()
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    GridRow {
+                        ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
+                            Text(cell)
+                                .font(bodyFont)
+                                .foregroundColor(AppColor.colaDarkText)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+            }
+
+        case .prose(let text):
+            Text(text)
+                .font(bodyFont)
+                .foregroundColor(AppColor.colaDarkText)
+                .lineSpacing(bodyLineSpacing)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+
+        case .verbatim(let text):
+            Text(text)
+                .font(bodyFont)
+                .foregroundColor(AppColor.colaDarkText)
+                .lineSpacing(bodyLineSpacing)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        }
+    }
+}
