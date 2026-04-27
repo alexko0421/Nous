@@ -3,7 +3,7 @@
 **Date:** 2026-04-26
 **Branch context:** `alexko0421/quick-action-agents` (L2.5 baseline — 4 commits on top of `replace-mentalhealth-with-plan`)
 **Status:** Hard gate fix before Phase 1 (A+B) of strict-AI-agent phased plan
-**Spec version:** v2 (post-codex review FAIL — verdict 5 P1 / 6 P2)
+**Spec version:** v3 (post-codex round 2 review — 1 P1 + 4 P2 surgical fixes from v2)
 
 ## Context
 
@@ -17,7 +17,17 @@ Three failure layers were identified:
 
 User feedback (2026-04-26): "Plan should produce a well-structured deliverable — what to do each Monday / Tuesday / Wednesday." Reference: a Claude.ai screenshot showing markdown headers, bullets, and a comparison table inside chat — the desired baseline. Confirmed scope: applies to all four modes (Direction / Brainstorm / Plan / default chat), not just Plan.
 
-### v2 changes from v1 (post-codex review)
+### v3 changes from v2 (post-codex round 2)
+
+Codex round 2 confirmed v2 addressed 8/12 v1 findings; 4 PARTIAL plus 1 new P1 + 4 new P2 surgical issues. v3 fixes:
+
+- **Plan cap range, not exact-match.** v2's `case Self.maxClarificationTurns:` only matches turn 4. Any race / persistence / parser edge that lets Plan survive to turn 5+ would resume normal contract. v3 uses Swift open-ended range `case Self.maxClarificationTurns...:` so cap fires for any turn ≥ cap.
+- **Sanitization strips balanced pairs only.** v2's "single regex pass to strip `*`, `_`, backticks" would damage `int *p`, `*.swift`, `3 * 4`, escaped delimiters, mixed Cantonese / English code. v3 strips only when delimiters appear in **matched pairs** within a single line; unmatched literals are preserved. Line-start prefixes (ordered-list `\d+\. `, quote `> `) still strip unconditionally.
+- **Code fence content is verbatim, not sanitized.** v2 said fence inner content renders as prose, but the prose sanitizer would then strip backticks/asterisks inside the fence — silently corrupting code examples. v3 adds a `verbatim` segment type: fence content bypasses sanitization entirely (still renders in chat font, no syntax highlighting).
+- **Table separator parsed by split-then-validate, not single regex.** v2's regex `^\|[ \t]*:?-+:?[ \t]*(\|[ \t]*:?-+:?[ \t]*)+\|$` rejects standard GFM separators like `| --- | --- |` because it doesn't allow whitespace after every internal pipe consistently. v3 splits the line on `|` (respecting `\|` escape), trims each cell, and validates each cell against `^:?-+:?$`. More robust against legitimate GFM spacing variations.
+- **Animation value gated on segment count.** v2 uses `.animation(value: assistantDisplayText)` — every streaming token mutates the String, triggering full markdown reparse + Grid reconstruction on each delta. v3 uses `.animation(value: assistantSegments.count)` so animation fires only on structural changes (a new heading / bullet / table appearing), not on prose growing token-by-token. The renderer still re-parses on text change (computed property) but SwiftUI's animation diff stays cheap.
+
+### v2 changes from v1 (post-codex round 1)
 
 Codex review of v1 returned FAIL (5 P1 / 6 P2). v2 addresses every finding:
 
@@ -65,23 +75,34 @@ Markdown subset (rendered as structure):
 
 Markdown subset (sanitized to plain text, NOT rendered as structure):
 
-- `**text**` and `__text__` (bold) → render as `text` (delimiters stripped, content kept).
-- `*text*` and `_text_` (italic) → render as `text`.
-- `` `text` `` (inline code) → render as `text`.
-- `1. text`, `2. text` (ordered list) → render as `text` (each item on its own line, no number, treated as a prose paragraph).
-- Block quotes (`> text`) → render as `text` (leading `> ` stripped).
-- Code blocks (```` ``` ````) → render the inner content as a single prose paragraph, fence lines dropped.
+- `**text**` and `__text__` (bold) — strip delimiters when they appear as a **matched pair within a single line**. Unmatched single `*` or `_` is preserved literally (so `int *p`, `*.swift`, `3 * 4`, snake_case_var stay intact).
+- `*text*` and `_text_` (italic) — same balanced-pair rule.
+- `` `text` `` (inline code) — same balanced-pair rule for backticks.
+- `1. text`, `2. text` (ordered list) → strip the leading `^\d+\.\s+` prefix; render `text` as a regular prose line. Always strips (line-start prefix, no balancing).
+- Block quotes (`> text`) → strip leading `^>\s+`; always strips.
 
-Rationale: an LLM under a Cantonese stoic voice contract will occasionally emit `**emphasis**` or `1. item` despite the soft 「」 rule. Showing raw `**` is a visible regression. Stripping delimiters is the minimum work to keep voice rule honest without supporting markup that doesn't fit the design.
+Code fence behavior (separate segment type — see `Segment.verbatim` below):
+
+- ```` ``` ```` opens a verbatim block. Inner content is captured **as-is** (no sanitization, no delimiter stripping) until the closing ```` ``` ````. Fence delimiter lines themselves are dropped from output. The verbatim segment renders in the same chat font as prose; no syntax highlighting.
+- Fenced content does NOT pass through the prose sanitizer — code examples like `` `foo` ``, `int *p`, `i++ * 2` survive verbatim inside fences.
+
+Rationale: an LLM under a Cantonese stoic voice contract will occasionally emit `**emphasis**` or `1. item` despite the soft 「」 rule. Showing raw `**` is a visible regression. Stripping only **balanced** delimiters preserves legitimate technical prose. Code fences as a verbatim segment guarantee the only safe place for code examples is intact.
 
 #### Table parsing strictness
 
 A `|...|` block becomes a table only if **all** of:
 
 1. The first row is a header row: `| col | col |` with ≥2 cells.
-2. The second row is a separator row matching `^\|[ \t]*:?-+:?[ \t]*(\|[ \t]*:?-+:?[ \t]*)+\|$`.
+2. The second row is a separator row. Validation is **split-then-validate**, not a single regex:
+   - Split the line by `|` (respecting `\|` as escape — temporarily replace `\|` with a sentinel before split, restore after).
+   - Drop empty leading and trailing fields produced by the bordering pipes.
+   - Trim whitespace from each remaining field.
+   - Each trimmed field must match `^:?-+:?$` (allows `---`, `:---`, `:---:`, `---:`).
+   - The number of separator fields must equal the header column count.
+
+   This handles `| --- | --- |`, `|---|---|`, `| :--- | ---: |`, and other GFM-legal spacing variations that the earlier single-regex approach would have rejected.
 3. At least one data row follows.
-4. Column count is consistent: data rows are right-padded with empty cells if short, truncated if too long. Pure prose containing `|` (not flanked by markdown table structure) renders as prose.
+4. Data row column count: data rows are split using the same escape-aware pipe-split rule. Right-pad with empty cells if short; truncate if too long. Pure prose containing `|` (not flanked by markdown table structure) renders as prose.
 
 If any condition fails, the entire candidate block falls back to prose rendering (each line as a separate paragraph through the unsupported-markdown sanitizer above).
 
@@ -94,15 +115,23 @@ Escape: `\|` in cell content renders as literal `|`, not a column separator.
 ```swift
 enum Segment {
     case heading(level: Int, text: String)
-    case bulletBlock([String])    // each string is one bullet's content
+    case bulletBlock([String])         // each string is one bullet's content
     case table(headers: [String], rows: [[String]])
-    case prose(String)            // multi-paragraph prose, with single-newline-as-space collapsing inside
+    case prose(String)                 // multi-paragraph prose, sanitized
+    case verbatim(String)              // fenced code, NOT sanitized
 }
 ```
 
 Output is a `VStack(alignment: .leading)` of segment views with `assistantParagraphSpacing` (14) between segments. Each segment internally uses font 14, color `colaDarkText`, line spacing 8 (matching current assistant prose style).
 
-**Sanitization of unsupported markdown happens inside the prose segment renderer** — when parsing a prose line, run a single regex pass to strip `**`, `__`, `*` (bold/italic delimiters), backticks (inline code), leading `> ` (quote), and leading `\d+\. ` (ordered list number). This keeps the segment types simple (no need for inline rich-text spans) while ensuring no raw markdown markers leak.
+**Sanitization of unsupported markdown is balanced-pair only:**
+
+- Strip `**...**` and `__...__` only when both delimiters present in the same line: regex `\*\*([^\*]+)\*\*` → `$1`, `__([^_]+)__` → `$1`.
+- Strip `*...*` and `_..._` only when balanced (same line, content non-empty): `(?<!\*)\*([^\*\s][^\*]*?)\*(?!\*)` → `$1` (negative lookbehind/lookahead avoids interfering with `**bold**`). Same shape for `_`.
+- Strip `` `...` `` (inline code) only when balanced: `` `([^`]+)` `` → `$1`. Verify `int *p` (no balanced `*`), `*.swift` (`*` followed by non-`*`), `3 * 4` (spaces around `*`), `if (n > 0) {` (no `*`/`_`) all pass through unchanged.
+- Strip line-start `^\d+\.\s+` and `^>\s+` unconditionally (these are positional markers, no balancing needed).
+
+Verbatim segments skip sanitization entirely — fenced code renders as captured.
 
 #### `MessageBubble` integration
 
@@ -123,8 +152,8 @@ private var assistantDisplayText: String {
 The `body` switches on `isUser`:
 
 - `isUser == true` (line 557 area): unchanged — `ForEach` over `userParagraphTexts` rendering each via `Text(...)`.
-- `isUser == false` (line 575 area): replace the `ForEach { Text(paragraph) }` with a single `ChatMarkdownRenderer(text: assistantDisplayText)` call. Existing `assistantTextMaxWidth: 690`, padding, animation are preserved.
-- The `.animation(.easeOut(duration: 0.15), value: paragraphTexts)` at line 592 changes its `value:` parameter from `paragraphTexts` to `assistantDisplayText` (the input that actually drives the assistant render). Animation behavior preserved during streaming.
+- `isUser == false` (line 575 area): replace the `ForEach { Text(paragraph) }` with a single `ChatMarkdownRenderer(text: assistantDisplayText)` call. Existing `assistantTextMaxWidth: 690` and padding are preserved.
+- The `.animation(.easeOut(duration: 0.15), value: paragraphTexts)` at line 592 changes its `value:` parameter from `paragraphTexts` to a stable count proxy: `ChatMarkdownRenderer.parse(assistantDisplayText).count` (the number of segments). Streaming a single growing prose segment produces no animation churn (count stays 1); a new heading / bullet block / table appearing animates once when its segment is added. Avoids the per-token reparse / Grid reconstruction storm that would result from animating on the full `assistantDisplayText` String identity.
 
 Old `normalizedParagraphs` stays as a private static helper used only by `userParagraphTexts`.
 
@@ -150,13 +179,15 @@ func contextAddendum(turnIndex: Int) -> String? {
         return nil
     case 1:
         return decideOrAskAddendum  // unchanged from current
-    case Self.maxClarificationTurns:
-        return finalUrgentAddendum  // NEW — see below
+    case Self.maxClarificationTurns...:
+        return finalUrgentAddendum  // NEW — fires for turn == cap AND any turn > cap (defensive)
     default:
         return normalProductionAddendum  // existing turn 2+ contract, with format scaffold
     }
 }
 ```
+
+The open-ended range `Self.maxClarificationTurns...` ensures the FINAL urgent contract fires for turn 4 **and** any later turn (5, 6, ...) if the mode survives past cap through any race / persistence / parser edge. `turnDirective` still returns `.complete` at turn 4 so mode normally drops, but the addendum is defensive against the edge case where it doesn't.
 
 `normalProductionAddendum` (turn 2+ but not at cap):
 
@@ -226,9 +257,21 @@ After A+B+C land in one branch / one PR:
 
 #### Unit tests (new)
 
-- `ChatMarkdownRendererTests` — covers `parse(text:)` returning expected `[Segment]` for: heading-only input, bullet-only input, table-only input, prose-only input, mixed input. Plus sanitization tests: input containing `**bold**`, `*italic*`, `` `code` ``, `1. item`, `> quote`, fenced code block — verify rendered output strips delimiters and contains no raw `**`/`*`/`` ` `` characters.
-- `ChatMarkdownRendererTests` table strictness — table with no separator row falls back to prose; ragged column counts normalize; escaped `\|` renders as `|`.
-- `PlanAgentTests` (extend existing `QuickActionAgentsTests`) — `contextAddendum(turnIndex:)` returns the right addendum at each turn: 0 → nil, 1 → decideOrAsk, 2 / 3 → normal production, `maxClarificationTurns` → final urgent. Verify final urgent contains "FINAL TURN" sentinel and table format hint.
+- `ChatMarkdownRendererTests` — covers `parse(text:)` returning expected `[Segment]` for: heading-only input, bullet-only input, table-only input, prose-only input, fenced-code-only input, mixed input.
+- `ChatMarkdownRendererTests` sanitization (balanced-pair):
+  - `**bold**` strips to `bold`, `*italic*` strips to `italic`, `` `code` `` strips to `code`, `__bold__` → `bold`, `_italic_` → `italic`.
+  - `1. item` strips leading `1. ` to `item`. `> quote` strips leading `> ` to `quote`.
+  - **Preserves**: `int *p` (single `*`, unbalanced), `*.swift` (`*` not paired before whitespace), `3 * 4` (spaces around `*`), `if (n > 0)` (unbalanced `>`), `snake_case_var` (`_` in identifier-like position, no balanced pair across whitespace), inline mention of literal `**` without text between (`a ** b` if `**` would have to cross word boundaries — depends on regex; explicit test).
+  - Fenced code block content survives verbatim — input `` ```\nint *p = `foo`;\n``` `` produces a `Segment.verbatim("int *p = `foo`;")`, no stripping.
+- `ChatMarkdownRendererTests` table strictness:
+  - Standard `| a | b |\n| --- | --- |\n| 1 | 2 |` parses as table.
+  - `| a | b |\n|---|---|\n| 1 | 2 |` (no inner whitespace) parses as table.
+  - `| a | b |\n| :--- | ---: |\n| 1 | 2 |` parses as table (alignment markers tolerated even though v1 ignores alignment).
+  - Table with no separator row falls back to prose.
+  - Ragged column counts normalize (right-pad short rows, truncate long rows).
+  - Escaped `\|` in cell content renders as literal `|`, not a column separator.
+  - Pipe in regular prose like "use `cmd | grep foo`" with no header / separator row rendering does NOT trigger table parsing.
+- `PlanAgentTests` (extend existing `QuickActionAgentsTests`) — `contextAddendum(turnIndex:)` returns the right addendum at each turn: 0 → nil, 1 → decideOrAsk, 2 / 3 → normal production, `maxClarificationTurns` (4) → final urgent, **`maxClarificationTurns + 1` and `+ 2` (5, 6) also → final urgent** (defensive range pattern coverage). Verify final urgent contains "FINAL TURN" sentinel and table format hint.
 - `BrainstormAgentTests` — addendum at turn 1+ contains the new "短 label + tradeoff + prose judgment" constraint string.
 - `ClarificationCardParserTests` (extend existing) — input containing `<summary>` with markdown inside (headers, bullets, table) returns `displayText` that preserves the inner markdown intact (no whitespace mangling, no marker leak).
 
@@ -264,7 +307,8 @@ Add new memory `project_anchor_is_frozen`:
 - **Brainstorm voice regression risk.** Adding bullet format guidance is a mode-addendum edit, not anchor.md edit, so `feedback_anchor_count_ceiling` does not directly apply — but voice impact still possible. Live-test confirms.
 - **Sanitization over-strips.** A user's prose containing literal `*` in Cantonese context (rare but possible in technical discussion: "C 嘅 `int *p`") could lose its asterisk. Acceptable for v1 — emphasis is the dominant LLM use of `*`, and the bug is recoverable by the user re-quoting with backticks (which would also be stripped, but conveying intent).
 - **Cap-aware addendum still ignored.** If the LLM ignores even the FINAL urgent contract, we're back to silent degradation. Mitigation: live test specifically for cap behavior; backstop is the deferred true synthetic turn (option C).
-- **Animation value change.** Switching `.animation(value:)` from `paragraphTexts` to `assistantDisplayText` changes the diff identity SwiftUI tracks during streaming. Should be equivalent for typical streaming (text grows monotonically) but test once with a long Plan response under streaming.
+- **Animation value change.** Switching `.animation(value:)` to `ChatMarkdownRenderer.parse(assistantDisplayText).count` makes animation fire only on segment count changes (new heading / bullet block / table appearing) — much fewer animations than v2's per-token approach. Test once with a long Plan response under streaming to confirm no janky flashes when a table block first appears.
+- **Sanitization regex backtracking.** Balanced-pair regexes with negative lookbehind/lookahead can hit catastrophic backtracking on adversarial input (e.g. very long lines of `*`). Add a fuzz test or input length cap (e.g. skip sanitization on lines > 4 KB) as defensive guardrail.
 - **`<summary>` interaction.** Long-form summaries that previously rendered as plain prose now render with markdown structure. This is a behavior change for the scratchpad-summary surface in chat. Tests cover the parse-through; manually verify a previously-summarized conversation still looks reasonable.
 
 ## Out of scope (explicitly deferred)
