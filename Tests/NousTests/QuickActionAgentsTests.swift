@@ -117,6 +117,19 @@ final class BrainstormAgentTests: XCTestCase {
         let parsed = ClarificationContent(displayText: "anything", card: nil, keepsQuickActionMode: false)
         XCTAssertEqual(agent.turnDirective(parsed: parsed, turnIndex: 1), .complete)
     }
+
+    func testContextAddendumOnTurnOneRequiresShortLabelTradeoffPlusProseJudgment() {
+        let addendum = agent.contextAddendum(turnIndex: 1)
+        XCTAssertNotNil(addendum)
+        let body = addendum!
+        XCTAssertTrue(body.contains("短 label"), "addendum must require short labels")
+        XCTAssertTrue(body.contains("trade-off"), "addendum must mention trade-off")
+        XCTAssertTrue(body.contains("非 bullet") || body.contains("唔用 bullet"),
+                      "addendum must require non-bullet judgment prose")
+        XCTAssertTrue(body.contains("等权") == false ||
+                      body.contains("唔可以等权列 options") || body.contains("唔可以系完整段落"),
+                      "addendum must guard against equally-weighted options listicle")
+    }
 }
 
 final class PlanAgentTests: XCTestCase {
