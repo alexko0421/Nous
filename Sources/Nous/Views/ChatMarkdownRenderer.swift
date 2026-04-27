@@ -4,6 +4,7 @@ enum Segment: Equatable {
     case heading(level: Int, text: String)
     case bulletBlock([String])
     case table(headers: [String], rows: [[String]])
+    case horizontalRule
     case prose(String)
     case verbatim(String)
 }
@@ -118,6 +119,11 @@ enum ChatMarkdownRenderer {
                 i = nextIndex
                 continue  // `i` advanced to nextIndex by parseTable; do not increment here.
             }
+            if isHorizontalRule(line) {
+                segments.append(.horizontalRule)
+                i += 1
+                continue
+            }
             segments.append(.prose(sanitizeProse(line)))
             i += 1
         }
@@ -173,6 +179,13 @@ enum ChatMarkdownRenderer {
         }
         guard !rows.isEmpty else { return nil }
         return (.table(headers: headers, rows: rows), i)
+    }
+
+    private static func isHorizontalRule(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.count >= 3, let marker = trimmed.first else { return false }
+        guard marker == "-" || marker == "_" || marker == "*" else { return false }
+        return trimmed.allSatisfy { $0 == marker }
     }
 
     private static func isBulletLine(_ line: String) -> Bool {
@@ -269,6 +282,10 @@ struct ChatMarkdownView: View {
                     }
                 }
             }
+
+        case .horizontalRule:
+            Divider()
+                .padding(.vertical, 4)
 
         case .prose(let text):
             Text(text)

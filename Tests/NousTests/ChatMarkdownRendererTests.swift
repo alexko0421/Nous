@@ -184,6 +184,23 @@ final class ChatMarkdownRendererTests: XCTestCase {
         )
     }
 
+    func testTableSeparatorRowStaysInTable() {
+        let input = "| a | b |\n| --- | --- |\n| 1 | 2 |"
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse(input),
+            [.table(headers: ["a", "b"], rows: [["1", "2"]])]
+        )
+    }
+
+    // MARK: - Horizontal rules
+
+    func testStandaloneDashLineProducesHorizontalRule() {
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse("---"),
+            [.horizontalRule]
+        )
+    }
+
     // MARK: - Code fences
 
     func testClosedFenceProducesVerbatim() {
