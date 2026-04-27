@@ -105,4 +105,78 @@ final class ChatMarkdownRendererTests: XCTestCase {
             [.bulletBlock(["one", "two"]), .heading(level: 1, text: "Section")]
         )
     }
+
+    // MARK: - Tables
+
+    func testStandardTable() {
+        let input = "| a | b |\n| --- | --- |\n| 1 | 2 |"
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse(input),
+            [.table(headers: ["a", "b"], rows: [["1", "2"]])]
+        )
+    }
+
+    func testTableTightSeparator() {
+        let input = "| a | b |\n|---|---|\n| 1 | 2 |"
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse(input),
+            [.table(headers: ["a", "b"], rows: [["1", "2"]])]
+        )
+    }
+
+    func testTableAlignmentMarkersAccepted() {
+        // v1 ignores alignment but must parse without rejection.
+        let input = "| a | b |\n| :--- | ---: |\n| 1 | 2 |"
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse(input),
+            [.table(headers: ["a", "b"], rows: [["1", "2"]])]
+        )
+    }
+
+    func testTableMultipleDataRows() {
+        let input = "| a | b |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |"
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse(input),
+            [.table(headers: ["a", "b"], rows: [["1", "2"], ["3", "4"]])]
+        )
+    }
+
+    func testTableWithoutSeparatorFallsToProse() {
+        let input = "| a | b |\n| 1 | 2 |"
+        let parsed = ChatMarkdownRenderer.parse(input)
+        XCTAssertFalse(parsed.contains { if case .table = $0 { return true } else { return false } })
+    }
+
+    func testTableRaggedRowsNormalize() {
+        // Row missing a cell gets right-padded; row with too many gets truncated.
+        let input = "| a | b | c |\n| --- | --- | --- |\n| 1 | 2 |\n| 3 | 4 | 5 | 6 |"
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse(input),
+            [.table(headers: ["a", "b", "c"], rows: [["1", "2", ""], ["3", "4", "5"]])]
+        )
+    }
+
+    func testTableEscapedPipeIsLiteral() {
+        let input = "| a | b |\n| --- | --- |\n| 1 \\| pipe | 2 |"
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse(input),
+            [.table(headers: ["a", "b"], rows: [["1 | pipe", "2"]])]
+        )
+    }
+
+    func testProsePipeDoesNotTriggerTable() {
+        // Single prose line containing "|" is not a table candidate (no separator row).
+        let input = "use cmd | grep foo"
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse(input),
+            [.prose("use cmd | grep foo")]
+        )
+    }
+
+    func testBorderlessGFMFallsToProse() {
+        // v1 explicitly out of scope: no leading/trailing pipes.
+        let input = "a | b\n--- | ---\n1 | 2"
+        let parsed = ChatMarkdownRenderer.parse(input)
+        XCTAssertFalse(parsed.contains { if case .table = $0 { return true } else { return false } })
+    }
 }
