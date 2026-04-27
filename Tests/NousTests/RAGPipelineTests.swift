@@ -594,11 +594,11 @@ final class RAGPipelineTests: XCTestCase {
     }
 
     func testQuickActionOpeningPromptStartsWithAssistantQuestioning() {
-        let prompt = ChatViewModel.quickActionOpeningPrompt(for: .mentalHealth)
+        let prompt = ChatViewModel.quickActionOpeningPrompt(for: .plan)
 
         XCTAssertTrue(prompt.contains("Start the conversation yourself"))
         XCTAssertTrue(prompt.contains("Ask one short, warm opening question"))
-        XCTAssertTrue(prompt.contains("Mental Health"))
+        XCTAssertTrue(prompt.contains("Plan"))
         XCTAssertTrue(prompt.contains("do not use the clarification card yet"))
         XCTAssertTrue(prompt.contains("<phase>understanding</phase>"))
     }

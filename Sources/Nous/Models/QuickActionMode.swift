@@ -3,11 +3,13 @@ import Foundation
 enum QuickActionMode: String, CaseIterable {
     case direction
     case brainstorm
-    case mentalHealth
+    case plan
 
+    // Includes "mental health" as a legacy alias so DB conversations created before
+    // the rename (2026-04-26) still register as placeholder-titled chats.
     private static let placeholderConversationTitles: Set<String> = Set(
         Self.allCases.map { $0.label.lowercased() }
-    )
+    ).union(["mental health"])
 
     var label: String {
         switch self {
@@ -15,8 +17,8 @@ enum QuickActionMode: String, CaseIterable {
             return "Direction"
         case .brainstorm:
             return "Brainstorm"
-        case .mentalHealth:
-            return "Mental Health"
+        case .plan:
+            return "Plan"
         }
     }
 
@@ -26,11 +28,15 @@ enum QuickActionMode: String, CaseIterable {
             return "safari"
         case .brainstorm:
             return "brain"
-        case .mentalHealth:
-            return "heart.fill"
+        case .plan:
+            return "map"
         }
     }
 
+    // TODO: this property is not currently consumed in production. The actual
+    // opening prompt sent to the LLM is built by ChatViewModel.quickActionOpeningPrompt(for:),
+    // which references only mode.label as of 2026-04-26. This stays here to capture
+    // design intent and so a future wire-up has a single source of truth.
     var prompt: String {
         switch self {
         case .direction:
@@ -54,16 +60,20 @@ enum QuickActionMode: String, CaseIterable {
             4. which ones are probably just noise.
             Be bold, but keep it grounded in reality.
             """
-        case .mentalHealth:
+        case .plan:
             return """
-            I need space to talk this through gently and honestly.
-            Don't over-diagnose or pretend certainty.
-            Help me:
-            1. name what I may be feeling,
-            2. see what may be driving it,
-            3. separate what needs care now from what can wait,
-            4. take one small next step if I'm ready.
-            If something sounds serious, say that clearly and carefully.
+            Let's plan this without pretending it's simple.
+            Walk through with me:
+            - the actual outcome I'm chasing (not the surface activity),
+            - the few moves that really matter, and what's just noise,
+            - what order makes sense given how I actually work,
+            - where I'll likely stall, and what catches me when I do,
+            - one concrete thing I can start today.
+
+            If the outcome, timeframe, or my real capacity is genuinely unclear,
+            ask me one short question first. Otherwise, plan now using what you know about me.
+
+            Stay specific to me. I don't need a generic study plan.
             """
         }
     }

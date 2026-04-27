@@ -409,9 +409,9 @@ final class ProvocationOrchestrationTests: XCTestCase {
     }
 
     @MainActor
-    func testMentalHealthModeStopsClarifyingAfterSecondUserTurn() async throws {
+    func testPlanModeStopsClarifyingAfterSecondUserTurn() async throws {
         await assertQuickModeStopsClarifying(
-            mode: .mentalHealth,
+            mode: .plan,
             openingReply: """
             <phase>understanding</phase>
             What feels heaviest for you right now?
