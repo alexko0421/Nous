@@ -571,24 +571,31 @@ final class RAGPipelineTests: XCTestCase {
         Before I jump in, what feels most stuck right now?
         """
 
+        // Post-L2.5: Direction's turnDirective is turn-based only (.keepActive at
+        // turn 0, .complete at turn >= 1). The clarify/understanding/normal content
+        // distinctions are now made by the agent's contextAddendum, not the directive.
+        // These assertions still hold with turnIndex chosen to match expected outcome.
         XCTAssertEqual(
             ChatViewModel.updatedQuickActionMode(
                 currentMode: .direction,
-                assistantContent: clarificationReply
+                assistantContent: clarificationReply,
+                turnIndex: 0
             ),
             .direction
         )
         XCTAssertEqual(
             ChatViewModel.updatedQuickActionMode(
                 currentMode: .direction,
-                assistantContent: understandingQuestion
+                assistantContent: understandingQuestion,
+                turnIndex: 0
             ),
             .direction
         )
         XCTAssertNil(
             ChatViewModel.updatedQuickActionMode(
                 currentMode: .direction,
-                assistantContent: normalReply
+                assistantContent: normalReply,
+                turnIndex: 1
             )
         )
     }
