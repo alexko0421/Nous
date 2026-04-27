@@ -52,7 +52,12 @@ enum ChatMarkdownRenderer {
 
     private static func splitPipes(_ line: String) -> [String]? {
         // Returns nil if line is not pipe-bordered (no leading | or no trailing |).
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        // Strip any stray SOH first — converts the "LLMs don't emit U+0001" assumption
+        // into an enforced invariant so the sentinel-substitute trick can't silently
+        // corrupt input that happens to contain SOH.
+        let trimmed = line
+            .replacingOccurrences(of: escapedPipeSentinel, with: "")
+            .trimmingCharacters(in: .whitespaces)
         guard trimmed.hasPrefix("|"), trimmed.hasSuffix("|") else { return nil }
         let escaped = trimmed.replacingOccurrences(of: "\\|", with: escapedPipeSentinel)
         var cells = escaped.components(separatedBy: "|")

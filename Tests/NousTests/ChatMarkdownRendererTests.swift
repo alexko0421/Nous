@@ -143,8 +143,10 @@ final class ChatMarkdownRendererTests: XCTestCase {
 
     func testTableWithoutSeparatorFallsToProse() {
         let input = "| a | b |\n| 1 | 2 |"
-        let parsed = ChatMarkdownRenderer.parse(input)
-        XCTAssertFalse(parsed.contains { if case .table = $0 { return true } else { return false } })
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse(input),
+            [.prose("| a | b |"), .prose("| 1 | 2 |")]
+        )
     }
 
     func testTableRaggedRowsNormalize() {
@@ -176,7 +178,9 @@ final class ChatMarkdownRendererTests: XCTestCase {
     func testBorderlessGFMFallsToProse() {
         // v1 explicitly out of scope: no leading/trailing pipes.
         let input = "a | b\n--- | ---\n1 | 2"
-        let parsed = ChatMarkdownRenderer.parse(input)
-        XCTAssertFalse(parsed.contains { if case .table = $0 { return true } else { return false } })
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse(input),
+            [.prose("a | b"), .prose("--- | ---"), .prose("1 | 2")]
+        )
     }
 }
