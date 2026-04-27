@@ -204,10 +204,12 @@ struct ChatMarkdownView: View {
     private let bodyFont: Font = .system(size: 14, weight: .regular)
     private let h1Font: Font = .system(size: 16, weight: .semibold)
     private let h2Font: Font = .system(size: 15, weight: .semibold)
+    private let tableHeaderFont: Font = .system(size: 14, weight: .semibold)
     private let bodyLineSpacing: CGFloat = 8
     private let segmentSpacing: CGFloat = 14
     private let bulletIndent: CGFloat = 4
-    private let bulletGap: CGFloat = 8
+    private let bulletContentGap: CGFloat = 8   // glyph (•) to content
+    private let bulletRowGap: CGFloat = 6       // between consecutive bullets
 
     var body: some View {
         VStack(alignment: .leading, spacing: segmentSpacing) {
@@ -228,9 +230,9 @@ struct ChatMarkdownView: View {
                 .textSelection(.enabled)
 
         case .bulletBlock(let bullets):
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: bulletRowGap) {
                 ForEach(Array(bullets.enumerated()), id: \.offset) { _, bullet in
-                    HStack(alignment: .firstTextBaseline, spacing: bulletGap) {
+                    HStack(alignment: .firstTextBaseline, spacing: bulletContentGap) {
                         Text("•")
                             .font(bodyFont)
                             .foregroundColor(AppColor.colaDarkText)
@@ -250,7 +252,7 @@ struct ChatMarkdownView: View {
                 GridRow {
                     ForEach(Array(headers.enumerated()), id: \.offset) { _, header in
                         Text(header)
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(tableHeaderFont)
                             .foregroundColor(AppColor.colaDarkText)
                             .textSelection(.enabled)
                     }
