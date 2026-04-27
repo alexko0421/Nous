@@ -27,7 +27,10 @@ enum ChatMarkdownRenderer {
         result = applyRegex(orderedListPrefixRegex, to: result, replacement: "")
         result = applyRegex(quotePrefixRegex, to: result, replacement: "")
 
-        // Balanced-pair stripping.
+        // Balanced-pair stripping. ORDERING IS LOAD-BEARING:
+        // Bold MUST run before italic. On `***word***`, bold-first strips outer pair
+        // → `*word*` → italic strips → `word`. Italic-first leaves `*word*` residue
+        // because the italic regex requires non-`*` after the opening `*`.
         result = applyRegex(boldPairRegex, to: result, replacement: "$1")
         result = applyRegex(italicAsteriskRegex, to: result, replacement: "$1")
         result = applyRegex(inlineCodeRegex, to: result, replacement: "$1")

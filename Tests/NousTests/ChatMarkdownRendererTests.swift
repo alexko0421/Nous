@@ -257,6 +257,15 @@ final class ChatMarkdownRendererTests: XCTestCase {
         )
     }
 
+    func testTripleStarBoldItalicStripped() {
+        // Guards the bold-before-italic ordering invariant in sanitizeProse.
+        // If italic ran before bold, this would leave `*bold-italic*` residue.
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse("***bold-italic***"),
+            [.prose("bold-italic")]
+        )
+    }
+
     func testOrderedListPrefixStripped() {
         XCTAssertEqual(
             ChatMarkdownRenderer.parse("1. first\n2. second"),
@@ -291,6 +300,13 @@ final class ChatMarkdownRendererTests: XCTestCase {
         XCTAssertEqual(
             ChatMarkdownRenderer.parse("3 * 4 = 12"),
             [.prose("3 * 4 = 12")]
+        )
+    }
+
+    func testMultiplicationWithVariablePreserved() {
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse("2 * x = 4"),
+            [.prose("2 * x = 4")]
         )
     }
 
