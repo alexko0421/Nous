@@ -33,6 +33,24 @@ struct PlanAgent: QuickActionAgent {
         }
     }
 
+    private static let planFormatScaffold = """
+
+    # Outcome
+    （one short paragraph — the actual outcome Alex is chasing, not the surface activity）
+
+    # Weekly schedule
+    | 周 | 重点 | 具体动作 |
+    |---|---|---|
+    | Week 1 | ... | ... |
+
+    # Where you'll stall
+    - ...
+    - ...
+
+    # Today's first step
+    （one concrete action）
+    """
+
     private static let decideOrAskAddendum = """
     ---
 
@@ -50,22 +68,7 @@ struct PlanAgent: QuickActionAgent {
 
     PLAN MODE PRODUCTION CONTRACT:
     Produce a structured plan using these markdown sections:
-
-    # Outcome
-    （one short paragraph — the actual outcome Alex is chasing, not the surface activity）
-
-    # Weekly schedule
-    | 周 | 重点 | 具体动作 |
-    |---|---|---|
-    | Week 1 | ... | ... |
-
-    # Where you'll stall
-    - ...
-    - ...
-
-    # Today's first step
-    （one concrete action）
-
+    \(planFormatScaffold)
     Use what you know about Alex from prior conversations and stored memory.
     Stay specific. No generic productivity advice.
     Drop the <phase>understanding</phase> marker once you commit to the plan.
@@ -76,14 +79,9 @@ struct PlanAgent: QuickActionAgent {
 
     PLAN MODE — FINAL TURN:
     This is your last chance to produce the plan. Mode drops after this reply.
-    You may NOT ask another clarifying question. Output the four markdown sections
-    now using whatever you have learned so far:
-
-    # Outcome
-    # Weekly schedule (use the | table | format)
-    # Where you'll stall
-    # Today's first step
-
+    You may NOT ask another clarifying question. Output the structured plan now
+    using whatever you have learned so far:
+    \(planFormatScaffold)
     Drop the <phase>understanding</phase> marker. Stay specific.
     """
 
