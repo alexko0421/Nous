@@ -884,9 +884,10 @@ final class ChatViewModel {
         // come from fresh RAG, attachments are turn-specific, etc. Keeping these out of
         // the cache costs ~300 tokens/turn in re-send but keeps hit rate near 100%.
 
-        // FIRST volatile piece: format policy grants markdown structure permission across
-        // all 4 modes (Direction / Brainstorm / Plan / default chat). Must appear before
-        // all other volatile pieces so it has highest LLM weight.
+        // CHAT FORMAT POLICY: unconditional global format permission for assistant
+        // output. Granted to default chat AND all quick-action modes (Direction,
+        // Brainstorm, Plan). Lives in volatile (not anchor.md, which is frozen
+        // per AGENTS.md:39, 131).
         volatilePieces.append("""
 ---
 

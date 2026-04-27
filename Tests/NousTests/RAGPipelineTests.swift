@@ -621,8 +621,12 @@ final class RAGPipelineTests: XCTestCase {
         ).combined
         XCTAssertTrue(context.contains("CHAT FORMAT POLICY"),
                       "assembleContext must include the chat format policy block")
-        XCTAssertTrue(context.contains("# 标题"),
-                      "policy must list markdown structure tokens")
+        XCTAssertTrue(context.contains("`# 标题`"),
+                      "policy must list `# 标题` as a literal code example")
+        XCTAssertTrue(context.contains("`- bullet`"),
+                      "policy must list `- bullet` as a literal code example")
+        XCTAssertTrue(context.contains("`| table |`"),
+                      "policy must list `| table |` as a literal code example")
         XCTAssertTrue(context.contains("「」"),
                       "policy must reference 「」 emphasis convention")
     }
