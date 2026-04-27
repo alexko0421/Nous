@@ -536,16 +536,14 @@ struct MessageBubble: View {
     let isUser: Bool
 
     private let userBubbleMaxWidth: CGFloat = 620
-    private let assistantTextMaxWidth: CGFloat = 690
     private let userParagraphSpacing: CGFloat = 10
-    private let assistantParagraphSpacing: CGFloat = 14
 
-    private var paragraphTexts: [String] {
-        let parsed = isUser
-            ? ClarificationContent(displayText: text, card: nil, keepsQuickActionMode: false)
-            : ClarificationCardParser.parse(text)
+    private var userParagraphTexts: [String] {
+        Self.normalizedParagraphs(from: text)
+    }
 
-        return Self.normalizedParagraphs(from: parsed.displayText)
+    private var assistantDisplayText: String {
+        ClarificationCardParser.parse(text).displayText
     }
 
     var body: some View {
@@ -553,12 +551,13 @@ struct MessageBubble: View {
             if let thinkingContent, !thinkingContent.isEmpty {
                 ThinkingAccordion(content: thinkingContent, isStreaming: isThinkingStreaming)
             }
-            if !paragraphTexts.isEmpty {
+            let hasContent = isUser ? !userParagraphTexts.isEmpty : !assistantDisplayText.isEmpty
+            if hasContent {
                 if isUser {
                     HStack {
                         Spacer(minLength: 60)
                         VStack(alignment: .leading, spacing: userParagraphSpacing) {
-                            ForEach(Array(paragraphTexts.enumerated()), id: \.offset) { _, paragraph in
+                            ForEach(Array(userParagraphTexts.enumerated()), id: \.offset) { _, paragraph in
                                 Text(paragraph)
                                     .font(.system(size: 14, weight: .regular))
                                     .foregroundColor(AppColor.colaDarkText)
@@ -574,22 +573,9 @@ struct MessageBubble: View {
                     }
                 } else {
                     HStack {
-                        VStack(alignment: .leading, spacing: assistantParagraphSpacing) {
-                            ForEach(Array(paragraphTexts.enumerated()), id: \.offset) { _, paragraph in
-                                Text(paragraph)
-                                    .font(.system(size: 14, weight: .regular))
-                                    .foregroundColor(AppColor.colaDarkText)
-                                    .lineSpacing(8)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .textSelection(.enabled)
-                            }
-                        }
-                        .frame(maxWidth: assistantTextMaxWidth, alignment: .leading)
-                        .padding(.top, 6)
-                        .padding(.bottom, 10)
+                        AssistantBubbleContent(displayText: assistantDisplayText)
                         Spacer(minLength: 0)
                     }
-                    .animation(.easeOut(duration: 0.15), value: paragraphTexts)
                 }
             }
         }
@@ -678,6 +664,24 @@ struct MessageBubble: View {
             .count
 
         return sentenceEndCount <= 2
+    }
+}
+
+private struct AssistantBubbleContent: View {
+    let displayText: String
+
+    private let assistantTextMaxWidth: CGFloat = 690
+
+    var body: some View {
+        // Single parse per body recompute via Swift `let` binding.
+        // Computed properties are NOT memoized by SwiftUI — `let` here ensures
+        // the renderer and animation modifier reference the same parse output.
+        let segments = ChatMarkdownRenderer.parse(displayText)
+        return ChatMarkdownView(segments: segments)
+            .frame(maxWidth: assistantTextMaxWidth, alignment: .leading)
+            .padding(.top, 6)
+            .padding(.bottom, 10)
+            .animation(.easeOut(duration: 0.15), value: segments.count)
     }
 }
 
