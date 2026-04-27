@@ -16,6 +16,7 @@ enum ChatMarkdownRenderer {
         // Blank-line rendering policy is deferred to Task 7; guard here to preserve
         // the Task 1 contract that parse("") returns [].
         guard !text.isEmpty else { return [] }
+
         var segments: [Segment] = []
         let lines = text.components(separatedBy: "\n")
         var i = 0
@@ -26,11 +27,29 @@ enum ChatMarkdownRenderer {
                 i += 1
                 continue
             }
-            // Fallback: prose (single line for now; bullet/table/fence in later tasks).
+            if isBulletLine(line) {
+                var bullets: [String] = []
+                while i < lines.count, isBulletLine(lines[i]) {
+                    bullets.append(bulletContent(lines[i]))
+                    i += 1
+                }
+                segments.append(.bulletBlock(bullets))
+                continue
+            }
+            // Fallback: prose (single line for now; table/fence in later tasks).
             segments.append(.prose(line))
             i += 1
         }
         return segments
+    }
+
+    private static func isBulletLine(_ line: String) -> Bool {
+        // Must start with "- " (dash followed by at least one space).
+        return line.hasPrefix("- ")
+    }
+
+    private static func bulletContent(_ line: String) -> String {
+        return String(line.dropFirst(2)).trimmingCharacters(in: .whitespaces)
     }
 
     private static func parseHeading(line: String) -> Segment? {

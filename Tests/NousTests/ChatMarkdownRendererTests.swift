@@ -53,4 +53,42 @@ final class ChatMarkdownRendererTests: XCTestCase {
             [.heading(level: 1, text: "Title")]
         )
     }
+
+    // MARK: - Bullets
+
+    func testSingleBullet() {
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse("- one"),
+            [.bulletBlock(["one"])]
+        )
+    }
+
+    func testConsecutiveBulletsGroupIntoOneBlock() {
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse("- one\n- two\n- three"),
+            [.bulletBlock(["one", "two", "three"])]
+        )
+    }
+
+    func testBulletBlockEndsOnNonBulletLine() {
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse("- one\n- two\nNot a bullet"),
+            [.bulletBlock(["one", "two"]), .prose("Not a bullet")]
+        )
+    }
+
+    func testBulletWithoutSpaceIsProse() {
+        // "-foo" without space after - is not a bullet.
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse("-foo"),
+            [.prose("-foo")]
+        )
+    }
+
+    func testBulletContentTrimmed() {
+        XCTAssertEqual(
+            ChatMarkdownRenderer.parse("-   indented bullet"),
+            [.bulletBlock(["indented bullet"])]
+        )
+    }
 }
