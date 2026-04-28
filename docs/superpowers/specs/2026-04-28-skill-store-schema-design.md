@@ -194,12 +194,22 @@ final class SkillMatcher: SkillMatching {
     func matchingSkills(
         from skills: [Skill],
         context: SkillMatchContext,
-        cap: Int = 4
+        cap: Int = 5
     ) -> [Skill] {
         guard let mode = context.mode else { return [] }
         return skills
             .filter { $0.state == .active }
             .filter { $0.payload.trigger.modes.contains(mode) }
+            // Opening-turn invariant: mode-skeleton skills do NOT fire on turn 0.
+            // The existing DirectionAgent/BrainstormAgent.contextAddendum returns nil
+            // at turnIndex == 0; preserving that prevents the structured clarification
+            // card from leaking into the opening chip turn.
+            .filter { skill in
+                if context.turnIndex == 0 && skill.payload.trigger.kind == .mode {
+                    return false
+                }
+                return true
+            }
             .sorted(by: Self.skillOrdering)
             .prefix(cap)
             .map { $0 }
@@ -217,9 +227,17 @@ final class SkillMatcher: SkillMatching {
 }
 ```
 
-**Cap = 4** total. Mode skeleton conventionally lives at priority 90-100; taste skills at 50-80. Cap 4 = 1 mode skeleton + 3 taste, with priority sorting handling everything else. No per-category cap, no priority boost — convention does the work.
+**Cap = 5** total. Mode skeleton lives at priority 90; taste skills at 55-70. With 7 seed skills:
 
-If Alex authors a taste skill at priority 95 that displaces the mode skeleton (priority 90), that's Alex's intentional override. v2 trusts the author.
+- **Direction / Brainstorm chip turn (turnIndex >= 1)**: 1 mode skeleton + 4 taste = 5 skills fire. Cuts the lowest-priority taste (`weight-against-default-chat-baseline` at priority 55).
+- **Plan chip turn**: 0 mode skeletons (Plan does not migrate) + 5 taste = 5 skills fire (all 5 taste).
+- **Direction / Brainstorm opening turn (turnIndex == 0)**: 0 mode skeletons (turn-0 invariant) + 4-5 taste skills. Skeleton silenced so the opening prompt's "do not use structured clarification card yet" rule survives.
+- **Plan opening turn (turnIndex == 0)**: PlanAgent's contextAddendum already returns nil at turn 0; skill matcher returns 4-5 taste; concatenation = taste only.
+- **Default companion chat**: 0 (matcher returns empty when `mode == nil`).
+
+No per-category cap, no priority boost — convention does the work. If Alex authors a taste skill at priority 95 that displaces the mode skeleton (priority 90), that's Alex's intentional override. v2 trusts the author.
+
+**Turn-0 mode-skeleton skip** is hardcoded in the matcher: `kind == .mode && turnIndex == 0` always returns false. This preserves the existing opening-turn semantics in `DirectionAgent.swift:25` and `BrainstormAgent.swift:18` (which return nil at turn 0 today). The skip is unconditional in v2; v2.5 may add per-skill turn gating if needed.
 
 ### `SkillTracker`
 
@@ -366,7 +384,10 @@ All 5 use `modes: [direction, brainstorm, plan]` whitelist (no default-chat impa
   - `mode` matches whitelist → skill fires
   - `mode` does not match whitelist → skill skipped
   - Inactive (`state != active`) skills excluded
-  - Cap=4 enforcement: 6 active matching skills → top 4 by priority
+  - Cap=5 enforcement: 7 active matching skills → top 5 by priority
+  - **Turn-0 mode-skeleton skip**: with `turnIndex=0` + Direction mode + `direction-skeleton` (kind=mode) + 5 taste skills active → matcher returns ONLY the 5 taste skills (skeleton silenced)
+  - **Turn-1+ mode-skeleton fires**: with `turnIndex=1` + Direction mode → matcher returns skeleton + top 4 taste = 5 skills
+  - **Turn-0 always-skill fires**: a `kind=always` skill with `modes=[direction]` + `turnIndex=0` → STILL fires (turn-0 skip is mode-only)
   - Equal priority deterministic order: 5 tied skills → name asc tiebreaker is deterministic across runs
   - Equal priority + equal name → id ascending (final tiebreaker)
 
@@ -388,19 +409,21 @@ All 5 use `modes: [direction, brainstorm, plan]` whitelist (no default-chat impa
   - Concurrent launch: shared transaction lock, no duplicate inserts
 
 - **`SkillIntegrationTests`** (against `TurnPlanner` callers):
-  - Snapshot test: Direction turn 1 with seed skills → `quickActionAddendum` byte-equivalent (modulo skill content) to pre-migration string
-  - Snapshot test: Brainstorm turn 1 → byte-equivalent
-  - Snapshot test: Plan turn 1, 2, 3, 4, 5 → unchanged (Plan addendum still flows from `PlanAgent.contextAddendum`, plus taste skills layered)
-  - Plan with taste skills: Plan addendum + 3 taste skills concatenate in correct order
-  - Steward-inferred Direction route: matcher uses `planningQuickActionMode` (explicit ?? inferred), mode skeleton STILL fires
-  - Default companion chat: NO skills fire (mode = nil)
-  - `DebugAblation.skipModeAddendum = true` → skill matcher skipped, integration falls back to `inferredAddendum` only
+  - **Snapshot test (Direction opening turn 0)**: matcher returns top 4-5 taste skills, NO mode skeleton (turn-0 invariant). `quickActionAddendum` is taste-only string; matches pre-migration nil + opening prompt.
+  - **Snapshot test (Direction turn 1)**: matcher returns `direction-skeleton` + 4 taste skills (cuts priority-55 `weight-against-default-chat-baseline`). Concatenated `quickActionAddendum` byte-equivalent (modulo skill content) to pre-migration string.
+  - **Snapshot test (Brainstorm turn 1)**: same pattern as Direction.
+  - **Snapshot test (Plan turn 0)**: PlanAgent.contextAddendum returns nil; matcher returns 5 taste skills (all of them, no mode skeleton consuming a slot).
+  - **Snapshot test (Plan turn 1)**: PlanAgent returns `decideOrAskAddendum`; matcher returns 5 taste skills. Concatenation = `[planAgentAddendum, allTasteSkillsJoined]`.
+  - **Snapshot test (Plan turn 2, 3, 4, 5)**: Plan addendum unchanged (turnIndex-driven); 5 taste skills fire each turn.
+  - Steward-inferred Direction route: matcher uses `planningQuickActionMode` (explicit ?? inferred), mode skeleton STILL fires at turnIndex >= 1.
+  - Default companion chat (`mode = nil`): NO skills fire, `quickActionAddendum = nil` (same as today).
+  - `DebugAblation.skipModeAddendum = true` → skill matcher skipped, integration falls back to `inferredAddendum` only.
 
 ### Manual QA (post-migration)
 
-1. Launch Nous, tap Direction chip, ask P1. Verify reply has Direction shape (same as pre-migration). Trace shows `direction-skeleton` + 5 taste skills firing.
-2. Tap Brainstorm chip, ask P2. Verify Brainstorm shape. Trace shows `brainstorm-skeleton` + taste.
-3. Tap Plan chip, ask P3. Verify Plan turn-1 partial-plan triad (PlanAgent unchanged). Trace shows 5 taste skills firing (NO `plan-skeleton`, because Plan didn't migrate).
+1. Launch Nous, tap Direction chip. Verify the **opening turn** asks one short question (no skeleton text leaking). Trace shows 4-5 taste skills, NO `direction-skeleton`. Then answer the opening question — verify the **turn-1 reply** has Direction shape (same as pre-migration). Trace shows `direction-skeleton` + 4 taste skills (5th cut is `weight-against-default-chat-baseline`).
+2. Same flow for Brainstorm chip: opening turn = taste only, turn 1 = `brainstorm-skeleton` + 4 taste.
+3. Tap Plan chip, ask P3. Verify Plan turn-1 partial-plan triad (PlanAgent.contextAddendum unchanged). Trace shows 5 taste skills firing (NO mode skeleton, because Plan does not migrate). Continue answering — verify turn-2 produces structured plan, turn-4+ forces final synthesis (PlanAgent state machine intact).
 4. Default companion chat: verify NO skills fire (no addendum injection beyond what already exists). No regression.
 
 If any regress, the migration broke something. Fix before continuing.
@@ -452,3 +475,4 @@ Estimated time: 1-1.5 weeks (vs original 2 weeks — Plan unmigrated saves time)
 - **2026-04-28 afternoon (round 1 amendment)** — Codex challenge surfaced 3 top-killers + 12 detail findings; doc amended to fix.
 - **2026-04-28 afternoon (round 2 amendment)** — Codex follow-up review found amended doc still had 5 remaining + 4 new issues. Recurring lesson: every new feature is new bug surface.
 - **2026-04-28 afternoon (Path Y simplification)** — Doc rewritten to minimal scope. Drop `regex`, `intent`, `specificity`, `turnRange`, `payloadVersion>1`, default-chat impact, and Plan migration. v2 has 2 trigger kinds (`mode`, `always`), 1 cap (priority + name tiebreaker), 7 seed skills (2 mode + 5 mode-whitelisted taste), Plan stays code-driven. Codex round-2 verdict was "one-more-iteration"; Path Y trades feature surface for stability.
+- **2026-04-28 evening (Path Y polish)** — Codex round-3 review on Path Y simplification verdict was "one-more-iteration" with 2 critical gaps: (1) opening-turn regression — matcher ignored `turnIndex`, would leak mode skeleton into turn 0 contradicting opening prompt; fix: matcher unconditionally skips `kind=mode` when `turnIndex == 0`. (2) Plan taste count inconsistent in doc (tests said 3, manual QA said 5) due to cap=4; fix: raise cap to 5 + document exact firing pattern per turn type. With these two fixes, schema is implementation-ready per Codex.
