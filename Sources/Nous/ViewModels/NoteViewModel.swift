@@ -54,6 +54,20 @@ final class NoteViewModel {
         openNote(node)
     }
 
+    func createNote(title: String, content: String, projectId: UUID? = nil) throws {
+        let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let node = NousNode(
+            type: .note,
+            title: cleanTitle.isEmpty ? "Untitled" : cleanTitle,
+            content: content,
+            projectId: projectId
+        )
+        try nodeStore.insertNode(node)
+        loadNotes()
+        openNote(node)
+        scheduleEmbedding()
+    }
+
     func openNote(_ node: NousNode) {
         currentNote = node
         title = node.title

@@ -137,6 +137,7 @@
 		9DF0B7981415723F2B61E384 /* FilenameSlug.swift in Sources */ = {isa = PBXBuildFile; fileRef = 023F16C8415E3503883F39FB /* FilenameSlug.swift */; };
 		9E19A81E4EA5A35DB831FF23 /* MemorySynthesisService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC0B3C4970895DC86B0C1761 /* MemorySynthesisService.swift */; };
 		9E7CD679D402D0E64AD9DBDC /* ReflectionValidatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F99DD230882CC09237EDA591 /* ReflectionValidatorTests.swift */; };
+		9E8655824CDC170F8925FAE3 /* NoteViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 903D3C6C02E50AC59FB4FB46 /* NoteViewModelTests.swift */; };
 		A12DB47C7D3F5AA157754C76 /* UserMemoryFacade.swift in Sources */ = {isa = PBXBuildFile; fileRef = 986A4BCA6E9150E04C414D3A /* UserMemoryFacade.swift */; };
 		A316A39D1CD4B7CBE01C03A9 /* ScratchPadStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E283B562C0F0CC0E5DED2286 /* ScratchPadStore.swift */; };
 		A38C4867F670608CCC852F9E /* UserMemoryScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF7B960A5DC5E42823F1CB9F /* UserMemoryScheduler.swift */; };
@@ -187,6 +188,7 @@
 		D8444027884631B4884AA612 /* 05-soft-tension-companion-quiet.json in Resources */ = {isa = PBXBuildFile; fileRef = 6F6742373CDE2591DA9492D4 /* 05-soft-tension-companion-quiet.json */; };
 		D93C394919E21895D21C166B /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0CC992F6DB4148B19D31F08E /* AVFoundation.framework */; };
 		DB7EF8A76378DF79B76DFD45 /* ReflectionCascadeOrphanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE378C977F3904FD02759C1E /* ReflectionCascadeOrphanTests.swift */; };
+		DBA6A501AAEB77589CFDB63C /* VoiceActionPill.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91308DA5781DDB5D15415B14 /* VoiceActionPill.swift */; };
 		DC5505E77AAAF3CC7A339F9D /* MemoryQueryPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94A8FFEAD37B4D3F0819439A /* MemoryQueryPlanner.swift */; };
 		DDBD058147B497D397D7DAC0 /* UserMemoryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1F0851321FDD912EBEA901F /* UserMemoryService.swift */; };
 		DE14FEF788D9AFA302DC7A02 /* MemoryGraphInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FDE22A4088C97B7F2B65171 /* MemoryGraphInspector.swift */; };
@@ -346,7 +348,9 @@
 		8C8E0A3AC729D626855B55C4 /* TurnExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnExecutor.swift; sourceTree = "<group>"; };
 		8D49D5566A433CB4F445DCF4 /* ReadNoteTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadNoteTool.swift; sourceTree = "<group>"; };
 		8E30FF68C5FA2AB210A95E1B /* FrameSpinner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameSpinner.swift; sourceTree = "<group>"; };
+		903D3C6C02E50AC59FB4FB46 /* NoteViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteViewModelTests.swift; sourceTree = "<group>"; };
 		908B3A0E9135905E5FFB061B /* MemoryEvidenceSnippet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryEvidenceSnippet.swift; sourceTree = "<group>"; };
+		91308DA5781DDB5D15415B14 /* VoiceActionPill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceActionPill.swift; sourceTree = "<group>"; };
 		92D5AA1CB7980A98700AB726 /* LocalLLMService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalLLMService.swift; sourceTree = "<group>"; };
 		94A8FFEAD37B4D3F0819439A /* MemoryQueryPlanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryQueryPlanner.swift; sourceTree = "<group>"; };
 		9767256444564BD36BC3ADB1 /* 04-soft-tension-strategist-provokes.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "04-soft-tension-strategist-provokes.json"; sourceTree = "<group>"; };
@@ -754,6 +758,7 @@
 				35A6551212FD9D1630A97C1D /* MemoryQueryPlannerTests.swift */,
 				2C258CFA6F991D14ED791FE3 /* MemoryV2MigratorTests.swift */,
 				840F091AC2ADF85B26F1884A /* NodeStoreTests.swift */,
+				903D3C6C02E50AC59FB4FB46 /* NoteViewModelTests.swift */,
 				6584D5A0074D2B750107B7CA /* PromptGovernanceTraceTests.swift */,
 				85551858035454B81C02665B /* ProvocationJudgeTests.swift */,
 				B357963D017ED46D343B3076 /* ProvocationKindDerivationTests.swift */,
@@ -806,6 +811,7 @@
 				FEA896134861BEAADF98E800 /* SettingsView.swift */,
 				768CDC34E8F6272348EC152B /* SetupView.swift */,
 				01EFE4D1B289FCB7FAB63B08 /* ThinkingAccordion.swift */,
+				91308DA5781DDB5D15415B14 /* VoiceActionPill.swift */,
 				B15EC86BFA4A972D811E5ADB /* WelcomeView.swift */,
 			);
 			path = Views;
@@ -1109,6 +1115,7 @@
 				DDBD058147B497D397D7DAC0 /* UserMemoryService.swift in Sources */,
 				4E287B4BCF939923FFE29C45 /* UserModel.swift in Sources */,
 				9CA12F6A78C6C54FA3535947 /* VectorStore.swift in Sources */,
+				DBA6A501AAEB77589CFDB63C /* VoiceActionPill.swift in Sources */,
 				C12D81B7B1B0295D73FDFA69 /* VoiceAudioCapture.swift in Sources */,
 				6146D9C1D7258FD6FCF32DDB /* VoiceCommandController.swift in Sources */,
 				E6D3F07FC3C05F45B68A5B5E /* VoiceMemoryFacade.swift in Sources */,
@@ -1152,6 +1159,7 @@
 				748AE8CBBB9D4916CE331C31 /* MemoryQueryPlannerTests.swift in Sources */,
 				293A8F632EE0107ADEF50D82 /* MemoryV2MigratorTests.swift in Sources */,
 				4116C4885DF5E1CB2FE62225 /* NodeStoreTests.swift in Sources */,
+				9E8655824CDC170F8925FAE3 /* NoteViewModelTests.swift in Sources */,
 				4637956CD19390098A7F7C5D /* PromptGovernanceTraceTests.swift in Sources */,
 				9DE0D671078EE3A3FAD93A63 /* ProvocationJudgeTests.swift in Sources */,
 				7896E877484BBF4EEFE73D61 /* ProvocationKindDerivationTests.swift in Sources */,

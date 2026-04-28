@@ -22,6 +22,7 @@ struct AppDependencies {
     let governanceTelemetry: GovernanceTelemetryStore
     let galaxyRelationTelemetry: GalaxyRelationTelemetry
     let scratchPadStore: ScratchPadStore
+    let voiceController: VoiceCommandController
     let settingsVM: SettingsViewModel
     let chatVM: ChatViewModel
     let noteVM: NoteViewModel
@@ -158,6 +159,8 @@ final class AppEnvironment {
                 return try? embeddingService.embed(text)
             }
         )
+        let voiceMemoryFacade = VoiceMemoryFacade(nodeStore: nodeStore)
+        let voiceController = VoiceCommandController(memory: voiceMemoryFacade)
         let scheduler = UserMemoryScheduler(service: userMemoryService.synthesizer)
         let conversationSessionStore = ConversationSessionStore(nodeStore: nodeStore)
         let chatVM = ChatViewModel(
@@ -228,6 +231,7 @@ final class AppEnvironment {
             governanceTelemetry: governanceTelemetry,
             galaxyRelationTelemetry: galaxyRelationTelemetry,
             scratchPadStore: scratchPadStore,
+            voiceController: voiceController,
             settingsVM: settingsVM,
             chatVM: chatVM,
             noteVM: noteVM,

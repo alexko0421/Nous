@@ -3,8 +3,13 @@ import SwiftUI
 
 struct ChatArea: View {
     @Bindable var vm: ChatViewModel
+    @Bindable var voiceController: VoiceCommandController
     @Binding var isSidebarVisible: Bool
     @Binding var isScratchPadVisible: Bool
+    let openAIAPIKey: String
+    let voiceUnavailableReason: String?
+    let onVoiceNavigate: (VoiceNavigationTarget) -> Void
+    let onVoiceCreateNote: (String, String) -> Void
     var onNavigateToNode: (NousNode) -> Void = { _ in }
 
     @State private var attachments: [AttachedFileContext] = []
@@ -273,7 +278,35 @@ struct ChatArea: View {
                             }
                         }
 
+                        if voiceController.isActive || voiceController.pendingAction != nil {
+                            VoiceActionPill(
+                                status: voiceController.status,
+                                hasPendingConfirmation: voiceController.pendingAction != nil,
+                                onConfirm: voiceController.confirmPendingAction,
+                                onCancel: voiceController.cancelPendingAction
+                            )
+                        }
+
                         HStack(spacing: 12) {
+                            Button(action: toggleVoiceMode) {
+                                NativeGlassPanel(
+                                    cornerRadius: 18,
+                                    tintColor: voiceController.isActive
+                                        ? NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.22)
+                                        : AppColor.glassTint
+                                ) { EmptyView() }
+                                .frame(width: 36, height: 36)
+                                .overlay(
+                                    Image(systemName: voiceController.isActive ? "mic.fill" : "mic")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundColor(voiceController.isActive ? AppColor.colaOrange : AppColor.secondaryText)
+                                )
+                                .overlay(Circle().stroke(AppColor.panelStroke, lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+                            .help(voiceUnavailableReason ?? (voiceController.isActive ? "Stop Voice Mode" : "Start Voice Mode"))
+                            .disabled(voiceUnavailableReason != nil)
+
                             Button(action: { isAttachmentMenuPresented = true }) {
                                 NativeGlassPanel(cornerRadius: 18, tintColor: AppColor.glassTint) { EmptyView() }
                                     .frame(width: 36, height: 36)
@@ -401,6 +434,9 @@ struct ChatArea: View {
                 .padding(.trailing, 24)
             }
         }
+        .onAppear {
+            configureVoiceHandlers()
+        }
         .confirmationDialog("Add Attachment", isPresented: $isAttachmentMenuPresented, titleVisibility: .visible) {
             Button("File") {
                 isFileImporterPresented = true
@@ -439,6 +475,44 @@ struct ChatArea: View {
         }
     }
 
+    private func configureVoiceHandlers() {
+        voiceController.setMemoryContextProvider {
+            guard let conversationId = vm.currentNode?.id else { return nil }
+            return VoiceMemoryContext(
+                projectId: vm.currentNode?.projectId ?? vm.defaultProjectId,
+                conversationId: conversationId
+            )
+        }
+
+        voiceController.configure(
+            VoiceActionHandlers(
+                navigate: onVoiceNavigate,
+                setSidebarVisible: { isSidebarVisible = $0 },
+                setScratchPadVisible: { isScratchPadVisible = $0 },
+                setComposerText: { vm.inputText = $0 },
+                appendComposerText: { text in
+                    if vm.inputText.isEmpty {
+                        vm.inputText = text
+                    } else {
+                        vm.inputText += "\n" + text
+                    }
+                },
+                clearComposer: { vm.inputText = "" },
+                startNewChat: {
+                    vm.stopGenerating()
+                    vm.currentNode = nil
+                    vm.messages = []
+                    vm.citations = []
+                    vm.currentResponse = ""
+                    vm.inputText = ""
+                    isScratchPadVisible = false
+                },
+                sendMessage: sendTextFromVoice,
+                createNote: onVoiceCreateNote
+            )
+        )
+    }
+
     private func sendCurrentInput() {
         guard canSend else { return }
         let pendingAttachments = attachments
@@ -452,6 +526,24 @@ struct ChatArea: View {
             return
         }
         sendCurrentInput()
+    }
+
+    private func sendTextFromVoice(_ text: String) {
+        vm.inputText = text
+        attachments = []
+        Task { await vm.send(attachments: []) }
+    }
+
+    private func toggleVoiceMode() {
+        configureVoiceHandlers()
+        if voiceController.isActive {
+            voiceController.stop()
+            return
+        }
+
+        Task {
+            try? await voiceController.start(apiKey: openAIAPIKey)
+        }
     }
 
     private func sendClarificationOption(_ option: String) {

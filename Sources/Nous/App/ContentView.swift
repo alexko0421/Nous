@@ -80,8 +80,17 @@ struct ContentView: View {
                 case .chat:
                     ChatArea(
                         vm: dependencies.chatVM,
+                        voiceController: dependencies.voiceController,
                         isSidebarVisible: $isSidebarVisible,
                         isScratchPadVisible: $isScratchPadVisible,
+                        openAIAPIKey: dependencies.settingsVM.openaiApiKey,
+                        voiceUnavailableReason: dependencies.settingsVM.voiceModeUnavailableReason,
+                        onVoiceNavigate: { target in
+                            navigateWithVoice(to: target)
+                        },
+                        onVoiceCreateNote: { title, body in
+                            createVoiceNote(title: title, body: body, dependencies: dependencies)
+                        },
                         onNavigateToNode: { node in navigateToNode(node, dependencies: dependencies) }
                     )
                 case .notes:
@@ -128,6 +137,9 @@ struct ContentView: View {
                 .shadow(color: .black.opacity(0.12), radius: 24, x: 0, y: 8)
         )
         .background(.clear)
+        .overlay(alignment: .bottom) {
+            globalVoicePill(dependencies: dependencies)
+        }
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isSidebarVisible)
         .task {
             dependencies.chatVM.defaultProjectId = selectedProjectId
@@ -190,6 +202,59 @@ struct ContentView: View {
         case .note:
             dependencies.noteVM.openNote(node)
             selectedTab = .notes
+        }
+    }
+
+    private func navigateWithVoice(to target: VoiceNavigationTarget) {
+        switch target {
+        case .chat:
+            selectedTab = .chat
+        case .notes:
+            selectedTab = .notes
+        case .galaxy:
+            selectedTab = .galaxy
+        case .settings:
+            selectedTab = .settings
+        }
+    }
+
+    private func createVoiceNote(title: String, body: String, dependencies: AppDependencies) {
+        do {
+            try dependencies.noteVM.createNote(title: title, content: body, projectId: selectedProjectId)
+            selectedTab = .notes
+        } catch {
+            dependencies.voiceController.status = .error("Could not create note")
+        }
+    }
+
+    @ViewBuilder
+    private func globalVoicePill(dependencies: AppDependencies) -> some View {
+        if selectedTab != .chat &&
+            (dependencies.voiceController.isActive || dependencies.voiceController.pendingAction != nil) {
+            HStack(spacing: 8) {
+                VoiceActionPill(
+                    status: dependencies.voiceController.status,
+                    hasPendingConfirmation: dependencies.voiceController.pendingAction != nil,
+                    onConfirm: dependencies.voiceController.confirmPendingAction,
+                    onCancel: dependencies.voiceController.cancelPendingAction
+                )
+
+                if dependencies.voiceController.isActive {
+                    Button(action: dependencies.voiceController.stop) {
+                        NativeGlassPanel(cornerRadius: 18, tintColor: AppColor.glassTint) { EmptyView() }
+                            .frame(width: 36, height: 36)
+                            .overlay(
+                                Image(systemName: "mic.slash")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundColor(AppColor.secondaryText)
+                            )
+                            .overlay(Circle().stroke(AppColor.panelStroke, lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Stop Voice Mode")
+                }
+            }
+            .padding(.bottom, 24)
         }
     }
 
