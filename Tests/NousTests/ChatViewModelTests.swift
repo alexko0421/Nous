@@ -218,6 +218,50 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertEqual(vm.messages.last?.content, assistantMessage.content)
     }
 
+    func testRegenerateLatestAssistantReplacesReplyWithoutDuplicatingUser() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let scratchPadStore = await MainActor.run { makeScratchPadStore(nodeStore: nodeStore) }
+        var llm = SingleReplyLLMService(output: "first answer")
+
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { llm },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: scratchPadStore
+        )
+
+        vm.inputText = "Help me think"
+        await vm.send()
+
+        let firstAssistant = try XCTUnwrap(vm.messages.last)
+        XCTAssertTrue(vm.canRegenerateAssistantMessage(firstAssistant.id))
+
+        llm = SingleReplyLLMService(output: "second answer")
+        await vm.regenerateLatestAssistant()
+
+        let nodeId = try XCTUnwrap(vm.currentNode?.id)
+        let storedMessages = try nodeStore.fetchMessages(nodeId: nodeId)
+        let storedNode = try XCTUnwrap(nodeStore.fetchNode(id: nodeId))
+
+        XCTAssertEqual(vm.messages.map(\.role), [.user, .assistant])
+        XCTAssertEqual(storedMessages.map(\.role), [.user, .assistant])
+        XCTAssertEqual(storedMessages.last?.content, "second answer")
+        XCTAssertFalse(storedMessages.contains { $0.content == "first answer" })
+        XCTAssertFalse(storedNode.content.contains("first answer"))
+        XCTAssertTrue(storedNode.content.contains("second answer"))
+    }
+
     func testSendSurfacesPlanningFailureAsVisibleAssistantMessage() async throws {
         let nodeStore = try NodeStore(path: ":memory:")
         let vectorStore = VectorStore(nodeStore: nodeStore)

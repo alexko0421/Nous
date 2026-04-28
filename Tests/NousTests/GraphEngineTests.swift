@@ -45,6 +45,101 @@ final class GraphEngineTests: XCTestCase {
         XCTAssertEqual(edges.count, 1)
         XCTAssertTrue(edges[0].sourceId == n1.id || edges[0].targetId == n1.id)
         XCTAssertGreaterThan(edges[0].strength, 0.75)
+        XCTAssertEqual(edges[0].relationKind, .topicSimilarity)
+        XCTAssertFalse(edges[0].explanation?.isEmpty ?? true)
+    }
+
+    func testGenerateSemanticEdgesUsesAtomRelationships() throws {
+        var n1 = NousNode(type: .note, title: "School pressure")
+        n1.embedding = [1.0, 0.0, 0.0]
+        var n2 = NousNode(type: .conversation, title: "Shipping pressure")
+        n2.embedding = [0.98, 0.02, 0.0]
+        try nodeStore.insertNode(n1)
+        try nodeStore.insertNode(n2)
+
+        let sourceAtom = MemoryAtom(
+            type: .pattern,
+            statement: "Alex turns uncertainty into speed when there is no safety net.",
+            scope: .conversation,
+            scopeRefId: n1.id,
+            sourceNodeId: n1.id
+        )
+        let targetAtom = MemoryAtom(
+            type: .insight,
+            statement: "Shipping faster is being used to manage uncertainty.",
+            scope: .conversation,
+            scopeRefId: n2.id,
+            sourceNodeId: n2.id
+        )
+        try nodeStore.insertMemoryAtom(sourceAtom)
+        try nodeStore.insertMemoryAtom(targetAtom)
+
+        try engine.generateSemanticEdges(for: n1)
+
+        let edge = try XCTUnwrap(nodeStore.fetchEdges(nodeId: n1.id).first)
+        XCTAssertEqual(edge.relationKind, .samePattern)
+        XCTAssertGreaterThan(edge.confidence, 0.75)
+        XCTAssertEqual(edge.sourceEvidence, "Alex turns uncertainty into speed when there is no safety net.")
+        XCTAssertEqual(edge.targetEvidence, "Shipping faster is being used to manage uncertainty.")
+        XCTAssertEqual(edge.sourceAtomId, sourceAtom.id)
+        XCTAssertEqual(edge.targetAtomId, targetAtom.id)
+    }
+
+    func testRelationTelemetryTracksSemanticCandidatesAndWrites() throws {
+        let telemetry = GalaxyRelationTelemetry()
+        engine = GraphEngine(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            relationJudge: GalaxyRelationJudge(telemetry: telemetry),
+            telemetry: telemetry
+        )
+        var n1 = NousNode(type: .note, title: "A")
+        n1.embedding = [1.0, 0.0, 0.0]
+        var n2 = NousNode(type: .note, title: "B similar")
+        n2.embedding = [0.95, 0.05, 0.0]
+        try nodeStore.insertNode(n1)
+        try nodeStore.insertNode(n2)
+
+        try engine.generateSemanticEdges(for: n1)
+
+        let snapshot = telemetry.snapshot()
+        XCTAssertEqual(snapshot.relationCandidateCount, 1)
+        XCTAssertEqual(snapshot.localVerdictCount, 1)
+        XCTAssertEqual(snapshot.semanticEdgeWriteCount, 1)
+    }
+
+    func testLLMNoneKeepsLocalSimilarityEdgeVisible() async throws {
+        engine = GraphEngine(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            relationJudge: GalaxyRelationJudge(
+                llmServiceProvider: {
+                    StaticGraphRelationLLMService(output: """
+                    {
+                      "relation": "none",
+                      "confidence": 0.95,
+                      "explanation": "not useful",
+                      "source_evidence": "source",
+                      "target_evidence": "target",
+                      "source_atom_id": null,
+                      "target_atom_id": null
+                    }
+                    """)
+                }
+            )
+        )
+        var n1 = NousNode(type: .note, title: "A")
+        n1.embedding = [1.0, 0.0, 0.0]
+        var n2 = NousNode(type: .note, title: "B similar")
+        n2.embedding = [0.95, 0.05, 0.0]
+        try nodeStore.insertNode(n1)
+        try nodeStore.insertNode(n2)
+
+        try await engine.generateSemanticEdgesWithRefinement(for: n1, maxCandidates: 1)
+
+        let edge = try XCTUnwrap(nodeStore.fetchEdges(nodeId: n1.id).first)
+        XCTAssertEqual(edge.relationKind, .topicSimilarity)
+        XCTAssertGreaterThan(edge.strength, 0.75)
     }
 
     func testGenerateSharedEdges() throws {
@@ -61,5 +156,18 @@ final class GraphEngineTests: XCTestCase {
         let edges = try nodeStore.fetchEdges(nodeId: n1.id)
         XCTAssertEqual(edges.count, 1)
         XCTAssertEqual(edges[0].type, .shared)
+        XCTAssertEqual(edges[0].relationKind, .topicSimilarity)
+        XCTAssertEqual(edges[0].explanation, "These nodes belong to the same project.")
+    }
+}
+
+private struct StaticGraphRelationLLMService: LLMService {
+    let output: String
+
+    func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.yield(output)
+            continuation.finish()
+        }
     }
 }

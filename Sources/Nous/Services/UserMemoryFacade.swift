@@ -37,12 +37,14 @@ final class UserMemoryService: MemorySynthesizing, @unchecked Sendable {
     init(
         nodeStore: NodeStore,
         llmServiceProvider: @escaping () -> (any LLMService)?,
-        governanceTelemetry: GovernanceTelemetryStore? = nil
+        governanceTelemetry: GovernanceTelemetryStore? = nil,
+        embedFunction: @escaping (String) -> [Float]? = { _ in nil }
     ) {
         let core = UserMemoryCore(
             nodeStore: nodeStore,
             llmServiceProvider: llmServiceProvider,
-            governanceTelemetry: governanceTelemetry
+            governanceTelemetry: governanceTelemetry,
+            embedFunction: embedFunction
         )
         self.core = core
         self.projectionService = MemoryProjectionService(core: core)
@@ -102,6 +104,40 @@ final class UserMemoryService: MemorySynthesizing, @unchecked Sendable {
 
     func currentUserModel(projectId: UUID?, conversationId: UUID? = nil) -> UserModel? {
         projectionService.currentUserModel(projectId: projectId, conversationId: conversationId)
+    }
+
+    func currentDecisionGraphRecall(
+        currentMessage: String,
+        projectId: UUID?,
+        conversationId: UUID,
+        limit: Int = 3,
+        now: Date = Date()
+    ) -> [String] {
+        projectionService.currentDecisionGraphRecall(
+            currentMessage: currentMessage,
+            projectId: projectId,
+            conversationId: conversationId,
+            limit: limit,
+            now: now
+        )
+    }
+
+    func currentGraphMemoryRecall(
+        currentMessage: String,
+        projectId: UUID?,
+        conversationId: UUID,
+        limit: Int = 4,
+        queryEmbedding: [Float]? = nil,
+        now: Date = Date()
+    ) -> [String] {
+        projectionService.currentGraphMemoryRecall(
+            currentMessage: currentMessage,
+            projectId: projectId,
+            conversationId: conversationId,
+            limit: limit,
+            queryEmbedding: queryEmbedding,
+            now: now
+        )
     }
 
     func shouldPersistMemory(messages: [Message], projectId: UUID?) -> Bool {

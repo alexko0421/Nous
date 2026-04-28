@@ -116,6 +116,7 @@ struct TurnCompletion {
 enum TurnEvent {
     case prepared(TurnPrepared)
     case thinkingDelta(String)
+    case agentTraceDelta(AgentTraceRecord)
     case textDelta(String)
     case completed(TurnCompletion)
     case aborted(TurnAbortReason)
@@ -164,6 +165,23 @@ struct TurnExecutionResult {
     let persistedThinking: String?
     let conversationTitle: String?
     let didHitBudgetExhaustion: Bool
+    let agentTraceJson: String?
+
+    init(
+        rawAssistantContent: String,
+        assistantContent: String,
+        persistedThinking: String?,
+        conversationTitle: String?,
+        didHitBudgetExhaustion: Bool,
+        agentTraceJson: String? = nil
+    ) {
+        self.rawAssistantContent = rawAssistantContent
+        self.assistantContent = assistantContent
+        self.persistedThinking = persistedThinking
+        self.conversationTitle = conversationTitle
+        self.didHitBudgetExhaustion = didHitBudgetExhaustion
+        self.agentTraceJson = agentTraceJson
+    }
 }
 
 struct TurnPlan {

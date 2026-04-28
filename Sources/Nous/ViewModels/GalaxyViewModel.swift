@@ -64,4 +64,50 @@ final class GalaxyViewModel {
     func nodeForId(_ id: UUID) -> NousNode? {
         nodes.first { $0.id == id }
     }
+
+    var selectedNode: NousNode? {
+        guard let selectedNodeId else { return nil }
+        return nodeForId(selectedNodeId)
+    }
+
+    var selectedNodeEdges: [NodeEdge] {
+        guard let selectedNodeId else { return [] }
+        return edges
+            .filter { $0.sourceId == selectedNodeId || $0.targetId == selectedNodeId }
+            .sorted { lhs, rhs in
+                edgeRank(lhs) == edgeRank(rhs)
+                    ? lhs.confidence > rhs.confidence
+                    : edgeRank(lhs) < edgeRank(rhs)
+            }
+    }
+
+    func connectedNode(for edge: NodeEdge) -> NousNode? {
+        guard let selectedNodeId else { return nil }
+        let connectedId = edge.sourceId == selectedNodeId ? edge.targetId : edge.sourceId
+        return nodeForId(connectedId)
+    }
+
+    private func edgeRank(_ edge: NodeEdge) -> Int {
+        switch edge.type {
+        case .manual:
+            return 3
+        case .shared:
+            return 4
+        case .semantic:
+            return relationRank(edge.relationKind)
+        }
+    }
+
+    private func relationRank(_ relationKind: GalaxyRelationKind) -> Int {
+        switch relationKind {
+        case .samePattern:
+            return 0
+        case .tension, .contradicts:
+            return 1
+        case .supports, .causeEffect:
+            return 2
+        case .topicSimilarity:
+            return 3
+        }
+    }
 }

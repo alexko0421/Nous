@@ -103,6 +103,7 @@ final class SettingsViewModelTests: XCTestCase {
     func testRuntimeModelSummariesShowOpenRouterForegroundAndJudgeModels() {
         let vm = makeViewModel()
         vm.selectedProvider = .openrouter
+        vm.geminiApiKey = "gemini-key"
 
         XCTAssertEqual(
             vm.runtimeModelSummaries,
@@ -114,8 +115,8 @@ final class SettingsViewModelTests: XCTestCase {
                 ),
                 .init(
                     label: "Judge tasks",
-                    model: "Disabled",
-                    detail: "Judge tasks are temporarily disabled on OpenRouter so slow judge calls cannot block the main reply."
+                    model: "gemini-2.5-pro",
+                    detail: "Uses Google AI Studio Gemini 2.5 Pro for judge checks while OpenRouter handles foreground chat."
                 ),
                 .init(
                     label: "Weekly reflections",
@@ -126,7 +127,18 @@ final class SettingsViewModelTests: XCTestCase {
         )
     }
 
-    func testMakeJudgeLLMServiceReturnsNilForOpenRouter() {
+    func testMakeJudgeLLMServiceUsesGeminiProForOpenRouterWhenGeminiKeyExists() {
+        let vm = makeViewModel()
+        vm.selectedProvider = .openrouter
+        vm.openrouterApiKey = "test-key"
+        vm.geminiApiKey = "gemini-key"
+
+        let service = vm.makeJudgeLLMService()
+        let gemini = service as? GeminiLLMService
+        XCTAssertEqual(gemini?.model, "gemini-2.5-pro")
+    }
+
+    func testMakeJudgeLLMServiceReturnsNilForOpenRouterWhenGeminiKeyMissing() {
         let vm = makeViewModel()
         vm.selectedProvider = .openrouter
         vm.openrouterApiKey = "test-key"

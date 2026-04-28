@@ -1,6 +1,6 @@
 import Foundation
 
-final class ContradictionMemoryService {
+final class ContradictionMemoryService: ContradictionFactProviding {
     private let core: UserMemoryCore
 
     init(core: UserMemoryCore) {

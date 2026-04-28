@@ -4,6 +4,59 @@ extension Notification.Name {
     static let nousNodesDidChange = Notification.Name("NousNodesDidChange")
 }
 
+extension NodeStore: MemoryEntrySearchProviding, RecentConversationMemoryProviding, NodeReading {
+    func searchActiveMemoryEntries(
+        query: String,
+        projectId: UUID?,
+        conversationId: UUID,
+        limit: Int
+    ) throws -> [MemoryEntry] {
+        let terms = Self.agentSearchTerms(from: query)
+        guard !terms.isEmpty else { return [] }
+
+        let scopedEntries = try fetchMemoryEntries().filter { entry in
+            guard entry.status == .active else { return false }
+            switch entry.scope {
+            case .global:
+                return entry.scopeRefId == nil
+            case .project:
+                return projectId != nil && entry.scopeRefId == projectId
+            case .conversation:
+                return entry.scopeRefId == conversationId
+            case .selfReflection:
+                return false
+            }
+        }
+
+        return scopedEntries
+            .map { entry in (entry: entry, score: Self.agentSearchScore(entry.content, terms: terms)) }
+            .filter { $0.score > 0 }
+            .sorted { lhs, rhs in
+                if lhs.score == rhs.score {
+                    return lhs.entry.updatedAt > rhs.entry.updatedAt
+                }
+                return lhs.score > rhs.score
+            }
+            .prefix(limit)
+            .map(\.entry)
+    }
+
+    private static func agentSearchTerms(from query: String) -> [String] {
+        query
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.count >= 2 }
+    }
+
+    private static func agentSearchScore(_ content: String, terms: [String]) -> Int {
+        let lowercased = content.lowercased()
+        return terms.reduce(0) { score, term in
+            lowercased.contains(term) ? score + 1 : score
+        }
+    }
+}
+
 struct ScratchPadStateRecord: Equatable {
     let nodeId: UUID
     let latestSummary: ScratchSummary?
@@ -81,15 +134,70 @@ final class NodeStore {
             alterSQL: "ALTER TABLE messages ADD COLUMN thinking_content TEXT;"
         )
 
+        try ensureColumnExists(
+            table: "messages",
+            column: "agent_trace_json",
+            alterSQL: "ALTER TABLE messages ADD COLUMN agent_trace_json TEXT;"
+        )
+
         try db.exec("""
             CREATE TABLE IF NOT EXISTS edges (
-                id       TEXT PRIMARY KEY,
-                sourceId TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-                targetId TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-                strength REAL NOT NULL DEFAULT 0,
-                type     TEXT NOT NULL
+                id             TEXT PRIMARY KEY,
+                sourceId       TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+                targetId       TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+                strength       REAL NOT NULL DEFAULT 0,
+                type           TEXT NOT NULL,
+                relationKind   TEXT NOT NULL DEFAULT 'topic_similarity',
+                confidence     REAL NOT NULL DEFAULT 0,
+                explanation    TEXT,
+                sourceEvidence TEXT,
+                targetEvidence TEXT,
+                sourceAtomId   TEXT,
+                targetAtomId   TEXT
             );
         """)
+
+        try ensureColumnExists(
+            table: "edges",
+            column: "relationKind",
+            alterSQL: "ALTER TABLE edges ADD COLUMN relationKind TEXT NOT NULL DEFAULT 'topic_similarity';"
+        )
+
+        try ensureColumnExists(
+            table: "edges",
+            column: "confidence",
+            alterSQL: "ALTER TABLE edges ADD COLUMN confidence REAL NOT NULL DEFAULT 0;"
+        )
+
+        try ensureColumnExists(
+            table: "edges",
+            column: "explanation",
+            alterSQL: "ALTER TABLE edges ADD COLUMN explanation TEXT;"
+        )
+
+        try ensureColumnExists(
+            table: "edges",
+            column: "sourceEvidence",
+            alterSQL: "ALTER TABLE edges ADD COLUMN sourceEvidence TEXT;"
+        )
+
+        try ensureColumnExists(
+            table: "edges",
+            column: "targetEvidence",
+            alterSQL: "ALTER TABLE edges ADD COLUMN targetEvidence TEXT;"
+        )
+
+        try ensureColumnExists(
+            table: "edges",
+            column: "sourceAtomId",
+            alterSQL: "ALTER TABLE edges ADD COLUMN sourceAtomId TEXT;"
+        )
+
+        try ensureColumnExists(
+            table: "edges",
+            column: "targetAtomId",
+            alterSQL: "ALTER TABLE edges ADD COLUMN targetAtomId TEXT;"
+        )
 
         // Schema version tracking. Lives in SQLite so it survives app reinstall
         // and iCloud restore, unlike UserDefaults. See MemoryV2Migrator.
@@ -195,6 +303,69 @@ final class NodeStore {
             );
         """)
 
+        // Graph-capable memory substrate. `memory_entries` remains the canonical
+        // summary store during migration; these tables add atom-level time,
+        // source-message, and relationship structure for recall paths that need
+        // more than prompt summaries.
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS memory_atoms (
+                id                TEXT PRIMARY KEY,
+                type              TEXT NOT NULL,
+                statement         TEXT NOT NULL,
+                normalized_key    TEXT,
+                scope             TEXT NOT NULL,
+                scope_ref_id      TEXT,
+                status            TEXT NOT NULL DEFAULT 'active',
+                confidence        REAL NOT NULL DEFAULT 0.7,
+                event_time        REAL,
+                valid_from        REAL,
+                valid_until       REAL,
+                created_at        REAL NOT NULL,
+                updated_at        REAL NOT NULL,
+                last_seen_at      REAL,
+                source_node_id    TEXT REFERENCES nodes(id) ON DELETE SET NULL,
+                source_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+                embedding         BLOB
+            );
+        """)
+
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS memory_edges (
+                id                TEXT PRIMARY KEY,
+                from_atom_id      TEXT NOT NULL REFERENCES memory_atoms(id) ON DELETE CASCADE,
+                to_atom_id        TEXT NOT NULL REFERENCES memory_atoms(id) ON DELETE CASCADE,
+                type              TEXT NOT NULL,
+                weight            REAL NOT NULL DEFAULT 1.0,
+                created_at        REAL NOT NULL,
+                source_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL
+            );
+        """)
+
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS memory_observations (
+                id                TEXT PRIMARY KEY,
+                raw_text          TEXT NOT NULL,
+                extracted_type    TEXT,
+                confidence        REAL NOT NULL DEFAULT 0.5,
+                source_node_id    TEXT REFERENCES nodes(id) ON DELETE SET NULL,
+                source_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+                created_at        REAL NOT NULL
+            );
+        """)
+
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS memory_recall_events (
+                id                 TEXT PRIMARY KEY,
+                query              TEXT NOT NULL,
+                intent             TEXT,
+                time_window_start  REAL,
+                time_window_end    REAL,
+                retrieved_atom_ids TEXT NOT NULL DEFAULT '[]',
+                answer_summary     TEXT,
+                created_at         REAL NOT NULL
+            );
+        """)
+
         // Weekly self-reflection tables (WeeklyReflectionService).
         // `reflection_runs` is one row per weekly job; `reflection_claim` stores
         // validator-passed claims; `reflection_evidence` binds each claim to the
@@ -276,11 +447,22 @@ final class NodeStore {
         try db.exec("CREATE INDEX IF NOT EXISTS idx_messages_nodeId  ON messages(nodeId);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_edges_sourceId   ON edges(sourceId);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_edges_targetId   ON edges(targetId);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_edges_sourceAtomId ON edges(sourceAtomId);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_edges_targetAtomId ON edges(targetAtomId);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_conversation_memory_updatedAt ON conversation_memory(updatedAt);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_entries_scope_ref_status ON memory_entries(scope, scopeRefId, status);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_fact_entries_scope_ref_status ON memory_fact_entries(scope, scopeRefId, status);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_fact_entries_kind ON memory_fact_entries(kind);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_fact_entries_updatedAt ON memory_fact_entries(updatedAt);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_atoms_type_status_time ON memory_atoms(type, status, event_time);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_atoms_scope ON memory_atoms(scope, scope_ref_id);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_atoms_scope_key ON memory_atoms(scope, scope_ref_id, normalized_key);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_atoms_source_node ON memory_atoms(source_node_id);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_atoms_source_message ON memory_atoms(source_message_id);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_edges_from_type ON memory_edges(from_atom_id, type);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_edges_to_type ON memory_edges(to_atom_id, type);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_observations_source_message ON memory_observations(source_message_id);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_recall_events_created_at ON memory_recall_events(created_at);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_judge_events_ts ON judge_events(ts);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_judge_events_fallback ON judge_events(fallbackReason);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_reflection_runs_project_week ON reflection_runs(project_id, week_end);")
@@ -600,8 +782,8 @@ final class NodeStore {
 
     func insertMessage(_ message: Message) throws {
         let stmt = try db.prepare("""
-            INSERT INTO messages (id, nodeId, role, content, timestamp, thinking_content)
-            VALUES (?, ?, ?, ?, ?, ?);
+            INSERT INTO messages (id, nodeId, role, content, timestamp, thinking_content, agent_trace_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?);
         """)
         try stmt.bind(message.id.uuidString, at: 1)
         try stmt.bind(message.nodeId.uuidString, at: 2)
@@ -609,13 +791,21 @@ final class NodeStore {
         try stmt.bind(message.content, at: 4)
         try stmt.bind(message.timestamp.timeIntervalSince1970, at: 5)
         try stmt.bind(message.thinkingContent, at: 6)
+        try stmt.bind(message.agentTraceJson, at: 7)
+        try stmt.step()
+        notifyNodesDidChange()
+    }
+
+    func deleteMessage(id: UUID) throws {
+        let stmt = try db.prepare("DELETE FROM messages WHERE id = ?;")
+        try stmt.bind(id.uuidString, at: 1)
         try stmt.step()
         notifyNodesDidChange()
     }
 
     func fetchMessages(nodeId: UUID) throws -> [Message] {
         let stmt = try db.prepare("""
-            SELECT id, nodeId, role, content, timestamp, thinking_content
+            SELECT id, nodeId, role, content, timestamp, thinking_content, agent_trace_json
             FROM messages WHERE nodeId=? ORDER BY timestamp ASC;
         """)
         try stmt.bind(nodeId.uuidString, at: 1)
@@ -627,13 +817,15 @@ final class NodeStore {
             let content = stmt.text(at: 3) ?? ""
             let timestamp = Date(timeIntervalSince1970: stmt.double(at: 4))
             let thinkingContent = stmt.text(at: 5)
+            let agentTraceJson = stmt.text(at: 6)
             results.append(Message(
                 id: id,
                 nodeId: nId,
                 role: role,
                 content: content,
                 timestamp: timestamp,
-                thinkingContent: thinkingContent
+                thinkingContent: thinkingContent,
+                agentTraceJson: agentTraceJson
             ))
         }
         return results
@@ -1191,6 +1383,29 @@ final class NodeStore {
         try deleteFactEntries.bind(scope.rawValue, at: 1)
         try deleteFactEntries.bind(scopeRefId.uuidString, at: 2)
         try deleteFactEntries.step()
+
+        let deleteAtomEdges = try db.prepare("""
+            DELETE FROM edges
+            WHERE sourceAtomId IN (
+                SELECT id FROM memory_atoms WHERE scope = ? AND scope_ref_id = ?
+            )
+               OR targetAtomId IN (
+                SELECT id FROM memory_atoms WHERE scope = ? AND scope_ref_id = ?
+            );
+        """)
+        try deleteAtomEdges.bind(scope.rawValue, at: 1)
+        try deleteAtomEdges.bind(scopeRefId.uuidString, at: 2)
+        try deleteAtomEdges.bind(scope.rawValue, at: 3)
+        try deleteAtomEdges.bind(scopeRefId.uuidString, at: 4)
+        try deleteAtomEdges.step()
+
+        let deleteAtoms = try db.prepare("""
+            DELETE FROM memory_atoms
+            WHERE scope = ? AND scope_ref_id = ?;
+        """)
+        try deleteAtoms.bind(scope.rawValue, at: 1)
+        try deleteAtoms.bind(scopeRefId.uuidString, at: 2)
+        try deleteAtoms.step()
     }
 
     private func memoryEntryFrom(_ stmt: Statement) -> MemoryEntry? {
@@ -1250,6 +1465,519 @@ final class NodeStore {
             sourceNodeIds: sourceNodeIds,
             createdAt: createdAt,
             updatedAt: updatedAt
+        )
+    }
+
+    // MARK: - Memory Graph
+
+    func insertMemoryAtom(_ atom: MemoryAtom) throws {
+        let stmt = try db.prepare("""
+            INSERT INTO memory_atoms
+              (id, type, statement, normalized_key, scope, scope_ref_id, status,
+               confidence, event_time, valid_from, valid_until, created_at,
+               updated_at, last_seen_at, source_node_id, source_message_id, embedding)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """)
+        try stmt.bind(atom.id.uuidString, at: 1)
+        try stmt.bind(atom.type.rawValue, at: 2)
+        try stmt.bind(atom.statement, at: 3)
+        try stmt.bind(atom.normalizedKey, at: 4)
+        try stmt.bind(atom.scope.rawValue, at: 5)
+        try stmt.bind(atom.scopeRefId?.uuidString, at: 6)
+        try stmt.bind(atom.status.rawValue, at: 7)
+        try stmt.bind(atom.confidence, at: 8)
+        try stmt.bind(atom.eventTime?.timeIntervalSince1970, at: 9)
+        try stmt.bind(atom.validFrom?.timeIntervalSince1970, at: 10)
+        try stmt.bind(atom.validUntil?.timeIntervalSince1970, at: 11)
+        try stmt.bind(atom.createdAt.timeIntervalSince1970, at: 12)
+        try stmt.bind(atom.updatedAt.timeIntervalSince1970, at: 13)
+        try stmt.bind(atom.lastSeenAt?.timeIntervalSince1970, at: 14)
+        try stmt.bind(atom.sourceNodeId?.uuidString, at: 15)
+        try stmt.bind(atom.sourceMessageId?.uuidString, at: 16)
+        let embeddingData = atom.embedding.map { encodeFloats($0) }
+        try stmt.bind(embeddingData, at: 17)
+        try stmt.step()
+    }
+
+    func updateMemoryAtom(_ atom: MemoryAtom) throws {
+        if let existing = try fetchMemoryAtom(id: atom.id),
+           relationSurfaceChanged(from: existing, to: atom) {
+            try deleteEdgesSupportedByMemoryAtom(id: atom.id)
+        }
+
+        let stmt = try db.prepare("""
+            UPDATE memory_atoms
+            SET type = ?, statement = ?, normalized_key = ?, scope = ?, scope_ref_id = ?,
+                status = ?, confidence = ?, event_time = ?, valid_from = ?,
+                valid_until = ?, updated_at = ?, last_seen_at = ?, source_node_id = ?,
+                source_message_id = ?, embedding = ?
+            WHERE id = ?;
+        """)
+        try stmt.bind(atom.type.rawValue, at: 1)
+        try stmt.bind(atom.statement, at: 2)
+        try stmt.bind(atom.normalizedKey, at: 3)
+        try stmt.bind(atom.scope.rawValue, at: 4)
+        try stmt.bind(atom.scopeRefId?.uuidString, at: 5)
+        try stmt.bind(atom.status.rawValue, at: 6)
+        try stmt.bind(atom.confidence, at: 7)
+        try stmt.bind(atom.eventTime?.timeIntervalSince1970, at: 8)
+        try stmt.bind(atom.validFrom?.timeIntervalSince1970, at: 9)
+        try stmt.bind(atom.validUntil?.timeIntervalSince1970, at: 10)
+        try stmt.bind(atom.updatedAt.timeIntervalSince1970, at: 11)
+        try stmt.bind(atom.lastSeenAt?.timeIntervalSince1970, at: 12)
+        try stmt.bind(atom.sourceNodeId?.uuidString, at: 13)
+        try stmt.bind(atom.sourceMessageId?.uuidString, at: 14)
+        let embeddingData = atom.embedding.map { encodeFloats($0) }
+        try stmt.bind(embeddingData, at: 15)
+        try stmt.bind(atom.id.uuidString, at: 16)
+        try stmt.step()
+    }
+
+    func fetchMemoryAtom(id: UUID) throws -> MemoryAtom? {
+        let stmt = try db.prepare("""
+            SELECT id, type, statement, normalized_key, scope, scope_ref_id, status,
+                   confidence, event_time, valid_from, valid_until, created_at,
+                   updated_at, last_seen_at, source_node_id, source_message_id, embedding
+            FROM memory_atoms
+            WHERE id = ?
+            LIMIT 1;
+        """)
+        try stmt.bind(id.uuidString, at: 1)
+        guard try stmt.step() else { return nil }
+        return memoryAtomFrom(stmt)
+    }
+
+    func fetchMemoryAtoms() throws -> [MemoryAtom] {
+        let stmt = try db.prepare("""
+            SELECT id, type, statement, normalized_key, scope, scope_ref_id, status,
+                   confidence, event_time, valid_from, valid_until, created_at,
+                   updated_at, last_seen_at, source_node_id, source_message_id, embedding
+            FROM memory_atoms
+            ORDER BY COALESCE(event_time, created_at) DESC, created_at DESC;
+        """)
+        var results: [MemoryAtom] = []
+        while try stmt.step() {
+            if let atom = memoryAtomFrom(stmt) { results.append(atom) }
+        }
+        return results
+    }
+
+    /// SQL-level filter so retrieval can use `idx_memory_atoms_type_status_time`
+    /// and `idx_memory_atoms_scope` instead of streaming every row into Swift.
+    /// Empty `types` / `statuses` mean "no filter" for that column. A `nil`
+    /// scope skips the scope predicate; a non-nil scope still applies even
+    /// when `scopeRefId` is nil (matches rows where scope_ref_id IS NULL).
+    func fetchMemoryAtoms(
+        types: Set<MemoryAtomType>,
+        statuses: Set<MemoryStatus>,
+        scope: MemoryScope?,
+        scopeRefId: UUID?,
+        eventTimeStart: Date?,
+        eventTimeEnd: Date?,
+        limit: Int?
+    ) throws -> [MemoryAtom] {
+        var whereClauses: [String] = []
+        var stringBindings: [String?] = []
+        var doubleBindings: [Double] = []
+
+        if !types.isEmpty {
+            let placeholders = Array(repeating: "?", count: types.count).joined(separator: ", ")
+            whereClauses.append("type IN (\(placeholders))")
+            stringBindings.append(contentsOf: types.map { Optional($0.rawValue) })
+        }
+        if !statuses.isEmpty {
+            let placeholders = Array(repeating: "?", count: statuses.count).joined(separator: ", ")
+            whereClauses.append("status IN (\(placeholders))")
+            stringBindings.append(contentsOf: statuses.map { Optional($0.rawValue) })
+        }
+        if let scope {
+            whereClauses.append("scope = ?")
+            stringBindings.append(scope.rawValue)
+            if let scopeRefId {
+                whereClauses.append("scope_ref_id = ?")
+                stringBindings.append(scopeRefId.uuidString)
+            } else {
+                whereClauses.append("scope_ref_id IS NULL")
+            }
+        }
+        var timeClauses: [String] = []
+        if eventTimeStart != nil {
+            timeClauses.append("event_time >= ?")
+        }
+        if eventTimeEnd != nil {
+            timeClauses.append("event_time <= ?")
+        }
+        if !timeClauses.isEmpty {
+            // event_time IS NOT NULL is implicit when both bounds are checked,
+            // but be explicit so SQLite plans a clean index range scan.
+            whereClauses.append("(event_time IS NOT NULL AND \(timeClauses.joined(separator: " AND ")))")
+        }
+
+        let whereSQL = whereClauses.isEmpty ? "" : "WHERE " + whereClauses.joined(separator: " AND ") + "\n"
+        let limitSQL = limit.map { "LIMIT \($0)\n" } ?? ""
+        let sql = """
+            SELECT id, type, statement, normalized_key, scope, scope_ref_id, status,
+                   confidence, event_time, valid_from, valid_until, created_at,
+                   updated_at, last_seen_at, source_node_id, source_message_id, embedding
+            FROM memory_atoms
+            \(whereSQL)ORDER BY COALESCE(event_time, created_at) DESC, created_at DESC
+            \(limitSQL);
+            """
+
+        let stmt = try db.prepare(sql)
+        var nextIndex: Int32 = 1
+        for value in stringBindings {
+            try stmt.bind(value, at: nextIndex)
+            nextIndex += 1
+        }
+        if let eventTimeStart {
+            doubleBindings.append(eventTimeStart.timeIntervalSince1970)
+        }
+        if let eventTimeEnd {
+            doubleBindings.append(eventTimeEnd.timeIntervalSince1970)
+        }
+        for value in doubleBindings {
+            try stmt.bind(value, at: nextIndex)
+            nextIndex += 1
+        }
+
+        var results: [MemoryAtom] = []
+        while try stmt.step() {
+            if let atom = memoryAtomFrom(stmt) { results.append(atom) }
+        }
+        return results
+    }
+
+    /// Vector entry-point: returns the top-K atoms ranked by cosine
+    /// similarity to `embedding`. Atoms with `NULL` embeddings are skipped
+    /// (they are not yet embeddable). `statuses` is applied at SQL level
+    /// when non-empty so stale memory doesn't surface. Cosine ranking is
+    /// done in Swift over the result rows — fine for current scale; an
+    /// HNSW / LSH index can replace this when atom counts grow.
+    func fetchMemoryAtomsNearest(
+        embedding query: [Float],
+        topK: Int,
+        statuses: Set<MemoryStatus> = []
+    ) throws -> [MemoryAtom] {
+        guard !query.isEmpty, topK > 0 else { return [] }
+
+        var whereClauses = ["embedding IS NOT NULL"]
+        var stringBindings: [String?] = []
+        if !statuses.isEmpty {
+            let placeholders = Array(repeating: "?", count: statuses.count).joined(separator: ", ")
+            whereClauses.append("status IN (\(placeholders))")
+            stringBindings.append(contentsOf: statuses.map { Optional($0.rawValue) })
+        }
+
+        let stmt = try db.prepare("""
+            SELECT id, type, statement, normalized_key, scope, scope_ref_id, status,
+                   confidence, event_time, valid_from, valid_until, created_at,
+                   updated_at, last_seen_at, source_node_id, source_message_id, embedding
+            FROM memory_atoms
+            WHERE \(whereClauses.joined(separator: " AND "));
+        """)
+        var index: Int32 = 1
+        for value in stringBindings {
+            try stmt.bind(value, at: index)
+            index += 1
+        }
+
+        var scored: [(score: Float, atom: MemoryAtom)] = []
+        let queryNorm = Self.l2Norm(query)
+        guard queryNorm > 0 else { return [] }
+
+        while try stmt.step() {
+            guard let atom = memoryAtomFrom(stmt) else { continue }
+            guard let candidate = atom.embedding,
+                  candidate.count == query.count
+            else { continue }
+            let candidateNorm = Self.l2Norm(candidate)
+            guard candidateNorm > 0 else { continue }
+            let score = Self.dot(query, candidate) / (queryNorm * candidateNorm)
+            scored.append((score, atom))
+        }
+
+        return scored
+            .sorted { $0.score > $1.score }
+            .prefix(topK)
+            .map(\.atom)
+    }
+
+    private static func dot(_ a: [Float], _ b: [Float]) -> Float {
+        var sum: Float = 0
+        for i in 0..<a.count { sum += a[i] * b[i] }
+        return sum
+    }
+
+    private static func l2Norm(_ v: [Float]) -> Float {
+        var sum: Float = 0
+        for value in v { sum += value * value }
+        return sqrt(sum)
+    }
+
+    func fetchMemoryAtoms(sourceNodeIds: [UUID]) throws -> [MemoryAtom] {
+        let uniqueIds = Array(Set(sourceNodeIds))
+        guard !uniqueIds.isEmpty else { return [] }
+        let placeholders = Array(repeating: "?", count: uniqueIds.count).joined(separator: ", ")
+        let stmt = try db.prepare("""
+            SELECT id, type, statement, normalized_key, scope, scope_ref_id, status,
+                   confidence, event_time, valid_from, valid_until, created_at,
+                   updated_at, last_seen_at, source_node_id, source_message_id, embedding
+            FROM memory_atoms
+            WHERE source_node_id IN (\(placeholders))
+            ORDER BY COALESCE(event_time, created_at) DESC, created_at DESC;
+        """)
+        for (index, id) in uniqueIds.enumerated() {
+            try stmt.bind(id.uuidString, at: Int32(index + 1))
+        }
+
+        var results: [MemoryAtom] = []
+        while try stmt.step() {
+            if let atom = memoryAtomFrom(stmt) { results.append(atom) }
+        }
+        return results
+    }
+
+    func deleteMemoryAtom(id: UUID) throws {
+        try inTransaction {
+            try deleteEdgesSupportedByMemoryAtom(id: id)
+            let stmt = try db.prepare("DELETE FROM memory_atoms WHERE id = ?;")
+            try stmt.bind(id.uuidString, at: 1)
+            try stmt.step()
+        }
+    }
+
+    func insertMemoryEdge(_ edge: MemoryEdge) throws {
+        let stmt = try db.prepare("""
+            INSERT INTO memory_edges
+              (id, from_atom_id, to_atom_id, type, weight, created_at, source_message_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?);
+        """)
+        try stmt.bind(edge.id.uuidString, at: 1)
+        try stmt.bind(edge.fromAtomId.uuidString, at: 2)
+        try stmt.bind(edge.toAtomId.uuidString, at: 3)
+        try stmt.bind(edge.type.rawValue, at: 4)
+        try stmt.bind(edge.weight, at: 5)
+        try stmt.bind(edge.createdAt.timeIntervalSince1970, at: 6)
+        try stmt.bind(edge.sourceMessageId?.uuidString, at: 7)
+        try stmt.step()
+    }
+
+    func fetchMemoryEdges() throws -> [MemoryEdge] {
+        let stmt = try db.prepare("""
+            SELECT id, from_atom_id, to_atom_id, type, weight, created_at, source_message_id
+            FROM memory_edges
+            ORDER BY created_at DESC;
+        """)
+        var results: [MemoryEdge] = []
+        while try stmt.step() {
+            if let edge = memoryEdgeFrom(stmt) { results.append(edge) }
+        }
+        return results
+    }
+
+    func fetchMemoryEdges(fromAtomId: UUID) throws -> [MemoryEdge] {
+        let stmt = try db.prepare("""
+            SELECT id, from_atom_id, to_atom_id, type, weight, created_at, source_message_id
+            FROM memory_edges
+            WHERE from_atom_id = ?
+            ORDER BY created_at DESC;
+        """)
+        try stmt.bind(fromAtomId.uuidString, at: 1)
+        var results: [MemoryEdge] = []
+        while try stmt.step() {
+            if let edge = memoryEdgeFrom(stmt) { results.append(edge) }
+        }
+        return results
+    }
+
+    func fetchMemoryEdges(toAtomId: UUID) throws -> [MemoryEdge] {
+        let stmt = try db.prepare("""
+            SELECT id, from_atom_id, to_atom_id, type, weight, created_at, source_message_id
+            FROM memory_edges
+            WHERE to_atom_id = ?
+            ORDER BY created_at DESC;
+        """)
+        try stmt.bind(toAtomId.uuidString, at: 1)
+        var results: [MemoryEdge] = []
+        while try stmt.step() {
+            if let edge = memoryEdgeFrom(stmt) { results.append(edge) }
+        }
+        return results
+    }
+
+    func deleteMemoryEdge(id: UUID) throws {
+        let stmt = try db.prepare("DELETE FROM memory_edges WHERE id = ?;")
+        try stmt.bind(id.uuidString, at: 1)
+        try stmt.step()
+    }
+
+    func insertMemoryObservation(_ observation: MemoryObservation) throws {
+        let stmt = try db.prepare("""
+            INSERT INTO memory_observations
+              (id, raw_text, extracted_type, confidence, source_node_id, source_message_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?);
+        """)
+        try stmt.bind(observation.id.uuidString, at: 1)
+        try stmt.bind(observation.rawText, at: 2)
+        try stmt.bind(observation.extractedType?.rawValue, at: 3)
+        try stmt.bind(observation.confidence, at: 4)
+        try stmt.bind(observation.sourceNodeId?.uuidString, at: 5)
+        try stmt.bind(observation.sourceMessageId?.uuidString, at: 6)
+        try stmt.bind(observation.createdAt.timeIntervalSince1970, at: 7)
+        try stmt.step()
+    }
+
+    func fetchMemoryObservations() throws -> [MemoryObservation] {
+        let stmt = try db.prepare("""
+            SELECT id, raw_text, extracted_type, confidence, source_node_id, source_message_id, created_at
+            FROM memory_observations
+            ORDER BY created_at DESC;
+        """)
+        var results: [MemoryObservation] = []
+        while try stmt.step() {
+            if let observation = memoryObservationFrom(stmt) { results.append(observation) }
+        }
+        return results
+    }
+
+    func appendMemoryRecallEvent(_ event: MemoryRecallEvent) throws {
+        let stmt = try db.prepare("""
+            INSERT INTO memory_recall_events
+              (id, query, intent, time_window_start, time_window_end, retrieved_atom_ids,
+               answer_summary, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+        """)
+        try stmt.bind(event.id.uuidString, at: 1)
+        try stmt.bind(event.query, at: 2)
+        try stmt.bind(event.intent, at: 3)
+        try stmt.bind(event.timeWindowStart?.timeIntervalSince1970, at: 4)
+        try stmt.bind(event.timeWindowEnd?.timeIntervalSince1970, at: 5)
+        try stmt.bind(encodeSourceNodeIds(event.retrievedAtomIds), at: 6)
+        try stmt.bind(event.answerSummary, at: 7)
+        try stmt.bind(event.createdAt.timeIntervalSince1970, at: 8)
+        try stmt.step()
+    }
+
+    func fetchMemoryRecallEvents(limit: Int) throws -> [MemoryRecallEvent] {
+        let stmt = try db.prepare("""
+            SELECT id, query, intent, time_window_start, time_window_end, retrieved_atom_ids,
+                   answer_summary, created_at
+            FROM memory_recall_events
+            ORDER BY created_at DESC
+            LIMIT ?;
+        """)
+        try stmt.bind(limit, at: 1)
+        var results: [MemoryRecallEvent] = []
+        while try stmt.step() {
+            if let event = memoryRecallEventFrom(stmt) { results.append(event) }
+        }
+        return results
+    }
+
+    private func memoryAtomFrom(_ stmt: Statement) -> MemoryAtom? {
+        guard let idText = stmt.text(at: 0), let id = UUID(uuidString: idText) else { return nil }
+        guard let typeText = stmt.text(at: 1), let type = MemoryAtomType(rawValue: typeText) else { return nil }
+        let statement = stmt.text(at: 2) ?? ""
+        let normalizedKey = stmt.text(at: 3)
+        guard let scopeText = stmt.text(at: 4), let scope = MemoryScope(rawValue: scopeText) else { return nil }
+        let scopeRefId = stmt.text(at: 5).flatMap { UUID(uuidString: $0) }
+        guard let statusText = stmt.text(at: 6), let status = MemoryStatus(rawValue: statusText) else { return nil }
+        let confidence = stmt.double(at: 7)
+        let eventTime = stmt.isNull(at: 8) ? nil : Date(timeIntervalSince1970: stmt.double(at: 8))
+        let validFrom = stmt.isNull(at: 9) ? nil : Date(timeIntervalSince1970: stmt.double(at: 9))
+        let validUntil = stmt.isNull(at: 10) ? nil : Date(timeIntervalSince1970: stmt.double(at: 10))
+        let createdAt = Date(timeIntervalSince1970: stmt.double(at: 11))
+        let updatedAt = Date(timeIntervalSince1970: stmt.double(at: 12))
+        let lastSeenAt = stmt.isNull(at: 13) ? nil : Date(timeIntervalSince1970: stmt.double(at: 13))
+        let sourceNodeId = stmt.text(at: 14).flatMap { UUID(uuidString: $0) }
+        let sourceMessageId = stmt.text(at: 15).flatMap { UUID(uuidString: $0) }
+        let embedding = stmt.blob(at: 16).map { decodeFloats($0) }
+        return MemoryAtom(
+            id: id,
+            type: type,
+            statement: statement,
+            normalizedKey: normalizedKey,
+            scope: scope,
+            scopeRefId: scopeRefId,
+            status: status,
+            confidence: confidence,
+            eventTime: eventTime,
+            validFrom: validFrom,
+            validUntil: validUntil,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            lastSeenAt: lastSeenAt,
+            sourceNodeId: sourceNodeId,
+            sourceMessageId: sourceMessageId,
+            embedding: embedding
+        )
+    }
+
+    private func relationSurfaceChanged(from old: MemoryAtom, to new: MemoryAtom) -> Bool {
+        old.type != new.type ||
+            old.statement != new.statement ||
+            old.status != new.status ||
+            old.confidence != new.confidence ||
+            old.sourceNodeId != new.sourceNodeId
+    }
+
+    private func memoryEdgeFrom(_ stmt: Statement) -> MemoryEdge? {
+        guard let idText = stmt.text(at: 0), let id = UUID(uuidString: idText) else { return nil }
+        guard let fromText = stmt.text(at: 1), let fromAtomId = UUID(uuidString: fromText) else { return nil }
+        guard let toText = stmt.text(at: 2), let toAtomId = UUID(uuidString: toText) else { return nil }
+        guard let typeText = stmt.text(at: 3), let type = MemoryEdgeType(rawValue: typeText) else { return nil }
+        let weight = stmt.double(at: 4)
+        let createdAt = Date(timeIntervalSince1970: stmt.double(at: 5))
+        let sourceMessageId = stmt.text(at: 6).flatMap { UUID(uuidString: $0) }
+        return MemoryEdge(
+            id: id,
+            fromAtomId: fromAtomId,
+            toAtomId: toAtomId,
+            type: type,
+            weight: weight,
+            createdAt: createdAt,
+            sourceMessageId: sourceMessageId
+        )
+    }
+
+    private func memoryObservationFrom(_ stmt: Statement) -> MemoryObservation? {
+        guard let idText = stmt.text(at: 0), let id = UUID(uuidString: idText) else { return nil }
+        let rawText = stmt.text(at: 1) ?? ""
+        let extractedType = stmt.text(at: 2).flatMap { MemoryAtomType(rawValue: $0) }
+        let confidence = stmt.double(at: 3)
+        let sourceNodeId = stmt.text(at: 4).flatMap { UUID(uuidString: $0) }
+        let sourceMessageId = stmt.text(at: 5).flatMap { UUID(uuidString: $0) }
+        let createdAt = Date(timeIntervalSince1970: stmt.double(at: 6))
+        return MemoryObservation(
+            id: id,
+            rawText: rawText,
+            extractedType: extractedType,
+            confidence: confidence,
+            sourceNodeId: sourceNodeId,
+            sourceMessageId: sourceMessageId,
+            createdAt: createdAt
+        )
+    }
+
+    private func memoryRecallEventFrom(_ stmt: Statement) -> MemoryRecallEvent? {
+        guard let idText = stmt.text(at: 0), let id = UUID(uuidString: idText) else { return nil }
+        let query = stmt.text(at: 1) ?? ""
+        let intent = stmt.text(at: 2)
+        let timeWindowStart = stmt.isNull(at: 3) ? nil : Date(timeIntervalSince1970: stmt.double(at: 3))
+        let timeWindowEnd = stmt.isNull(at: 4) ? nil : Date(timeIntervalSince1970: stmt.double(at: 4))
+        let retrievedAtomIds = decodeSourceNodeIds(stmt.text(at: 5) ?? "[]")
+        let answerSummary = stmt.text(at: 6)
+        let createdAt = Date(timeIntervalSince1970: stmt.double(at: 7))
+        return MemoryRecallEvent(
+            id: id,
+            query: query,
+            intent: intent,
+            timeWindowStart: timeWindowStart,
+            timeWindowEnd: timeWindowEnd,
+            retrievedAtomIds: retrievedAtomIds,
+            answerSummary: answerSummary,
+            createdAt: createdAt
         )
     }
 
@@ -1316,20 +2044,41 @@ final class NodeStore {
 
     func insertEdge(_ edge: NodeEdge) throws {
         let stmt = try db.prepare("""
-            INSERT INTO edges (id, sourceId, targetId, strength, type)
-            VALUES (?, ?, ?, ?, ?);
+            INSERT INTO edges
+              (id, sourceId, targetId, strength, type, relationKind, confidence,
+               explanation, sourceEvidence, targetEvidence, sourceAtomId, targetAtomId)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """)
         try stmt.bind(edge.id.uuidString, at: 1)
         try stmt.bind(edge.sourceId.uuidString, at: 2)
         try stmt.bind(edge.targetId.uuidString, at: 3)
         try stmt.bind(Double(edge.strength), at: 4)
         try stmt.bind(edge.type.rawValue, at: 5)
+        try stmt.bind(edge.relationKind.rawValue, at: 6)
+        try stmt.bind(Double(edge.confidence), at: 7)
+        try stmt.bind(edge.explanation, at: 8)
+        try stmt.bind(edge.sourceEvidence, at: 9)
+        try stmt.bind(edge.targetEvidence, at: 10)
+        try stmt.bind(edge.sourceAtomId?.uuidString, at: 11)
+        try stmt.bind(edge.targetAtomId?.uuidString, at: 12)
         try stmt.step()
+    }
+
+    func upsertEdge(_ edge: NodeEdge) throws {
+        try inTransaction {
+            try deleteEdgeBetween(
+                sourceId: edge.sourceId,
+                targetId: edge.targetId,
+                type: edge.type
+            )
+            try insertEdge(edge)
+        }
     }
 
     func fetchEdges(nodeId: UUID) throws -> [NodeEdge] {
         let stmt = try db.prepare("""
-            SELECT id, sourceId, targetId, strength, type
+            SELECT id, sourceId, targetId, strength, type, relationKind, confidence,
+                   explanation, sourceEvidence, targetEvidence, sourceAtomId, targetAtomId
             FROM edges WHERE sourceId=? OR targetId=?;
         """)
         try stmt.bind(nodeId.uuidString, at: 1)
@@ -1343,7 +2092,9 @@ final class NodeStore {
 
     func fetchAllEdges() throws -> [NodeEdge] {
         let stmt = try db.prepare("""
-            SELECT id, sourceId, targetId, strength, type FROM edges;
+            SELECT id, sourceId, targetId, strength, type, relationKind, confidence,
+                   explanation, sourceEvidence, targetEvidence, sourceAtomId, targetAtomId
+            FROM edges;
         """)
         var results: [NodeEdge] = []
         while try stmt.step() {
@@ -1362,13 +2113,79 @@ final class NodeStore {
         try stmt.step()
     }
 
+    func deleteEdgeBetween(sourceId: UUID, targetId: UUID, type: EdgeType) throws {
+        let stmt = try db.prepare("""
+            DELETE FROM edges
+            WHERE type=?
+              AND (
+                    (sourceId=? AND targetId=?)
+                 OR (sourceId=? AND targetId=?)
+              );
+        """)
+        try stmt.bind(type.rawValue, at: 1)
+        try stmt.bind(sourceId.uuidString, at: 2)
+        try stmt.bind(targetId.uuidString, at: 3)
+        try stmt.bind(targetId.uuidString, at: 4)
+        try stmt.bind(sourceId.uuidString, at: 5)
+        try stmt.step()
+    }
+
+    func fetchEdgesSupportedByMemoryAtom(id: UUID) throws -> [NodeEdge] {
+        let stmt = try db.prepare("""
+            SELECT id, sourceId, targetId, strength, type, relationKind, confidence,
+                   explanation, sourceEvidence, targetEvidence, sourceAtomId, targetAtomId
+            FROM edges
+            WHERE sourceAtomId=? OR targetAtomId=?;
+        """)
+        try stmt.bind(id.uuidString, at: 1)
+        try stmt.bind(id.uuidString, at: 2)
+
+        var results: [NodeEdge] = []
+        while try stmt.step() {
+            results.append(edgeFrom(stmt))
+        }
+        return results
+    }
+
+    func deleteEdgesSupportedByMemoryAtom(id: UUID) throws {
+        let stmt = try db.prepare("""
+            DELETE FROM edges
+            WHERE sourceAtomId=? OR targetAtomId=?;
+        """)
+        try stmt.bind(id.uuidString, at: 1)
+        try stmt.bind(id.uuidString, at: 2)
+        try stmt.step()
+    }
+
     private func edgeFrom(_ stmt: Statement) -> NodeEdge {
         let id = UUID(uuidString: stmt.text(at: 0) ?? "") ?? UUID()
         let sourceId = UUID(uuidString: stmt.text(at: 1) ?? "") ?? UUID()
         let targetId = UUID(uuidString: stmt.text(at: 2) ?? "") ?? UUID()
         let strength = Float(stmt.double(at: 3))
         let type = EdgeType(rawValue: stmt.text(at: 4) ?? "") ?? .semantic
-        return NodeEdge(id: id, sourceId: sourceId, targetId: targetId, strength: strength, type: type)
+        let storedRelationKind = GalaxyRelationKind(rawValue: stmt.text(at: 5) ?? "")
+        let relationKind: GalaxyRelationKind
+        switch type {
+        case .semantic:
+            relationKind = storedRelationKind ?? .topicSimilarity
+        case .manual, .shared:
+            relationKind = storedRelationKind ?? .topicSimilarity
+        }
+        let confidence = Float(stmt.double(at: 6))
+        return NodeEdge(
+            id: id,
+            sourceId: sourceId,
+            targetId: targetId,
+            strength: strength,
+            type: type,
+            relationKind: relationKind,
+            confidence: confidence > 0 ? confidence : strength,
+            explanation: stmt.text(at: 7),
+            sourceEvidence: stmt.text(at: 8),
+            targetEvidence: stmt.text(at: 9),
+            sourceAtomId: stmt.text(at: 10).flatMap { UUID(uuidString: $0) },
+            targetAtomId: stmt.text(at: 11).flatMap { UUID(uuidString: $0) }
+        )
     }
 }
 
@@ -1470,6 +2287,14 @@ extension NodeStore {
         """)
         try stmt.bind(messageId.uuidString, at: 1)
         try stmt.bind(eventId.uuidString, at: 2)
+        try stmt.step()
+    }
+
+    func clearJudgeEventMessageId(messageId: UUID) throws {
+        let stmt = try db.prepare("""
+            UPDATE judge_events SET messageId = NULL WHERE messageId = ?;
+        """)
+        try stmt.bind(messageId.uuidString, at: 1)
         try stmt.step()
     }
 

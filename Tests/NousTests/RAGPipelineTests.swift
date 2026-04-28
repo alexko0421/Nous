@@ -167,6 +167,41 @@ final class RAGPipelineTests: XCTestCase {
         XCTAssertFalse(context.contains("Alex explicitly wants deeper reasoning"))
     }
 
+    func testAssembleContextIncludesGraphMemoryRecall() {
+        let recall = """
+        - Rejected proposal: Build Nous around solving emotions.
+          Rejection: Alex rejected solving emotions as unrealistic.
+          Reason: Emotions cannot be solved like a mechanical problem.
+          Replacement/current direction: Observe and coexist with emotions.
+        """
+
+        let context = ChatViewModel.assembleContext(
+            currentUserInput: "我哋之前否決過邊個方案，點解？",
+            globalMemory: nil,
+            memoryGraphRecall: [recall],
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        ).combined
+        let trace = ChatViewModel.governanceTrace(
+            currentUserInput: "我哋之前否決過邊個方案，點解？",
+            globalMemory: nil,
+            memoryGraphRecall: [recall],
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        )
+
+        XCTAssertTrue(context.contains("GRAPH MEMORY RECALL"))
+        XCTAssertTrue(context.contains("Build Nous around solving emotions."))
+        XCTAssertTrue(context.contains("atoms are claims, chains are decision paths"))
+        XCTAssertTrue(trace.promptLayers.contains("memory_graph_recall"))
+    }
+
     func testAssembleContextStrategistModeChangesPromptBehaviorWithoutDroppingContinuity() {
         let context = ChatViewModel.assembleContext(
             chatMode: .strategist,
@@ -523,9 +558,10 @@ final class RAGPipelineTests: XCTestCase {
         XCTAssertTrue(enabled.contains("stop clarifying and give the best real guidance"))
         XCTAssertFalse(disabled.contains("INTERACTIVE CLARIFICATION UI"))
         XCTAssertTrue(disabled.contains("ACTIVE QUICK MODE: Direction"))
+        XCTAssertTrue(disabled.contains("QUICK MODE QUALITY POLICY"))
     }
 
-    func testInteractiveClarificationStopsAfterFirstUserReply() {
+    func testInteractiveClarificationOnlyAppliesToPlanAfterOpeningQuestion() {
         let firstReply = [
             Message(nodeId: UUID(), role: .user, content: "I'm stuck between two paths.")
         ]
@@ -537,14 +573,26 @@ final class RAGPipelineTests: XCTestCase {
 
         XCTAssertTrue(
             ChatViewModel.shouldAllowInteractiveClarification(
+                activeQuickActionMode: .plan,
+                messages: firstReply
+            )
+        )
+        XCTAssertFalse(
+            ChatViewModel.shouldAllowInteractiveClarification(
+                activeQuickActionMode: .plan,
+                messages: secondReply
+            )
+        )
+        XCTAssertFalse(
+            ChatViewModel.shouldAllowInteractiveClarification(
                 activeQuickActionMode: .direction,
                 messages: firstReply
             )
         )
         XCTAssertFalse(
             ChatViewModel.shouldAllowInteractiveClarification(
-                activeQuickActionMode: .direction,
-                messages: secondReply
+                activeQuickActionMode: .brainstorm,
+                messages: firstReply
             )
         )
         XCTAssertFalse(
@@ -571,35 +619,63 @@ final class RAGPipelineTests: XCTestCase {
         Before I jump in, what feels most stuck right now?
         """
 
+        // Post-L2.5: Direction's turnDirective is turn-based only (.keepActive at
+        // turn 0, .complete at turn >= 1). The clarify/understanding/normal content
+        // distinctions are now made by the agent's contextAddendum, not the directive.
+        // These assertions still hold with turnIndex chosen to match expected outcome.
         XCTAssertEqual(
             ChatViewModel.updatedQuickActionMode(
                 currentMode: .direction,
-                assistantContent: clarificationReply
+                assistantContent: clarificationReply,
+                turnIndex: 0
             ),
             .direction
         )
         XCTAssertEqual(
             ChatViewModel.updatedQuickActionMode(
                 currentMode: .direction,
-                assistantContent: understandingQuestion
+                assistantContent: understandingQuestion,
+                turnIndex: 0
             ),
             .direction
         )
         XCTAssertNil(
             ChatViewModel.updatedQuickActionMode(
                 currentMode: .direction,
-                assistantContent: normalReply
+                assistantContent: normalReply,
+                turnIndex: 1
             )
         )
     }
 
     func testQuickActionOpeningPromptStartsWithAssistantQuestioning() {
-        let prompt = ChatViewModel.quickActionOpeningPrompt(for: .mentalHealth)
+        let prompt = PlanAgent().openingPrompt()
 
         XCTAssertTrue(prompt.contains("Start the conversation yourself"))
-        XCTAssertTrue(prompt.contains("Ask one short, warm opening question"))
-        XCTAssertTrue(prompt.contains("Mental Health"))
-        XCTAssertTrue(prompt.contains("do not use the clarification card yet"))
+        XCTAssertTrue(prompt.contains("Ask one short, natural, open-ended question"))
+        XCTAssertTrue(prompt.contains("Plan"))
+        XCTAssertTrue(prompt.contains("do not use the structured clarification card"))
         XCTAssertTrue(prompt.contains("<phase>understanding</phase>"))
+    }
+
+    func testAssembleContextIncludesChatFormatPolicy() {
+        let context = ChatViewModel.assembleContext(
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        ).combined
+        XCTAssertTrue(context.contains("CHAT FORMAT POLICY"),
+                      "assembleContext must include the chat format policy block")
+        XCTAssertTrue(context.contains("`# 标题`"),
+                      "policy must list `# 标题` as a literal code example")
+        XCTAssertTrue(context.contains("`- bullet`"),
+                      "policy must list `- bullet` as a literal code example")
+        XCTAssertTrue(context.contains("`| table |`"),
+                      "policy must list `| table |` as a literal code example")
+        XCTAssertTrue(context.contains("「」"),
+                      "policy must reference 「」 emphasis convention")
     }
 }

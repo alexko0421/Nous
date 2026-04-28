@@ -278,4 +278,35 @@ final class ClarificationCardParserTests: XCTestCase {
         let parsed = ClarificationCardParser.parse(raw)
         XCTAssertEqual(parsed.displayText, "我会直接答你。")
     }
+
+    func testSummaryWithInnerMarkdownPreservesStructure() {
+        let input = """
+        Here is the summary:
+
+        <summary>
+        # Title
+
+        - bullet 1
+        - bullet 2
+
+        | col | col |
+        |---|---|
+        | 1 | 2 |
+        </summary>
+
+        More text after.
+        """
+        let parsed = ClarificationCardParser.parse(input)
+        let display = parsed.displayText
+
+        // Markdown structure inside <summary> must survive parsing intact.
+        XCTAssertTrue(display.contains("# Title"), "heading preserved")
+        XCTAssertTrue(display.contains("- bullet 1"), "bullets preserved")
+        XCTAssertTrue(display.contains("| col | col |"), "table header preserved")
+        XCTAssertTrue(display.contains("|---|---|"), "table separator preserved")
+
+        // Tag markers must be stripped.
+        XCTAssertFalse(display.contains("<summary>"), "<summary> tag stripped")
+        XCTAssertFalse(display.contains("</summary>"), "</summary> tag stripped")
+    }
 }

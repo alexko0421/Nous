@@ -14,6 +14,7 @@ struct CommittedAssistantTurn {
 
 enum ConversationSessionStoreError: Error {
     case missingNode(UUID)
+    case invalidRegenerationTarget
 }
 
 final class ConversationSessionStore {
@@ -67,13 +68,15 @@ final class ConversationSessionStore {
         assistantContent: String,
         thinkingContent: String? = nil,
         conversationTitle: String? = nil,
-        judgeEventId: UUID? = nil
+        judgeEventId: UUID? = nil,
+        agentTraceJson: String? = nil
     ) throws -> CommittedAssistantTurn {
         let assistantMessage = Message(
             nodeId: nodeId,
             role: .assistant,
             content: assistantContent,
-            thinkingContent: thinkingContent
+            thinkingContent: thinkingContent,
+            agentTraceJson: agentTraceJson
         )
         try nodeStore.insertMessage(assistantMessage)
 
@@ -95,6 +98,22 @@ final class ConversationSessionStore {
             assistantMessage: assistantMessage,
             messagesAfterAssistantAppend: messagesAfterAssistantAppend
         )
+    }
+
+    func removeAssistantTurn(
+        nodeId: UUID,
+        assistantMessage: Message,
+        retainedMessages: [Message]
+    ) throws -> NousNode {
+        guard assistantMessage.role == .assistant,
+              retainedMessages.allSatisfy({ $0.id != assistantMessage.id })
+        else {
+            throw ConversationSessionStoreError.invalidRegenerationTarget
+        }
+
+        try nodeStore.clearJudgeEventMessageId(messageId: assistantMessage.id)
+        try nodeStore.deleteMessage(id: assistantMessage.id)
+        return try persistTranscript(nodeId: nodeId, messages: retainedMessages)
     }
 
     func persistTranscript(nodeId: UUID, messages: [Message]) throws -> NousNode {

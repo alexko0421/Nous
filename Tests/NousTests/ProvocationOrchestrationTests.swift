@@ -138,6 +138,42 @@ final class ProvocationOrchestrationTests: XCTestCase {
         XCTAssertEqual(viewModel.messages.last?.content, finalGuidance)
     }
 
+    /// Asserts a quick mode that uses single-turn completion (Direction, Brainstorm).
+    /// After L2.5, these modes drop active state on the first user reply — no clarify
+    /// card phase, no second user turn under the active mode marker.
+    @MainActor
+    private func assertSingleTurnQuickModeCompletes(
+        mode: QuickActionMode,
+        openingReply: String,
+        userInput: String,
+        finalGuidance: String
+    ) async {
+        llm.replyOutput = openingReply
+        await viewModel.beginQuickActionConversation(mode)
+
+        llm.replyOutput = finalGuidance
+        viewModel.inputText = userInput
+        await viewModel.send()
+
+        let chatSystems = llm.receivedSystems.compactMap { $0 }.filter {
+            $0.contains("ACTIVE QUICK MODE: \(mode.label)")
+        }
+
+        // Single-turn: opening + 1 user reply = 2 LLM calls under the active mode marker.
+        XCTAssertEqual(chatSystems.count, 2,
+                       "single-turn mode should produce 2 systems with active marker (opening + final)")
+        // Opening turn: no clarify card UI (the agent has not seen any user context yet).
+        XCTAssertFalse(chatSystems[0].contains("INTERACTIVE CLARIFICATION UI"),
+                       "opening turn must not offer a clarify card")
+        // Final turn (first user reply): Direction and Brainstorm should produce a
+        // real take, not enter another clarification UI pass.
+        XCTAssertFalse(chatSystems[1].contains("INTERACTIVE CLARIFICATION UI"),
+                       "single-turn modes should not include clarification UI on final turn")
+        XCTAssertNil(viewModel.activeQuickActionMode,
+                     "mode must drop after single-turn completion")
+        XCTAssertEqual(viewModel.messages.last?.content, finalGuidance)
+    }
+
     func testJudgeVerdictParsesInferredMode() throws {
         let json = """
         {
@@ -363,55 +399,117 @@ final class ProvocationOrchestrationTests: XCTestCase {
     }
 
     @MainActor
-    func testQuickModeStopsOfferingClarificationAfterSecondUserTurn() async throws {
-        await assertQuickModeStopsClarifying(
+    func testDirectionModeCompletesAfterFirstUserReply() async throws {
+        // Post-L2.5: Direction completes on first user reply, no clarify card phase.
+        // Renamed from testQuickModeStopsOfferingClarificationAfterSecondUserTurn.
+        await assertSingleTurnQuickModeCompletes(
             mode: .direction,
             openingReply: """
             <phase>understanding</phase>
             What feels most stuck right now?
             """,
-            clarificationReply: """
-            <phase>understanding</phase>
-            <clarify>
-            <question>Which kind of fork is this?</question>
-            <option>School</option>
-            <option>Work</option>
-            <option>Relationship</option>
-            </clarify>
-            """,
-            firstUserInput: "I'm choosing between two paths.",
-            secondUserInput: "It's mainly about school versus going all in.",
+            userInput: "I'm choosing between school and going all in on the startup.",
             finalGuidance: "Given what you've shared, choose the path that preserves optionality for one more semester."
         )
     }
 
     @MainActor
-    func testBrainstormModeStopsClarifyingAfterSecondUserTurn() async throws {
-        await assertQuickModeStopsClarifying(
+    func testBrainstormModeCompletesAfterFirstUserReply() async throws {
+        // Post-L2.5: Brainstorm completes on first user reply, no clarify card phase.
+        // Renamed from testBrainstormModeStopsClarifyingAfterSecondUserTurn.
+        await assertSingleTurnQuickModeCompletes(
             mode: .brainstorm,
             openingReply: """
             <phase>understanding</phase>
             What are you trying to open up right now?
             """,
-            clarificationReply: """
-            <phase>understanding</phase>
-            <clarify>
-            <question>What kind of thing are we brainstorming?</question>
-            <option>Startup idea</option>
-            <option>Feature direction</option>
-            <option>Life direction</option>
-            </clarify>
-            """,
-            firstUserInput: "I want to explore a few possible directions.",
-            secondUserInput: "It's mainly a startup idea I might build.",
+            userInput: "It's a startup idea I might build — exploring possible directions.",
             finalGuidance: "Three live directions: a narrow workflow tool, a premium personal assistant, or a founder ops product. Start with the narrow workflow tool because it is easiest to validate fast."
         )
     }
 
     @MainActor
-    func testMentalHealthModeStopsClarifyingAfterSecondUserTurn() async throws {
+    func testStewardInferredBrainstormIsOneShotAndLean() async throws {
+        viewModel.inputText = "brainstorm a few directions from scratch"
+        await viewModel.send()
+
+        let system = try XCTUnwrap(
+            llm.receivedSystems.compactMap { $0 }.first {
+                $0.contains("ACTIVE QUICK MODE: Brainstorm")
+            }
+        )
+
+        XCTAssertTrue(system.contains("ACTIVE QUICK MODE: Brainstorm"))
+        XCTAssertTrue(system.contains("BRAINSTORM MODE QUALITY CONTRACT"))
+        XCTAssertTrue(system.contains("TURN STEWARD RESPONSE SHAPE"))
+        XCTAssertTrue(system.contains("structurally distinct framings or directions"))
+        XCTAssertFalse(system.contains("INTERACTIVE CLARIFICATION UI"))
+        XCTAssertFalse(system.contains("BEHAVIOR:"),
+                       "lean brainstorm should not inject behavior profile")
+        XCTAssertNil(viewModel.activeQuickActionMode,
+                     "steward-inferred quick route must be one-shot")
+        XCTAssertEqual(viewModel.lastPromptGovernanceTrace?.turnSteward?.route, .brainstorm)
+        XCTAssertEqual(viewModel.lastPromptGovernanceTrace?.turnSteward?.memoryPolicy, .lean)
+    }
+
+    @MainActor
+    func testStewardSupportFirstSkipsJudgeFocus() async throws {
+        viewModel.inputText = "我好攰，感觉顶唔顺"
+        await viewModel.send()
+
+        let system = try XCTUnwrap(
+            llm.receivedSystems.compactMap { $0 }.first {
+                $0.contains("BEHAVIOR: SUPPORTIVE")
+            }
+        )
+
+        XCTAssertTrue(system.contains("BEHAVIOR: SUPPORTIVE"))
+        XCTAssertFalse(system.contains("RELEVANT PRIOR MEMORY"))
+        XCTAssertEqual(judge.previousModeHistory.count, 0,
+                       "support-first turns should skip the provocation judge")
+        XCTAssertEqual(viewModel.lastPromptGovernanceTrace?.turnSteward?.challengeStance, .supportFirst)
+
+        let events = telemetry.recentJudgeEvents(limit: 5, filter: .none)
+        XCTAssertEqual(events.first?.fallbackReason, .judgeUnavailable)
+    }
+
+    @MainActor
+    func testStewardInferredPlanIgnoresOldTranscriptLengthForAgentTurnIndex() async throws {
+        let node = NousNode(type: .conversation, title: "old thread")
+        try store.insertNode(node)
+        viewModel.currentNode = node
+        viewModel.messages = (0..<6).map { index in
+            Message(
+                nodeId: node.id,
+                role: .user,
+                content: "prior user turn \(index)"
+            )
+        }
+
+        viewModel.inputText = "help me plan this week"
+        await viewModel.send()
+
+        let system = try XCTUnwrap(
+            llm.receivedSystems.compactMap { $0 }.first {
+                $0.contains("ACTIVE QUICK MODE: Plan")
+            }
+        )
+
+        XCTAssertTrue(system.contains("ACTIVE QUICK MODE: Plan"))
+        XCTAssertTrue(system.contains("PLAN MODE PRODUCTION CONTRACT"))
+        XCTAssertFalse(system.contains("PLAN MODE — FINAL TURN"),
+                       "inferred one-shot plan must not use old transcript count as PlanAgent turn index")
+        XCTAssertFalse(system.contains("INTERACTIVE CLARIFICATION UI"))
+        XCTAssertNil(viewModel.activeQuickActionMode,
+                     "steward-inferred plan must not persist active quick mode")
+        XCTAssertEqual(viewModel.lastPromptGovernanceTrace?.turnSteward?.route, .plan)
+        XCTAssertEqual(viewModel.lastPromptGovernanceTrace?.turnSteward?.responseShape, .producePlan)
+    }
+
+    @MainActor
+    func testPlanModeStopsClarifyingAfterSecondUserTurn() async throws {
         await assertQuickModeStopsClarifying(
-            mode: .mentalHealth,
+            mode: .plan,
             openingReply: """
             <phase>understanding</phase>
             What feels heaviest for you right now?

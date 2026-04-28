@@ -12,6 +12,17 @@ protocol LLMService {
     func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error>
 }
 
+protocol ToolCallingLLMService {
+    var supportsAgentToolUse: Bool { get }
+
+    func callWithTools(
+        system: String,
+        messages: [AgentLoopMessage],
+        tools: [AgentToolDeclaration],
+        allowToolCalls: Bool
+    ) async throws -> AgentToolLLMResponse
+}
+
 typealias ThinkingDeltaHandler = @MainActor (String) async -> Void
 
 struct LLMMessage {
@@ -396,6 +407,146 @@ struct OpenRouterLLMService: LLMService {
                 producer.cancel()
             }
         }
+    }
+}
+
+extension OpenRouterLLMService: ToolCallingLLMService {
+    var supportsAgentToolUse: Bool {
+        model == "anthropic/claude-sonnet-4.6"
+    }
+
+    func callWithTools(
+        system: String,
+        messages: [AgentLoopMessage],
+        tools: [AgentToolDeclaration],
+        allowToolCalls: Bool
+    ) async throws -> AgentToolLLMResponse {
+        let url = URL(string: "https://openrouter.ai/api/v1/chat/completions")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("https://nous.app", forHTTPHeaderField: "HTTP-Referer")
+        request.setValue("Nous", forHTTPHeaderField: "X-Title")
+
+        let requestBody = try Self.buildToolRequestBody(
+            model: model,
+            system: system,
+            messages: messages,
+            tools: tools,
+            allowToolCalls: allowToolCalls
+        )
+        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw LLMError.invalidResponse
+        }
+        guard httpResponse.statusCode == 200 else {
+            throw LLMError.httpError(httpResponse.statusCode)
+        }
+        return try Self.parseToolResponse(data)
+    }
+
+    static func buildToolRequestBody(
+        model: String,
+        system: String,
+        messages: [AgentLoopMessage],
+        tools: [AgentToolDeclaration],
+        allowToolCalls: Bool
+    ) throws -> [String: Any] {
+        [
+            "model": model,
+            "stream": false,
+            "messages": Self.serializeAgentMessages(system: system, messages: messages),
+            "tools": try Self.serializeToolDeclarations(tools),
+            "tool_choice": allowToolCalls ? "auto" : "none"
+        ]
+    }
+
+    static func serializeAgentMessages(
+        system: String,
+        messages: [AgentLoopMessage]
+    ) -> [[String: Any]] {
+        var serialized: [[String: Any]] = []
+        if !system.isEmpty {
+            serialized.append(["role": "system", "content": system])
+        }
+        serialized.append(contentsOf: messages.map(serializeAgentMessage))
+        return serialized
+    }
+
+    static func serializeAgentMessage(_ message: AgentLoopMessage) -> [String: Any] {
+        switch message {
+        case .text(let role, let content):
+            return ["role": role, "content": content]
+        case .assistantToolCalls(let content, let toolCalls):
+            var payload: [String: Any] = [
+                "role": "assistant",
+                "tool_calls": toolCalls.map(serializeToolCall)
+            ]
+            payload["content"] = content ?? ""
+            return payload
+        case .toolResult(let toolCallId, let name, let content, _):
+            return [
+                "role": "tool",
+                "tool_call_id": toolCallId,
+                "name": name,
+                "content": content
+            ]
+        }
+    }
+
+    static func serializeToolCall(_ toolCall: AgentToolCall) -> [String: Any] {
+        [
+            "id": toolCall.id,
+            "type": "function",
+            "function": [
+                "name": toolCall.name,
+                "arguments": toolCall.argumentsJSON
+            ]
+        ]
+    }
+
+    static func serializeToolDeclarations(_ tools: [AgentToolDeclaration]) throws -> [[String: Any]] {
+        let data = try JSONEncoder().encode(tools)
+        guard let array = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            throw LLMError.invalidResponse
+        }
+        return array
+    }
+
+    private static func parseToolResponse(_ data: Data) throws -> AgentToolLLMResponse {
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let choices = json["choices"] as? [[String: Any]],
+              let first = choices.first,
+              let message = first["message"] as? [String: Any] else {
+            throw LLMError.invalidResponse
+        }
+
+        let text = message["content"] as? String ?? ""
+        let toolCalls = (message["tool_calls"] as? [[String: Any]] ?? []).compactMap(parseToolCall)
+        let assistantMessage: AgentLoopMessage = toolCalls.isEmpty
+            ? .text(role: "assistant", content: text)
+            : .assistantToolCalls(
+                content: text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : text,
+                toolCalls: toolCalls
+            )
+        return AgentToolLLMResponse(
+            text: text,
+            assistantMessage: assistantMessage,
+            toolCalls: toolCalls
+        )
+    }
+
+    private static func parseToolCall(_ payload: [String: Any]) -> AgentToolCall? {
+        guard let id = payload["id"] as? String,
+              let function = payload["function"] as? [String: Any],
+              let name = function["name"] as? String else {
+            return nil
+        }
+        let arguments = function["arguments"] as? String ?? "{}"
+        return AgentToolCall(id: id, name: name, argumentsJSON: arguments)
     }
 }
 
