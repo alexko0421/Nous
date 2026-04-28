@@ -218,8 +218,8 @@ struct ChatMarkdownView: View {
     private let h1Font: Font = .system(size: 16, weight: .semibold)
     private let h2Font: Font = .system(size: 15, weight: .semibold)
     private let tableHeaderFont: Font = .system(size: 14, weight: .semibold)
-    private let bodyLineSpacing: CGFloat = 8
-    private let segmentSpacing: CGFloat = 14
+    private let bodyLineSpacing: CGFloat = 6
+    private let segmentSpacing: CGFloat = 5
     private let bulletIndent: CGFloat = 4
     private let bulletContentGap: CGFloat = 8   // glyph (•) to content
     private let bulletRowGap: CGFloat = 6       // between consecutive bullets

@@ -7,9 +7,11 @@ struct WelcomeView: View {
     let onPickAttachment: () -> Void
     let onRemoveAttachment: (UUID) -> Void
     let onSend: () -> Void
+    let onImageDrop: ([NSItemProvider]) -> Bool
     let onQuickActionSelected: (QuickActionMode) -> Void
     
     @AppStorage("nous.username") private var userName: String = "ALEX"
+    @State private var isImageDropTargeted = false
     
     private var greeting: String {
         let hour = Calendar.current.component(.hour, from: Date())
@@ -63,6 +65,18 @@ struct WelcomeView: View {
                         }
 
                         composerRow
+                            .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                            .onDrop(
+                                of: AttachmentDropSupport.acceptedTypeIdentifiers,
+                                isTargeted: $isImageDropTargeted,
+                                perform: onImageDrop
+                            )
+                            .overlay {
+                                if isImageDropTargeted {
+                                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                                        .stroke(AppColor.colaOrange.opacity(0.55), lineWidth: 1.5)
+                                }
+                            }
 
                         HStack(spacing: 10) {
                             ForEach(quickActions, id: \.rawValue) { action in

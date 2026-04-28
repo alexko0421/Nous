@@ -644,6 +644,52 @@ final class ChatViewModelTests: XCTestCase {
         )
     }
 
+    func testUserMessageContentCapsImageAttachmentsAtFive() {
+        let imageAttachments = (1...6).map {
+            AttachedFileContext(name: "Photo \($0).jpeg", extractedText: "image text \($0)")
+        }
+
+        let content = TurnPlanner.userMessageContent(
+            inputText: "Look at these",
+            attachments: imageAttachments
+        )
+
+        XCTAssertTrue(content.contains("Photo 1.jpeg"))
+        XCTAssertTrue(content.contains("Photo 5.jpeg"))
+        XCTAssertFalse(content.contains("Photo 6.jpeg"))
+    }
+
+    func testImageAttachmentCapDoesNotDropNonImageFiles() {
+        let imageAttachments = (1...6).map {
+            AttachedFileContext(name: "Photo \($0).jpeg", extractedText: "image text \($0)")
+        }
+        let document = AttachedFileContext(name: "context.pdf", extractedText: "document text")
+
+        let content = TurnPlanner.userMessageContent(
+            inputText: "Use these",
+            attachments: imageAttachments + [document]
+        )
+
+        XCTAssertFalse(content.contains("Photo 6.jpeg"))
+        XCTAssertTrue(content.contains("context.pdf"))
+    }
+
+    func testDroppedImageContextsIgnoreNonImageFiles() throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nous-drop-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        let imageURL = folder.appendingPathComponent("dragged.png")
+        let textURL = folder.appendingPathComponent("notes.txt")
+        try Data("not real image bytes".utf8).write(to: imageURL)
+        try Data("plain text".utf8).write(to: textURL)
+
+        let contexts = AttachmentExtractor.imageFileContexts(from: [imageURL, textURL])
+
+        XCTAssertEqual(contexts.map(\.name), ["dragged.png"])
+    }
+
     @MainActor
     func testSendPromotesHiddenChatTitleAndStripsItFromStoredAssistantMessage() async throws {
         let nodeStore = try NodeStore(path: ":memory:")

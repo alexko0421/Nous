@@ -17,6 +17,7 @@ struct ChatArea: View {
     @State private var isAttachmentMenuPresented = false
     @State private var isFileImporterPresented = false
     @State private var isPhotosPickerPresented = false
+    @State private var isImageDropTargeted = false
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
     @State private var floatingHeaderHeight: CGFloat = 76
     @State private var floatingComposerHeight: CGFloat = 124
@@ -41,6 +42,14 @@ struct ChatArea: View {
 
     private var canPrimaryAction: Bool {
         vm.isGenerating || canSend
+    }
+
+    private var remainingImageAttachmentSlots: Int {
+        AttachmentLimitPolicy.remainingImageSlots(in: attachments)
+    }
+
+    private var canPickPhotoAttachment: Bool {
+        remainingImageAttachmentSlots > 0
     }
 
     private var activeClarificationCard: ClarificationCard? {
@@ -72,6 +81,7 @@ struct ChatArea: View {
                     onPickAttachment: { isAttachmentMenuPresented = true },
                     onRemoveAttachment: removeAttachment,
                     onSend: sendCurrentInput,
+                    onImageDrop: handleImageDrop,
                     onQuickActionSelected: { mode in
                         Task {
                             await vm.beginQuickActionConversation(mode)
@@ -369,6 +379,18 @@ struct ChatArea: View {
                     .frame(maxWidth: composerMaxWidth)
                     .padding(.horizontal, 36)
                     .padding(.bottom, 16)
+                    .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                    .onDrop(
+                        of: AttachmentDropSupport.acceptedTypeIdentifiers,
+                        isTargeted: $isImageDropTargeted,
+                        perform: handleImageDrop
+                    )
+                    .overlay {
+                        if isImageDropTargeted {
+                            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                                .stroke(AppColor.colaOrange.opacity(0.55), lineWidth: 1.5)
+                        }
+                    }
                     .readHeight { floatingComposerHeight = $0 }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                 }
@@ -444,6 +466,7 @@ struct ChatArea: View {
             Button("Photo") {
                 isPhotosPickerPresented = true
             }
+            .disabled(!canPickPhotoAttachment)
             Button("Cancel", role: .cancel) {}
         }
         .fileImporter(
@@ -455,7 +478,7 @@ struct ChatArea: View {
         .photosPicker(
             isPresented: $isPhotosPickerPresented,
             selection: $selectedPhotoItems,
-            maxSelectionCount: 6,
+            maxSelectionCount: max(1, remainingImageAttachmentSlots),
             matching: .images
         )
         .onChange(of: selectedPhotoItems) { _, items in
@@ -515,7 +538,7 @@ struct ChatArea: View {
 
     private func sendCurrentInput() {
         guard canSend else { return }
-        let pendingAttachments = attachments
+        let pendingAttachments = AttachmentLimitPolicy.limitingImageAttachments(attachments)
         attachments = []
         Task { await vm.send(attachments: pendingAttachments) }
     }
@@ -560,15 +583,31 @@ struct ChatArea: View {
         appendAttachments(AttachmentExtractor.fileContexts(from: urls))
     }
 
+    private func handleImageDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard canPickPhotoAttachment else { return false }
+        Task {
+            let droppedAttachments = await AttachmentExtractor.droppedImageContexts(from: providers)
+            await MainActor.run {
+                appendAttachments(droppedAttachments)
+            }
+        }
+        return true
+    }
+
     private func appendAttachments(_ newAttachments: [AttachedFileContext]) {
+        var updatedAttachments = attachments
         for attachment in newAttachments {
-            let alreadyExists = attachments.contains {
+            let alreadyExists = !AttachmentLimitPolicy.isImageAttachment(attachment) && updatedAttachments.contains {
                 $0.name == attachment.name && $0.extractedText == attachment.extractedText
             }
             if !alreadyExists {
-                attachments.append(attachment)
+                updatedAttachments = AttachmentLimitPolicy.applyingImageLimit(
+                    to: updatedAttachments,
+                    appending: [attachment]
+                )
             }
         }
+        attachments = updatedAttachments
     }
 
     private func shouldShowRelevantChats(after message: Message) -> Bool {

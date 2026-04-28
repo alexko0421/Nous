@@ -183,7 +183,8 @@ final class RAGPipelineTests: XCTestCase {
             conversationMemory: nil,
             recentConversations: [],
             citations: [],
-            projectGoal: nil
+            projectGoal: nil,
+            activeQuickActionMode: .plan
         ).combined
         let trace = ChatViewModel.governanceTrace(
             currentUserInput: "我哋之前否決過邊個方案，點解？",
@@ -193,13 +194,31 @@ final class RAGPipelineTests: XCTestCase {
             conversationMemory: nil,
             recentConversations: [],
             citations: [],
-            projectGoal: nil
+            projectGoal: nil,
+            activeQuickActionMode: .plan
         )
 
         XCTAssertTrue(context.contains("GRAPH MEMORY RECALL"))
         XCTAssertTrue(context.contains("Build Nous around solving emotions."))
         XCTAssertTrue(context.contains("atoms are claims, chains are decision paths"))
         XCTAssertTrue(trace.promptLayers.contains("memory_graph_recall"))
+    }
+
+    func testAssembleContextOmitsGraphMemoryRecallInNormalChat() {
+        let recall = "- Rejected proposal: Build Nous around solving emotions."
+        let context = ChatViewModel.assembleContext(
+            currentUserInput: "我哋之前否決過邊個方案，點解？",
+            globalMemory: nil,
+            memoryGraphRecall: [recall],
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        ).combined
+
+        XCTAssertFalse(context.contains("GRAPH MEMORY RECALL"),
+                       "normal chat (no activeQuickActionMode) must not surface graph memory recall")
     }
 
     func testAssembleContextStrategistModeChangesPromptBehaviorWithoutDroppingContinuity() {
@@ -658,17 +677,18 @@ final class RAGPipelineTests: XCTestCase {
         XCTAssertTrue(prompt.contains("<phase>understanding</phase>"))
     }
 
-    func testAssembleContextIncludesChatFormatPolicy() {
+    func testAssembleContextIncludesChatFormatPolicyForQuickActionModes() {
         let context = ChatViewModel.assembleContext(
             globalMemory: nil,
             projectMemory: nil,
             conversationMemory: nil,
             recentConversations: [],
             citations: [],
-            projectGoal: nil
+            projectGoal: nil,
+            activeQuickActionMode: .plan
         ).combined
         XCTAssertTrue(context.contains("CHAT FORMAT POLICY"),
-                      "assembleContext must include the chat format policy block")
+                      "quick-action mode must include the chat format policy block")
         XCTAssertTrue(context.contains("`# 标题`"),
                       "policy must list `# 标题` as a literal code example")
         XCTAssertTrue(context.contains("`- bullet`"),
@@ -677,5 +697,18 @@ final class RAGPipelineTests: XCTestCase {
                       "policy must list `| table |` as a literal code example")
         XCTAssertTrue(context.contains("「」"),
                       "policy must reference 「」 emphasis convention")
+    }
+
+    func testAssembleContextOmitsChatFormatPolicyInNormalChat() {
+        let context = ChatViewModel.assembleContext(
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        ).combined
+        XCTAssertFalse(context.contains("CHAT FORMAT POLICY"),
+                       "normal chat (no activeQuickActionMode) must let anchor drive prose register")
     }
 }

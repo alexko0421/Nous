@@ -519,13 +519,14 @@ final class ChatViewModel {
 
     @MainActor
     func send(attachments: [AttachedFileContext] = []) async {
-        guard (!inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty), !isGenerating else { return }
+        let limitedAttachments = AttachmentLimitPolicy.limitingImageAttachments(attachments)
+        guard (!inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !limitedAttachments.isEmpty), !isGenerating else { return }
 
         let responseTaskId = UUID()
         inFlightResponseAbortReason = nil
         let responseTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            await self.runSend(attachments: attachments, responseTaskId: responseTaskId)
+            await self.runSend(attachments: limitedAttachments, responseTaskId: responseTaskId)
         }
         inFlightResponseTask = responseTask
         inFlightResponseTaskId = responseTaskId
@@ -1034,7 +1035,7 @@ final class ChatViewModel {
             }
         }
 
-        if !memoryGraphRecall.isEmpty {
+        if !memoryGraphRecall.isEmpty, activeQuickActionMode != nil {
             volatilePieces.append("---\n\nGRAPH MEMORY RECALL:")
             for recall in memoryGraphRecall {
                 volatilePieces.append(recall)
@@ -1063,17 +1064,20 @@ final class ChatViewModel {
         // come from fresh RAG, attachments are turn-specific, etc. Keeping these out of
         // the cache costs ~300 tokens/turn in re-send but keeps hit rate near 100%.
 
-        // CHAT FORMAT POLICY: unconditional global format permission for assistant
-        // output. Granted to default chat AND all quick-action modes (Direction,
-        // Brainstorm, Plan). Lives in volatile (not anchor.md, which is frozen
-        // per AGENTS.md:39, 131).
-        volatilePieces.append("""
+        // CHAT FORMAT POLICY: format permission for quick-action modes only
+        // (Plan needs table rendering, Direction/Brainstorm benefit from structure).
+        // Normal chat reverts to anchor-driven prose — granting markdown structure
+        // here pulled Sonnet toward consultant register and away from the anchor's
+        // push-back / first-principles reflexes.
+        if activeQuickActionMode != nil {
+            volatilePieces.append("""
 ---
 
 CHAT FORMAT POLICY:
 当内容有 distinct items / 周期 schedule / 数据对比，可以用 markdown 结构（`# 标题`、
 `- bullet`、`| table |`）呈现。Emphasis 仍然用「」，唔好用 `**bold**` / `*italic*` / 倒勾。
 """)
+        }
 
         volatilePieces.append(activeChatModeBlock(chatMode))
 
@@ -1190,7 +1194,7 @@ CHAT FORMAT POLICY:
         if let projectMemory, !projectMemory.isEmpty { layers.append("project_memory") }
         if let conversationMemory, !conversationMemory.isEmpty { layers.append("conversation_memory") }
         if !memoryEvidence.isEmpty { layers.append("memory_evidence") }
-        if !memoryGraphRecall.isEmpty { layers.append("memory_graph_recall") }
+        if !memoryGraphRecall.isEmpty, activeQuickActionMode != nil { layers.append("memory_graph_recall") }
         if let userModel, !userModel.isEmpty { layers.append("user_model") }
         if let projectGoal, !projectGoal.isEmpty { layers.append("project_goal") }
         if !recentConversations.isEmpty { layers.append("recent_conversations") }

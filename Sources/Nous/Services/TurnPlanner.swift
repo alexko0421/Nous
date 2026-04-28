@@ -355,8 +355,9 @@ final class TurnPlanner {
     }
 
     static func userMessageContent(inputText: String, attachments: [AttachedFileContext]) -> String {
-        let promptQuery = normalizedPromptQuery(inputText: inputText, attachments: attachments)
-        let attachmentNames = attachments.map(\.name)
+        let limitedAttachments = AttachmentLimitPolicy.limitingImageAttachments(attachments)
+        let promptQuery = normalizedPromptQuery(inputText: inputText, attachments: limitedAttachments)
+        let attachmentNames = limitedAttachments.map(\.name)
         guard !attachmentNames.isEmpty else { return promptQuery }
         return "\(promptQuery)\n\nFiles: \(attachmentNames.joined(separator: ", "))"
     }
