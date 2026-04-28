@@ -442,7 +442,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
         XCTAssertTrue(system.contains("ACTIVE QUICK MODE: Brainstorm"))
         XCTAssertTrue(system.contains("BRAINSTORM MODE QUALITY CONTRACT"))
         XCTAssertTrue(system.contains("TURN STEWARD RESPONSE SHAPE"))
-        XCTAssertTrue(system.contains("Generate genuinely distinct directions"))
+        XCTAssertTrue(system.contains("structurally distinct framings or directions"))
         XCTAssertFalse(system.contains("INTERACTIVE CLARIFICATION UI"))
         XCTAssertFalse(system.contains("BEHAVIOR:"),
                        "lean brainstorm should not inject behavior profile")
