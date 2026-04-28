@@ -13,13 +13,26 @@ final class RealtimeVoiceSessionTests: XCTestCase {
         let data = try RealtimeVoiceSession.makeSessionUpdateEvent()
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let session = try XCTUnwrap(json["session"] as? [String: Any])
+        let toolNames = try Self.toolNames(from: session)
 
         XCTAssertEqual(json["type"] as? String, "session.update")
         XCTAssertEqual(session["type"] as? String, "realtime")
         XCTAssertNil(session["model"])
         XCTAssertEqual(session["output_modalities"] as? [String], ["text"])
         XCTAssertEqual(session["tool_choice"] as? String, "auto")
-        XCTAssertFalse((session["tools"] as? [[String: Any]])?.isEmpty ?? true)
+        XCTAssertFalse(toolNames.isEmpty)
+        XCTAssertFalse(toolNames.contains("search_memory"))
+        XCTAssertFalse(toolNames.contains("recall_recent_conversations"))
+    }
+
+    func testSessionUpdateIncludesMemoryToolsOnlyWhenRequested() throws {
+        let data = try RealtimeVoiceSession.makeSessionUpdateEvent(includeMemoryTools: true)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let session = try XCTUnwrap(json["session"] as? [String: Any])
+        let toolNames = try Self.toolNames(from: session)
+
+        XCTAssertTrue(toolNames.contains("search_memory"))
+        XCTAssertTrue(toolNames.contains("recall_recent_conversations"))
     }
 
     func testParsesFunctionCallArgumentsDone() throws {
@@ -254,6 +267,11 @@ final class RealtimeVoiceSessionTests: XCTestCase {
 
         XCTAssertEqual(socket.sentTypes.suffix(2), ["conversation.item.create", "response.create"])
     }
+
+    private static func toolNames(from session: [String: Any]) throws -> [String] {
+        let tools = try XCTUnwrap(session["tools"] as? [[String: Any]])
+        return tools.compactMap { $0["name"] as? String }
+    }
 }
 
 private final class FakeRealtimeVoiceSocket: RealtimeVoiceSocketing {
@@ -261,14 +279,26 @@ private final class FakeRealtimeVoiceSocket: RealtimeVoiceSocketing {
         case sendFailed
     }
 
-    private(set) var connectedRequest: URLRequest?
-    private(set) var sentData: [Data] = []
-    private(set) var closeCount = 0
+    var connectedRequest: URLRequest? {
+        locked { _connectedRequest }
+    }
+
+    var sentData: [Data] {
+        locked { _sentData }
+    }
+
+    var closeCount: Int {
+        locked { _closeCount }
+    }
 
     private let sendErrorAfterCount: Int?
     private let audioSendDelays: [String: UInt64]
     private let eventSendDelays: [String: UInt64]
     private let heldAudioChunks: Set<String>
+    private let lock = NSLock()
+    private var _connectedRequest: URLRequest?
+    private var _sentData: [Data] = []
+    private var _closeCount = 0
     private var heldAudioSends: [String: CheckedContinuation<Void, Swift.Error>] = [:]
     private var heldAudioWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
 
@@ -285,7 +315,8 @@ private final class FakeRealtimeVoiceSocket: RealtimeVoiceSocketing {
     }
 
     var sentTypes: [String] {
-        sentData.compactMap { data in
+        let data = sentData
+        return data.compactMap { data in
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 return nil
             }
@@ -294,7 +325,8 @@ private final class FakeRealtimeVoiceSocket: RealtimeVoiceSocketing {
     }
 
     var sentAudioChunks: [String] {
-        sentData.compactMap { data in
+        let data = sentData
+        return data.compactMap { data in
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   json["type"] as? String == "input_audio_buffer.append" else {
                 return nil
@@ -304,11 +336,14 @@ private final class FakeRealtimeVoiceSocket: RealtimeVoiceSocketing {
     }
 
     func connect(request: URLRequest) async throws {
-        connectedRequest = request
+        locked {
+            _connectedRequest = request
+        }
     }
 
     func send(_ data: Data) async throws {
-        if let sendErrorAfterCount, sentData.count >= sendErrorAfterCount {
+        let sentCount = locked { _sentData.count }
+        if let sendErrorAfterCount, sentCount >= sendErrorAfterCount {
             throw Error.sendFailed
         }
 
@@ -323,7 +358,9 @@ private final class FakeRealtimeVoiceSocket: RealtimeVoiceSocketing {
         if let eventType = eventType(from: data), let delay = eventSendDelays[eventType] {
             try await Task.sleep(nanoseconds: delay)
         }
-        sentData.append(data)
+        locked {
+            _sentData.append(data)
+        }
     }
 
     func receive() async throws -> String? {
@@ -331,20 +368,35 @@ private final class FakeRealtimeVoiceSocket: RealtimeVoiceSocketing {
     }
 
     func close() {
-        closeCount += 1
+        locked {
+            _closeCount += 1
+        }
     }
 
     func waitForHeldAudioSend(_ chunk: String) async throws {
-        if heldAudioSends[chunk] != nil { return }
+        if locked({ heldAudioSends[chunk] != nil }) {
+            return
+        }
 
         await withCheckedContinuation { continuation in
-            heldAudioWaiters[chunk, default: []].append(continuation)
+            let shouldResume = locked {
+                if heldAudioSends[chunk] != nil {
+                    return true
+                }
+                heldAudioWaiters[chunk, default: []].append(continuation)
+                return false
+            }
+            if shouldResume {
+                continuation.resume()
+            }
         }
     }
 
     func failHeldAudioSend(_ chunk: String) {
-        heldAudioSends[chunk]?.resume(throwing: Error.sendFailed)
-        heldAudioSends[chunk] = nil
+        let continuation = locked {
+            heldAudioSends.removeValue(forKey: chunk)
+        }
+        continuation?.resume(throwing: Error.sendFailed)
     }
 
     private func audioChunk(from data: Data) -> String? {
@@ -364,11 +416,18 @@ private final class FakeRealtimeVoiceSocket: RealtimeVoiceSocketing {
 
     private func holdAudioSend(_ chunk: String) async throws {
         try await withCheckedThrowingContinuation { continuation in
-            heldAudioSends[chunk] = continuation
-            for waiter in heldAudioWaiters.removeValue(forKey: chunk) ?? [] {
-                waiter.resume()
+            let waiters = locked {
+                heldAudioSends[chunk] = continuation
+                return heldAudioWaiters.removeValue(forKey: chunk) ?? []
             }
+            waiters.forEach { $0.resume() }
         }
+    }
+
+    private func locked<T>(_ work: () -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return work()
     }
 }
 

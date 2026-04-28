@@ -122,6 +122,7 @@
 		8C145059D8CF43EDF0BA43A5 /* NodeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 728E7385459EB842724E8BCA /* NodeStore.swift */; };
 		8C7CFB0C2C5581CFEBD55BFE /* RAGPipelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE5485D2A957CBBB28E2D627 /* RAGPipelineTests.swift */; };
 		8D729AFF98D71911817AC300 /* GalaxyRelationRefinementQueueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 290D34EB4F73148AA708BD26 /* GalaxyRelationRefinementQueueTests.swift */; };
+		8DB6F6CF58448033BB402860 /* VoiceMemoryFacadeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A63497299EB4AA3979DE9AF4 /* VoiceMemoryFacadeTests.swift */; };
 		908AA9FAD2465E11A9354FC4 /* GalaxyRelationEvalFixtureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F790283A94823DBACE19C2AF /* GalaxyRelationEvalFixtureTests.swift */; };
 		90F3DEB7C7B248585371FE51 /* StructuredLLMClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DECCD1373F970E6B6A9F5A0 /* StructuredLLMClient.swift */; };
 		973F0E1BA6A8CFDC939DAF85 /* ScratchPadStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08F9F1F71CFCDC24C78B9092 /* ScratchPadStoreTests.swift */; };
@@ -200,6 +201,7 @@
 		E39C56976C2D37208591708F /* ChatMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2521A241BB593FF07230FE0 /* ChatMode.swift */; };
 		E672E2F406A0DDD39311C3BA /* MemoryObservation.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB3C1936919D55659F869547 /* MemoryObservation.swift */; };
 		E6978899110C57909E022FFD /* ClarificationCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3154A6E7BC8B7FD38EF8B21 /* ClarificationCard.swift */; };
+		E6D3F07FC3C05F45B68A5B5E /* VoiceMemoryFacade.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2299867B8E4254D6B54F0BA /* VoiceMemoryFacade.swift */; };
 		E945B227EBC4479E9F43EF34 /* NousNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC28A679A68D922546206E9D /* NousNode.swift */; };
 		E9B08F46CEE6A7C2C0FF0D4D /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88CB0A79B5A731BC1D27C575 /* main.swift */; };
 		EEB13190252504BB2CAAAE3B /* ChatMarkdownRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CA1498BB2382E71760BE25A /* ChatMarkdownRenderer.swift */; };
@@ -361,6 +363,7 @@
 		A3154A6E7BC8B7FD38EF8B21 /* ClarificationCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClarificationCard.swift; sourceTree = "<group>"; };
 		A47BC60463D5E92044AFDB86 /* LeftSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LeftSidebar.swift; sourceTree = "<group>"; };
 		A5EF979813E783CA3666DEBE /* AttachmentChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentChip.swift; sourceTree = "<group>"; };
+		A63497299EB4AA3979DE9AF4 /* VoiceMemoryFacadeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceMemoryFacadeTests.swift; sourceTree = "<group>"; };
 		A83922509F1BB3EA3476B0D9 /* GraphLayoutEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GraphLayoutEngine.swift; sourceTree = "<group>"; };
 		AB3C1936919D55659F869547 /* MemoryObservation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryObservation.swift; sourceTree = "<group>"; };
 		AB46BB1DCA54C416A6215077 /* Project.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Project.swift; sourceTree = "<group>"; };
@@ -412,6 +415,7 @@
 		F0A35FC2025E4781FA8CEBE4 /* RAGCitationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RAGCitationView.swift; sourceTree = "<group>"; };
 		F10E1F8EDB401E152BEEE51B /* GeminiPromptCacheService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeminiPromptCacheService.swift; sourceTree = "<group>"; };
 		F1F0851321FDD912EBEA901F /* UserMemoryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserMemoryService.swift; sourceTree = "<group>"; };
+		F2299867B8E4254D6B54F0BA /* VoiceMemoryFacade.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceMemoryFacade.swift; sourceTree = "<group>"; };
 		F5E8453730FD807288584740 /* ProvocationJudge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProvocationJudge.swift; sourceTree = "<group>"; };
 		F790283A94823DBACE19C2AF /* GalaxyRelationEvalFixtureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalaxyRelationEvalFixtureTests.swift; sourceTree = "<group>"; };
 		F839455BCBC5668612A6A606 /* LLMService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMService.swift; sourceTree = "<group>"; };
@@ -690,6 +694,7 @@
 				5B93C993AA118825C12F999B /* VectorStore.swift */,
 				69868D5B206BD27D8F54B079 /* VoiceAudioCapture.swift */,
 				02AC12449EDE4D32637B0A15 /* VoiceCommandController.swift */,
+				F2299867B8E4254D6B54F0BA /* VoiceMemoryFacade.swift */,
 				7A2FA2F104CB9B8CF401CE9D /* WeeklyReflectionService.swift */,
 			);
 			path = Services;
@@ -768,6 +773,7 @@
 				C94FF3DE937E45E699C4E0A2 /* VectorStoreTests.swift */,
 				AEAB81A9BAD73AABC89F45E3 /* VoiceAudioCaptureTests.swift */,
 				EFD309860C2B5F38E8EC1A9C /* VoiceCommandControllerTests.swift */,
+				A63497299EB4AA3979DE9AF4 /* VoiceMemoryFacadeTests.swift */,
 				34332DAC1DB987EEF307E380 /* WeeklyReflectionServiceTests.swift */,
 				23617A5762FD2EC9BF112530 /* Fixtures */,
 			);
@@ -1105,6 +1111,7 @@
 				9CA12F6A78C6C54FA3535947 /* VectorStore.swift in Sources */,
 				C12D81B7B1B0295D73FDFA69 /* VoiceAudioCapture.swift in Sources */,
 				6146D9C1D7258FD6FCF32DDB /* VoiceCommandController.swift in Sources */,
+				E6D3F07FC3C05F45B68A5B5E /* VoiceMemoryFacade.swift in Sources */,
 				DEA87961CBF63ADDB23F74AB /* VoiceModeModels.swift in Sources */,
 				FCE2542CF4E2A112E7653AE2 /* WeeklyReflectionService.swift in Sources */,
 				07FFF1026087C07958572C54 /* WelcomeView.swift in Sources */,
@@ -1164,6 +1171,7 @@
 				D707ED9BF3B1B7CD5C6A6CB0 /* VectorStoreTests.swift in Sources */,
 				CA95BE49C08D1585A1F9BD28 /* VoiceAudioCaptureTests.swift in Sources */,
 				E2837CFD74D35CA3FB702A87 /* VoiceCommandControllerTests.swift in Sources */,
+				8DB6F6CF58448033BB402860 /* VoiceMemoryFacadeTests.swift in Sources */,
 				B46503B8420A0C79794E8A15 /* WeeklyReflectionServiceTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

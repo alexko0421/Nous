@@ -127,6 +127,172 @@ final class VoiceCommandControllerTests: XCTestCase {
         XCTAssertEqual(session.functionOutputs, [.init(callId: "call-2", output: "Voice command rejected")])
     }
 
+    func testSearchMemoryToolReturnsFacadeOutput() async throws {
+        let session = FakeRealtimeVoiceSession()
+        let memory = FakeVoiceMemory(output: "- decision: Keep voice memory read-only.")
+        let conversationId = UUID()
+        let projectId = UUID()
+        let controller = VoiceCommandController(session: session, memory: memory)
+        controller.setMemoryContextProvider {
+            VoiceMemoryContext(projectId: projectId, conversationId: conversationId)
+        }
+
+        try await controller.start(apiKey: "sk-test")
+        await session.emit(.toolCall(
+            .init(name: "search_memory", arguments: #"{"query":"voice memory","limit":4.0}"#),
+            callId: "call-memory"
+        ))
+
+        XCTAssertEqual(controller.status, .action("Searching memory"))
+        XCTAssertEqual(
+            memory.searchRequests,
+            [.init(query: "voice memory", limit: 4, context: VoiceMemoryContext(projectId: projectId, conversationId: conversationId))]
+        )
+        XCTAssertEqual(
+            session.functionOutputs,
+            [.init(callId: "call-memory", output: "- decision: Keep voice memory read-only.")]
+        )
+        XCTAssertNil(controller.pendingAction)
+    }
+
+    func testSearchMemoryRejectsFractionalLimitWithoutCallingFacade() async throws {
+        let session = FakeRealtimeVoiceSession()
+        let memory = FakeVoiceMemory(output: "should not be called")
+        let conversationId = UUID()
+        let controller = VoiceCommandController(session: session, memory: memory)
+        controller.setMemoryContextProvider {
+            VoiceMemoryContext(projectId: nil, conversationId: conversationId)
+        }
+
+        try await controller.start(apiKey: "sk-test")
+        await session.emit(.toolCall(
+            .init(name: "search_memory", arguments: #"{"query":"voice","limit":1.9}"#),
+            callId: "call-fraction"
+        ))
+
+        XCTAssertTrue(memory.searchRequests.isEmpty)
+        XCTAssertEqual(session.functionOutputs, [.init(callId: "call-fraction", output: "Voice command rejected")])
+    }
+
+    func testSearchMemoryClampsHugeLimitWithoutTrapping() async throws {
+        let session = FakeRealtimeVoiceSession()
+        let memory = FakeVoiceMemory(output: "- decision: Huge limit clamped.")
+        let conversationId = UUID()
+        let controller = VoiceCommandController(session: session, memory: memory)
+        controller.setMemoryContextProvider {
+            VoiceMemoryContext(projectId: nil, conversationId: conversationId)
+        }
+
+        try await controller.start(apiKey: "sk-test")
+        await session.emit(.toolCall(
+            .init(name: "search_memory", arguments: #"{"query":"voice","limit":1e100}"#),
+            callId: "call-huge"
+        ))
+
+        XCTAssertEqual(memory.searchRequests.map(\.limit), [5])
+        XCTAssertEqual(session.functionOutputs, [.init(callId: "call-huge", output: "- decision: Huge limit clamped.")])
+    }
+
+    func testSearchMemoryRestoresPendingConfirmationStatusAfterOutput() async throws {
+        let session = FakeRealtimeVoiceSession()
+        let memory = FakeVoiceMemory(output: "- decision: Pending action still visible.")
+        let conversationId = UUID()
+        let controller = VoiceCommandController(session: session, memory: memory)
+        controller.setMemoryContextProvider {
+            VoiceMemoryContext(projectId: nil, conversationId: conversationId)
+        }
+
+        try await controller.start(apiKey: "sk-test")
+        await session.emit(.toolCall(
+            .init(name: "propose_send_message", arguments: #"{"text":"Ship it."}"#),
+            callId: "call-propose"
+        ))
+        await session.emit(.toolCall(
+            .init(name: "search_memory", arguments: #"{"query":"pending"}"#),
+            callId: "call-memory-pending"
+        ))
+
+        XCTAssertEqual(controller.pendingAction, .sendMessage(text: "Ship it."))
+        XCTAssertEqual(controller.status, .needsConfirmation("Confirm send?"))
+        XCTAssertEqual(
+            session.functionOutputs,
+            [
+                .init(callId: "call-propose", output: "Confirm send?"),
+                .init(callId: "call-memory-pending", output: "- decision: Pending action still visible.")
+            ]
+        )
+    }
+
+    func testMemoryReadFailureReturnsMemoryUnavailableWithoutStoppingVoice() async throws {
+        let session = FakeRealtimeVoiceSession()
+        let memory = FakeVoiceMemory(output: "unused")
+        memory.searchError = FakeVoiceMemory.Error.readFailed
+        let conversationId = UUID()
+        let controller = VoiceCommandController(session: session, memory: memory)
+        controller.setMemoryContextProvider {
+            VoiceMemoryContext(projectId: nil, conversationId: conversationId)
+        }
+
+        try await controller.start(apiKey: "sk-test")
+        await session.emit(.toolCall(
+            .init(name: "search_memory", arguments: #"{"query":"voice"}"#),
+            callId: "call-memory-error"
+        ))
+
+        XCTAssertTrue(controller.isActive)
+        XCTAssertEqual(controller.status, .error("Memory unavailable"))
+        XCTAssertEqual(session.stopCallCount, 0)
+        XCTAssertEqual(session.functionOutputs, [.init(callId: "call-memory-error", output: "Memory unavailable.")])
+    }
+
+    func testRecallRecentConversationsWithoutContextReturnsFriendlyOutput() async throws {
+        let session = FakeRealtimeVoiceSession()
+        let memory = FakeVoiceMemory(output: "should not be called")
+        let controller = VoiceCommandController(session: session, memory: memory)
+
+        try await controller.start(apiKey: "sk-test")
+        await session.emit(.toolCall(
+            .init(name: "recall_recent_conversations", arguments: #"{"limit":2}"#),
+            callId: "call-recent"
+        ))
+
+        XCTAssertEqual(controller.status, .action("Recalling recent chats"))
+        XCTAssertTrue(memory.recallRequests.isEmpty)
+        XCTAssertEqual(
+            session.functionOutputs,
+            [.init(callId: "call-recent", output: "No active conversation memory context.")]
+        )
+        XCTAssertNil(controller.pendingAction)
+    }
+
+    func testMemoryToolOutputDoesNotLeakIntoLaterRejectedToolCall() async throws {
+        let session = FakeRealtimeVoiceSession()
+        let memory = FakeVoiceMemory(output: "- decision: Prior memory.")
+        let conversationId = UUID()
+        let controller = VoiceCommandController(session: session, memory: memory)
+        controller.setMemoryContextProvider {
+            VoiceMemoryContext(projectId: nil, conversationId: conversationId)
+        }
+
+        try await controller.start(apiKey: "sk-test")
+        await session.emit(.toolCall(
+            .init(name: "search_memory", arguments: #"{"query":"prior"}"#),
+            callId: "call-memory"
+        ))
+        await session.emit(.toolCall(
+            .init(name: "navigate_to_tab", arguments: #"{"tab":"files"}"#),
+            callId: "call-rejected"
+        ))
+
+        XCTAssertEqual(
+            session.functionOutputs,
+            [
+                .init(callId: "call-memory", output: "- decision: Prior memory."),
+                .init(callId: "call-rejected", output: "Voice command rejected")
+            ]
+        )
+    }
+
     func testResponseDoneKeepsPendingConfirmationStatus() async throws {
         let session = FakeRealtimeVoiceSession()
         let controller = VoiceCommandController(session: session)
@@ -481,6 +647,49 @@ private final class FakeRealtimeVoiceSession: RealtimeVoiceSessioning {
 
     func emit(_ event: RealtimeVoiceEvent) async {
         await onEvent?(event)
+    }
+}
+
+private final class FakeVoiceMemory: VoiceMemorySearching {
+    enum Error: Swift.Error {
+        case readFailed
+    }
+
+    struct SearchRequest: Equatable {
+        let query: String
+        let limit: Int
+        let context: VoiceMemoryContext
+    }
+
+    struct RecallRequest: Equatable {
+        let limit: Int
+        let context: VoiceMemoryContext
+    }
+
+    let output: String
+    var searchRequests: [SearchRequest] = []
+    var recallRequests: [RecallRequest] = []
+    var searchError: Error?
+    var recallError: Error?
+
+    init(output: String) {
+        self.output = output
+    }
+
+    func searchMemory(query: String, limit: Int, context: VoiceMemoryContext) throws -> String {
+        searchRequests.append(.init(query: query, limit: limit, context: context))
+        if let searchError {
+            throw searchError
+        }
+        return output
+    }
+
+    func recallRecentConversations(limit: Int, context: VoiceMemoryContext) throws -> String {
+        recallRequests.append(.init(limit: limit, context: context))
+        if let recallError {
+            throw recallError
+        }
+        return output
     }
 }
 

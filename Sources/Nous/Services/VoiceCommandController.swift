@@ -14,14 +14,25 @@ final class VoiceCommandController {
 
     private var handlers: VoiceActionHandlers = .empty
     private let session: RealtimeVoiceSessioning
+    private let memory: VoiceMemorySearching?
+    private var memoryContextProvider: () -> VoiceMemoryContext? = { nil }
+    private var lastToolOutput: String?
     private var sessionGeneration = 0
 
-    init(session: RealtimeVoiceSessioning = RealtimeVoiceSession()) {
-        self.session = session
+    init(
+        session: RealtimeVoiceSessioning? = nil,
+        memory: VoiceMemorySearching? = nil
+    ) {
+        self.session = session ?? RealtimeVoiceSession(includeMemoryTools: memory != nil)
+        self.memory = memory
     }
 
     func configure(_ handlers: VoiceActionHandlers) {
         self.handlers = handlers
+    }
+
+    func setMemoryContextProvider(_ provider: @escaping () -> VoiceMemoryContext?) {
+        memoryContextProvider = provider
     }
 
     func markListening() {
@@ -72,9 +83,13 @@ final class VoiceCommandController {
 
         case .toolCall(let call, let callId):
             do {
+                lastToolOutput = nil
                 try await handleToolCall(call)
-                await sendFunctionOutput(callId: callId, output: status.displayText, generation: generation)
+                let output = lastToolOutput ?? status.displayText
+                lastToolOutput = nil
+                await sendFunctionOutput(callId: callId, output: output, generation: generation)
             } catch {
+                lastToolOutput = nil
                 restorePendingConfirmationStatus()
                 await sendFunctionOutput(callId: callId, output: "Voice command rejected", generation: generation)
             }
@@ -126,6 +141,41 @@ final class VoiceCommandController {
         case "start_new_chat":
             handlers.startNewChat()
             status = .action("New chat")
+
+        case "search_memory":
+            guard let memory else {
+                completeMemoryToolOutput("Memory unavailable.", fallbackStatus: .error("Memory unavailable"))
+                return
+            }
+            status = .action("Searching memory")
+            let query = try requiredString("query", in: args)
+            let limit = try optionalInt("limit", in: args, default: 3, range: 1...5)
+            guard let context = memoryContextProvider() else {
+                completeMemoryToolOutput("No active conversation memory context.")
+                return
+            }
+            do {
+                completeMemoryToolOutput(try memory.searchMemory(query: query, limit: limit, context: context))
+            } catch {
+                completeMemoryToolOutput("Memory unavailable.", fallbackStatus: .error("Memory unavailable"))
+            }
+
+        case "recall_recent_conversations":
+            guard let memory else {
+                completeMemoryToolOutput("Memory unavailable.", fallbackStatus: .error("Memory unavailable"))
+                return
+            }
+            status = .action("Recalling recent chats")
+            let limit = try optionalInt("limit", in: args, default: 3, range: 1...5)
+            guard let context = memoryContextProvider() else {
+                completeMemoryToolOutput("No active conversation memory context.")
+                return
+            }
+            do {
+                completeMemoryToolOutput(try memory.recallRecentConversations(limit: limit, context: context))
+            } catch {
+                completeMemoryToolOutput("Memory unavailable.", fallbackStatus: .error("Memory unavailable"))
+            }
 
         case "propose_send_message":
             try rejectIfPendingActionExists()
@@ -192,6 +242,42 @@ final class VoiceCommandController {
         guard args.keys.contains(key) else { throw VoiceToolError.missingArgument(key) }
         guard let value = args[key] as? Bool else { throw VoiceToolError.invalidArgument(key) }
         return value
+    }
+
+    private func optionalInt(
+        _ key: String,
+        in args: [String: Any],
+        default defaultValue: Int,
+        range: ClosedRange<Int>
+    ) throws -> Int {
+        guard args.keys.contains(key) else { return defaultValue }
+        if let int = args[key] as? Int {
+            return min(max(int, range.lowerBound), range.upperBound)
+        }
+        guard let double = args[key] as? Double else {
+            throw VoiceToolError.invalidArgument(key)
+        }
+        guard double.isFinite else {
+            return double.sign == .minus ? range.lowerBound : range.upperBound
+        }
+        guard double.rounded(.towardZero) == double else {
+            throw VoiceToolError.invalidArgument(key)
+        }
+        if double < Double(range.lowerBound) { return range.lowerBound }
+        if double > Double(range.upperBound) { return range.upperBound }
+        return Int(double)
+    }
+
+    private func completeMemoryToolOutput(
+        _ output: String,
+        fallbackStatus: VoiceModeStatus? = nil
+    ) {
+        lastToolOutput = output
+        if pendingAction != nil {
+            restorePendingConfirmationStatus()
+        } else if let fallbackStatus {
+            status = fallbackStatus
+        }
     }
 
     private func rejectIfPendingActionExists() throws {

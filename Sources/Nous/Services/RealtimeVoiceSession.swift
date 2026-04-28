@@ -118,15 +118,18 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
 
     private let socket: RealtimeVoiceSocketing
     private let audioCapture: VoiceAudioCapturing?
+    private let includeMemoryTools: Bool
     private var receiveTask: Task<Void, Never>?
     private var outboundQueue: RealtimeVoiceOutboundQueue?
 
     init(
         socket: RealtimeVoiceSocketing = URLSessionRealtimeVoiceSocket(),
-        audioCapture: VoiceAudioCapturing? = VoiceAudioCapture()
+        audioCapture: VoiceAudioCapturing? = VoiceAudioCapture(),
+        includeMemoryTools: Bool = false
     ) {
         self.socket = socket
         self.audioCapture = audioCapture
+        self.includeMemoryTools = includeMemoryTools
     }
 
     static func makeRequest(apiKey: String, model: String = defaultModel) -> URLRequest {
@@ -148,7 +151,7 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
             let queue = RealtimeVoiceOutboundQueue(maxPendingAudioChunks: 8)
             outboundQueue = queue
             queue.start(socket: socket, onEvent: onEvent)
-            try await queue.enqueueControl(Self.makeSessionUpdateEvent())
+            try await queue.enqueueControl(Self.makeSessionUpdateEvent(includeMemoryTools: includeMemoryTools))
             startReceiveLoop(onEvent: onEvent)
             try audioCapture?.start { chunk in
                 queue.enqueueAudio(chunk)
@@ -178,7 +181,10 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
         socket.close()
     }
 
-    static func makeSessionUpdateEvent(model: String = defaultModel) throws -> Data {
+    static func makeSessionUpdateEvent(
+        model: String = defaultModel,
+        includeMemoryTools: Bool = false
+    ) throws -> Data {
         let body: [String: Any] = [
             "type": "session.update",
             "session": [
@@ -196,7 +202,7 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
                         ]
                     ]
                 ],
-                "tools": voiceToolDeclarations,
+                "tools": voiceToolDeclarations(includeMemoryTools: includeMemoryTools),
                 "tool_choice": "auto"
             ]
         ]
@@ -254,7 +260,13 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
     Use propose_* tools for sending messages or creating notes. Never claim you clicked UI.
     """
 
-    private static let voiceToolDeclarations: [[String: Any]] = [
+    private static func voiceToolDeclarations(includeMemoryTools: Bool) -> [[String: Any]] {
+        includeMemoryTools
+            ? baseVoiceToolDeclarations + memoryVoiceToolDeclarations
+            : baseVoiceToolDeclarations
+    }
+
+    private static let baseVoiceToolDeclarations: [[String: Any]] = [
         functionTool(
             name: "navigate_to_tab",
             description: "Navigate to a main Nous tab.",
@@ -321,6 +333,24 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
             name: "cancel_pending_action",
             description: "Cancel the pending send or create action.",
             properties: [:],
+            required: []
+        )
+    ]
+
+    private static let memoryVoiceToolDeclarations: [[String: Any]] = [
+        functionTool(
+            name: "search_memory",
+            description: "Search Nous memory for short read-only context.",
+            properties: [
+                "query": ["type": "string"],
+                "limit": ["type": "integer"]
+            ],
+            required: ["query"]
+        ),
+        functionTool(
+            name: "recall_recent_conversations",
+            description: "Recall short read-only summaries from recent conversations.",
+            properties: ["limit": ["type": "integer"]],
             required: []
         )
     ]
