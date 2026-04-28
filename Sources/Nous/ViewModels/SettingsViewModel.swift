@@ -66,6 +66,14 @@ final class SettingsViewModel {
         secretStore.storageDescription
     }
 
+    var isVoiceModeAvailable: Bool {
+        !openaiApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var voiceModeUnavailableReason: String? {
+        isVoiceModeAvailable ? nil : "Add an OpenAI API key to use Voice Mode."
+    }
+
     var runtimeModelSummaries: [RuntimeModelSummary] {
         [
             RuntimeModelSummary(

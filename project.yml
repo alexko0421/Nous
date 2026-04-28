@@ -19,6 +19,7 @@ targets:
       properties:
         CFBundleIconName: AppIcon
         LSMinimumSystemVersion: "26.0"
+        NSMicrophoneUsageDescription: Nous uses the microphone only while Voice Mode is active so you can speak commands and draft messages.
         NSPrincipalClass: NSApplication
         ATSApplicationFontsPath: Fonts
     settings:
@@ -33,6 +34,7 @@ targets:
       - package: mlx-swift-examples
         product: MLXEmbedders
       - sdk: Accelerate.framework
+      - sdk: AVFoundation.framework
       - sdk: Security.framework
       - sdk: SpriteKit.framework
   ProvocationFixtureRunner:

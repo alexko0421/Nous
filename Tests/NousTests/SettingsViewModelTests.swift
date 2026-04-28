@@ -173,6 +173,18 @@ final class SettingsViewModelTests: XCTestCase {
         )
     }
 
+    func testVoiceModeAvailabilityRequiresOpenAIKey() {
+        let vm = makeViewModel()
+
+        XCTAssertFalse(vm.isVoiceModeAvailable)
+        XCTAssertEqual(vm.voiceModeUnavailableReason, "Add an OpenAI API key to use Voice Mode.")
+
+        vm.openaiApiKey = "  openai-key  "
+
+        XCTAssertTrue(vm.isVoiceModeAvailable)
+        XCTAssertNil(vm.voiceModeUnavailableReason)
+    }
+
     private func makeViewModel() -> SettingsViewModel {
         SettingsViewModel(
             embeddingService: EmbeddingService(),
