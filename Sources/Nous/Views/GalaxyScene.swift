@@ -20,7 +20,7 @@ final class GalaxyScene: SKScene {
     // MARK: - Lifecycle
 
     override func didMove(to view: SKView) {
-        backgroundColor = .clear
+        backgroundColor = SKColor(red: 26/255, green: 26/255, blue: 46/255, alpha: 1)
         anchorPoint = CGPoint(x: 0.5, y: 0.5)
 
         addChild(cameraNode)
@@ -67,19 +67,19 @@ final class GalaxyScene: SKScene {
             let line = SKShapeNode(path: path)
             let isSelectedEdge = edge.sourceId == selectedNodeId || edge.targetId == selectedNodeId
             let strength = CGFloat(edge.strength).clamped(to: 0...1)
+            let confidence = CGFloat(edge.confidence).clamped(to: 0...1)
+            let visualStrength = max(strength, confidence)
 
             switch edge.type {
             case .manual:
-                line.strokeColor = SKColor(red: 243/255, green: 131/255, blue: 53/255, alpha: isSelectedEdge ? 0.24 : 0.14)
-                line.lineWidth = isSelectedEdge ? 1.1 : 0.9
+                line.strokeColor = galaxyOrange(alpha: isSelectedEdge ? 0.42 : 0.26)
+                line.lineWidth = isSelectedEdge ? 1.45 : 1.2
             case .shared:
-                line.strokeColor = SKColor(red: 243/255, green: 131/255, blue: 53/255, alpha: isSelectedEdge ? 0.16 : 0.05 + strength * 0.05)
-                line.lineWidth = isSelectedEdge ? 0.95 : 0.65
+                line.strokeColor = galaxyOrange(alpha: isSelectedEdge ? 0.28 : 0.08 + visualStrength * 0.12)
+                line.lineWidth = isSelectedEdge ? 1.2 : 0.75 + visualStrength * 0.25
             case .semantic:
-                line.strokeColor = isSelectedEdge
-                    ? SKColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.18 + strength * 0.06)
-                    : SKColor(red: 51/255, green: 51/255, blue: 51/255, alpha: 0.08 + strength * 0.07)
-                line.lineWidth = isSelectedEdge ? 1.0 : 0.7 + strength * 0.18
+                line.strokeColor = galaxyOrange(alpha: isSelectedEdge ? 0.34 : 0.10 + visualStrength * 0.24)
+                line.lineWidth = isSelectedEdge ? 1.35 : 0.85 + visualStrength * 0.55
             }
             line.zPosition = -1
             edgeSprites[edge.id] = line
@@ -101,28 +101,35 @@ final class GalaxyScene: SKScene {
             circle.position = CGPoint(x: CGFloat(pos.x), y: CGFloat(pos.y))
             circle.fillColor = circleColor
             circle.strokeColor = strokeColor(for: node, isSelected: isSelected)
-            circle.lineWidth = isSelected || node.isFavorite ? 1.0 : 0.6
-            circle.glowWidth = 0
+            circle.lineWidth = isSelected || node.isFavorite ? 2.0 : 1.4
+            circle.glowWidth = isSelected ? 8 : 4
             circle.name = node.id.uuidString
             circle.zPosition = 1
 
             if isSelected || node.isFavorite {
                 let emphasisRing = SKShapeNode(circleOfRadius: CGFloat(radius + 5))
-                emphasisRing.strokeColor = SKColor(red: 243/255, green: 131/255, blue: 53/255, alpha: isSelected ? 0.20 : 0.14)
+                emphasisRing.strokeColor = galaxyOrange(alpha: isSelected ? 0.32 : 0.18)
                 emphasisRing.lineWidth = 1
                 emphasisRing.fillColor = .clear
                 emphasisRing.zPosition = 0
                 circle.addChild(emphasisRing)
             }
 
+            let emojiLabel = SKLabelNode(text: TopicEmojiResolver.emoji(for: node))
+            emojiLabel.fontSize = CGFloat(radius * 0.85)
+            emojiLabel.verticalAlignmentMode = .center
+            emojiLabel.horizontalAlignmentMode = .center
+            emojiLabel.zPosition = 2
+            circle.addChild(emojiLabel)
+
             // Title label below circle
-            let titleLabel = SKLabelNode(text: truncated(node.title, maxLen: 24))
+            let titleLabel = SKLabelNode(text: truncated(node.title, maxLen: 20))
             titleLabel.fontName = "SF Pro Text"
-            titleLabel.fontSize = isSelected ? 11 : 10
+            titleLabel.fontSize = isSelected ? 10 : 9
             titleLabel.fontColor = labelColor(for: node, isSelected: isSelected)
             titleLabel.verticalAlignmentMode = .top
             titleLabel.horizontalAlignmentMode = .center
-            titleLabel.position = CGPoint(x: 0, y: -(CGFloat(radius) + 8))
+            titleLabel.position = CGPoint(x: 0, y: -(CGFloat(radius) + 4))
             titleLabel.zPosition = 2
             circle.addChild(titleLabel)
 
@@ -144,48 +151,46 @@ final class GalaxyScene: SKScene {
     }
 
     private func nodeRadius(for node: NousNode, degree: Int) -> CGFloat {
-        let contentWeight = min(sqrt(Double(node.content.count)) * 0.12, 2.4)
-        let degreeWeight = min(Double(degree) * 0.45, 3.2)
-        let favoriteWeight = node.isFavorite ? 1.0 : 0.0
-        return CGFloat(4.5 + contentWeight + degreeWeight + favoriteWeight)
+        let contentWeight = sqrt(Double(node.content.count)) * 0.38
+        let degreeWeight = min(Double(degree) * 0.7, 4.0)
+        let favoriteWeight = node.isFavorite ? 2.0 : 0.0
+        return CGFloat(max(12.0, min(30.0, 12.0 + contentWeight + degreeWeight + favoriteWeight)))
     }
 
     private func fillColor(for node: NousNode, isSelected: Bool) -> SKColor {
         if isSelected {
-            return SKColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.88)
+            return galaxyOrange(alpha: 0.90)
         }
 
-        switch node.type {
-        case .conversation:
-            return SKColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.78)
-        case .note:
-            return SKColor(red: 51/255, green: 51/255, blue: 51/255, alpha: 0.84)
-        }
+        return galaxyOrange(alpha: node.type == .conversation ? 0.72 : 0.62)
     }
 
     private func strokeColor(for node: NousNode, isSelected: Bool) -> SKColor {
         if isSelected {
-            return SKColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.74)
+            return galaxyOrange(alpha: 1.0)
         }
 
         if node.isFavorite {
-            return SKColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.30)
+            return galaxyOrange(alpha: 0.80)
         }
 
-        return SKColor(red: 51/255, green: 51/255, blue: 51/255, alpha: 0.10)
+        return galaxyOrange(alpha: 0.58)
     }
 
     private func labelColor(for node: NousNode, isSelected: Bool) -> SKColor {
         if isSelected {
-            return SKColor(red: 51/255, green: 51/255, blue: 51/255, alpha: 0.90)
+            return SKColor(white: 1, alpha: 0.94)
         }
 
-        switch node.type {
-        case .conversation:
-            return SKColor(red: 51/255, green: 51/255, blue: 51/255, alpha: 0.72)
-        case .note:
-            return SKColor(red: 51/255, green: 51/255, blue: 51/255, alpha: 0.68)
-        }
+        return SKColor(white: 0.9, alpha: node.type == .conversation ? 0.86 : 0.72)
+    }
+
+    // Morandi dusty rose — replaces the original colaOrange tint for the entire
+    // Galaxy scene. Nodes / edges / emphasis rings all read through this single
+    // function, so changing the RGB here pulls the whole canvas into the
+    // Morandi palette in one place.
+    private func galaxyOrange(alpha: CGFloat) -> SKColor {
+        SKColor(red: 196/255, green: 160/255, blue: 154/255, alpha: alpha)   // #C4A09A
     }
 
     private func truncated(_ text: String, maxLen: Int) -> String {

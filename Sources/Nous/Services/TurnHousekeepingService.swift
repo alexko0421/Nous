@@ -6,6 +6,7 @@ final class TurnHousekeepingService {
     private let vectorStore: VectorStore
     private let embeddingService: EmbeddingService
     private let graphEngine: GraphEngine
+    private let relationRefinementQueue: GalaxyRelationRefinementQueue?
     private let geminiPromptCache: GeminiPromptCacheService
     private let llmServiceProvider: () -> (any LLMService)?
     private let shouldUseGeminiHistoryCache: () -> Bool
@@ -18,6 +19,7 @@ final class TurnHousekeepingService {
         vectorStore: VectorStore,
         embeddingService: EmbeddingService,
         graphEngine: GraphEngine,
+        relationRefinementQueue: GalaxyRelationRefinementQueue? = nil,
         geminiPromptCache: GeminiPromptCacheService,
         llmServiceProvider: @escaping () -> (any LLMService)?,
         shouldUseGeminiHistoryCache: @escaping () -> Bool,
@@ -27,6 +29,7 @@ final class TurnHousekeepingService {
         self.vectorStore = vectorStore
         self.embeddingService = embeddingService
         self.graphEngine = graphEngine
+        self.relationRefinementQueue = relationRefinementQueue
         self.geminiPromptCache = geminiPromptCache
         self.llmServiceProvider = llmServiceProvider
         self.shouldUseGeminiHistoryCache = shouldUseGeminiHistoryCache
@@ -251,6 +254,7 @@ final class TurnHousekeepingService {
         let vectorStore = self.vectorStore
         let nodeStore = self.nodeStore
         let graphEngine = self.graphEngine
+        let relationRefinementQueue = self.relationRefinementQueue
 
         Task.detached(priority: .background) {
             if let embedding = try? embeddingService.embed(fullContent) {
@@ -258,6 +262,7 @@ final class TurnHousekeepingService {
                 if var updatedNode = try? nodeStore.fetchNode(id: nodeId) {
                     updatedNode.embedding = embedding
                     try? graphEngine.regenerateEdges(for: updatedNode)
+                    relationRefinementQueue?.enqueue(nodeId: nodeId)
                 }
             }
         }

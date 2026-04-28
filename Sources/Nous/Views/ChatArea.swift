@@ -85,7 +85,9 @@ struct ChatArea: View {
                                         MessageBubble(
                                             text: msg.content,
                                             thinkingContent: msg.thinkingContent,
+                                            agentTraceRecords: msg.decodedAgentTraceRecords,
                                             isThinkingStreaming: false,
+                                            isAgentTraceStreaming: false,
                                             isUser: msg.role == .user
                                         )
                                         if shouldShowRelevantChats(after: msg) {
@@ -152,12 +154,14 @@ struct ChatArea: View {
                                         }
                                     }
                                 }
-                                if vm.isGenerating && (!vm.currentThinking.isEmpty || !vm.currentResponse.isEmpty) {
+                                if vm.isGenerating && (!vm.currentThinking.isEmpty || !vm.currentResponse.isEmpty || !vm.currentAgentTrace.isEmpty) {
                                     VStack(alignment: .leading, spacing: 4) {
                                         MessageBubble(
                                             text: vm.currentResponse,
                                             thinkingContent: vm.currentThinking.isEmpty ? nil : vm.currentThinking,
+                                            agentTraceRecords: vm.currentAgentTrace,
                                             isThinkingStreaming: vm.currentResponse.isEmpty,
+                                            isAgentTraceStreaming: !vm.currentAgentTrace.isEmpty && vm.currentResponse.isEmpty,
                                             isUser: false
                                         )
                                         if !vm.citations.isEmpty {
@@ -544,10 +548,12 @@ struct ChatArea: View {
 struct MessageBubble: View {
     let text: String
     let thinkingContent: String?
+    let agentTraceRecords: [AgentTraceRecord]
     let isThinkingStreaming: Bool
+    let isAgentTraceStreaming: Bool
     let isUser: Bool
 
-    private let userBubbleMaxWidth: CGFloat = 620
+    private let userBubbleMaxWidth: CGFloat = 520
     private let userParagraphSpacing: CGFloat = 10
 
     private var userParagraphTexts: [String] {
@@ -560,6 +566,9 @@ struct MessageBubble: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            if !isUser && !agentTraceRecords.isEmpty {
+                AgentTraceAccordion(records: agentTraceRecords, isStreaming: isAgentTraceStreaming)
+            }
             if let thinkingContent, !thinkingContent.isEmpty {
                 ThinkingAccordion(content: thinkingContent, isStreaming: isThinkingStreaming)
             }
@@ -582,6 +591,7 @@ struct MessageBubble: View {
                         .padding(.vertical, 12)
                         .background(AppColor.colaBubble)
                         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                        .frame(maxWidth: userBubbleMaxWidth, alignment: .trailing)
                     }
                 } else {
                     HStack {
@@ -682,7 +692,7 @@ struct MessageBubble: View {
 private struct AssistantBubbleContent: View {
     let displayText: String
 
-    private let assistantTextMaxWidth: CGFloat = 690
+    private let assistantTextMaxWidth: CGFloat = 520
 
     var body: some View {
         // Single parse per body recompute via Swift `let` binding.

@@ -13,6 +13,7 @@ final class ChatViewModel {
     var isGenerating: Bool = false
     var currentResponse: String = ""
     var currentThinking: String = ""
+    var currentAgentTrace: [AgentTraceRecord] = []
     var didHitBudgetExhaustion: Bool = false
     var citations: [SearchResult] = []
     var activeQuickActionMode: QuickActionMode?
@@ -27,6 +28,7 @@ final class ChatViewModel {
     private let vectorStore: VectorStore
     private let embeddingService: EmbeddingService
     private let graphEngine: GraphEngine
+    private let relationRefinementQueue: GalaxyRelationRefinementQueue?
     private let userMemoryService: UserMemoryService
     private let userMemoryScheduler: UserMemoryScheduler
     private let conversationSessionStore: ConversationSessionStore
@@ -77,6 +79,23 @@ final class ChatViewModel {
             conversationSessionStore: conversationSessionStore,
             turnPlanner: turnPlanner,
             turnExecutor: turnExecutor,
+            agentLoopExecutorFactory: { [weak self] mode, _, _ in
+                guard let self,
+                      self.currentProviderProvider() == .openrouter,
+                      let toolLLM = self.llmServiceProvider() as? any ToolCallingLLMService,
+                      toolLLM.supportsAgentToolUse else {
+                    return nil
+                }
+                let registry = AgentToolRegistry
+                    .standard(
+                        nodeStore: self.nodeStore,
+                        vectorStore: self.vectorStore,
+                        embeddingService: self.embeddingService,
+                        contradictionProvider: self.userMemoryService.contradictionReader
+                    )
+                    .subset(mode.agent().toolNames)
+                return AgentLoopExecutor(llmService: toolLLM, registry: registry)
+            },
             outcomeFactory: turnOutcomeFactory,
             onPlanReady: { [governanceTelemetry] plan in
                 governanceTelemetry.recordPromptTrace(plan.promptTrace)
@@ -161,6 +180,7 @@ final class ChatViewModel {
             vectorStore: vectorStore,
             embeddingService: embeddingService,
             graphEngine: graphEngine,
+            relationRefinementQueue: relationRefinementQueue,
             geminiPromptCache: geminiPromptCache,
             llmServiceProvider: llmServiceProvider,
             shouldUseGeminiHistoryCache: shouldUseGeminiHistoryCache,
@@ -180,6 +200,7 @@ final class ChatViewModel {
         vectorStore: VectorStore,
         embeddingService: EmbeddingService,
         graphEngine: GraphEngine,
+        relationRefinementQueue: GalaxyRelationRefinementQueue? = nil,
         userMemoryService: UserMemoryService,
         userMemoryScheduler: UserMemoryScheduler,
         conversationSessionStore: ConversationSessionStore? = nil,
@@ -203,6 +224,7 @@ final class ChatViewModel {
         self.vectorStore = vectorStore
         self.embeddingService = embeddingService
         self.graphEngine = graphEngine
+        self.relationRefinementQueue = relationRefinementQueue
         self.userMemoryService = userMemoryService
         self.userMemoryScheduler = userMemoryScheduler
         self.conversationSessionStore = conversationSessionStore ?? ConversationSessionStore(nodeStore: nodeStore)
@@ -245,6 +267,7 @@ final class ChatViewModel {
         citations = []
         currentResponse = ""
         currentThinking = ""
+        currentAgentTrace = []
         didHitBudgetExhaustion = false
         activeQuickActionMode = nil
         activeChatMode = nil  // brand-new chat has no prior judgment
@@ -262,6 +285,7 @@ final class ChatViewModel {
         citations = []
         currentResponse = ""
         currentThinking = ""
+        currentAgentTrace = []
         didHitBudgetExhaustion = false
         activeQuickActionMode = nil
         activeChatMode = (try? nodeStore.latestChatMode(forNode: node.id)) ?? nil
@@ -303,6 +327,7 @@ final class ChatViewModel {
 
         isGenerating = true
         currentResponse = ""
+        currentAgentTrace = []
         defer {
             if isActiveResponseTask(responseTaskId) {
                 isGenerating = false
@@ -312,7 +337,14 @@ final class ChatViewModel {
         let agent = mode.agent()
         let policy = agent.memoryPolicy()
         let openingText = agent.openingPrompt()
+        #if DEBUG
+        DebugAblation.logActiveFlags(context: "quick-mode-opening:\(mode)")
+        let openingAddendum: String? = DebugAblation.skipModeAddendum
+            ? nil
+            : agent.contextAddendum(turnIndex: 0)
+        #else
         let openingAddendum = agent.contextAddendum(turnIndex: 0)
+        #endif
 
         var projectGoal: String? = nil
         if policy.includeProjectGoal,
@@ -401,6 +433,7 @@ final class ChatViewModel {
                 turnIndex: 0
             )
             currentResponse = ""
+            currentAgentTrace = []
             return
         }
 
@@ -454,34 +487,32 @@ final class ChatViewModel {
 
         guard isActiveResponseTask(responseTaskId) else { return }
         let rawAssistantContent = currentResponse
-        let assistantContent = ClarificationCardParser.stripChatTitle(from: rawAssistantContent)
-        let conversationTitle = ChatViewModel.sanitizedConversationTitle(
-            from: ClarificationCardParser.extractChatTitle(from: rawAssistantContent)
-        )
+        let normalized = AssistantTurnNormalizer.normalize(rawAssistantContent)
         guard let committed = try? conversationSessionStore.commitAssistantTurn(
             nodeId: node.id,
             currentMessages: messages,
-            assistantContent: assistantContent,
-            conversationTitle: conversationTitle
+            assistantContent: normalized.assistantContent,
+            conversationTitle: normalized.conversationTitle
         ) else { return }
         currentNode = committed.node
         messages = committed.messagesAfterAssistantAppend
         let openingTurnIndex = messages.lazy.filter { $0.role == .user }.count
         activeQuickActionMode = ChatViewModel.updatedQuickActionMode(
             currentMode: activeQuickActionMode,
-            assistantContent: assistantContent,
+            assistantContent: normalized.assistantContent,
             turnIndex: openingTurnIndex
         )
         let completion = turnOutcomeFactory.makeCompletion(
             turnId: responseTaskId,
             nextQuickActionModeIfCompleted: activeQuickActionMode,
             committed: committed,
-            assistantContent: assistantContent,
+            assistantContent: normalized.assistantContent,
             stableSystem: contextSlice.stable
         )
         await contextContinuationService.run(completion.continuationPlan)
         turnHousekeepingService.run(completion.housekeepingPlan)
         currentResponse = ""
+        currentAgentTrace = []
     }
 
     // MARK: - Send (RAG Pipeline)
@@ -562,6 +593,7 @@ final class ChatViewModel {
         inputText = ""
         isGenerating = true
         currentResponse = ""
+        currentAgentTrace = []
         defer {
             if isActiveResponseTask(responseTaskId) {
                 isGenerating = false
@@ -609,6 +641,7 @@ final class ChatViewModel {
         citations = []
         currentResponse = ""
         currentThinking = ""
+        currentAgentTrace = []
         didHitBudgetExhaustion = false
 
         let request = TurnRequest(
@@ -685,9 +718,12 @@ final class ChatViewModel {
             activeChatMode = prepared.effectiveMode
             currentResponse = ""
             currentThinking = ""
+            currentAgentTrace = []
             didHitBudgetExhaustion = false
         case .thinkingDelta(let delta):
             currentThinking.append(delta)
+        case .agentTraceDelta(let record):
+            currentAgentTrace.append(record)
         case .textDelta(let delta):
             currentResponse.append(delta)
         case .completed(let completion):
@@ -696,9 +732,11 @@ final class ChatViewModel {
             activeQuickActionMode = completion.nextQuickActionMode
             currentResponse = ""
             currentThinking = ""
+            currentAgentTrace = []
             didHitBudgetExhaustion = false
         case .aborted(let reason):
             currentThinking = ""
+            currentAgentTrace = []
             didHitBudgetExhaustion = false
             if reason == .unexpectedCancellation {
                 presentAssistantFailure(
@@ -707,6 +745,7 @@ final class ChatViewModel {
             }
         case .failed(let failure):
             currentThinking = ""
+            currentAgentTrace = []
             didHitBudgetExhaustion = false
             presentAssistantFailure("Error: \(failure.message)")
         }
@@ -735,6 +774,7 @@ final class ChatViewModel {
             )
         }
         currentResponse = ""
+        currentAgentTrace = []
     }
 
     @MainActor
@@ -797,6 +837,7 @@ final class ChatViewModel {
         if clearDraft {
             currentResponse = ""
             currentThinking = ""
+            currentAgentTrace = []
             didHitBudgetExhaustion = false
         }
     }
@@ -908,6 +949,22 @@ final class ChatViewModel {
     Do not romanticize self-destruction, isolation, or dependency.
     """
 
+    nonisolated private static let quickModeQualityPolicy = """
+    ---
+
+    QUICK MODE QUALITY POLICY:
+    A quick mode is only a lens on Nous's normal judgment. It is not a new persona,
+    not a workflow bot, and not permission to flatten Alex into a template.
+
+    Preserve the anchor voice first: specific to Alex, direct, warm, and willing to
+    name the real tension. Use the mode to choose the shape of help, not to replace
+    the conversation.
+
+    Do not interview by default. If Alex has already given enough signal for a useful
+    take, answer. Ask one more question only when the missing detail would change the
+    judgment materially.
+    """
+
     nonisolated private static func activeChatModeBlock(_ chatMode: ChatMode) -> String {
         "---\n\nACTIVE CHAT MODE: \(chatMode.label)\n\(chatMode.contextBlock)"
     }
@@ -921,6 +978,7 @@ final class ChatViewModel {
         essentialStory: String? = nil,
         userModel: UserModel? = nil,
         memoryEvidence: [MemoryEvidenceSnippet] = [],
+        memoryGraphRecall: [String] = [],
         projectMemory: String?,
         conversationMemory: String?,
         recentConversations: [(title: String, memory: String)],
@@ -938,7 +996,15 @@ final class ChatViewModel {
         // Stable prefix: identity + policies + slow-changing memory layers. This is what
         // gets frozen into cachedContents.systemInstruction; any per-turn additions here
         // would invalidate the cache hash every request and defeat the whole point.
+        #if DEBUG
+        if !DebugAblation.skipAnchor {
+            stable.append(anchor)
+        } else {
+            print("[DebugAblation] anchor SKIPPED")
+        }
+        #else
         stable.append(anchor)
+        #endif
         stable.append(memoryInterpretationPolicy)
         stable.append(coreSafetyPolicy)
         stable.append(stoicGroundingPolicy)
@@ -966,6 +1032,14 @@ final class ChatViewModel {
             for evidence in memoryEvidence {
                 stable.append("- \(evidence.label) · \"\(evidence.sourceTitle)\": \(evidence.snippet)")
             }
+        }
+
+        if !memoryGraphRecall.isEmpty {
+            volatilePieces.append("---\n\nGRAPH MEMORY RECALL:")
+            for recall in memoryGraphRecall {
+                volatilePieces.append(recall)
+            }
+            volatilePieces.append("Use this as scoped graph recall: atoms are claims, chains are decision paths, and source_quote is evidence. Do not claim more certainty than the graph provides.")
         }
 
         if let userModel,
@@ -1040,6 +1114,7 @@ CHAT FORMAT POLICY:
 
         if let activeQuickActionMode {
             volatilePieces.append("ACTIVE QUICK MODE: \(activeQuickActionMode.label)")
+            volatilePieces.append(quickModeQualityPolicy)
         }
 
         if let quickActionAddendum, !quickActionAddendum.isEmpty {
@@ -1094,6 +1169,7 @@ CHAT FORMAT POLICY:
         essentialStory: String? = nil,
         userModel: UserModel? = nil,
         memoryEvidence: [MemoryEvidenceSnippet] = [],
+        memoryGraphRecall: [String] = [],
         projectMemory: String?,
         conversationMemory: String?,
         recentConversations: [(title: String, memory: String)],
@@ -1114,6 +1190,7 @@ CHAT FORMAT POLICY:
         if let projectMemory, !projectMemory.isEmpty { layers.append("project_memory") }
         if let conversationMemory, !conversationMemory.isEmpty { layers.append("conversation_memory") }
         if !memoryEvidence.isEmpty { layers.append("memory_evidence") }
+        if !memoryGraphRecall.isEmpty { layers.append("memory_graph_recall") }
         if let userModel, !userModel.isEmpty { layers.append("user_model") }
         if let projectGoal, !projectGoal.isEmpty { layers.append("project_goal") }
         if !recentConversations.isEmpty { layers.append("recent_conversations") }
@@ -1197,38 +1274,6 @@ CHAT FORMAT POLICY:
         return Int(elapsed / 86_400)
     }
 
-    nonisolated private static func sanitizedConversationTitle(from raw: String?) -> String? {
-        guard var title = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else {
-            return nil
-        }
-
-        title = title
-            .replacingOccurrences(of: "\n", with: " ")
-            .replacingOccurrences(of: "\t", with: " ")
-        while title.contains("  ") {
-            title = title.replacingOccurrences(of: "  ", with: " ")
-        }
-
-        while let first = title.first, first == "#" || first == "-" || first == "*" || first.isWhitespace {
-            title.removeFirst()
-        }
-
-        title = title.trimmingCharacters(in: CharacterSet(charactersIn: "\"'`“”‘’"))
-        title = title.trimmingCharacters(in: CharacterSet(charactersIn: ".!?,;:。！？、，；："))
-
-        let filteredScalars = title.unicodeScalars.filter { scalar in
-            !CharacterSet(charactersIn: "<>|/\\").contains(scalar)
-        }
-        title = String(String.UnicodeScalarView(filteredScalars))
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        if title.count > 48 {
-            title = String(title.prefix(48)).trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-
-        return title.isEmpty ? nil : title
-    }
-
     nonisolated static func updatedQuickActionMode(
         currentMode: QuickActionMode?,
         assistantContent: String,
@@ -1244,7 +1289,8 @@ CHAT FORMAT POLICY:
         activeQuickActionMode: QuickActionMode?,
         messages: [Message]
     ) -> Bool {
-        guard activeQuickActionMode != nil else { return false }
+        guard let activeQuickActionMode else { return false }
+        guard activeQuickActionMode == .plan else { return false }
         let userTurnCount = messages.lazy.filter { $0.role == .user }.count
         return userTurnCount <= 1
     }

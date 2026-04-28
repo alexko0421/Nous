@@ -4,6 +4,7 @@ struct MemoryDebugInspector: View {
     let nodeStore: NodeStore
     let userMemoryService: UserMemoryService
     let telemetry: GovernanceTelemetryStore
+    let galaxyRelationTelemetry: GalaxyRelationTelemetry
 
     private enum MemoryFocus: String, CaseIterable {
         case active = "All"
@@ -61,6 +62,7 @@ struct MemoryDebugInspector: View {
                 header
                 overviewCard
                 browseCard
+                MemoryGraphInspector(nodeStore: nodeStore)
 
                 HStack(alignment: .top, spacing: 20) {
                     entriesPane
@@ -724,6 +726,9 @@ struct MemoryDebugInspector: View {
                 JudgeEventsTab(telemetry: telemetry)
                     .tabItem { Label("Judge", systemImage: "wand.and.sparkles") }
 
+                GalaxyRelationTelemetryTab(telemetry: galaxyRelationTelemetry)
+                    .tabItem { Label("Galaxy", systemImage: "point.3.connected.trianglepath.dotted") }
+
                 ReflectionClaimsTab(nodeStore: nodeStore)
                     .tabItem { Label("Reflections", systemImage: "sparkles.rectangle.stack") }
             }
@@ -1049,6 +1054,142 @@ struct MemoryDebugInspector: View {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .short
         return formatter.localizedString(for: date, relativeTo: Date())
+    }
+}
+
+struct GalaxyRelationTelemetryTab: View {
+    let telemetry: GalaxyRelationTelemetry
+    @State private var snapshot = GalaxyRelationTelemetrySnapshot()
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Galaxy Relations")
+                            .font(.headline)
+                            .foregroundColor(AppColor.colaDarkText)
+                        Text("Runtime counters for candidate generation, relation judging, and background refinement.")
+                            .font(.caption)
+                            .foregroundColor(AppColor.secondaryText)
+                    }
+
+                    Spacer()
+
+                    Button("Refresh") { reload() }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(AppColor.colaOrange)
+                        .clipShape(Capsule())
+                }
+
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
+                    relationStat(title: "Candidates", value: snapshot.relationCandidateCount, subtitle: "Local generation")
+                    relationStat(title: "Refined", value: snapshot.refinedCandidateCount, subtitle: "LLM candidates")
+                    relationStat(title: "Local Hit", value: snapshot.localVerdictCount, subtitle: "\(percentage(snapshot.localVerdictCount, of: localTotal))")
+                    relationStat(title: "Local Nil", value: snapshot.localNilCount, subtitle: "\(percentage(snapshot.localNilCount, of: localTotal))")
+                    relationStat(title: "LLM Hit", value: snapshot.llmVerdictCount, subtitle: "\(percentage(snapshot.llmVerdictCount, of: llmTotal))")
+                    relationStat(title: "LLM Nil", value: snapshot.llmNilCount, subtitle: "\(percentage(snapshot.llmNilCount, of: llmTotal))")
+                    relationStat(title: "Fallback", value: snapshot.llmFallbackCount, subtitle: "LLM errors")
+                    relationStat(title: "Semantic Writes", value: snapshot.semanticEdgeWriteCount, subtitle: "Insert/upsert")
+                    relationStat(title: "Shared Writes", value: snapshot.sharedEdgeWriteCount, subtitle: "Project edges")
+                }
+
+                HStack(alignment: .top, spacing: 12) {
+                    relationGroup(
+                        title: "Queue Intake",
+                        rows: [
+                            ("Enqueued", snapshot.queueEnqueuedCount),
+                            ("Deduped", snapshot.queueDedupedCount),
+                            ("Disabled drops", snapshot.queueDisabledDropCount)
+                        ]
+                    )
+
+                    relationGroup(
+                        title: "Queue Work",
+                        rows: [
+                            ("Started", snapshot.queueStartedCount),
+                            ("Retries", snapshot.queueRetryCount),
+                            ("Permanent failures", snapshot.queuePermanentFailureCount),
+                            ("Budget waits", snapshot.queueBudgetWaitCount)
+                        ]
+                    )
+                }
+            }
+            .padding(24)
+        }
+        .background(AppColor.colaBeige)
+        .onAppear(perform: reload)
+    }
+
+    private var localTotal: Int {
+        snapshot.localVerdictCount + snapshot.localNilCount
+    }
+
+    private var llmTotal: Int {
+        snapshot.llmVerdictCount + snapshot.llmNilCount + snapshot.llmFallbackCount
+    }
+
+    private func relationStat(title: String, value: Int, subtitle: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title)
+                .font(.caption)
+                .foregroundColor(AppColor.secondaryText)
+            Text("\(value)")
+                .font(.title3.monospacedDigit().weight(.semibold))
+                .foregroundColor(AppColor.colaDarkText)
+            Text(subtitle)
+                .font(.caption2)
+                .foregroundColor(AppColor.secondaryText)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(AppColor.surfacePrimary)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(AppColor.panelStroke, lineWidth: 1)
+        )
+    }
+
+    private func relationGroup(title: String, rows: [(String, Int)]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(AppColor.colaDarkText)
+
+            ForEach(rows, id: \.0) { row in
+                HStack {
+                    Text(row.0)
+                        .font(.caption)
+                        .foregroundColor(AppColor.secondaryText)
+                    Spacer()
+                    Text("\(row.1)")
+                        .font(.caption.monospacedDigit().weight(.semibold))
+                        .foregroundColor(AppColor.colaDarkText)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(AppColor.surfacePrimary)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(AppColor.panelStroke, lineWidth: 1)
+        )
+    }
+
+    private func percentage(_ part: Int, of total: Int) -> String {
+        guard total > 0 else { return "n/a" }
+        return "\(Int((Double(part) / Double(total) * 100).rounded()))%"
+    }
+
+    private func reload() {
+        snapshot = telemetry.snapshot()
     }
 }
 

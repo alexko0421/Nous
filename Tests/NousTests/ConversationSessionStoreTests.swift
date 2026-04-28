@@ -96,4 +96,23 @@ final class ConversationSessionStoreTests: XCTestCase {
         let storedNode = try XCTUnwrap(store.fetchNode(id: node.id))
         XCTAssertEqual(storedNode.title, "Future of Parenting")
     }
+
+    func testCommitAssistantTurnPersistsAgentTraceJson() throws {
+        let node = try sessionStore.startConversation()
+        let trace = try XCTUnwrap(AgentTraceCodec.encode([
+            AgentTraceRecord(kind: .toolResult, toolName: AgentToolNames.searchMemory, title: "Memory results", detail: "Matched")
+        ]))
+
+        let committed = try sessionStore.commitAssistantTurn(
+            nodeId: node.id,
+            currentMessages: [],
+            assistantContent: "Done",
+            agentTraceJson: trace
+        )
+
+        XCTAssertEqual(committed.assistantMessage.agentTraceJson, trace)
+        let storedMessage = try XCTUnwrap(try store.fetchMessages(nodeId: node.id).first)
+        XCTAssertEqual(storedMessage.agentTraceJson, trace)
+        XCTAssertEqual(storedMessage.decodedAgentTraceRecords.first?.detail, "Matched")
+    }
 }

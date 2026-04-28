@@ -158,3 +158,241 @@ Unit tests should cover:
 - Each mode addendum contains its bad-version guardrails.
 - Direction and Plan lifecycle behavior remains bounded.
 - Brainstorm stays single-shot unless a separate future spec changes that.
+
+## Post-Ablation Amendments (2026-04-27)
+
+### Decisions log
+
+- **2026-04-27** — H1 fast-path ablation run (6 cells, P1 only, anchor + addendum, no memory). See "H1 finding summary" below.
+- **2026-04-27** — Plan turn-1 question resolved: path **(b)** chosen (strengthen turn-1 addendum to force partial-plan output). See "Revision: Implementation Direction" below.
+- **2026-04-27** — H2 fast-path ablation run (3 cells, P1 only, anchor + addendum + 2192-char mock memory). Codex #10 (memory causes mode collapse) **falsified**. See "H2 finding summary" below. No per-mode memory-policy revision needed.
+- **2026-04-27** — Direction implementation finding: explicit numbered skeleton + bulleted bad-version list made Sonnet 4.6 over-cautious on turn 1 (output collapsed from 445 → 164 chars, stopped at step 1-2). Prose form with lead-deliverable + compact "Avoid: ..." line + explicit anti-stop instruction restored shape (527 chars with conditional judgment). See "Implementation finding: prescription density" below. This constrains how Brainstorm and Plan addenda must be encoded.
+
+After the product contract above was approved, a fast-path ablation tested
+whether per-mode addenda actually carry skeleton signal at the prompt level
+(H1 — anchor dominance). Six LLM calls via `.context/ablations/run_ablation.py`,
+composing only `[anchor + addendum + user message]` (memory layer intentionally
+excluded — if skeletons cannot differentiate without memory, they cannot with
+memory either). The companion H2 memory-convergence ablation is deferred.
+
+The 6 reply files live at `.context/ablations/outputs/h1-anchor-quick/`.
+
+### H1 finding summary
+
+| Cell | Mode | Shape produced |
+|------|------|---------------|
+| `_both` | Direction | Names tension + reframes + offers two polar options. **Direction-shaped.** 445 chars. |
+| `_both` | Brainstorm | Lists 3 candidate axes packaged as clarifying question. **Mild Brainstorm signal.** 210 chars. |
+| `_both` | Plan | Empathy + clarifying question. **Zero Plan structure** despite full production-contract addendum. 134 chars. |
+| `_anchor-only` × 3 | (n/a — identical system prompt) | All collapse to "empathy + Nous stage question + users existing question." Mode signal absent. |
+
+The 3 `_anchor-only` outputs share an identical system prompt, so the
+differences between them are sampling noise. Their convergence to a single
+shape — empathy + clarification questions — is the baseline that anchor.md
+alone produces for a fresh user message.
+
+### Per-mode reading
+
+**Direction addendum has real signal.** `_both` for Direction produced
+substantive content: tension naming + reframe + dichotomy. The addendum
+visibly pushes the reply beyond anchor's baseline shape. The redesign's
+treatment of Direction is sound.
+
+**Brainstorm addendum signal is weak.** `_both` for Brainstorm did NOT produce
+the bullet-hybrid format the contract describes; it produced 3 candidate
+axes wrapped as a clarification question. The "Generate genuinely distinct
+directions" instruction did not override the model's "gather more info first"
+reflex on a fresh user turn.
+
+**Plan addendum failed completely.** `_both` for Plan produced empathy +
+clarification only, with no `# Outcome` / `# Weekly schedule` / `# Where you'll
+stall` scaffold despite the production-contract addendum specifying that exact
+markdown structure. In production this is masked because Plan operates as a
+2-turn experience (clarify → produce plan), but the spec implicitly assumed
+turn-1 mode-distinctiveness, which does not exist for Plan.
+
+### Anchor dominance: partial confirmation
+
+Codex's "anchor.md is already a skeleton" hypothesis is partially true.
+Anchor alone produces a recognizable Nous shape (empathy + clarification +
+Nous tone) but it does not contain mode-specific differentiation. Mode
+addenda CAN push beyond that baseline, but mode-by-mode push strength varies:
+
+| Mode | Addendum push strength on turn 1 |
+|------|----------------------------------|
+| Direction | strong |
+| Brainstorm | weak |
+| Plan | zero |
+
+This contradicts the original spec's implicit assumption that all three mode
+addenda are equally effective.
+
+### Caveats
+
+- Fast-path ablation excludes Nous's memory layers. The full memory pull
+  (global memory, essential story, user model, project memory, conversation
+  memory, etc.) might lift Brainstorm's signal or even Plan's, by injecting
+  Alex-specific context that a generic prompt lacks. The H2 ablation is
+  designed to test exactly this.
+- Sample size = 1 prompt (P1). The findings are directionally clear but a
+  full 36-cell run with P2/P3/P4 would tighten confidence.
+- The model received NO opening-question turn (no model-generated prelude).
+  Production turn 1 has the model's own opening question as conversation
+  context; the ablation has just the user message. This may slightly
+  underestimate the addendum's effect.
+
+### Revision: Brainstorm Contract
+
+The Brainstorm Contract above relies entirely on negative bad-version
+guardrails. Add a positive invariant set as the hard production gate:
+
+> **Positive invariants (must satisfy on production turns):**
+>
+> - Output must contain at least three structurally distinct framings or
+>   directions, each with its own short label and tradeoff.
+> - Output must NOT end as a clarification question. If memory or context
+>   is genuinely insufficient, name the gap and proceed with at least three
+>   directions anyway, marking which depend on the missing info.
+> - Bullet block must not present equal-weight options. The reader's first
+>   visual scan must perceive "directions + a judgment," not "options to
+>   choose from."
+
+The negative bad-version list stays, but these positive invariants become
+the production gate that unit tests (and any future ablation re-run) must
+verify.
+
+### Revision: Plan Contract
+
+The Plan Contract above implicitly assumed turn-1 mode-distinctiveness.
+Acknowledge multi-turn structure explicitly and define a turn-1 minimum:
+
+> **Multi-turn structure:** Plan is a multi-turn experience. Turn 1 may
+> clarify outcome, constraint, or capacity, but must NOT degenerate to
+> pure clarification. Turn 1 must include one of:
+>
+> - the structured plan, if outcome + constraint + capacity are all
+>   inferable from user input + memory; OR
+> - a partial plan: best-guess outcome + best-guess constraint + best-guess
+>   failure mode, explicitly marked as draft, plus the one clarifying
+>   question that would refine the draft.
+>
+> A turn-1 reply consisting only of empathy + clarification fails the contract.
+
+### Revision: Implementation Direction
+
+The implementation order matters now that the three modes are no longer at
+parity. Replace "the likely implementation is a prompt-contract rewrite
+inside the existing QuickActionAgent files" with the following ordered plan:
+
+> **Per-mode implementation priority (post-ablation):**
+>
+> 1. **Direction** — addendum already works; rewrite per the contract above
+>    and ship.
+> 2. **Brainstorm** — rewrite addendum with the positive invariants from
+>    the Brainstorm Contract revision. Re-run a focused 6-cell ablation
+>    against the new addendum BEFORE shipping; the original addendum did
+>    not produce the contracted bullet-hybrid format and the new one must
+>    be falsified the same way.
+> 3. **Plan** — implement per the turn-1-minimum requirement in the Plan
+>    Contract revision. Path **(b) — strengthen turn-1 addendum to force
+>    partial-plan output** was chosen on 2026-04-27 (rationale: the
+>    Product Principle frames quick modes as thinking skeletons, not
+>    workflows; turn-1 partial plan keeps Plan skeleton-distinct on the
+>    first reply rather than collapsing to default-chat behavior). Re-run a
+>    focused 6-cell ablation against the new turn-1 addendum BEFORE
+>    shipping; the original addendum failed completely on turn 1 and the
+>    new one must demonstrably produce the partial-plan output (best-guess
+>    outcome + constraint + failure mode + one clarifying question) before
+>    commit. Implementation order: ship Direction first; ship Brainstorm
+>    second; ship Plan third.
+
+### H2 finding summary
+
+A 3-cell fast-path H2 ablation tested whether memory pull homogenizes mode
+signal (Codex #10). Each cell composed `[anchor + addendum + 2192-char mock
+memory + user message]` for one mode, then compared against the H1 `_both`
+output (same composition without memory). Results in `outputs/h2-memory-quick/`.
+
+| Mode | mem-none (H1 `_both`) | mem-full (H2 new) | Memory effect |
+|------|-----------------------|-------------------|---------------|
+| Direction | 445 chars, generic dichotomy | 552 chars, Alex-specific dichotomy | Stronger Direction shape |
+| Brainstorm | 210 chars, packaged-as-question | 549 chars, real reframe move ("二选一系假问题") | Stronger Brainstorm shape |
+| Plan | 134 chars, empathy + clarification | 144 chars, empathy + clarification | No change |
+
+**Codex #10 falsified.** Memory does NOT cause mode collapse for Direction or
+Brainstorm. The opposite happened: memory provided Alex-specific context that
+both modes used as raw material to reframe the user's surface ask, producing
+sharper mode-distinct output than the no-memory baseline.
+
+**Plan unchanged with memory.** Plan/mem-full and Plan/mem-none are
+near-identical in shape and length. Memory does not rescue Plan's turn-1
+failure. This re-confirms the Plan path-(b) decision: turn-1 addendum
+strengthening is the correct intervention regardless of memory layer.
+
+**One incidental finding.** Direction/mem-full and Brainstorm/mem-full both
+opened with "唔系懒" before diverging. The anchor's empathy framing comes
+first; the mode addendum kicks in starting at the second clause. Anchor and
+mode addendum are stacked (additive), not competing. This re-confirms the H1
+reading of partial anchor dominance: anchor sets base shape, mode addendum
+pushes the rest.
+
+### Caveats on H2
+
+- Mock memory is synthetic (grounded in our public conversation), not pulled
+  from Alex's real DB. Magnitude of memory effect on real Nous may differ;
+  direction of effect (no collapse) is the conclusion.
+- 3-cell test on P1 only. A full P1+P2+P3+P4 H2 sweep would tighten the
+  confidence interval, but the Direction/Brainstorm "memory helps not hurts"
+  signal is strong enough that further H2 testing is not blocking.
+- The H2 result does NOT validate that production memory layers are
+  optimally tuned — it only refutes the specific claim that they cause
+  collapse. Per-mode memory policy may still be worth tuning for other
+  reasons (cost, latency, citation quality), but those are out of scope for
+  this contract redesign.
+
+### Implementation finding: prescription density
+
+While shipping Direction (per "Revision: Implementation Direction"), three
+addendum variants were tested live against P1 to verify the rewrite produced
+the contracted Direction shape:
+
+| Variant | Output chars | Shape verdict |
+|---------|-------------|---------------|
+| Pre-existing addendum (prose, light prescription) | 445 | Direction-shaped, ends with question |
+| Variant A — explicit 5-step numbered skeleton + 5-item bulleted bad-version list | 164 | Stopped at step 1-2, ended with clarifying question |
+| Variant B — variant A + "must reach all five in one reply" instruction | 210 | Still stage question; skeleton not honored |
+| Variant C (shipped) — prose form + lead-with-deliverable + compact `Avoid: ...` line + explicit anti-stop instruction | 527 | Direction-shaped, conditional judgment, tradeoff mapping |
+
+The data point: explicit numbered skeletons + bulleted bad-version lists make
+Sonnet 4.6 *more* conservative on turn 1, not less. The model interprets heavy
+explicit constraint stacks adversarially ("what's the safest interpretation
+that complies?") and the safe answer is to ask another question rather than
+commit to all required moves.
+
+**Implications for Brainstorm and Plan implementations:**
+
+- Avoid numbered-list skeletons in addendum text. Prefer prose that names the
+  required moves inline ("name the real tension, surface the tradeoff, give
+  your judgment, land on one next step") and let the model order them.
+- Lead the addendum with the deliverable. The first sentence after the feel
+  framing should tell the model what to produce, not what to walk through.
+- Bad-version guardrails work better as a single comma-separated `Avoid: ...`
+  line than as a bulleted list. Less visual prescription density.
+- Add an explicit "Do not break this across turns. Do not stop mid-way to ask
+  a clarifying question." pair. This was the only consistently effective
+  anti-stopping signal observed.
+- Re-test addendum text on a single LLM call before commit. The shape that
+  reads well in code may produce the wrong reply shape at runtime.
+
+This finding does not invalidate the Brainstorm Contract / Plan Contract
+revisions above — positive invariants and turn-1 minimums remain the design
+intent — but it constrains *how* those revisions get encoded in addendum
+text. A focused single-cell ablation per mode is therefore mandatory before
+each ships.
+
+### Source files
+
+- `.context/ablations/run_ablation.py` — fast-path runner
+- `.context/ablations/outputs/h1-anchor-quick/` — 6 reply files
+- `.context/ablations/eval/decision_matrix.md` — original decision matrix
+- `Sources/Nous/Services/DebugAblation.swift` — DEBUG toggles for the gold-standard path through the live Nous app

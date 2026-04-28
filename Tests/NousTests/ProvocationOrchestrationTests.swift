@@ -165,11 +165,10 @@ final class ProvocationOrchestrationTests: XCTestCase {
         // Opening turn: no clarify card UI (the agent has not seen any user context yet).
         XCTAssertFalse(chatSystems[0].contains("INTERACTIVE CLARIFICATION UI"),
                        "opening turn must not offer a clarify card")
-        // Final turn (first user reply): shouldAllowInteractiveClarification is still true
-        // (userTurnCount == 1), so the clarification block IS present in the system prompt.
-        // The mode drops via turnDirective after the response — not via prompt suppression.
-        XCTAssertTrue(chatSystems[1].contains("INTERACTIVE CLARIFICATION UI"),
-                      "final turn system prompt includes clarification block (userTurnCount == 1)")
+        // Final turn (first user reply): Direction and Brainstorm should produce a
+        // real take, not enter another clarification UI pass.
+        XCTAssertFalse(chatSystems[1].contains("INTERACTIVE CLARIFICATION UI"),
+                       "single-turn modes should not include clarification UI on final turn")
         XCTAssertNil(viewModel.activeQuickActionMode,
                      "mode must drop after single-turn completion")
         XCTAssertEqual(viewModel.messages.last?.content, finalGuidance)
@@ -441,9 +440,9 @@ final class ProvocationOrchestrationTests: XCTestCase {
         )
 
         XCTAssertTrue(system.contains("ACTIVE QUICK MODE: Brainstorm"))
-        XCTAssertTrue(system.contains("BRAINSTORM MODE PRODUCTION CONTRACT"))
+        XCTAssertTrue(system.contains("BRAINSTORM MODE QUALITY CONTRACT"))
         XCTAssertTrue(system.contains("TURN STEWARD RESPONSE SHAPE"))
-        XCTAssertTrue(system.contains("Generate distinct directions"))
+        XCTAssertTrue(system.contains("Generate genuinely distinct directions"))
         XCTAssertFalse(system.contains("INTERACTIVE CLARIFICATION UI"))
         XCTAssertFalse(system.contains("BEHAVIOR:"),
                        "lean brainstorm should not inject behavior profile")

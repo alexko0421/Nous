@@ -68,13 +68,15 @@ final class ConversationSessionStore {
         assistantContent: String,
         thinkingContent: String? = nil,
         conversationTitle: String? = nil,
-        judgeEventId: UUID? = nil
+        judgeEventId: UUID? = nil,
+        agentTraceJson: String? = nil
     ) throws -> CommittedAssistantTurn {
         let assistantMessage = Message(
             nodeId: nodeId,
             role: .assistant,
             content: assistantContent,
-            thinkingContent: thinkingContent
+            thinkingContent: thinkingContent,
+            agentTraceJson: agentTraceJson
         )
         try nodeStore.insertMessage(assistantMessage)
 

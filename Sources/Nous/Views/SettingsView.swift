@@ -22,6 +22,7 @@ struct SettingsView: View {
     @Binding var selectedTab: SettingsSection
     let userMemoryService: UserMemoryService
     let telemetry: GovernanceTelemetryStore
+    let galaxyRelationTelemetry: GalaxyRelationTelemetry
     var onBack: (() -> Void)? = nil
 
     @AppStorage("nous.username")   private var username       = "ALEX"
@@ -77,7 +78,8 @@ struct SettingsView: View {
                     MemoryDebugInspector(
                         nodeStore: vm.nodeStore,
                         userMemoryService: userMemoryService,
-                        telemetry: telemetry
+                        telemetry: telemetry,
+                        galaxyRelationTelemetry: galaxyRelationTelemetry
                     )
                 }
             }

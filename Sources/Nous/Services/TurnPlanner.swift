@@ -227,7 +227,16 @@ final class TurnPlanner {
             stewardship: stewardship,
             messagesAfterUserAppend: prepared.messagesAfterUserAppend
         )
+        #if DEBUG
+        if planningAgent != nil {
+            DebugAblation.logActiveFlags(context: "quick-mode-turn:\(planningAgent.map { String(describing: $0.mode) } ?? "?"):\(agentTurnIndex)")
+        }
+        let quickActionAddendum: String? = DebugAblation.skipModeAddendum
+            ? nil
+            : planningAgent?.contextAddendum(turnIndex: agentTurnIndex)
+        #else
         let quickActionAddendum: String? = planningAgent?.contextAddendum(turnIndex: agentTurnIndex)
+        #endif
         let responseShapeBlock = Self.responseShapeBlock(for: stewardship)
         let quickActionContextBlocks = [quickActionAddendum, responseShapeBlock]
             .compactMap { block -> String? in

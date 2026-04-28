@@ -54,13 +54,19 @@ struct PlanAgent: QuickActionAgent {
     private static let decideOrAskAddendum = """
     ---
 
-    PLAN MODE — DECIDE OR ASK CONTRACT:
-    Alex has answered your opening question. Either:
-    (a) produce the structured plan now if you have enough on outcome, timeframe,
-        and his real capacity, OR
-    (b) ask exactly one more open-ended question if a critical piece is still missing.
-    If you ask, keep the <phase>understanding</phase> marker.
-    If you produce the plan, drop the marker.
+    PLAN MODE — TURN 1 CONTRACT:
+
+    Feel: 规划感, execution gravity. Not a Notion template, not generic productivity advice.
+
+    Alex has answered your opening question. Produce one of these in this single reply — empathy + a clarifying question alone is a contract failure:
+
+    (A) Full structured plan, if outcome + real constraint + Alex's real capacity are all clearly inferable from his reply + memory. Use the markdown scaffold below. Drop the <phase>understanding</phase> marker.
+
+    (B) Partial plan with best-guess outcome (marked draft) + best-guess real constraint (one specific limit you observe or infer) + best-guess likely failure mode (one specific way this will break), followed by ONE clarifying question to refine the draft. Always commit to all three triad pieces before asking — empathy + clarification with no triad is a contract failure. Keep the <phase>understanding</phase> marker.
+
+    If the surface ask hides a direction or identity question (Alex doesn't know whether to do this at all), say that plainly and give a Direction-style judgment instead of fake-planning.
+
+    Avoid: pretty schedule, generic productivity advice, assuming ideal team or unlimited energy or unlimited time, calendar-first planning when the real risk is scope or doubt or execution breakage.
     """
 
     private static let normalProductionAddendum = """
@@ -70,7 +76,9 @@ struct PlanAgent: QuickActionAgent {
     Produce a structured plan using these markdown sections:
     \(planFormatScaffold)
     Use what you know about Alex from prior conversations and stored memory.
-    Stay specific. No generic productivity advice.
+    Start from Alex's real capacity and likely failure mode, not an ideal version of him.
+    Stay specific. No generic productivity advice. If a plan section would be filler,
+    replace it with a concrete constraint, tradeoff, or first action.
     Drop the <phase>understanding</phase> marker once you commit to the plan.
     """
 
@@ -82,10 +90,21 @@ struct PlanAgent: QuickActionAgent {
     You may NOT ask another clarifying question. Output the structured plan now
     using whatever you have learned so far:
     \(planFormatScaffold)
-    Drop the <phase>understanding</phase> marker. Stay specific.
+    Name the main failure mode before the schedule. Drop the <phase>understanding</phase>
+    marker. Stay specific.
     """
 
-    func memoryPolicy() -> QuickActionMemoryPolicy { .full }
+    func memoryPolicy() -> QuickActionMemoryPolicy {
+        #if DEBUG
+        return DebugAblation.override(.full)
+        #else
+        return .full
+        #endif
+    }
+
+    var toolNames: [String] {
+        AgentToolNames.standard
+    }
 
     func turnDirective(parsed: ClarificationContent, turnIndex: Int) -> QuickActionTurnDirective {
         if turnIndex >= Self.maxClarificationTurns {

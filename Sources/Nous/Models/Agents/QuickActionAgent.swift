@@ -28,6 +28,9 @@ protocol QuickActionAgent {
     /// policy bool.
     func memoryPolicy() -> QuickActionMemoryPolicy
 
+    var toolNames: [String] { get }
+    var useAgentLoop: Bool { get }
+
     /// Per-turn directive. Resolved after `ClarificationCardParser` parses the
     /// assistant response. Drives whether activeQuickActionMode is preserved
     /// for the next turn or dropped.
@@ -35,6 +38,11 @@ protocol QuickActionAgent {
         parsed: ClarificationContent,
         turnIndex: Int
     ) -> QuickActionTurnDirective
+}
+
+extension QuickActionAgent {
+    var toolNames: [String] { [] }
+    var useAgentLoop: Bool { !toolNames.isEmpty }
 }
 
 /// 12-bool policy. Each bool maps 1:1 to a memory fetch / injection site:
@@ -47,11 +55,12 @@ protocol QuickActionAgent {
 /// - includeRecentConversations ↔ NodeStore.fetchRecentConversationMemories(...)
 /// - includeProjectGoal ↔ NodeStore.fetchProject(id:).goal injection
 /// - includeCitations ↔ TurnPlanner.retrieveCitations(...)
-/// - includeContradictionRecall ↔ ContradictionMemoryService.contradictionRecallFacts(...)
+/// - includeContradictionRecall ↔ graph recall planner + ContradictionMemoryService.contradictionRecallFacts(...)
 /// - includeJudgeFocus ↔ provocation judge invocation + focusBlock derivation
 /// - includeBehaviorProfile ↔ BehaviorProfile.contextBlock injection
 ///
-/// Safe-combination invariants (current factories `.full` and `.lean` respect these):
+/// Safe-combination invariants (current factories `.full`, `.lean`, and
+/// `.groundedBrainstorm` respect these):
 /// - If includeProjectGoal == false, also set includeUserModel == false —
 ///   currentGoalModel reads Project.goal and would leak it via the user-model layer.
 /// - If includeContradictionRecall == false AND includeJudgeFocus == false,
@@ -104,6 +113,21 @@ struct QuickActionMemoryPolicy: Equatable {
         includeContradictionRecall: false,
         includeJudgeFocus: false,
         includeBehaviorProfile: false
+    )
+
+    static let groundedBrainstorm = QuickActionMemoryPolicy(
+        includeGlobalMemory: true,
+        includeEssentialStory: true,
+        includeUserModel: true,
+        includeMemoryEvidence: true,
+        includeProjectMemory: true,
+        includeConversationMemory: true,
+        includeRecentConversations: true,
+        includeProjectGoal: true,
+        includeCitations: true,
+        includeContradictionRecall: false,
+        includeJudgeFocus: false,
+        includeBehaviorProfile: true
     )
 
     func with(

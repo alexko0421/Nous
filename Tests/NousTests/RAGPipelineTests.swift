@@ -167,6 +167,41 @@ final class RAGPipelineTests: XCTestCase {
         XCTAssertFalse(context.contains("Alex explicitly wants deeper reasoning"))
     }
 
+    func testAssembleContextIncludesGraphMemoryRecall() {
+        let recall = """
+        - Rejected proposal: Build Nous around solving emotions.
+          Rejection: Alex rejected solving emotions as unrealistic.
+          Reason: Emotions cannot be solved like a mechanical problem.
+          Replacement/current direction: Observe and coexist with emotions.
+        """
+
+        let context = ChatViewModel.assembleContext(
+            currentUserInput: "我哋之前否決過邊個方案，點解？",
+            globalMemory: nil,
+            memoryGraphRecall: [recall],
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        ).combined
+        let trace = ChatViewModel.governanceTrace(
+            currentUserInput: "我哋之前否決過邊個方案，點解？",
+            globalMemory: nil,
+            memoryGraphRecall: [recall],
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        )
+
+        XCTAssertTrue(context.contains("GRAPH MEMORY RECALL"))
+        XCTAssertTrue(context.contains("Build Nous around solving emotions."))
+        XCTAssertTrue(context.contains("atoms are claims, chains are decision paths"))
+        XCTAssertTrue(trace.promptLayers.contains("memory_graph_recall"))
+    }
+
     func testAssembleContextStrategistModeChangesPromptBehaviorWithoutDroppingContinuity() {
         let context = ChatViewModel.assembleContext(
             chatMode: .strategist,
@@ -523,9 +558,10 @@ final class RAGPipelineTests: XCTestCase {
         XCTAssertTrue(enabled.contains("stop clarifying and give the best real guidance"))
         XCTAssertFalse(disabled.contains("INTERACTIVE CLARIFICATION UI"))
         XCTAssertTrue(disabled.contains("ACTIVE QUICK MODE: Direction"))
+        XCTAssertTrue(disabled.contains("QUICK MODE QUALITY POLICY"))
     }
 
-    func testInteractiveClarificationStopsAfterFirstUserReply() {
+    func testInteractiveClarificationOnlyAppliesToPlanAfterOpeningQuestion() {
         let firstReply = [
             Message(nodeId: UUID(), role: .user, content: "I'm stuck between two paths.")
         ]
@@ -537,14 +573,26 @@ final class RAGPipelineTests: XCTestCase {
 
         XCTAssertTrue(
             ChatViewModel.shouldAllowInteractiveClarification(
+                activeQuickActionMode: .plan,
+                messages: firstReply
+            )
+        )
+        XCTAssertFalse(
+            ChatViewModel.shouldAllowInteractiveClarification(
+                activeQuickActionMode: .plan,
+                messages: secondReply
+            )
+        )
+        XCTAssertFalse(
+            ChatViewModel.shouldAllowInteractiveClarification(
                 activeQuickActionMode: .direction,
                 messages: firstReply
             )
         )
         XCTAssertFalse(
             ChatViewModel.shouldAllowInteractiveClarification(
-                activeQuickActionMode: .direction,
-                messages: secondReply
+                activeQuickActionMode: .brainstorm,
+                messages: firstReply
             )
         )
         XCTAssertFalse(

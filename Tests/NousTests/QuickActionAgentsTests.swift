@@ -37,10 +37,77 @@ final class DirectionAgentTests: XCTestCase {
         XCTAssertNotNil(addendum)
         XCTAssertTrue(addendum!.contains("convergent"))
         XCTAssertTrue(addendum!.contains("one concrete next step"))
+        XCTAssertTrue(addendum!.contains("real tension"))
+        XCTAssertTrue(addendum!.contains("identity question"))
+    }
+
+    func testContextAddendumIncludesMentorFeelFraming() {
+        // Spec contract: Feel is 咨询感 + mentor conversation, NOT clinical
+        // diagnosis or founder office hour pressure.
+        let addendum = agent.contextAddendum(turnIndex: 1)
+        XCTAssertNotNil(addendum)
+        XCTAssertTrue(addendum!.contains("咨询感"))
+        XCTAssertTrue(addendum!.contains("Mentor conversation"))
+    }
+
+    func testContextAddendumIncludesAllSkeletonMoves() {
+        // Spec skeleton: hear shape -> name tension -> surface tradeoff ->
+        // judgment -> next step. Tested as keyword presence rather than as
+        // an explicit numbered list (explicit lists made Sonnet over-cautious
+        // and skip judgment + next step on turn 1; ablation 2026-04-27).
+        let addendum = agent.contextAddendum(turnIndex: 1)
+        XCTAssertNotNil(addendum)
+        XCTAssertTrue(addendum!.contains("real tension"))
+        XCTAssertTrue(addendum!.contains("tradeoff"))
+        XCTAssertTrue(addendum!.contains("judgment"))
+        XCTAssertTrue(addendum!.contains("next step"))
+    }
+
+    func testContextAddendumForbidsBreakingSkeletonAcrossTurns() {
+        // Critical guard surfaced in 2026-04-27 ablation: model defaults to
+        // "ask clarifying question" instead of producing all five moves.
+        let addendum = agent.contextAddendum(turnIndex: 1)
+        XCTAssertNotNil(addendum)
+        XCTAssertTrue(addendum!.contains("Do not break this across turns"))
+        XCTAssertTrue(addendum!.contains("Do not stop mid-way"))
+    }
+
+    func testContextAddendumIncludesBadVersionGuardrails() {
+        // Spec bad versions: advice list, equal-weight options, founder office
+        // hour energy, generic motivational, identity-as-productivity.
+        let addendum = agent.contextAddendum(turnIndex: 1)
+        XCTAssertNotNil(addendum)
+        XCTAssertTrue(addendum!.contains("advice list"))
+        XCTAssertTrue(addendum!.contains("founder office hour energy"))
+        XCTAssertTrue(addendum!.contains("equal-weight options"))
+    }
+
+    func testContextAddendumIncludesExplicitDeliverable() {
+        // Spec deliverable: "A clear judgment plus one concrete next step."
+        let addendum = agent.contextAddendum(turnIndex: 1)
+        XCTAssertNotNil(addendum)
+        XCTAssertTrue(addendum!.contains("Deliverable:"))
+    }
+
+    func testOpeningPromptInstructsAgainstIntakeFormPhrasing() {
+        // Spec: "Make opening prompts less like intake forms."
+        // The prompt itself must explicitly forbid the canonical intake phrasing
+        // and instruct mentor voice. We test for the instruction's presence,
+        // not for absence of the example string (the example is in the prompt
+        // as a negative example, by design).
+        let prompt = agent.openingPrompt()
+        XCTAssertTrue(prompt.contains("intake form"))
+        XCTAssertTrue(prompt.contains("Do not ask"))
+        XCTAssertTrue(prompt.contains("mentor"))
     }
 
     func testMemoryPolicyIsFull() {
         XCTAssertEqual(agent.memoryPolicy(), .full)
+    }
+
+    func testUsesStandardAgentTools() {
+        XCTAssertEqual(agent.toolNames, AgentToolNames.standard)
+        XCTAssertTrue(agent.useAgentLoop)
     }
 
     func testTurnDirectiveKeepsActiveOnTurnZero() {
@@ -94,18 +161,54 @@ final class BrainstormAgentTests: XCTestCase {
         XCTAssertTrue(addendum!.contains("divergent"))
     }
 
-    func testContextAddendumMentionsMemoryIsolation() {
+    func testContextAddendumMentionsPersonalMemoryGrounding() {
         let addendum = agent.contextAddendum(turnIndex: 1)
         XCTAssertNotNil(addendum)
-        // Bias prevention list should call out the memory layers Brainstorm strips.
-        XCTAssertTrue(addendum!.contains("no userModel"))
-        XCTAssertTrue(addendum!.contains("no project"))
-        XCTAssertTrue(addendum!.contains("no judge"))
-        XCTAssertTrue(addendum!.contains("no behavior profile"))
+        XCTAssertTrue(addendum!.contains("Memory grounding"))
+        XCTAssertTrue(addendum!.contains("generic idea generator"))
+        XCTAssertTrue(addendum!.contains("not as a cage"))
     }
 
-    func testMemoryPolicyIsLean() {
-        XCTAssertEqual(agent.memoryPolicy(), .lean)
+    func testContextAddendumIncludesFeelFraming() {
+        // Spec contract: Feel is 开放感.
+        let addendum = agent.contextAddendum(turnIndex: 1)
+        XCTAssertNotNil(addendum)
+        XCTAssertTrue(addendum!.contains("开放感"))
+    }
+
+    func testContextAddendumIncludesPositiveInvariantThreeFramings() {
+        // Spec amendment positive invariant: ≥3 structurally distinct framings.
+        let addendum = agent.contextAddendum(turnIndex: 1)
+        XCTAssertNotNil(addendum)
+        XCTAssertTrue(addendum!.contains("at least three structurally distinct"))
+        XCTAssertTrue(addendum!.contains("至少三条"))
+    }
+
+    func testContextAddendumIncludesAntiStopGuard() {
+        // Direction implementation lesson: Sonnet defaults to mid-skeleton
+        // clarification unless an explicit anti-stop instruction is present.
+        // Heavy stacked "Do not" lists empirically made Sonnet MORE cautious
+        // (Brainstorm v1 ablation 2026-04-27), so we keep one focused anti-stop.
+        let addendum = agent.contextAddendum(turnIndex: 1)
+        XCTAssertNotNil(addendum)
+        XCTAssertTrue(addendum!.contains("Do not stop to ask another question"))
+        XCTAssertTrue(addendum!.contains("do not narrow to a single answer"))
+    }
+
+    func testContextAddendumForbidsClarificationQuestionEnding() {
+        // Spec positive invariant: output must NOT end as clarification question.
+        let addendum = agent.contextAddendum(turnIndex: 1)
+        XCTAssertNotNil(addendum)
+        XCTAssertTrue(addendum!.contains("ending the reply as a clarification question"))
+    }
+
+    func testMemoryPolicyIsGroundedBrainstorm() {
+        XCTAssertEqual(agent.memoryPolicy(), .groundedBrainstorm)
+    }
+
+    func testDoesNotUseAgentLoop() {
+        XCTAssertEqual(agent.toolNames, [])
+        XCTAssertFalse(agent.useAgentLoop)
     }
 
     func testTurnDirectiveKeepsActiveOnTurnZero() {
@@ -164,11 +267,27 @@ final class PlanAgentTests: XCTestCase {
         XCTAssertNil(agent.contextAddendum(turnIndex: 0))
     }
 
-    func testContextAddendumOnTurnOneSaysDecideOrAsk() {
+    func testContextAddendumOnTurnOneRequiresFullOrPartialPlan() {
+        // Spec amendment path (b): turn 1 must produce a full structured plan
+        // OR a partial plan triad (best-guess outcome + constraint + failure
+        // mode) plus ONE clarifying question. Pure empathy + clarification on
+        // turn 1 fails the contract.
         let addendum = agent.contextAddendum(turnIndex: 1)
         XCTAssertNotNil(addendum)
-        XCTAssertTrue(addendum!.contains("produce the structured plan now"))
-        XCTAssertTrue(addendum!.contains("ask exactly one more"))
+        XCTAssertTrue(addendum!.contains("Full structured plan"))
+        XCTAssertTrue(addendum!.contains("Partial plan"))
+        XCTAssertTrue(addendum!.contains("best-guess outcome"))
+        XCTAssertTrue(addendum!.contains("best-guess real constraint"))
+        XCTAssertTrue(addendum!.contains("best-guess likely failure mode"))
+        XCTAssertTrue(addendum!.contains("ONE clarifying question"))
+        XCTAssertTrue(addendum!.contains("contract failure"))
+    }
+
+    func testContextAddendumOnTurnOneIncludesFeelFraming() {
+        let addendum = agent.contextAddendum(turnIndex: 1)
+        XCTAssertNotNil(addendum)
+        XCTAssertTrue(addendum!.contains("规划感"))
+        XCTAssertTrue(addendum!.contains("execution gravity"))
     }
 
     func testContextAddendumOnTurnTwoIsProductionOnly() {
@@ -176,10 +295,16 @@ final class PlanAgentTests: XCTestCase {
         XCTAssertNotNil(addendum)
         XCTAssertTrue(addendum!.contains("Produce a structured plan"))
         XCTAssertFalse(addendum!.contains("ask exactly one more"))
+        XCTAssertTrue(addendum!.contains("Alex's real capacity"))
     }
 
     func testMemoryPolicyIsFull() {
         XCTAssertEqual(agent.memoryPolicy(), .full)
+    }
+
+    func testUsesStandardAgentTools() {
+        XCTAssertEqual(agent.toolNames, AgentToolNames.standard)
+        XCTAssertTrue(agent.useAgentLoop)
     }
 
     func testTurnDirectiveKeepsActiveWhenMarkerPresentBeforeCap() {
@@ -208,10 +333,10 @@ final class PlanAgentTests: XCTestCase {
         XCTAssertNil(agent.contextAddendum(turnIndex: 0))
     }
 
-    func testAddendumTurnOneIsDecideOrAsk() {
+    func testAddendumTurnOneIsTurn1Contract() {
         let addendum = agent.contextAddendum(turnIndex: 1)
         XCTAssertNotNil(addendum)
-        XCTAssertTrue(addendum!.contains("DECIDE OR ASK"))
+        XCTAssertTrue(addendum!.contains("TURN 1 CONTRACT"))
     }
 
     func testAddendumTurnTwoIsNormalProductionWithFormatScaffold() {
@@ -288,6 +413,23 @@ final class QuickActionMemoryPolicyTests: XCTestCase {
 
     func testFullAndLeanAreDistinct() {
         XCTAssertNotEqual(QuickActionMemoryPolicy.full, QuickActionMemoryPolicy.lean)
+    }
+
+    func testGroundedBrainstormUsesMemoryWithoutJudgeOrContradictionRecall() {
+        let p = QuickActionMemoryPolicy.groundedBrainstorm
+
+        XCTAssertTrue(p.includeGlobalMemory)
+        XCTAssertTrue(p.includeEssentialStory)
+        XCTAssertTrue(p.includeUserModel)
+        XCTAssertTrue(p.includeMemoryEvidence)
+        XCTAssertTrue(p.includeProjectMemory)
+        XCTAssertTrue(p.includeConversationMemory)
+        XCTAssertTrue(p.includeRecentConversations)
+        XCTAssertTrue(p.includeProjectGoal)
+        XCTAssertTrue(p.includeCitations)
+        XCTAssertFalse(p.includeContradictionRecall)
+        XCTAssertFalse(p.includeJudgeFocus)
+        XCTAssertTrue(p.includeBehaviorProfile)
     }
 
     func testProjectOnlyPresetIncludesOnlyProjectLayersAndBehaviorProfile() {
