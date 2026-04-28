@@ -61,6 +61,12 @@ enum RealtimeVoiceEvent: Equatable {
     case error(String)
 }
 
+protocol RealtimeVoiceSessioning: AnyObject {
+    func start(apiKey: String, onEvent: @escaping @MainActor (RealtimeVoiceEvent) async -> Void) async throws
+    func sendFunctionOutput(callId: String, output: String) async throws
+    func stop()
+}
+
 enum RealtimeVoiceEventParser {
     static func parse(_ raw: String) -> RealtimeVoiceEvent? {
         guard let data = raw.data(using: .utf8),
@@ -107,7 +113,7 @@ enum RealtimeVoiceEventParser {
     }
 }
 
-final class RealtimeVoiceSession {
+final class RealtimeVoiceSession: RealtimeVoiceSessioning {
     static let defaultModel = "gpt-realtime"
 
     private let socket: RealtimeVoiceSocketing

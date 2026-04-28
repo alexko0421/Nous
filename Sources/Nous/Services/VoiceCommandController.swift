@@ -1,6 +1,10 @@
 import Foundation
 import Observation
 
+enum VoiceSessionError: Error, Equatable {
+    case missingOpenAIKey
+}
+
 @Observable
 @MainActor
 final class VoiceCommandController {
@@ -9,6 +13,12 @@ final class VoiceCommandController {
     var isActive: Bool = false
 
     private var handlers: VoiceActionHandlers = .empty
+    private let session: RealtimeVoiceSessioning
+    private var sessionGeneration = 0
+
+    init(session: RealtimeVoiceSessioning = RealtimeVoiceSession()) {
+        self.session = session
+    }
 
     func configure(_ handlers: VoiceActionHandlers) {
         self.handlers = handlers
@@ -19,10 +29,64 @@ final class VoiceCommandController {
         status = .listening
     }
 
+    func start(apiKey: String) async throws {
+        let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedAPIKey.isEmpty else {
+            failVoiceSession(message: "Add OpenAI API key")
+            throw VoiceSessionError.missingOpenAIKey
+        }
+
+        sessionGeneration += 1
+        let generation = sessionGeneration
+        markListening()
+        do {
+            try await session.start(apiKey: trimmedAPIKey) { [weak self] event in
+                guard let self else { return }
+                await self.handleRealtimeEvent(event, generation: generation)
+            }
+        } catch {
+            guard generation == sessionGeneration, isActive else { throw error }
+            failVoiceSession(message: "Voice unavailable")
+            throw error
+        }
+    }
+
     func stop() {
+        sessionGeneration += 1
+        session.stop()
         isActive = false
         pendingAction = nil
         status = .idle
+    }
+
+    func handleRealtimeEvent(_ event: RealtimeVoiceEvent) async {
+        await handleRealtimeEvent(event, generation: sessionGeneration)
+    }
+
+    private func handleRealtimeEvent(_ event: RealtimeVoiceEvent, generation: Int) async {
+        guard generation == sessionGeneration, isActive else { return }
+
+        switch event {
+        case .sessionReady:
+            status = .listening
+
+        case .toolCall(let call, let callId):
+            do {
+                try await handleToolCall(call)
+                await sendFunctionOutput(callId: callId, output: status.displayText, generation: generation)
+            } catch {
+                restorePendingConfirmationStatus()
+                await sendFunctionOutput(callId: callId, output: "Voice command rejected", generation: generation)
+            }
+
+        case .responseDone:
+            if pendingAction == nil {
+                status = .listening
+            }
+
+        case .error:
+            failVoiceSession(message: "Voice unavailable")
+        }
     }
 
     func handleToolCall(_ call: VoiceToolCall) async throws {
@@ -134,6 +198,34 @@ final class VoiceCommandController {
         guard pendingAction == nil else {
             status = .needsConfirmation("Confirm current action first")
             throw VoiceToolError.pendingActionAlreadyExists
+        }
+    }
+
+    private func sendFunctionOutput(callId: String, output: String, generation: Int) async {
+        do {
+            try await session.sendFunctionOutput(callId: callId, output: output)
+        } catch {
+            guard generation == sessionGeneration, isActive else { return }
+            failVoiceSession(message: "Voice unavailable")
+        }
+    }
+
+    private func failVoiceSession(message: String) {
+        sessionGeneration += 1
+        session.stop()
+        isActive = false
+        pendingAction = nil
+        status = .error(message)
+    }
+
+    private func restorePendingConfirmationStatus() {
+        guard let pendingAction else { return }
+
+        switch pendingAction {
+        case .sendMessage:
+            status = .needsConfirmation("Confirm send?")
+        case .createNote:
+            status = .needsConfirmation("Create note?")
         }
     }
 }

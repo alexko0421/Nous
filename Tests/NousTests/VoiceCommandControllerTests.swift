@@ -3,6 +3,261 @@ import XCTest
 
 @MainActor
 final class VoiceCommandControllerTests: XCTestCase {
+    func testStartRejectsWhitespaceAPIKey() async {
+        let session = FakeRealtimeVoiceSession()
+        let controller = VoiceCommandController(session: session)
+
+        await XCTAssertThrowsErrorAsync(
+            try await controller.start(apiKey: " \n\t ")
+        ) { error in
+            XCTAssertEqual(error as? VoiceSessionError, .missingOpenAIKey)
+        }
+
+        XCTAssertEqual(session.startedAPIKeys, [])
+        XCTAssertFalse(controller.isActive)
+        XCTAssertEqual(controller.status, .error("Add OpenAI API key"))
+    }
+
+    func testMissingAPIKeyStopsExistingActiveSession() async throws {
+        let session = FakeRealtimeVoiceSession()
+        let controller = VoiceCommandController(session: session)
+
+        try await controller.start(apiKey: "sk-test")
+
+        await XCTAssertThrowsErrorAsync(
+            try await controller.start(apiKey: " ")
+        ) { error in
+            XCTAssertEqual(error as? VoiceSessionError, .missingOpenAIKey)
+        }
+
+        XCTAssertEqual(session.stopCallCount, 1)
+        XCTAssertFalse(controller.isActive)
+        XCTAssertEqual(controller.status, .error("Add OpenAI API key"))
+    }
+
+    func testInFlightStartFailureAfterStopDoesNotMutateIdleState() async throws {
+        let session = FakeRealtimeVoiceSession()
+        let startGate = StartGate()
+        session.startGates = [startGate]
+        let controller = VoiceCommandController(session: session)
+
+        let startTask = Task {
+            try await controller.start(apiKey: "sk-test")
+        }
+
+        await startGate.waitUntilInFlight()
+        controller.stop()
+        let stopCallCountAfterExplicitStop = session.stopCallCount
+        await startGate.release(error: RealtimeVoiceSocketError.notConnected)
+        await XCTAssertThrowsErrorAsync(
+            try await startTask.value
+        ) { error in
+            XCTAssertEqual(error as? RealtimeVoiceSocketError, .notConnected)
+        }
+
+        XCTAssertEqual(stopCallCountAfterExplicitStop, 1)
+        XCTAssertEqual(session.stopCallCount, 1)
+        XCTAssertFalse(controller.isActive)
+        XCTAssertEqual(controller.status, .idle)
+    }
+
+    func testInFlightStartFailureAfterRestartDoesNotStopNewSession() async throws {
+        let session = FakeRealtimeVoiceSession()
+        let startGate = StartGate()
+        session.startGates = [startGate]
+        let controller = VoiceCommandController(session: session)
+
+        let startTask = Task {
+            try await controller.start(apiKey: "sk-old")
+        }
+
+        await startGate.waitUntilInFlight()
+        controller.stop()
+        try await controller.start(apiKey: "sk-new")
+        let stopCallCountBeforeStaleFailure = session.stopCallCount
+        await startGate.release(error: RealtimeVoiceSocketError.notConnected)
+        await XCTAssertThrowsErrorAsync(
+            try await startTask.value
+        ) { error in
+            XCTAssertEqual(error as? RealtimeVoiceSocketError, .notConnected)
+        }
+
+        XCTAssertEqual(session.startedAPIKeys, ["sk-old", "sk-new"])
+        XCTAssertEqual(stopCallCountBeforeStaleFailure, 1)
+        XCTAssertEqual(session.stopCallCount, 1)
+        XCTAssertTrue(controller.isActive)
+        XCTAssertEqual(controller.status, .listening)
+    }
+
+    func testRealtimeToolCallRunsThroughControllerAndSendsFunctionOutput() async throws {
+        let session = FakeRealtimeVoiceSession()
+        let controller = VoiceCommandController(session: session)
+        var navigated: VoiceNavigationTarget?
+        controller.configure(
+            VoiceActionHandlers(
+                navigate: { navigated = $0 },
+                setSidebarVisible: { _ in },
+                setScratchPadVisible: { _ in },
+                setComposerText: { _ in },
+                appendComposerText: { _ in },
+                clearComposer: {},
+                startNewChat: {},
+                sendMessage: { _ in },
+                createNote: { _, _ in }
+            )
+        )
+
+        try await controller.start(apiKey: " sk-test \n")
+        await session.emit(.toolCall(.init(name: "navigate_to_tab", arguments: #"{"tab":"galaxy"}"#), callId: "call-1"))
+
+        XCTAssertEqual(session.startedAPIKeys, ["sk-test"])
+        XCTAssertEqual(navigated, .galaxy)
+        XCTAssertEqual(controller.status, .action("Opening Galaxy"))
+        XCTAssertEqual(session.functionOutputs, [.init(callId: "call-1", output: "Opening Galaxy")])
+    }
+
+    func testRealtimeRejectedToolCallSendsRejectedFunctionOutput() async throws {
+        let session = FakeRealtimeVoiceSession()
+        let controller = VoiceCommandController(session: session)
+
+        try await controller.start(apiKey: "sk-test")
+        await session.emit(.toolCall(.init(name: "navigate_to_tab", arguments: #"{"tab":"files"}"#), callId: "call-2"))
+
+        XCTAssertEqual(controller.status, .error("Voice command rejected"))
+        XCTAssertEqual(session.functionOutputs, [.init(callId: "call-2", output: "Voice command rejected")])
+    }
+
+    func testResponseDoneKeepsPendingConfirmationStatus() async throws {
+        let session = FakeRealtimeVoiceSession()
+        let controller = VoiceCommandController(session: session)
+
+        try await controller.start(apiKey: "sk-test")
+        await session.emit(.toolCall(.init(name: "propose_send_message", arguments: #"{"text":"Ship it."}"#), callId: "call-3"))
+        await session.emit(.responseDone)
+
+        XCTAssertEqual(controller.pendingAction, .sendMessage(text: "Ship it."))
+        XCTAssertEqual(controller.status, .needsConfirmation("Confirm send?"))
+    }
+
+    func testRejectedToolCallKeepsPendingConfirmationVisible() async throws {
+        let session = FakeRealtimeVoiceSession()
+        let controller = VoiceCommandController(session: session)
+
+        try await controller.start(apiKey: "sk-test")
+        await session.emit(.toolCall(.init(name: "propose_note", arguments: #"{"title":"Decision","body":"Keep it small."}"#), callId: "call-4"))
+        await session.emit(.toolCall(.init(name: "navigate_to_tab", arguments: #"{"tab":"files"}"#), callId: "call-5"))
+
+        XCTAssertEqual(controller.pendingAction, .createNote(title: "Decision", body: "Keep it small."))
+        XCTAssertEqual(controller.status, .needsConfirmation("Create note?"))
+        XCTAssertEqual(
+            session.functionOutputs,
+            [
+                .init(callId: "call-4", output: "Create note?"),
+                .init(callId: "call-5", output: "Voice command rejected")
+            ]
+        )
+    }
+
+    func testRealtimeErrorMarksVoiceUnavailableAndInactive() async throws {
+        let session = FakeRealtimeVoiceSession()
+        let controller = VoiceCommandController(session: session)
+
+        try await controller.start(apiKey: "sk-test")
+        await session.emit(.error("socket closed"))
+
+        XCTAssertEqual(session.stopCallCount, 1)
+        XCTAssertFalse(controller.isActive)
+        XCTAssertEqual(controller.status, .error("Voice unavailable"))
+    }
+
+    func testSendFunctionOutputFailureStopsVoiceMode() async throws {
+        let session = FakeRealtimeVoiceSession()
+        session.sendFunctionOutputError = RealtimeVoiceSocketError.notConnected
+        let controller = VoiceCommandController(session: session)
+
+        try await controller.start(apiKey: "sk-test")
+        await session.emit(.toolCall(.init(name: "navigate_to_tab", arguments: #"{"tab":"galaxy"}"#), callId: "call-6"))
+
+        XCTAssertEqual(session.stopCallCount, 1)
+        XCTAssertFalse(controller.isActive)
+        XCTAssertEqual(controller.status, .error("Voice unavailable"))
+    }
+
+    func testInFlightSendFailureAfterStopDoesNotMutateIdleState() async throws {
+        let session = FakeRealtimeVoiceSession()
+        let sendGate = SendFunctionOutputGate()
+        session.sendFunctionOutputGate = sendGate
+        let controller = VoiceCommandController(session: session)
+
+        try await controller.start(apiKey: "sk-test")
+        let eventTask = Task {
+            await session.emit(.toolCall(.init(name: "navigate_to_tab", arguments: #"{"tab":"galaxy"}"#), callId: "call-8"))
+        }
+
+        await sendGate.waitUntilInFlight()
+        controller.stop()
+        let stopCallCountAfterExplicitStop = session.stopCallCount
+        await sendGate.release(error: RealtimeVoiceSocketError.notConnected)
+        await eventTask.value
+
+        XCTAssertEqual(stopCallCountAfterExplicitStop, 1)
+        XCTAssertEqual(session.stopCallCount, 1)
+        XCTAssertFalse(controller.isActive)
+        XCTAssertEqual(controller.status, .idle)
+    }
+
+    func testInFlightSendFailureAfterRestartDoesNotStopNewSession() async throws {
+        let session = FakeRealtimeVoiceSession()
+        let sendGate = SendFunctionOutputGate()
+        session.sendFunctionOutputGate = sendGate
+        let controller = VoiceCommandController(session: session)
+
+        try await controller.start(apiKey: "sk-old")
+        let eventTask = Task {
+            await session.emit(.toolCall(.init(name: "navigate_to_tab", arguments: #"{"tab":"galaxy"}"#), callId: "call-9"))
+        }
+
+        await sendGate.waitUntilInFlight()
+        controller.stop()
+        try await controller.start(apiKey: "sk-new")
+        let stopCallCountBeforeStaleFailure = session.stopCallCount
+        await sendGate.release(error: RealtimeVoiceSocketError.notConnected)
+        await eventTask.value
+
+        XCTAssertEqual(session.startedAPIKeys, ["sk-old", "sk-new"])
+        XCTAssertEqual(stopCallCountBeforeStaleFailure, 1)
+        XCTAssertEqual(session.stopCallCount, 1)
+        XCTAssertTrue(controller.isActive)
+        XCTAssertEqual(controller.status, .listening)
+    }
+
+    func testStaleEventAfterStopIsIgnored() async throws {
+        let session = FakeRealtimeVoiceSession()
+        let controller = VoiceCommandController(session: session)
+        var navigated: VoiceNavigationTarget?
+        controller.configure(
+            VoiceActionHandlers(
+                navigate: { navigated = $0 },
+                setSidebarVisible: { _ in },
+                setScratchPadVisible: { _ in },
+                setComposerText: { _ in },
+                appendComposerText: { _ in },
+                clearComposer: {},
+                startNewChat: {},
+                sendMessage: { _ in },
+                createNote: { _, _ in }
+            )
+        )
+
+        try await controller.start(apiKey: "sk-test")
+        controller.stop()
+        await session.emit(.toolCall(.init(name: "navigate_to_tab", arguments: #"{"tab":"galaxy"}"#), callId: "call-7"))
+
+        XCTAssertNil(navigated)
+        XCTAssertEqual(session.functionOutputs, [])
+        XCTAssertEqual(controller.status, .idle)
+    }
+
     func testNavigateToolUpdatesStatusAndCallsHandler() async throws {
         let controller = VoiceCommandController()
         var navigated: VoiceNavigationTarget?
@@ -180,5 +435,121 @@ private func XCTAssertThrowsErrorAsync<T>(
         XCTFail("Expected async expression to throw.", file: file, line: line)
     } catch {
         handler(error)
+    }
+}
+
+private final class FakeRealtimeVoiceSession: RealtimeVoiceSessioning {
+    struct FunctionOutput: Equatable {
+        let callId: String
+        let output: String
+    }
+
+    var startedAPIKeys: [String] = []
+    var functionOutputs: [FunctionOutput] = []
+    var stopCallCount = 0
+    var sendFunctionOutputError: Error?
+    var sendFunctionOutputGate: SendFunctionOutputGate?
+    var startGates: [StartGate] = []
+
+    private var onEvent: (@MainActor (RealtimeVoiceEvent) async -> Void)?
+
+    func start(
+        apiKey: String,
+        onEvent: @escaping @MainActor (RealtimeVoiceEvent) async -> Void
+    ) async throws {
+        startedAPIKeys.append(apiKey)
+        self.onEvent = onEvent
+        if !startGates.isEmpty {
+            let startGate = startGates.removeFirst()
+            try await startGate.suspendUntilReleased()
+        }
+    }
+
+    func sendFunctionOutput(callId: String, output: String) async throws {
+        if let sendFunctionOutputGate {
+            try await sendFunctionOutputGate.suspendUntilReleased()
+        }
+        if let sendFunctionOutputError {
+            throw sendFunctionOutputError
+        }
+        functionOutputs.append(.init(callId: callId, output: output))
+    }
+
+    func stop() {
+        stopCallCount += 1
+    }
+
+    func emit(_ event: RealtimeVoiceEvent) async {
+        await onEvent?(event)
+    }
+}
+
+private actor StartGate {
+    private var isInFlight = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+    private var releaseError: Error?
+
+    func waitUntilInFlight() async {
+        guard !isInFlight else { return }
+
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func suspendUntilReleased() async throws {
+        isInFlight = true
+        waiters.forEach { $0.resume() }
+        waiters.removeAll()
+
+        await withCheckedContinuation { continuation in
+            releaseContinuation = continuation
+        }
+
+        if let releaseError {
+            throw releaseError
+        }
+    }
+
+    func release(error: Error?) {
+        releaseError = error
+        releaseContinuation?.resume()
+        releaseContinuation = nil
+    }
+}
+
+private actor SendFunctionOutputGate {
+    private var isInFlight = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+    private var releaseError: Error?
+
+    func waitUntilInFlight() async {
+        guard !isInFlight else { return }
+
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func suspendUntilReleased() async throws {
+        isInFlight = true
+        waiters.forEach { $0.resume() }
+        waiters.removeAll()
+
+        await withCheckedContinuation { continuation in
+            releaseContinuation = continuation
+        }
+
+        if let releaseError {
+            throw releaseError
+        }
+    }
+
+    func release(error: Error?) {
+        releaseError = error
+        releaseContinuation?.resume()
+        releaseContinuation = nil
     }
 }
