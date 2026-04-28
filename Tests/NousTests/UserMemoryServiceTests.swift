@@ -71,6 +71,49 @@ final class UserMemoryServiceTests: XCTestCase {
                       "prompt must carry the literal 'ALEX ONLY' marker so evidence framing is explicit")
     }
 
+    func testRefreshConversationPromptGuardsTemporalStateAndCorrections() async throws {
+        let capture = PromptSequenceCapture()
+        let mock = QueueMockLLMService(
+            capture: capture,
+            replies: [
+                "- Alex is waiting to send a 4am update",
+                #"{"facts":[],"decision_chains":[],"semantic_atoms":[]}"#
+            ]
+        )
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let node = NousNode(type: .conversation, title: "Future plan chat", content: "")
+        try store.insertNode(node)
+
+        let messages: [Message] = [
+            Message(
+                nodeId: node.id,
+                role: .user,
+                content: "I plan to sleep, wake up at 4am, then send her an update.",
+                timestamp: Date(timeIntervalSince1970: 1)
+            ),
+            Message(
+                nodeId: node.id,
+                role: .user,
+                content: "No, I have not sent it yet. I will only know tomorrow.",
+                timestamp: Date(timeIntervalSince1970: 2)
+            )
+        ]
+
+        await service.refreshConversation(nodeId: node.id, projectId: nil, messages: messages)
+
+        let prompts = await capture.prompts()
+        guard let sentPrompt = prompts.first else {
+            XCTFail("QueueMockLLMService was never called")
+            return
+        }
+
+        XCTAssertTrue(sentPrompt.contains("planned/future/waiting"),
+                      "prompt must explicitly protect future plans from being rewritten as completed events")
+        XCTAssertTrue(sentPrompt.contains("latest correction"),
+                      "prompt must explicitly make Alex's latest correction override older memory")
+    }
+
     /// P0 fix from post-commit /plan-eng-review: Alex routinely pastes Nous's
     /// prior reply into his next user turn as a markdown blockquote (`> …`)
     /// when asking for clarification. The role filter alone would let that

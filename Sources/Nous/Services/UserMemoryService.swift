@@ -506,6 +506,10 @@ final class UserMemoryCore {
         - What is Alex trying to do in this chat?
         - What has he told me that I should remember while this chat continues?
         - Do NOT include general facts about Alex — those belong in other memory layers.
+        - Preserve temporal state exactly: planned/future/waiting actions must stay
+          planned/future/waiting, not be rewritten as completed events.
+        - If Alex gives a latest correction or says Nous misunderstood, the latest
+          correction overrides existing thread memory and earlier ambiguous phrasing.
         - Keep under 6 bullet points. Markdown only.
         """
 

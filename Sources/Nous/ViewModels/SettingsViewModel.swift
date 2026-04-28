@@ -13,7 +13,7 @@ final class SettingsViewModel {
 
     private enum ModelCatalog {
         static let geminiForeground = "gemini-2.5-pro"
-        static let geminiJudge = "gemini-2.5-flash-lite"
+        static let geminiJudge = "gemini-2.5-pro"
         static let geminiReflection = "gemini-2.5-pro"
         static let claudeForeground = "claude-sonnet-4-6-20250414"
         static let claudeJudge = "claude-haiku-4-5-20251001"
@@ -223,7 +223,8 @@ final class SettingsViewModel {
             guard !openaiApiKey.isEmpty else { return nil }
             return OpenAILLMService(apiKey: openaiApiKey, model: ModelCatalog.openAIJudge)
         case .openrouter:
-            return nil
+            guard !geminiApiKey.isEmpty else { return nil }
+            return GeminiLLMService(apiKey: geminiApiKey, model: ModelCatalog.geminiJudge)
         }
     }
 
@@ -272,7 +273,7 @@ final class SettingsViewModel {
         case .openai:
             return ModelCatalog.openAIJudge
         case .openrouter:
-            return "Disabled"
+            return geminiApiKey.isEmpty ? "Disabled" : ModelCatalog.geminiJudge
         }
     }
 
@@ -287,7 +288,10 @@ final class SettingsViewModel {
         case .openai:
             return "Separate lightweight judge model for retrieval and provocation decisions."
         case .openrouter:
-            return "Judge tasks are temporarily disabled on OpenRouter so slow judge calls cannot block the main reply."
+            if geminiApiKey.isEmpty {
+                return "Add a Google AI Studio Gemini API key to run judge checks while OpenRouter handles foreground chat."
+            }
+            return "Uses Google AI Studio Gemini 2.5 Pro for judge checks while OpenRouter handles foreground chat."
         }
     }
 
