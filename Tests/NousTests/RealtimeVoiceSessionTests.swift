@@ -16,7 +16,7 @@ final class RealtimeVoiceSessionTests: XCTestCase {
 
         XCTAssertEqual(json["type"] as? String, "session.update")
         XCTAssertEqual(session["type"] as? String, "realtime")
-        XCTAssertEqual(session["model"] as? String, "gpt-realtime")
+        XCTAssertNil(session["model"])
         XCTAssertEqual(session["output_modalities"] as? [String], ["text"])
         XCTAssertEqual(session["tool_choice"] as? String, "auto")
         XCTAssertFalse((session["tools"] as? [[String: Any]])?.isEmpty ?? true)
@@ -102,5 +102,303 @@ final class RealtimeVoiceSessionTests: XCTestCase {
 
         XCTAssertEqual(json["type"] as? String, "response.create")
         XCTAssertEqual(response["output_modalities"] as? [String], ["text"])
+    }
+
+    func testStartConnectsAndSendsSessionUpdateWithoutAudioCapture() async throws {
+        let socket = FakeRealtimeVoiceSocket()
+        let session = RealtimeVoiceSession(socket: socket, audioCapture: nil)
+
+        try await session.start(apiKey: "sk-test") { _ in }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        session.stop()
+
+        XCTAssertEqual(socket.connectedRequest?.value(forHTTPHeaderField: "Authorization"), "Bearer sk-test")
+        XCTAssertEqual(socket.sentTypes, ["session.update"])
+    }
+
+    func testStartClosesSocketWhenSessionUpdateSendThrows() async throws {
+        let socket = FakeRealtimeVoiceSocket(sendErrorAfterCount: 0)
+        let session = RealtimeVoiceSession(socket: socket, audioCapture: nil)
+
+        do {
+            try await session.start(apiKey: "sk-test") { _ in }
+            XCTFail("Expected start to rethrow the session.update send error.")
+        } catch {
+            XCTAssertEqual(error as? FakeRealtimeVoiceSocket.Error, .sendFailed)
+        }
+
+        XCTAssertNotNil(socket.connectedRequest)
+        XCTAssertEqual(socket.closeCount, 2)
+    }
+
+    func testAudioChunksAreSentInCaptureOrderThroughSessionQueue() async throws {
+        let socket = FakeRealtimeVoiceSocket(audioSendDelays: ["first": 100_000_000])
+        let audioCapture = FakeVoiceAudioCapture()
+        let session = RealtimeVoiceSession(socket: socket, audioCapture: audioCapture)
+
+        try await session.start(apiKey: "sk-test") { _ in }
+        audioCapture.emit("first")
+        audioCapture.emit("second")
+
+        try await waitUntil { socket.sentAudioChunks.count == 2 }
+        session.stop()
+
+        XCTAssertEqual(socket.sentAudioChunks, ["first", "second"])
+    }
+
+    func testAudioChunksEmittedAfterStopAreNotSent() async throws {
+        let socket = FakeRealtimeVoiceSocket()
+        let audioCapture = FakeVoiceAudioCapture()
+        let session = RealtimeVoiceSession(socket: socket, audioCapture: audioCapture)
+
+        try await session.start(apiKey: "sk-test") { _ in }
+        session.stop()
+        audioCapture.emit("after-stop")
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertFalse(socket.sentAudioChunks.contains("after-stop"))
+    }
+
+    func testFunctionOutputWaitsBehindInFlightAudioOnSingleOutboundQueue() async throws {
+        let socket = FakeRealtimeVoiceSocket(audioSendDelays: ["first": 100_000_000])
+        let audioCapture = FakeVoiceAudioCapture()
+        let session = RealtimeVoiceSession(socket: socket, audioCapture: audioCapture)
+
+        try await session.start(apiKey: "sk-test") { _ in }
+        audioCapture.emit("first")
+        try await Task.sleep(nanoseconds: 20_000_000)
+        try await session.sendFunctionOutput(callId: "call_123", output: "Opened Galaxy")
+        session.stop()
+
+        XCTAssertEqual(socket.sentTypes.prefix(4), [
+            "session.update",
+            "input_audio_buffer.append",
+            "conversation.item.create",
+            "response.create"
+        ])
+        XCTAssertEqual(socket.sentAudioChunks, ["first"])
+    }
+
+    func testFunctionOutputAndResponseCreateStayAdjacentWhenAudioArrivesDuringToolOutput() async throws {
+        let socket = FakeRealtimeVoiceSocket(eventSendDelays: ["conversation.item.create": 100_000_000])
+        let audioCapture = FakeVoiceAudioCapture()
+        let session = RealtimeVoiceSession(socket: socket, audioCapture: audioCapture)
+
+        try await session.start(apiKey: "sk-test") { _ in }
+        let outputTask = Task {
+            try await session.sendFunctionOutput(callId: "call_123", output: "Opened Galaxy")
+        }
+        try await Task.sleep(nanoseconds: 20_000_000)
+        audioCapture.emit("during-tool-output")
+        try await outputTask.value
+        try await waitUntil {
+            socket.sentAudioChunks.contains("during-tool-output")
+        }
+        session.stop()
+
+        XCTAssertEqual(socket.sentTypes.prefix(4), [
+            "session.update",
+            "conversation.item.create",
+            "response.create",
+            "input_audio_buffer.append"
+        ])
+    }
+
+    func testAudioBacklogDropsStaleChunksWhenSocketStalls() async throws {
+        let socket = FakeRealtimeVoiceSocket(audioSendDelays: ["chunk-0": 150_000_000])
+        let audioCapture = FakeVoiceAudioCapture()
+        let session = RealtimeVoiceSession(socket: socket, audioCapture: audioCapture)
+
+        try await session.start(apiKey: "sk-test") { _ in }
+        for index in 0..<20 {
+            audioCapture.emit("chunk-\(index)")
+        }
+
+        try await waitUntil(timeoutNanoseconds: 2_000_000_000) {
+            socket.sentAudioChunks.contains("chunk-19")
+        }
+        session.stop()
+
+        XCTAssertLessThan(socket.sentAudioChunks.count, 20)
+        XCTAssertEqual(socket.sentAudioChunks.first, "chunk-0")
+        XCTAssertTrue(socket.sentAudioChunks.contains("chunk-19"))
+    }
+
+    func testSendFunctionOutputSendsOutputThenResponseCreate() async throws {
+        let socket = FakeRealtimeVoiceSocket()
+        let session = RealtimeVoiceSession(socket: socket, audioCapture: nil)
+
+        try await session.start(apiKey: "sk-test") { _ in }
+        try await session.sendFunctionOutput(callId: "call_123", output: "Opened Galaxy")
+        session.stop()
+
+        XCTAssertEqual(socket.sentTypes, ["session.update", "conversation.item.create", "response.create"])
+    }
+
+    func testOldOutboundQueueFailureAfterRestartDoesNotCancelNewQueue() async throws {
+        let socket = FakeRealtimeVoiceSocket(heldAudioChunks: ["old-audio"])
+        let audioCapture = FakeVoiceAudioCapture()
+        let session = RealtimeVoiceSession(socket: socket, audioCapture: audioCapture)
+
+        try await session.start(apiKey: "sk-test") { _ in }
+        audioCapture.emit("old-audio")
+        try await socket.waitForHeldAudioSend("old-audio")
+
+        session.stop()
+        try await session.start(apiKey: "sk-test") { _ in }
+        socket.failHeldAudioSend("old-audio")
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        try await session.sendFunctionOutput(callId: "call_123", output: "Opened Galaxy")
+        session.stop()
+
+        XCTAssertEqual(socket.sentTypes.suffix(2), ["conversation.item.create", "response.create"])
+    }
+}
+
+private final class FakeRealtimeVoiceSocket: RealtimeVoiceSocketing {
+    enum Error: Swift.Error, Equatable {
+        case sendFailed
+    }
+
+    private(set) var connectedRequest: URLRequest?
+    private(set) var sentData: [Data] = []
+    private(set) var closeCount = 0
+
+    private let sendErrorAfterCount: Int?
+    private let audioSendDelays: [String: UInt64]
+    private let eventSendDelays: [String: UInt64]
+    private let heldAudioChunks: Set<String>
+    private var heldAudioSends: [String: CheckedContinuation<Void, Swift.Error>] = [:]
+    private var heldAudioWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+
+    init(
+        sendErrorAfterCount: Int? = nil,
+        audioSendDelays: [String: UInt64] = [:],
+        eventSendDelays: [String: UInt64] = [:],
+        heldAudioChunks: Set<String> = []
+    ) {
+        self.sendErrorAfterCount = sendErrorAfterCount
+        self.audioSendDelays = audioSendDelays
+        self.eventSendDelays = eventSendDelays
+        self.heldAudioChunks = heldAudioChunks
+    }
+
+    var sentTypes: [String] {
+        sentData.compactMap { data in
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return nil
+            }
+            return json["type"] as? String
+        }
+    }
+
+    var sentAudioChunks: [String] {
+        sentData.compactMap { data in
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  json["type"] as? String == "input_audio_buffer.append" else {
+                return nil
+            }
+            return json["audio"] as? String
+        }
+    }
+
+    func connect(request: URLRequest) async throws {
+        connectedRequest = request
+    }
+
+    func send(_ data: Data) async throws {
+        if let sendErrorAfterCount, sentData.count >= sendErrorAfterCount {
+            throw Error.sendFailed
+        }
+
+        if let chunk = audioChunk(from: data) {
+            if heldAudioChunks.contains(chunk) {
+                try await holdAudioSend(chunk)
+            }
+            if let delay = audioSendDelays[chunk] {
+                try await Task.sleep(nanoseconds: delay)
+            }
+        }
+        if let eventType = eventType(from: data), let delay = eventSendDelays[eventType] {
+            try await Task.sleep(nanoseconds: delay)
+        }
+        sentData.append(data)
+    }
+
+    func receive() async throws -> String? {
+        nil
+    }
+
+    func close() {
+        closeCount += 1
+    }
+
+    func waitForHeldAudioSend(_ chunk: String) async throws {
+        if heldAudioSends[chunk] != nil { return }
+
+        await withCheckedContinuation { continuation in
+            heldAudioWaiters[chunk, default: []].append(continuation)
+        }
+    }
+
+    func failHeldAudioSend(_ chunk: String) {
+        heldAudioSends[chunk]?.resume(throwing: Error.sendFailed)
+        heldAudioSends[chunk] = nil
+    }
+
+    private func audioChunk(from data: Data) -> String? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              json["type"] as? String == "input_audio_buffer.append" else {
+            return nil
+        }
+        return json["audio"] as? String
+    }
+
+    private func eventType(from data: Data) -> String? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return json["type"] as? String
+    }
+
+    private func holdAudioSend(_ chunk: String) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            heldAudioSends[chunk] = continuation
+            for waiter in heldAudioWaiters.removeValue(forKey: chunk) ?? [] {
+                waiter.resume()
+            }
+        }
+    }
+}
+
+private final class FakeVoiceAudioCapture: VoiceAudioCapturing {
+    private(set) var didStop = false
+    private var onAudio: (@Sendable (String) -> Void)?
+
+    func start(onAudio: @escaping @Sendable (String) -> Void) throws {
+        self.onAudio = onAudio
+    }
+
+    func stop() {
+        didStop = true
+    }
+
+    func emit(_ chunk: String) {
+        onAudio?(chunk)
+    }
+}
+
+private func waitUntil(
+    timeoutNanoseconds: UInt64 = 1_000_000_000,
+    condition: @escaping () -> Bool
+) async throws {
+    let start = DispatchTime.now().uptimeNanoseconds
+    while !condition() {
+        if DispatchTime.now().uptimeNanoseconds - start > timeoutNanoseconds {
+            XCTFail("Timed out waiting for condition.")
+            return
+        }
+        try await Task.sleep(nanoseconds: 10_000_000)
     }
 }

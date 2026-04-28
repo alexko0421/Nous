@@ -1,5 +1,59 @@
 import Foundation
 
+protocol RealtimeVoiceSocketing: AnyObject {
+    func connect(request: URLRequest) async throws
+    func send(_ data: Data) async throws
+    func receive() async throws -> String?
+    func close()
+}
+
+final class URLSessionRealtimeVoiceSocket: RealtimeVoiceSocketing {
+    private let session: URLSession
+    private var task: URLSessionWebSocketTask?
+
+    init(session: URLSession = .shared) {
+        self.session = session
+    }
+
+    func connect(request: URLRequest) async throws {
+        let task = session.webSocketTask(with: request)
+        self.task = task
+        task.resume()
+    }
+
+    func send(_ data: Data) async throws {
+        guard let task else { throw RealtimeVoiceSocketError.notConnected }
+
+        if let string = String(data: data, encoding: .utf8) {
+            try await task.send(.string(string))
+        } else {
+            try await task.send(.data(data))
+        }
+    }
+
+    func receive() async throws -> String? {
+        guard let task else { throw RealtimeVoiceSocketError.notConnected }
+
+        switch try await task.receive() {
+        case .string(let string):
+            return string
+        case .data(let data):
+            return String(data: data, encoding: .utf8)
+        @unknown default:
+            return nil
+        }
+    }
+
+    func close() {
+        task?.cancel(with: .goingAway, reason: nil)
+        task = nil
+    }
+}
+
+enum RealtimeVoiceSocketError: Error {
+    case notConnected
+}
+
 enum RealtimeVoiceEvent: Equatable {
     case sessionReady
     case toolCall(VoiceToolCall, callId: String)
@@ -56,6 +110,19 @@ enum RealtimeVoiceEventParser {
 final class RealtimeVoiceSession {
     static let defaultModel = "gpt-realtime"
 
+    private let socket: RealtimeVoiceSocketing
+    private let audioCapture: VoiceAudioCapturing?
+    private var receiveTask: Task<Void, Never>?
+    private var outboundQueue: RealtimeVoiceOutboundQueue?
+
+    init(
+        socket: RealtimeVoiceSocketing = URLSessionRealtimeVoiceSocket(),
+        audioCapture: VoiceAudioCapturing? = VoiceAudioCapture()
+    ) {
+        self.socket = socket
+        self.audioCapture = audioCapture
+    }
+
     static func makeRequest(apiKey: String, model: String = defaultModel) -> URLRequest {
         var components = URLComponents(string: "wss://api.openai.com/v1/realtime")!
         components.queryItems = [URLQueryItem(name: "model", value: model)]
@@ -64,12 +131,52 @@ final class RealtimeVoiceSession {
         return request
     }
 
+    func start(
+        apiKey: String,
+        onEvent: @escaping @MainActor (RealtimeVoiceEvent) async -> Void
+    ) async throws {
+        stop()
+
+        do {
+            try await socket.connect(request: Self.makeRequest(apiKey: apiKey))
+            let queue = RealtimeVoiceOutboundQueue(maxPendingAudioChunks: 8)
+            outboundQueue = queue
+            queue.start(socket: socket, onEvent: onEvent)
+            try await queue.enqueueControl(Self.makeSessionUpdateEvent())
+            startReceiveLoop(onEvent: onEvent)
+            try audioCapture?.start { chunk in
+                queue.enqueueAudio(chunk)
+            }
+        } catch {
+            stop()
+            throw error
+        }
+    }
+
+    func sendFunctionOutput(callId: String, output: String) async throws {
+        guard let outboundQueue else { throw RealtimeVoiceSocketError.notConnected }
+
+        try await outboundQueue.enqueueControls([
+            Self.makeFunctionOutputEvent(callId: callId, output: output),
+            Self.makeResponseCreateEvent()
+        ])
+    }
+
+    func stop() {
+        receiveTask?.cancel()
+        receiveTask = nil
+        let queue = outboundQueue
+        outboundQueue = nil
+        queue?.stop()
+        audioCapture?.stop()
+        socket.close()
+    }
+
     static func makeSessionUpdateEvent(model: String = defaultModel) throws -> Data {
         let body: [String: Any] = [
             "type": "session.update",
             "session": [
                 "type": "realtime",
-                "model": model,
                 "instructions": voiceInstructions,
                 "output_modalities": ["text"],
                 "audio": [
@@ -88,6 +195,24 @@ final class RealtimeVoiceSession {
             ]
         ]
         return try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+    }
+
+    private func startReceiveLoop(
+        onEvent: @escaping @MainActor (RealtimeVoiceEvent) async -> Void
+    ) {
+        receiveTask = Task { [socket] in
+            while !Task.isCancelled {
+                do {
+                    guard let raw = try await socket.receive() else { break }
+                    guard let event = RealtimeVoiceEventParser.parse(raw) else { continue }
+                    await onEvent(event)
+                } catch {
+                    if Task.isCancelled { break }
+                    await onEvent(.error(error.localizedDescription))
+                    break
+                }
+            }
+        }
     }
 
     static func makeAudioAppendEvent(base64Audio: String) throws -> Data {
@@ -211,5 +336,174 @@ final class RealtimeVoiceSession {
                 "additionalProperties": false
             ]
         ]
+    }
+}
+
+private final class RealtimeVoiceOutboundQueue {
+    private enum Item {
+        case control([Data], CheckedContinuation<Void, Error>)
+        case audio(String)
+    }
+
+    private let maxPendingAudioChunks: Int
+    private let lock = NSLock()
+    private var isRunning = false
+    private var pendingItems: [Item] = []
+    private var waiter: CheckedContinuation<Item?, Never>?
+    private var sendTask: Task<Void, Never>?
+
+    init(maxPendingAudioChunks: Int) {
+        self.maxPendingAudioChunks = max(0, maxPendingAudioChunks)
+    }
+
+    func start(
+        socket: RealtimeVoiceSocketing,
+        onEvent: @escaping @MainActor (RealtimeVoiceEvent) async -> Void
+    ) {
+        stop()
+
+        lock.lock()
+        isRunning = true
+        lock.unlock()
+
+        sendTask = Task { [weak self, socket] in
+            guard let self else { return }
+
+            while !Task.isCancelled {
+                guard let item = await nextItem() else { break }
+
+                do {
+                    switch item {
+                    case .control(let frames, _):
+                        for frame in frames {
+                            try await socket.send(frame)
+                        }
+                    case .audio(let chunk):
+                        try await socket.send(RealtimeVoiceSession.makeAudioAppendEvent(base64Audio: chunk))
+                    }
+                    completeControlItem(item)
+                } catch {
+                    failControlItem(item, with: error)
+                    if !Task.isCancelled {
+                        await onEvent(.error(error.localizedDescription))
+                    }
+                    stop()
+                    break
+                }
+            }
+        }
+    }
+
+    func enqueueControl(_ data: Data) async throws {
+        try await enqueueControls([data])
+    }
+
+    func enqueueControls(_ data: [Data]) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            enqueue(.control(data, continuation))
+        }
+    }
+
+    func enqueueAudio(_ chunk: String) {
+        enqueue(.audio(chunk))
+    }
+
+    func stop() {
+        let itemsToCancel: [Item]
+        let waiterToResume: CheckedContinuation<Item?, Never>?
+        let taskToCancel: Task<Void, Never>?
+
+        lock.lock()
+        isRunning = false
+        itemsToCancel = pendingItems
+        pendingItems.removeAll()
+        waiterToResume = waiter
+        waiter = nil
+        taskToCancel = sendTask
+        sendTask = nil
+        lock.unlock()
+
+        taskToCancel?.cancel()
+        waiterToResume?.resume(returning: nil)
+        for item in itemsToCancel {
+            failControlItem(item, with: CancellationError())
+        }
+    }
+
+    private func enqueue(_ item: Item) {
+        let waiterToResume: CheckedContinuation<Item?, Never>?
+        let itemToResume: Item?
+
+        lock.lock()
+        guard isRunning else {
+            lock.unlock()
+            if case .control(_, let continuation) = item {
+                continuation.resume(throwing: CancellationError())
+            }
+            return
+        }
+
+        if case .audio = item {
+            removeOldestAudioIfNeeded()
+        }
+
+        if let waiter {
+            self.waiter = nil
+            waiterToResume = waiter
+            itemToResume = item
+        } else {
+            waiterToResume = nil
+            itemToResume = nil
+            pendingItems.append(item)
+        }
+        lock.unlock()
+
+        if let waiterToResume, let itemToResume {
+            waiterToResume.resume(returning: itemToResume)
+        }
+    }
+
+    private func nextItem() async -> Item? {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if !pendingItems.isEmpty {
+                let item = pendingItems.removeFirst()
+                lock.unlock()
+                continuation.resume(returning: item)
+            } else if isRunning {
+                waiter = continuation
+                lock.unlock()
+            } else {
+                lock.unlock()
+                continuation.resume(returning: nil)
+            }
+        }
+    }
+
+    private func removeOldestAudioIfNeeded() {
+        let pendingAudioCount = pendingItems.reduce(0) { count, item in
+            if case .audio = item { return count + 1 }
+            return count
+        }
+        guard pendingAudioCount >= maxPendingAudioChunks,
+              let index = pendingItems.firstIndex(where: { item in
+                  if case .audio = item { return true }
+                  return false
+              }) else {
+            return
+        }
+        pendingItems.remove(at: index)
+    }
+
+    private func completeControlItem(_ item: Item) {
+        if case .control(_, let continuation) = item {
+            continuation.resume()
+        }
+    }
+
+    private func failControlItem(_ item: Item, with error: Error) {
+        if case .control(_, let continuation) = item {
+            continuation.resume(throwing: error)
+        }
     }
 }
