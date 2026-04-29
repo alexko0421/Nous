@@ -208,6 +208,7 @@
 		CA95BE49C08D1585A1F9BD28 /* VoiceAudioCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEAB81A9BAD73AABC89F45E3 /* VoiceAudioCaptureTests.swift */; };
 		CCD59E4EED96273AAF29A5C9 /* ReflectionValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC450BD26E0E8BC3E6C4C09D /* ReflectionValidator.swift */; };
 		CD5A9D0A9AFB9F7439FE0662 /* GalaxyRelationJudge.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3078086DC92EB7BD6418A98 /* GalaxyRelationJudge.swift */; };
+		CF956568ABE6CC7193710443 /* VoiceCapsuleContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56FEE69E49FFEDDDC18A2909 /* VoiceCapsuleContent.swift */; };
 		D4CB9A1787379C73E950A26C /* MemoryAtomEmbeddingBackfillServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AEEECB38B12401CA44B5965 /* MemoryAtomEmbeddingBackfillServiceTests.swift */; };
 		D67AE98AD27B27D71D9962AE /* GalaxyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26B0833FF90A3381A73858CE /* GalaxyView.swift */; };
 		D707ED9BF3B1B7CD5C6A6CB0 /* VectorStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C94FF3DE937E45E699C4E0A2 /* VectorStoreTests.swift */; };
@@ -352,6 +353,7 @@
 		565CA96BC6999A4CFC7B10EC /* MemoryAtom.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryAtom.swift; sourceTree = "<group>"; };
 		56B4306968099267E4DF183A /* VoiceWaveformBars.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceWaveformBars.swift; sourceTree = "<group>"; };
 		56E09B534B87A1CB827DDD6C /* GhostCursorTravelDurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhostCursorTravelDurationTests.swift; sourceTree = "<group>"; };
+		56FEE69E49FFEDDDC18A2909 /* VoiceCapsuleContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceCapsuleContent.swift; sourceTree = "<group>"; };
 		593E59F6467AEF07EEFC96B6 /* Database.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Database.swift; sourceTree = "<group>"; };
 		596976551651E43571FAEADA /* GeminiPromptCacheServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeminiPromptCacheServiceTests.swift; sourceTree = "<group>"; };
 		5A6D27C2BAB07520726AA007 /* VoiceTranscriptLine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceTranscriptLine.swift; sourceTree = "<group>"; };
@@ -604,6 +606,7 @@
 			isa = PBXGroup;
 			children = (
 				4D3C1F273307486B5EEB8FCD /* NotchScreenDetection.swift */,
+				56FEE69E49FFEDDDC18A2909 /* VoiceCapsuleContent.swift */,
 				65FF9FAAED20493D36FC8629 /* VoiceTranscriptPanel.swift */,
 				56B4306968099267E4DF183A /* VoiceWaveformBars.swift */,
 			);
@@ -1268,6 +1271,7 @@
 				DBA6A501AAEB77589CFDB63C /* VoiceActionPill.swift in Sources */,
 				68CE2F34053AA04B0EA7B42B /* VoiceActionRegistry.swift in Sources */,
 				C12D81B7B1B0295D73FDFA69 /* VoiceAudioCapture.swift in Sources */,
+				CF956568ABE6CC7193710443 /* VoiceCapsuleContent.swift in Sources */,
 				6146D9C1D7258FD6FCF32DDB /* VoiceCommandController.swift in Sources */,
 				E6D3F07FC3C05F45B68A5B5E /* VoiceMemoryFacade.swift in Sources */,
 				DEA87961CBF63ADDB23F74AB /* VoiceModeModels.swift in Sources */,
