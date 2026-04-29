@@ -266,6 +266,12 @@ struct ChatArea: View {
                             )
                             .padding(.top, 16)
                             .transition(.move(edge: .top).combined(with: .opacity))
+                            VoiceTranscriptPanel(
+                                lines: voiceController.transcript,
+                                isVisible: voiceController.isActive
+                            )
+                            .padding(.top, 60)
+                            .allowsHitTesting(true)
                         }
                     }
                     .animation(.spring(response: 0.4, dampingFraction: 0.8), value: voiceController.isActive)

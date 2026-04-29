@@ -398,6 +398,12 @@ struct ContentView: View {
                         onConfirm: dependencies.voiceController.confirmPendingAction,
                         onCancel: dependencies.voiceController.cancelPendingAction
                     )
+                    VoiceTranscriptPanel(
+                        lines: dependencies.voiceController.transcript,
+                        isVisible: dependencies.voiceController.isActive
+                    )
+                    .padding(.top, 60)
+                    .allowsHitTesting(true)
                 }
 
                 VoiceModeButton(
