@@ -442,6 +442,20 @@ final class NodeStore {
             alterSQL: "ALTER TABLE judge_events ADD COLUMN feedbackNote TEXT;"
         )
 
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS skills (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL DEFAULT 'alex',
+                payload TEXT NOT NULL CHECK (json_valid(payload)),
+                state TEXT NOT NULL DEFAULT 'active'
+                    CHECK (state IN ('active', 'retired', 'disabled')),
+                fired_count INTEGER NOT NULL DEFAULT 0,
+                created_at REAL NOT NULL,
+                last_modified_at REAL NOT NULL,
+                last_fired_at REAL
+            );
+        """)
+
         // Indexes
         try db.exec("CREATE INDEX IF NOT EXISTS idx_nodes_projectId  ON nodes(projectId);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_messages_nodeId  ON messages(nodeId);")
@@ -466,6 +480,7 @@ final class NodeStore {
         try db.exec("CREATE INDEX IF NOT EXISTS idx_judge_events_ts ON judge_events(ts);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_judge_events_fallback ON judge_events(fallbackReason);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_reflection_runs_project_week ON reflection_runs(project_id, week_end);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_skills_active ON skills(user_id, state);")
         // SQLite treats NULLs as distinct in UNIQUE constraints, so the free-chat
         // scope (project_id IS NULL) would accept duplicate rows for the same week.
         // COALESCE folds NULL to '' and restores the single-row-per-(scope, week) invariant.

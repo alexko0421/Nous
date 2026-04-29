@@ -18,6 +18,9 @@ final class TurnPlanner {
     private let judgeLLMServiceFactory: () -> (any LLMService)?
     private let provocationJudgeFactory: (any LLMService) -> any Judging
     private let governanceTelemetry: GovernanceTelemetryStore
+    private let skillStore: (any SkillStoring)?
+    private let skillMatcher: any SkillMatching
+    private let skillTracker: (any SkillTracking)?
     private let runJudge: (@escaping () async throws -> JudgeVerdict) async throws -> JudgeVerdict
 
     init(
@@ -30,6 +33,9 @@ final class TurnPlanner {
         judgeLLMServiceFactory: @escaping () -> (any LLMService)?,
         provocationJudgeFactory: @escaping (any LLMService) -> any Judging = { ProvocationJudge(llmService: $0) },
         governanceTelemetry: GovernanceTelemetryStore = GovernanceTelemetryStore(),
+        skillStore: (any SkillStoring)? = nil,
+        skillMatcher: any SkillMatching = SkillMatcher(),
+        skillTracker: (any SkillTracking)? = nil,
         runJudge: @escaping (@escaping () async throws -> JudgeVerdict) async throws -> JudgeVerdict = { operation in
             try await operation()
         }
@@ -43,6 +49,9 @@ final class TurnPlanner {
         self.judgeLLMServiceFactory = judgeLLMServiceFactory
         self.provocationJudgeFactory = provocationJudgeFactory
         self.governanceTelemetry = governanceTelemetry
+        self.skillStore = skillStore
+        self.skillMatcher = skillMatcher
+        self.skillTracker = skillTracker
         self.runJudge = runJudge
     }
 
@@ -231,14 +240,54 @@ final class TurnPlanner {
         if planningAgent != nil {
             DebugAblation.logActiveFlags(context: "quick-mode-turn:\(planningAgent.map { String(describing: $0.mode) } ?? "?"):\(agentTurnIndex)")
         }
-        let quickActionAddendum: String? = DebugAblation.skipModeAddendum
-            ? nil
-            : planningAgent?.contextAddendum(turnIndex: agentTurnIndex)
-        #else
-        let quickActionAddendum: String? = planningAgent?.contextAddendum(turnIndex: agentTurnIndex)
         #endif
+        let inferredAddendum = planningAgent?.contextAddendum(turnIndex: agentTurnIndex)
+        let skillAddendum: String? = {
+            #if DEBUG
+            if DebugAblation.skipModeAddendum {
+                SkillTraceLogger.logSkipped(
+                    mode: planningQuickActionMode,
+                    turnIndex: agentTurnIndex,
+                    reason: "DebugAblation.skipModeAddendum"
+                )
+                return nil
+            }
+            #endif
+            guard let skillStore else { return nil }
+            let active = (try? skillStore.fetchActiveSkills(userId: "alex")) ?? []
+            let matched = skillMatcher.matchingSkills(
+                from: active,
+                context: SkillMatchContext(
+                    mode: planningQuickActionMode,
+                    turnIndex: agentTurnIndex
+                ),
+                cap: 5
+            )
+            #if DEBUG
+            SkillTraceLogger.log(
+                matched: matched,
+                mode: planningQuickActionMode,
+                turnIndex: agentTurnIndex
+            )
+            #endif
+            guard !matched.isEmpty else { return nil }
+
+            if let skillTracker {
+                let skillIds = matched.map(\.id)
+                Task.detached {
+                    try? await skillTracker.recordFire(skillIds: skillIds)
+                }
+            }
+
+            return matched.map { $0.payload.action.content }.joined(separator: "\n\n")
+        }()
+        let quickActionAddendum = [inferredAddendum, skillAddendum]
+            .compactMap { $0 }
+            .joined(separator: "\n\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedQuickActionAddendum = quickActionAddendum.isEmpty ? nil : quickActionAddendum
         let responseShapeBlock = Self.responseShapeBlock(for: stewardship)
-        let quickActionContextBlocks = [quickActionAddendum, responseShapeBlock]
+        let quickActionContextBlocks = [resolvedQuickActionAddendum, responseShapeBlock]
             .compactMap { block -> String? in
                 guard let block,
                       !block.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

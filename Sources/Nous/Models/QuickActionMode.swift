@@ -1,6 +1,6 @@
 import Foundation
 
-enum QuickActionMode: String, CaseIterable {
+enum QuickActionMode: String, CaseIterable, Codable {
     case direction
     case brainstorm
     case plan

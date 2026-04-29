@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MemoryDebugInspector: View {
     let nodeStore: NodeStore
+    let skillStore: SkillStore
     let userMemoryService: UserMemoryService
     let telemetry: GovernanceTelemetryStore
     let galaxyRelationTelemetry: GalaxyRelationTelemetry
@@ -44,11 +45,18 @@ struct MemoryDebugInspector: View {
         }
     }
 
+    private enum SkillSort: String, CaseIterable {
+        case firedCount = "Fired"
+        case lastFired = "Last fired"
+    }
+
     @State private var entries: [MemoryEntry] = []
+    @State private var skills: [Skill] = []
     @State private var projectTitles: [UUID: String] = [:]
     @State private var nodeTitles: [UUID: String] = [:]
     @State private var searchText = ""
     @State private var selectedFocus: MemoryFocus = .active
+    @State private var skillSort: SkillSort = .firedCount
     @State private var selectedEntryId: UUID?
     @State private var sourceSnippetsByEntryId: [UUID: [MemoryEvidenceSnippet]] = [:]
     @State private var actingEntryId: UUID?
@@ -62,6 +70,9 @@ struct MemoryDebugInspector: View {
                 header
                 overviewCard
                 browseCard
+                #if DEBUG
+                skillsCard
+                #endif
                 MemoryGraphInspector(nodeStore: nodeStore)
 
                 HStack(alignment: .top, spacing: 20) {
@@ -185,6 +196,51 @@ struct MemoryDebugInspector: View {
         }
     }
 
+    #if DEBUG
+    private var skillsCard: some View {
+        card {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        sectionLabel("Skills")
+                        Text("Read-only prompt fragments currently stored in SkillStore.")
+                            .font(.system(size: 12, design: .rounded))
+                            .foregroundColor(AppColor.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Spacer()
+
+                    statPill(title: "Total", value: "\(skills.count)")
+                    statPill(title: "Active", value: "\(skills.filter { $0.state == .active }.count)")
+                }
+
+                HStack(spacing: 10) {
+                    sectionLabel("Sort")
+                    filterRow(
+                        options: SkillSort.allCases,
+                        selection: skillSort,
+                        onSelect: { skillSort = $0 }
+                    )
+                }
+
+                if sortedSkills.isEmpty {
+                    Text("No skills have been imported yet.")
+                        .font(.system(size: 13, design: .rounded))
+                        .foregroundColor(AppColor.secondaryText)
+                        .padding(.vertical, 8)
+                } else {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(sortedSkills) { skill in
+                            skillRow(skill)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    #endif
+
     private var entriesPane: some View {
         card {
             VStack(alignment: .leading, spacing: 12) {
@@ -284,6 +340,30 @@ struct MemoryDebugInspector: View {
             return lhs.updatedAt > rhs.updatedAt
         }
     }
+
+    #if DEBUG
+    private var sortedSkills: [Skill] {
+        skills.sorted { lhs, rhs in
+            switch skillSort {
+            case .firedCount:
+                if lhs.firedCount != rhs.firedCount {
+                    return lhs.firedCount > rhs.firedCount
+                }
+            case .lastFired:
+                let left = lhs.lastFiredAt ?? .distantPast
+                let right = rhs.lastFiredAt ?? .distantPast
+                if left != right {
+                    return left > right
+                }
+                if lhs.firedCount != rhs.firedCount {
+                    return lhs.firedCount > rhs.firedCount
+                }
+            }
+
+            return lhs.payload.name.localizedCaseInsensitiveCompare(rhs.payload.name) == .orderedAscending
+        }
+    }
+    #endif
 
     private var activeEntries: [MemoryEntry] {
         sortedEntries.filter { $0.status == .active }
@@ -543,6 +623,76 @@ struct MemoryDebugInspector: View {
         }
     }
 
+    #if DEBUG
+    @ViewBuilder
+    private func skillRow(_ skill: Skill) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(skill.payload.name)
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundColor(AppColor.colaDarkText)
+                        .lineLimit(1)
+
+                    if let description = skill.payload.description,
+                       !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text(description)
+                            .font(.system(size: 12, design: .rounded))
+                            .foregroundColor(AppColor.secondaryText)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                Spacer(minLength: 12)
+
+                badge(
+                    text: skillStateDisplay(skill.state),
+                    tint: skillStateTint(skill.state),
+                    textColor: skillStateTextColor(skill.state)
+                )
+            }
+
+            HStack(spacing: 8) {
+                badge(
+                    text: "\(skill.firedCount) fired",
+                    tint: AppColor.surfacePrimary,
+                    textColor: AppColor.colaDarkText.opacity(0.78)
+                )
+
+                if let lastFiredAt = skill.lastFiredAt {
+                    badge(
+                        text: "Last \(Self.relative(lastFiredAt))",
+                        tint: AppColor.colaOrange.opacity(0.12),
+                        textColor: AppColor.colaDarkText
+                    )
+                }
+
+                badge(
+                    text: "\(skill.payload.trigger.kind.rawValue.capitalized) · P\(skill.payload.trigger.priority)",
+                    tint: AppColor.surfacePrimary,
+                    textColor: AppColor.secondaryText
+                )
+
+                Text(skillModesDisplay(skill))
+                    .font(.system(size: 11, design: .rounded))
+                    .foregroundColor(AppColor.secondaryText)
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppColor.surfacePrimary)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(AppColor.panelStroke, lineWidth: 1)
+        )
+    }
+    #endif
+
     @ViewBuilder
     private func detailStatCard(title: String, value: String, accent: Color = AppColor.surfacePrimary) -> some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -723,6 +873,17 @@ struct MemoryDebugInspector: View {
                 .background(AppColor.colaBeige)
                 .tabItem { Label("Entries", systemImage: "tray.full") }
 
+                #if DEBUG
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        skillsCard
+                    }
+                    .padding(24)
+                }
+                .background(AppColor.colaBeige)
+                .tabItem { Label("Skills", systemImage: "sparkles") }
+                #endif
+
                 JudgeEventsTab(telemetry: telemetry)
                     .tabItem { Label("Judge", systemImage: "wand.and.sparkles") }
 
@@ -771,6 +932,9 @@ struct MemoryDebugInspector: View {
     private func reload() {
         do {
             entries = userMemoryService.allMemoryEntries()
+            #if DEBUG
+            skills = try skillStore.fetchAllSkills(userId: "alex")
+            #endif
 
             let projects = try nodeStore.fetchAllProjects()
             projectTitles = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0.title) })
@@ -1049,6 +1213,39 @@ struct MemoryDebugInspector: View {
             return AppColor.panelStroke.opacity(0.9)
         }
     }
+
+    #if DEBUG
+    private func skillStateDisplay(_ state: SkillState) -> String {
+        state.rawValue.capitalized
+    }
+
+    private func skillStateTint(_ state: SkillState) -> Color {
+        switch state {
+        case .active:
+            return AppColor.colaOrange.opacity(0.14)
+        case .retired:
+            return Color.blue.opacity(0.12)
+        case .disabled:
+            return Color.gray.opacity(0.16)
+        }
+    }
+
+    private func skillStateTextColor(_ state: SkillState) -> Color {
+        switch state {
+        case .active:
+            return AppColor.colaDarkText
+        case .retired:
+            return Color.blue.opacity(0.75)
+        case .disabled:
+            return AppColor.colaDarkText.opacity(0.62)
+        }
+    }
+
+    private func skillModesDisplay(_ skill: Skill) -> String {
+        let modes = skill.payload.trigger.modes.map(\.label).joined(separator: ", ")
+        return modes.isEmpty ? "No modes" : modes
+    }
+    #endif
 
     static func relative(_ date: Date) -> String {
         let formatter = RelativeDateTimeFormatter()

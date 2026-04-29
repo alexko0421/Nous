@@ -33,60 +33,7 @@ final class DirectionAgentTests: XCTestCase {
     }
 
     func testContextAddendumOnTurnOneStatesConvergentContract() {
-        let addendum = agent.contextAddendum(turnIndex: 1)
-        XCTAssertNotNil(addendum)
-        XCTAssertTrue(addendum!.contains("convergent"))
-        XCTAssertTrue(addendum!.contains("one concrete next step"))
-        XCTAssertTrue(addendum!.contains("real tension"))
-        XCTAssertTrue(addendum!.contains("identity question"))
-    }
-
-    func testContextAddendumIncludesMentorFeelFraming() {
-        // Spec contract: Feel is 咨询感 + mentor conversation, NOT clinical
-        // diagnosis or founder office hour pressure.
-        let addendum = agent.contextAddendum(turnIndex: 1)
-        XCTAssertNotNil(addendum)
-        XCTAssertTrue(addendum!.contains("咨询感"))
-        XCTAssertTrue(addendum!.contains("Mentor conversation"))
-    }
-
-    func testContextAddendumIncludesAllSkeletonMoves() {
-        // Spec skeleton: hear shape -> name tension -> surface tradeoff ->
-        // judgment -> next step. Tested as keyword presence rather than as
-        // an explicit numbered list (explicit lists made Sonnet over-cautious
-        // and skip judgment + next step on turn 1; ablation 2026-04-27).
-        let addendum = agent.contextAddendum(turnIndex: 1)
-        XCTAssertNotNil(addendum)
-        XCTAssertTrue(addendum!.contains("real tension"))
-        XCTAssertTrue(addendum!.contains("tradeoff"))
-        XCTAssertTrue(addendum!.contains("judgment"))
-        XCTAssertTrue(addendum!.contains("next step"))
-    }
-
-    func testContextAddendumForbidsBreakingSkeletonAcrossTurns() {
-        // Critical guard surfaced in 2026-04-27 ablation: model defaults to
-        // "ask clarifying question" instead of producing all five moves.
-        let addendum = agent.contextAddendum(turnIndex: 1)
-        XCTAssertNotNil(addendum)
-        XCTAssertTrue(addendum!.contains("Do not break this across turns"))
-        XCTAssertTrue(addendum!.contains("Do not stop mid-way"))
-    }
-
-    func testContextAddendumIncludesBadVersionGuardrails() {
-        // Spec bad versions: advice list, equal-weight options, founder office
-        // hour energy, generic motivational, identity-as-productivity.
-        let addendum = agent.contextAddendum(turnIndex: 1)
-        XCTAssertNotNil(addendum)
-        XCTAssertTrue(addendum!.contains("advice list"))
-        XCTAssertTrue(addendum!.contains("founder office hour energy"))
-        XCTAssertTrue(addendum!.contains("equal-weight options"))
-    }
-
-    func testContextAddendumIncludesExplicitDeliverable() {
-        // Spec deliverable: "A clear judgment plus one concrete next step."
-        let addendum = agent.contextAddendum(turnIndex: 1)
-        XCTAssertNotNil(addendum)
-        XCTAssertTrue(addendum!.contains("Deliverable:"))
+        XCTAssertNil(agent.contextAddendum(turnIndex: 1))
     }
 
     func testOpeningPromptInstructsAgainstIntakeFormPhrasing() {
@@ -156,50 +103,7 @@ final class BrainstormAgentTests: XCTestCase {
     }
 
     func testContextAddendumOnTurnOneStatesDivergentContract() {
-        let addendum = agent.contextAddendum(turnIndex: 1)
-        XCTAssertNotNil(addendum)
-        XCTAssertTrue(addendum!.contains("divergent"))
-    }
-
-    func testContextAddendumMentionsPersonalMemoryGrounding() {
-        let addendum = agent.contextAddendum(turnIndex: 1)
-        XCTAssertNotNil(addendum)
-        XCTAssertTrue(addendum!.contains("Memory grounding"))
-        XCTAssertTrue(addendum!.contains("generic idea generator"))
-        XCTAssertTrue(addendum!.contains("not as a cage"))
-    }
-
-    func testContextAddendumIncludesFeelFraming() {
-        // Spec contract: Feel is 开放感.
-        let addendum = agent.contextAddendum(turnIndex: 1)
-        XCTAssertNotNil(addendum)
-        XCTAssertTrue(addendum!.contains("开放感"))
-    }
-
-    func testContextAddendumIncludesPositiveInvariantThreeFramings() {
-        // Spec amendment positive invariant: ≥3 structurally distinct framings.
-        let addendum = agent.contextAddendum(turnIndex: 1)
-        XCTAssertNotNil(addendum)
-        XCTAssertTrue(addendum!.contains("at least three structurally distinct"))
-        XCTAssertTrue(addendum!.contains("至少三条"))
-    }
-
-    func testContextAddendumIncludesAntiStopGuard() {
-        // Direction implementation lesson: Sonnet defaults to mid-skeleton
-        // clarification unless an explicit anti-stop instruction is present.
-        // Heavy stacked "Do not" lists empirically made Sonnet MORE cautious
-        // (Brainstorm v1 ablation 2026-04-27), so we keep one focused anti-stop.
-        let addendum = agent.contextAddendum(turnIndex: 1)
-        XCTAssertNotNil(addendum)
-        XCTAssertTrue(addendum!.contains("Do not stop to ask another question"))
-        XCTAssertTrue(addendum!.contains("do not narrow to a single answer"))
-    }
-
-    func testContextAddendumForbidsClarificationQuestionEnding() {
-        // Spec positive invariant: output must NOT end as clarification question.
-        let addendum = agent.contextAddendum(turnIndex: 1)
-        XCTAssertNotNil(addendum)
-        XCTAssertTrue(addendum!.contains("ending the reply as a clarification question"))
+        XCTAssertNil(agent.contextAddendum(turnIndex: 1))
     }
 
     func testMemoryPolicyIsGroundedBrainstorm() {
@@ -221,17 +125,6 @@ final class BrainstormAgentTests: XCTestCase {
         XCTAssertEqual(agent.turnDirective(parsed: parsed, turnIndex: 1), .complete)
     }
 
-    func testContextAddendumOnTurnOneRequiresShortLabelTradeoffPlusProseJudgment() {
-        let addendum = agent.contextAddendum(turnIndex: 1)
-        XCTAssertNotNil(addendum)
-        let body = addendum!
-        XCTAssertTrue(body.contains("短 label"), "addendum must require short labels")
-        XCTAssertTrue(body.contains("trade-off"), "addendum must mention trade-off")
-        XCTAssertTrue(body.contains("非 bullet") || body.contains("唔用 bullet"),
-                      "addendum must require non-bullet judgment prose")
-        XCTAssertTrue(body.contains("唔可以等权列 options") || body.contains("唔可以系完整段落"),
-                      "addendum must guard against equally-weighted options listicle")
-    }
 }
 
 final class PlanAgentTests: XCTestCase {

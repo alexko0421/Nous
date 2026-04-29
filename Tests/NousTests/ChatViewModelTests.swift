@@ -45,6 +45,40 @@ final class SingleReplyLLMService: LLMService {
     }
 }
 
+final class CapturingSingleReplyLLMService: LLMService {
+    private let lock = NSLock()
+    private let output: String
+    private var storedReceivedSystem: String?
+    private var storedReceivedMessages: [LLMMessage] = []
+
+    var receivedSystem: String? {
+        lock.withLock { storedReceivedSystem }
+    }
+
+    var receivedPromptText: String {
+        lock.withLock {
+            ([storedReceivedSystem ?? ""] + storedReceivedMessages.map(\.content))
+                .joined(separator: "\n\n")
+        }
+    }
+
+    init(output: String) {
+        self.output = output
+    }
+
+    func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
+        lock.withLock {
+            storedReceivedSystem = system
+            storedReceivedMessages = messages
+        }
+        let output = self.output
+        return AsyncThrowingStream { continuation in
+            continuation.yield(output)
+            continuation.finish()
+        }
+    }
+}
+
 final class CancellationFailingLLMService: LLMService {
     func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
         throw CancellationError()
@@ -365,6 +399,52 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertEqual(vm.currentNode?.projectId, project.id)
     }
 
+    func testQuickActionOpeningUsesTasteSkillsAndSkipsModeSkeleton() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let skillStore = SkillStore(nodeStore: nodeStore)
+        try skillStore.insertSkill(makeSkill(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000201")!,
+            name: "opening-direction-skeleton",
+            kind: .mode,
+            content: "OPENING MODE SKELETON SHOULD NOT APPEAR"
+        ))
+        try skillStore.insertSkill(makeSkill(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000202")!,
+            name: "opening-taste",
+            kind: .always,
+            content: "OPENING TASTE SKILL SHOULD APPEAR"
+        ))
+        let llm = CapturingSingleReplyLLMService(output: "Opening reply")
+
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { llm },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            skillStore: skillStore,
+            skillMatcher: SkillMatcher(),
+            skillTracker: SkillTracker(store: skillStore),
+            scratchPadStore: makeScratchPadStore(nodeStore: nodeStore)
+        )
+
+        await vm.beginQuickActionConversation(.direction)
+
+        let promptText = llm.receivedPromptText
+        XCTAssertTrue(promptText.contains("OPENING TASTE SKILL SHOULD APPEAR"))
+        XCTAssertFalse(promptText.contains("OPENING MODE SKELETON SHOULD NOT APPEAR"))
+        XCTAssertTrue(vm.lastPromptGovernanceTrace?.promptLayers.contains("quick_action_addendum") == true)
+    }
+
     func testQuickActionConversationPromotesHiddenChatTitle() async throws {
         let nodeStore = try NodeStore(path: ":memory:")
         let vectorStore = VectorStore(nodeStore: nodeStore)
@@ -402,6 +482,34 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertEqual(storedNode.title, "搬去纽约定Austin")
         XCTAssertEqual(assistant.content, "我想先听你讲多少少。")
         XCTAssertFalse(assistant.content.contains("<chat_title>"))
+    }
+
+    private func makeSkill(
+        id: UUID,
+        name: String,
+        kind: SkillTrigger.Kind,
+        content: String
+    ) -> Skill {
+        Skill(
+            id: id,
+            userId: "alex",
+            payload: SkillPayload(
+                payloadVersion: 1,
+                name: name,
+                source: .alex,
+                trigger: SkillTrigger(
+                    kind: kind,
+                    modes: [.direction],
+                    priority: 70
+                ),
+                action: SkillAction(kind: .promptFragment, content: content)
+            ),
+            state: .active,
+            firedCount: 0,
+            createdAt: Date(timeIntervalSince1970: 1_000),
+            lastModifiedAt: Date(timeIntervalSince1970: 1_000),
+            lastFiredAt: nil
+        )
     }
 
     @MainActor

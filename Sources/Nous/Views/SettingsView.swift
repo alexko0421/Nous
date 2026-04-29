@@ -20,6 +20,7 @@ enum SettingsSection: String, CaseIterable {
 struct SettingsView: View {
     @Bindable var vm: SettingsViewModel
     @Binding var selectedTab: SettingsSection
+    let skillStore: SkillStore
     let userMemoryService: UserMemoryService
     let telemetry: GovernanceTelemetryStore
     let galaxyRelationTelemetry: GalaxyRelationTelemetry
@@ -77,6 +78,7 @@ struct SettingsView: View {
                 case .memory:
                     MemoryDebugInspector(
                         nodeStore: vm.nodeStore,
+                        skillStore: skillStore,
                         userMemoryService: userMemoryService,
                         telemetry: telemetry,
                         galaxyRelationTelemetry: galaxyRelationTelemetry

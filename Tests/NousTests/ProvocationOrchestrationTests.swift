@@ -62,6 +62,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
     }
 
     var store: NodeStore!
+    var skillStore: SkillStore!
     var telemetry: GovernanceTelemetryStore!
     var llm: CannedLLMService!
     var judge: StubJudge!
@@ -77,6 +78,8 @@ final class ProvocationOrchestrationTests: XCTestCase {
     override func setUp() {
         super.setUp()
         store = try! NodeStore(path: ":memory:")
+        skillStore = SkillStore(nodeStore: store)
+        try! importSeedSkills(into: skillStore)
         telemetry = GovernanceTelemetryStore(
             defaults: UserDefaults(suiteName: "test-\(UUID().uuidString)")!,
             nodeStore: store
@@ -96,14 +99,43 @@ final class ProvocationOrchestrationTests: XCTestCase {
             currentProviderProvider: { .claude },
             judgeLLMServiceFactory: { CannedLLMService() },
             provocationJudgeFactory: { _ in self.judge },
+            skillStore: skillStore,
+            skillMatcher: SkillMatcher(),
+            skillTracker: nil,
             governanceTelemetry: telemetry,
             scratchPadStore: makeScratchPadStore()
         )
     }
 
     override func tearDown() {
-        viewModel = nil; judge = nil; llm = nil; telemetry = nil; store = nil
+        viewModel = nil; judge = nil; llm = nil; telemetry = nil; skillStore = nil; store = nil
         super.tearDown()
+    }
+
+    private func importSeedSkills(into skillStore: SkillStore) throws {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let repoRoot = testFile
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let url = repoRoot.appendingPathComponent("Sources/Nous/Resources/seed-skills.json")
+        let rows = try JSONDecoder().decode([SeedSkillRow].self, from: Data(contentsOf: url))
+        let importedAt = Date(timeIntervalSince1970: 10_000)
+
+        for row in rows {
+            try skillStore.insertSkill(
+                Skill(
+                    id: row.id,
+                    userId: row.userId,
+                    payload: row.payload,
+                    state: row.state,
+                    firedCount: 0,
+                    createdAt: importedAt,
+                    lastModifiedAt: importedAt,
+                    lastFiredAt: nil
+                )
+            )
+        }
     }
 
     @MainActor

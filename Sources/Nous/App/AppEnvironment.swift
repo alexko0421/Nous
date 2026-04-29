@@ -9,6 +9,10 @@ enum AppBootstrapState {
 
 struct AppDependencies {
     let nodeStore: NodeStore
+    let skillStore: SkillStore
+    let skillMatcher: SkillMatcher
+    let skillTracker: SkillTracker
+    let seedSkillImporter: SeedSkillImporter
     let vectorStore: VectorStore
     let embeddingService: EmbeddingService
     let localLLM: LocalLLMService
@@ -100,6 +104,16 @@ final class AppEnvironment {
             throw AppBootstrapError.migrationFailed(name: "MemoryGraphBackfillService", underlying: error)
         }
 
+        let skillStore = SkillStore(nodeStore: nodeStore)
+        let skillMatcher = SkillMatcher()
+        let skillTracker = SkillTracker(store: skillStore)
+        let seedSkillImporter = SeedSkillImporter(store: skillStore)
+        do {
+            try seedSkillImporter.importSeeds()
+        } catch {
+            print("[SeedSkillImporter] failed during launch: \(error)")
+        }
+
         let vectorStore = VectorStore(nodeStore: nodeStore)
         let embeddingService = EmbeddingService()
         let localLLM = LocalLLMService()
@@ -175,6 +189,9 @@ final class AppEnvironment {
             llmServiceProvider: { settingsVM.makeLLMService() },
             currentProviderProvider: { settingsVM.selectedProvider },
             judgeLLMServiceFactory: { settingsVM.makeJudgeLLMService() },
+            skillStore: skillStore,
+            skillMatcher: skillMatcher,
+            skillTracker: skillTracker,
             governanceTelemetry: governanceTelemetry,
             scratchPadStore: scratchPadStore,
             shouldUseGeminiHistoryCache: { settingsVM.geminiHistoryCacheEnabled },
@@ -218,6 +235,10 @@ final class AppEnvironment {
 
         return AppDependencies(
             nodeStore: nodeStore,
+            skillStore: skillStore,
+            skillMatcher: skillMatcher,
+            skillTracker: skillTracker,
+            seedSkillImporter: seedSkillImporter,
             vectorStore: vectorStore,
             embeddingService: embeddingService,
             localLLM: localLLM,

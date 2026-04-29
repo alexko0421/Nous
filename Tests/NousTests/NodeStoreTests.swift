@@ -27,6 +27,118 @@ final class NodeStoreTests: XCTestCase {
         NousNode(type: type, title: title, content: content, projectId: projectId, isFavorite: isFavorite)
     }
 
+    private func temporaryDatabasePath() -> String {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NousNodeStoreTests-\(UUID().uuidString)")
+            .appendingPathExtension("sqlite")
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(atPath: url.path + "-shm")
+            try? FileManager.default.removeItem(atPath: url.path + "-wal")
+        }
+        return url.path
+    }
+
+    private func validSkillPayloadJSON() -> String {
+        """
+        {
+          "payloadVersion": 1,
+          "name": "test-skill",
+          "source": "alex",
+          "trigger": {
+            "kind": "always",
+            "modes": ["direction"],
+            "priority": 50
+          },
+          "action": {
+            "kind": "promptFragment",
+            "content": "Use concrete language."
+          },
+          "antiPatternExamples": []
+        }
+        """
+    }
+
+    private func insertRawSkillRow(
+        into database: Database,
+        id: UUID = UUID(),
+        payload: String,
+        state: String = "active"
+    ) throws {
+        let stmt = try database.prepare("""
+            INSERT INTO skills (id, user_id, payload, state, created_at, last_modified_at)
+            VALUES (?, 'alex', ?, ?, 1000.25, 1001.5);
+        """)
+        try stmt.bind(id.uuidString, at: 1)
+        try stmt.bind(payload, at: 2)
+        try stmt.bind(state, at: 3)
+        try stmt.step()
+    }
+
+    private func tableExists(_ table: String, in database: Database) throws -> Bool {
+        let stmt = try database.prepare("""
+            SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?;
+        """)
+        try stmt.bind(table, at: 1)
+        return try stmt.step()
+    }
+
+    private func columnTypes(for table: String, in database: Database) throws -> [String: String] {
+        let stmt = try database.prepare("PRAGMA table_info(\(table));")
+        var types: [String: String] = [:]
+        while try stmt.step() {
+            guard let name = stmt.text(at: 1),
+                  let type = stmt.text(at: 2) else {
+                continue
+            }
+            types[name] = type
+        }
+        return types
+    }
+
+    // MARK: - Schema Tests
+
+    func testSkillSchemaMigrationIsIdempotent() throws {
+        let path = temporaryDatabasePath()
+        _ = try NodeStore(path: path)
+
+        let migratedAgain = try NodeStore(path: path)
+
+        XCTAssertTrue(try tableExists("skills", in: migratedAgain.rawDatabase))
+    }
+
+    func testSkillsTableRejectsTypoState() throws {
+        XCTAssertTrue(try tableExists("skills", in: store.rawDatabase))
+        try insertRawSkillRow(into: store.rawDatabase, payload: validSkillPayloadJSON())
+
+        XCTAssertThrowsError(
+            try insertRawSkillRow(
+                into: store.rawDatabase,
+                payload: validSkillPayloadJSON(),
+                state: "actve"
+            )
+        )
+    }
+
+    func testSkillsTableRejectsCorruptPayloadJSON() throws {
+        XCTAssertTrue(try tableExists("skills", in: store.rawDatabase))
+
+        XCTAssertThrowsError(
+            try insertRawSkillRow(
+                into: store.rawDatabase,
+                payload: "{not json}"
+            )
+        )
+    }
+
+    func testSkillsDateColumnsUseRealStorage() throws {
+        let types = try columnTypes(for: "skills", in: store.rawDatabase)
+
+        XCTAssertEqual(types["created_at"]?.uppercased(), "REAL")
+        XCTAssertEqual(types["last_modified_at"]?.uppercased(), "REAL")
+        XCTAssertEqual(types["last_fired_at"]?.uppercased(), "REAL")
+    }
+
     // MARK: - Node Tests
 
     func testInsertAndFetchNode() throws {

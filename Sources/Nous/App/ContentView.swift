@@ -180,6 +180,7 @@ struct ContentView: View {
                 SettingsView(
                     vm: dependencies.settingsVM,
                     selectedTab: $selectedSettingsSection,
+                    skillStore: dependencies.skillStore,
                     userMemoryService: dependencies.userMemoryService,
                     telemetry: dependencies.governanceTelemetry,
                     galaxyRelationTelemetry: dependencies.galaxyRelationTelemetry,

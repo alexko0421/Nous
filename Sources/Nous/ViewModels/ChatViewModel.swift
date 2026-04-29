@@ -41,6 +41,9 @@ final class ChatViewModel {
     private let currentProviderProvider: () -> LLMProvider
     private let judgeLLMServiceFactory: () -> (any LLMService)?
     private let provocationJudgeFactory: (any LLMService) -> any Judging
+    private let skillStore: SkillStore?
+    private let skillMatcher: SkillMatcher?
+    private let skillTracker: SkillTracker?
     /// Stored as a typed `Task<JudgeVerdict, Error>` — not `Task<Void, …>` — so tests can
     /// `await task.value` and inspect the verdict directly. The slot is guarded on clear:
     /// a later `send()` may have already overwritten it with a new task ID, so only the task
@@ -123,6 +126,9 @@ final class ChatViewModel {
             judgeLLMServiceFactory: judgeLLMServiceFactory,
             provocationJudgeFactory: provocationJudgeFactory,
             governanceTelemetry: governanceTelemetry,
+            skillStore: skillStore,
+            skillMatcher: skillMatcher ?? SkillMatcher(),
+            skillTracker: skillTracker,
             runJudge: { [weak self] operation in
                 guard let self else { throw CancellationError() }
                 return try await self.executeJudgeTask(operation)
@@ -213,6 +219,9 @@ final class ChatViewModel {
         currentProviderProvider: @escaping () -> LLMProvider,
         judgeLLMServiceFactory: @escaping () -> (any LLMService)?,
         provocationJudgeFactory: @escaping (any LLMService) -> any Judging = { ProvocationJudge(llmService: $0) },
+        skillStore: SkillStore? = nil,
+        skillMatcher: SkillMatcher? = nil,
+        skillTracker: SkillTracker? = nil,
         governanceTelemetry: GovernanceTelemetryStore = GovernanceTelemetryStore(),
         geminiPromptCache: GeminiPromptCacheService = GeminiPromptCacheService(),
         scratchPadStore: ScratchPadStore,
@@ -232,6 +241,9 @@ final class ChatViewModel {
         self.currentProviderProvider = currentProviderProvider
         self.judgeLLMServiceFactory = judgeLLMServiceFactory
         self.provocationJudgeFactory = provocationJudgeFactory
+        self.skillStore = skillStore
+        self.skillMatcher = skillMatcher
+        self.skillTracker = skillTracker
         self.governanceTelemetry = governanceTelemetry
         self.geminiPromptCache = geminiPromptCache
         self.scratchPadStore = scratchPadStore
@@ -339,12 +351,46 @@ final class ChatViewModel {
         let openingText = agent.openingPrompt()
         #if DEBUG
         DebugAblation.logActiveFlags(context: "quick-mode-opening:\(mode)")
-        let openingAddendum: String? = DebugAblation.skipModeAddendum
-            ? nil
-            : agent.contextAddendum(turnIndex: 0)
-        #else
-        let openingAddendum = agent.contextAddendum(turnIndex: 0)
         #endif
+        let inferredOpeningAddendum = agent.contextAddendum(turnIndex: 0)
+        let skillOpeningAddendum: String? = {
+            #if DEBUG
+            if DebugAblation.skipModeAddendum {
+                SkillTraceLogger.logSkipped(
+                    mode: mode,
+                    turnIndex: 0,
+                    reason: "DebugAblation.skipModeAddendum"
+                )
+                return nil
+            }
+            #endif
+            guard let skillStore else { return nil }
+            let matcher = skillMatcher ?? SkillMatcher()
+            let active = (try? skillStore.fetchActiveSkills(userId: "alex")) ?? []
+            let matched = matcher.matchingSkills(
+                from: active,
+                context: SkillMatchContext(mode: mode, turnIndex: 0),
+                cap: 5
+            )
+            #if DEBUG
+            SkillTraceLogger.log(matched: matched, mode: mode, turnIndex: 0)
+            #endif
+            guard !matched.isEmpty else { return nil }
+
+            if let skillTracker {
+                let skillIds = matched.map(\.id)
+                Task.detached {
+                    try? await skillTracker.recordFire(skillIds: skillIds)
+                }
+            }
+
+            return matched.map { $0.payload.action.content }.joined(separator: "\n\n")
+        }()
+        let openingAddendumText = [inferredOpeningAddendum, skillOpeningAddendum]
+            .compactMap { $0 }
+            .joined(separator: "\n\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let openingAddendum = openingAddendumText.isEmpty ? nil : openingAddendumText
 
         var projectGoal: String? = nil
         if policy.includeProjectGoal,
