@@ -22,28 +22,32 @@ struct VoiceWaveformBars: View {
     private static let maxHeight: CGFloat = 22
     private static let phase: Double = 0.85
 
-    @State private var clock: Double = 0
-    private let timer = Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
-
-    var body: some View {
-        HStack(alignment: .center, spacing: Self.barGap) {
-            ForEach(0..<Self.barCount, id: \.self) { i in
-                RoundedRectangle(cornerRadius: Self.barWidth / 2)
-                    .fill(barColor)
-                    .frame(width: Self.barWidth, height: barHeight(forIndex: i))
-                    .animation(.spring(response: 0.18, dampingFraction: 0.7), value: barHeight(forIndex: i))
-                    .animation(.easeInOut(duration: 0.14), value: state)
-            }
-        }
-        .onReceive(timer) { _ in
-            guard !reduceMotion else { return }
-            clock += 1.0 / 30.0
-        }
+    private var isAnimating: Bool {
+        !reduceMotion && (state == .listening || state == .thinking)
     }
 
-    private func barHeight(forIndex i: Int) -> CGFloat {
-        if reduceMotion { return Self.minHeight + 6 }
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !isAnimating)) { context in
+            let clock = context.date.timeIntervalSinceReferenceDate
+            HStack(alignment: .center, spacing: Self.barGap) {
+                ForEach(0..<Self.barCount, id: \.self) { i in
+                    RoundedRectangle(cornerRadius: Self.barWidth / 2)
+                        .fill(barColor)
+                        .frame(width: Self.barWidth, height: barHeight(forIndex: i, clock: clock))
+                }
+            }
+            .animation(.easeInOut(duration: 0.14), value: state)
+        }
+        .accessibilityElement()
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private func barHeight(forIndex i: Int, clock: Double) -> CGFloat {
+        // Idle and error always show the spec's flat 4pt baseline, regardless of motion mode.
         if state == .idle || state == .error { return Self.minHeight }
+        // Reduce-motion still distinguishes "active" (listening/thinking) from idle/error
+        // by sitting at a stable 10pt midline rather than animating.
+        if reduceMotion { return Self.minHeight + 6 }
 
         let envelope = 0.6 + 0.4 * sin(Double(i) * Self.phase + clock)
         let raw = CGFloat(level) * CGFloat(envelope) * Self.maxHeight
@@ -56,6 +60,15 @@ struct VoiceWaveformBars: View {
         case .listening: return AppColor.colaOrange
         case .thinking:  return AppColor.colaOrange.opacity(0.6)
         case .error:     return Color.red
+        }
+    }
+
+    private var accessibilityLabel: Text {
+        switch state {
+        case .idle:      return Text("Voice idle")
+        case .listening: return Text("Listening")
+        case .thinking:  return Text("Thinking")
+        case .error:     return Text("Voice error")
         }
     }
 }
