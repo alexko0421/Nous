@@ -41,10 +41,6 @@ struct VoiceAudioLevelSmoother {
         value = (1 - alpha) * value + alpha * clamped
     }
 
-    mutating func reset() {
-        value = 0
-    }
-
     static func rms(samples: [Float]) -> Float {
         guard !samples.isEmpty else { return 0 }
         var sumSq: Float = 0
