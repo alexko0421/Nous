@@ -58,6 +58,10 @@ enum RealtimeVoiceEvent: Equatable {
     case sessionReady
     case toolCall(VoiceToolCall, callId: String)
     case outputAudioDelta(String)
+    case inputTranscriptDelta(String)
+    case inputTranscriptCompleted(String)
+    case outputTranscriptDelta(String)
+    case outputTranscriptCompleted(String)
     case responseDone
     case error(String)
 }
@@ -91,6 +95,26 @@ enum RealtimeVoiceEventParser {
                 return .error("Invalid audio delta")
             }
             return .outputAudioDelta(delta)
+        case "conversation.item.input_audio_transcription.delta":
+            guard let delta = json["delta"] as? String else {
+                return .error("Invalid input transcript delta")
+            }
+            return .inputTranscriptDelta(delta)
+        case "conversation.item.input_audio_transcription.completed":
+            guard let transcript = json["transcript"] as? String else {
+                return .error("Invalid input transcript completion")
+            }
+            return .inputTranscriptCompleted(transcript)
+        case "response.audio_transcript.delta", "response.output_audio_transcript.delta":
+            guard let delta = json["delta"] as? String else {
+                return .error("Invalid output transcript delta")
+            }
+            return .outputTranscriptDelta(delta)
+        case "response.audio_transcript.done", "response.output_audio_transcript.done":
+            guard let transcript = json["transcript"] as? String else {
+                return .error("Invalid output transcript completion")
+            }
+            return .outputTranscriptCompleted(transcript)
         case "response.done":
             return parseResponseDone(json)
         case "error":
@@ -207,6 +231,12 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
                         "format": [
                             "type": "audio/pcm",
                             "rate": 24000
+                        ],
+                        "noise_reduction": [
+                            "type": "near_field"
+                        ],
+                        "transcription": [
+                            "model": "gpt-4o-mini-transcribe"
                         ],
                         "turn_detection": [
                             "type": "semantic_vad"

@@ -20,6 +20,8 @@ final class RealtimeVoiceSessionTests: XCTestCase {
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let session = try XCTUnwrap(json["session"] as? [String: Any])
         let audio = try XCTUnwrap(session["audio"] as? [String: Any])
+        let input = try XCTUnwrap(audio["input"] as? [String: Any])
+        let transcription = try XCTUnwrap(input["transcription"] as? [String: Any])
         let output = try XCTUnwrap(audio["output"] as? [String: Any])
         let format = try XCTUnwrap(output["format"] as? [String: Any])
         let toolNames = try Self.toolNames(from: session)
@@ -28,6 +30,7 @@ final class RealtimeVoiceSessionTests: XCTestCase {
         XCTAssertEqual(session["type"] as? String, "realtime")
         XCTAssertNil(session["model"])
         XCTAssertEqual(session["output_modalities"] as? [String], ["audio"])
+        XCTAssertEqual(transcription["model"] as? String, "gpt-4o-mini-transcribe")
         XCTAssertEqual(output["voice"] as? String, "cedar")
         XCTAssertEqual(format["type"] as? String, "audio/pcm")
         XCTAssertEqual(format["rate"] as? Int, 24_000)
@@ -77,6 +80,30 @@ final class RealtimeVoiceSessionTests: XCTestCase {
         let raw = #"{"type":"response.output_audio.delta","delta":"abc123"}"#
 
         XCTAssertEqual(RealtimeVoiceEventParser.parse(raw), .outputAudioDelta("abc123"))
+    }
+
+    func testParsesInputAudioTranscriptionDelta() throws {
+        let raw = #"{"type":"conversation.item.input_audio_transcription.delta","delta":"Open"}"#
+
+        XCTAssertEqual(RealtimeVoiceEventParser.parse(raw), .inputTranscriptDelta("Open"))
+    }
+
+    func testParsesInputAudioTranscriptionCompleted() throws {
+        let raw = #"{"type":"conversation.item.input_audio_transcription.completed","transcript":"Open Galaxy"}"#
+
+        XCTAssertEqual(RealtimeVoiceEventParser.parse(raw), .inputTranscriptCompleted("Open Galaxy"))
+    }
+
+    func testParsesResponseAudioTranscriptDelta() throws {
+        let raw = #"{"type":"response.audio_transcript.delta","delta":"Opening"}"#
+
+        XCTAssertEqual(RealtimeVoiceEventParser.parse(raw), .outputTranscriptDelta("Opening"))
+    }
+
+    func testParsesResponseAudioTranscriptDone() throws {
+        let raw = #"{"type":"response.audio_transcript.done","transcript":"Opening Galaxy"}"#
+
+        XCTAssertEqual(RealtimeVoiceEventParser.parse(raw), .outputTranscriptCompleted("Opening Galaxy"))
     }
 
     func testParsesResponseDoneAsThinkingComplete() throws {

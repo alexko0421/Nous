@@ -258,6 +258,7 @@ struct ChatArea: View {
                         if voiceController.isActive || voiceController.status.shouldDisplayPill || voiceController.pendingAction != nil {
                             VoiceCapsuleView(
                                 status: voiceController.status,
+                                subtitleText: voiceController.subtitleText,
                                 hasPendingConfirmation: voiceController.pendingAction != nil,
                                 onConfirm: voiceController.confirmPendingAction,
                                 onCancel: voiceController.cancelPendingAction
@@ -282,7 +283,7 @@ struct ChatArea: View {
                         )
                         .allowsHitTesting(false)
                     )
-                    .allowsHitTesting(false)
+                    .allowsHitTesting(voiceController.pendingAction != nil)
                     .readHeight { floatingHeaderHeight = $0 }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 

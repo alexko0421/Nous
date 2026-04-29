@@ -3,6 +3,7 @@ import AppKit
 
 struct VoiceCapsuleView: View {
     let status: VoiceModeStatus
+    let subtitleText: String
     let hasPendingConfirmation: Bool
     let onConfirm: () -> Void
     let onCancel: () -> Void
@@ -12,13 +13,24 @@ struct VoiceCapsuleView: View {
             FrameSpinner(isAnimating: status == .listening || status == .thinking)
                 .frame(width: 16, height: 16)
 
-            Text(status.displayText)
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
-                .foregroundStyle(AppColor.colaDarkText)
-                .tracking(0.5) // Cinematic letter spacing
-                .lineLimit(1)
-                .contentTransition(.interpolate)
-                .animation(.easeOut(duration: 0.15), value: status.displayText)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(status.displayText)
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(AppColor.colaDarkText)
+                    .lineLimit(1)
+                    .contentTransition(.interpolate)
+                    .animation(.easeOut(duration: 0.15), value: status.displayText)
+
+                if !subtitleText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text(subtitleText)
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(AppColor.secondaryText)
+                        .lineLimit(1)
+                        .contentTransition(.interpolate)
+                        .animation(.easeOut(duration: 0.12), value: subtitleText)
+                }
+            }
+            .frame(maxWidth: 420, alignment: .leading)
 
             if hasPendingConfirmation {
                 HStack(spacing: 8) {
@@ -47,6 +59,7 @@ struct VoiceCapsuleView: View {
                 .stroke(AppColor.panelStroke.opacity(0.6), lineWidth: 1)
         )
         .animation(.spring(response: 0.35, dampingFraction: 0.75), value: status.displayText)
+        .animation(.spring(response: 0.35, dampingFraction: 0.75), value: subtitleText)
         .animation(.spring(response: 0.35, dampingFraction: 0.75), value: hasPendingConfirmation)
     }
 }

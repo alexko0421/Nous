@@ -139,6 +139,81 @@ final class VoiceCommandControllerTests: XCTestCase {
         XCTAssertEqual(session.functionOutputs, [.init(callId: "call-1", output: "Opening Galaxy")])
     }
 
+    func testRealtimeUserTranscriptStreamsIntoSubtitle() async throws {
+        let session = FakeRealtimeVoiceSession()
+        let controller = VoiceCommandController(session: session)
+
+        try await controller.start(apiKey: "sk-test")
+        await session.emit(.inputTranscriptDelta("Open"))
+        await session.emit(.inputTranscriptDelta(" Galaxy"))
+        await session.emit(.inputTranscriptCompleted("Open Galaxy"))
+
+        XCTAssertEqual(controller.subtitleText, "Open Galaxy")
+        XCTAssertEqual(controller.status, .thinking)
+    }
+
+    func testRealtimeAssistantTranscriptStreamsIntoSubtitle() async throws {
+        let session = FakeRealtimeVoiceSession()
+        let controller = VoiceCommandController(session: session)
+
+        try await controller.start(apiKey: "sk-test")
+        await session.emit(.outputTranscriptDelta("Opening"))
+        await session.emit(.outputTranscriptDelta(" Galaxy"))
+        await session.emit(.outputTranscriptCompleted("Opening Galaxy"))
+
+        XCTAssertEqual(controller.subtitleText, "Opening Galaxy")
+    }
+
+    func testStopClearsRealtimeSubtitle() async throws {
+        let session = FakeRealtimeVoiceSession()
+        let controller = VoiceCommandController(session: session)
+
+        try await controller.start(apiKey: "sk-test")
+        await session.emit(.inputTranscriptCompleted("Open Galaxy"))
+        controller.stop()
+
+        XCTAssertEqual(controller.subtitleText, "")
+        XCTAssertFalse(controller.isActive)
+        XCTAssertEqual(controller.status, .idle)
+    }
+
+    func testToolOutputIncludesFreshAppStateWhenConfigured() async throws {
+        let session = FakeRealtimeVoiceSession()
+        let controller = VoiceCommandController(session: session)
+        controller.configure(
+            VoiceActionHandlers(
+                navigate: { _ in },
+                setSidebarVisible: { _ in },
+                setScratchPadVisible: { _ in },
+                setComposerText: { _ in },
+                appendComposerText: { _ in },
+                clearComposer: {},
+                startNewChat: {},
+                sendMessage: { _ in },
+                createNote: { _, _ in },
+                appSnapshot: {
+                    VoiceAppSnapshot(
+                        currentTab: .galaxy,
+                        settingsSection: nil,
+                        composerText: "",
+                        selectedProjectName: "New York",
+                        sidebarVisible: true,
+                        scratchpadVisible: false,
+                        activeConversationTitle: "Voice mode"
+                    )
+                }
+            )
+        )
+
+        try await controller.start(apiKey: "sk-test")
+        await session.emit(.toolCall(.init(name: "navigate_to_tab", arguments: #"{"tab":"galaxy"}"#), callId: "call-state-sync"))
+
+        let output = try XCTUnwrap(session.functionOutputs.first?.output)
+        XCTAssertTrue(output.contains("Opening Galaxy"))
+        XCTAssertTrue(output.contains("APP_STATE:"))
+        XCTAssertTrue(output.contains(#""current_tab":"galaxy""#))
+    }
+
     func testRealtimeRejectedToolCallSendsRejectedFunctionOutput() async throws {
         let session = FakeRealtimeVoiceSession()
         let controller = VoiceCommandController(session: session)

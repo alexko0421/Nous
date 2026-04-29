@@ -392,6 +392,7 @@ struct ContentView: View {
                 if dependencies.voiceController.status.shouldDisplayPill || dependencies.voiceController.pendingAction != nil {
                     VoiceCapsuleView(
                         status: dependencies.voiceController.status,
+                        subtitleText: dependencies.voiceController.subtitleText,
                         hasPendingConfirmation: dependencies.voiceController.pendingAction != nil,
                         onConfirm: dependencies.voiceController.confirmPendingAction,
                         onCancel: dependencies.voiceController.cancelPendingAction

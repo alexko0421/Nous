@@ -11,12 +11,18 @@ final class VoiceCommandController {
     var status: VoiceModeStatus = .idle
     var pendingAction: VoicePendingAction?
     var isActive: Bool = false
+    var subtitleText: String = ""
 
     private var handlers: VoiceActionHandlers = .empty
     private let session: RealtimeVoiceSessioning
     private let memory: VoiceMemorySearching?
     private var memoryContextProvider: () -> VoiceMemoryContext? = { nil }
     private var lastToolOutput: String?
+    private var lastToolShouldIncludeAppState = false
+    private var inputTranscriptBuffer = ""
+    private var outputTranscriptBuffer = ""
+    private var inputTranscriptIsFinal = false
+    private var outputTranscriptIsFinal = false
     private var sessionGeneration = 0
 
     init(
@@ -38,6 +44,7 @@ final class VoiceCommandController {
     func markListening() {
         isActive = true
         status = .listening
+        resetTranscript()
     }
 
     func start(apiKey: String) async throws {
@@ -68,6 +75,7 @@ final class VoiceCommandController {
         isActive = false
         pendingAction = nil
         status = .idle
+        resetTranscript()
     }
 
     func handleRealtimeEvent(_ event: RealtimeVoiceEvent) async {
@@ -84,12 +92,15 @@ final class VoiceCommandController {
         case .toolCall(let call, let callId):
             do {
                 lastToolOutput = nil
+                lastToolShouldIncludeAppState = false
                 try await handleToolCall(call)
-                let output = lastToolOutput ?? status.displayText
+                let output = functionOutput(lastToolOutput ?? status.displayText)
                 lastToolOutput = nil
+                lastToolShouldIncludeAppState = false
                 await sendFunctionOutput(callId: callId, output: output, generation: generation)
             } catch {
                 lastToolOutput = nil
+                lastToolShouldIncludeAppState = false
                 restorePendingConfirmationStatus()
                 await sendFunctionOutput(callId: callId, output: "Voice command rejected", generation: generation)
             }
@@ -101,6 +112,18 @@ final class VoiceCommandController {
 
         case .outputAudioDelta:
             break
+
+        case .inputTranscriptDelta(let delta):
+            appendInputTranscript(delta)
+
+        case .inputTranscriptCompleted(let transcript):
+            completeInputTranscript(transcript)
+
+        case .outputTranscriptDelta(let delta):
+            appendOutputTranscript(delta)
+
+        case .outputTranscriptCompleted(let transcript):
+            completeOutputTranscript(transcript)
 
         case .error(let message):
             failVoiceSession(message: Self.userFacingVoiceError(for: message))
@@ -122,15 +145,18 @@ final class VoiceCommandController {
                 throw VoiceToolError.invalidArgument("tab")
             }
             handlers.navigate(target)
+            markAppStateChanged()
             status = .action(target.actionTitle)
 
         case "set_sidebar_visibility":
             handlers.setSidebarVisible(try requiredBool("visible", in: args))
+            markAppStateChanged()
             status = .action("Updated sidebar")
 
         case "set_scratchpad_visibility":
             let visible = try requiredBool("visible", in: args)
             handlers.setScratchPadVisible(visible)
+            markAppStateChanged()
             status = .action(visible ? "Opening Scratchpad" : "Closing Scratchpad")
 
         case "set_appearance_mode":
@@ -140,6 +166,7 @@ final class VoiceCommandController {
                 throw VoiceToolError.invalidArgument("mode")
             }
             handlers.setAppearanceMode(mode)
+            markAppStateChanged()
             status = .action(mode.actionTitle)
 
         case "open_settings_section":
@@ -149,22 +176,27 @@ final class VoiceCommandController {
                 throw VoiceToolError.invalidArgument("section")
             }
             handlers.openSettingsSection(section)
+            markAppStateChanged()
             status = .action(section.actionTitle)
 
         case "set_composer_text":
             handlers.setComposerText(try requiredString("text", in: args))
+            markAppStateChanged()
             status = .action("Drafting message")
 
         case "append_composer_text":
             handlers.appendComposerText(try requiredString("text", in: args))
+            markAppStateChanged()
             status = .action("Drafting message")
 
         case "clear_composer":
             handlers.clearComposer()
+            markAppStateChanged()
             status = .action("Cleared draft")
 
         case "start_new_chat":
             handlers.startNewChat()
+            markAppStateChanged()
             status = .action("New chat")
 
         case "search_memory":
@@ -205,6 +237,7 @@ final class VoiceCommandController {
         case "propose_send_message":
             try rejectIfPendingActionExists()
             pendingAction = .sendMessage(text: try requiredString("text", in: args))
+            markAppStateChanged()
             status = .needsConfirmation("Confirm send?")
 
         case "propose_note":
@@ -213,13 +246,16 @@ final class VoiceCommandController {
                 title: try requiredString("title", in: args),
                 body: try requiredString("body", in: args)
             )
+            markAppStateChanged()
             status = .needsConfirmation("Create note?")
 
         case "confirm_pending_action":
             confirmPendingAction()
+            markAppStateChanged()
 
         case "cancel_pending_action":
             cancelPendingAction()
+            markAppStateChanged()
 
         default:
             status = .error("Voice command rejected")
@@ -327,6 +363,7 @@ final class VoiceCommandController {
         isActive = false
         pendingAction = nil
         status = .error(message)
+        resetTranscript()
     }
 
     private static func userFacingVoiceError(for message: String) -> String {
@@ -349,5 +386,65 @@ final class VoiceCommandController {
         case .createNote:
             status = .needsConfirmation("Create note?")
         }
+    }
+
+    private func appendInputTranscript(_ delta: String) {
+        if inputTranscriptIsFinal {
+            inputTranscriptBuffer = ""
+        }
+        inputTranscriptIsFinal = false
+        outputTranscriptBuffer = ""
+        outputTranscriptIsFinal = false
+        inputTranscriptBuffer += delta
+        subtitleText = inputTranscriptBuffer
+    }
+
+    private func completeInputTranscript(_ transcript: String) {
+        inputTranscriptBuffer = transcript
+        inputTranscriptIsFinal = true
+        outputTranscriptBuffer = ""
+        outputTranscriptIsFinal = false
+        subtitleText = transcript
+        if pendingAction == nil {
+            status = .thinking
+        }
+    }
+
+    private func appendOutputTranscript(_ delta: String) {
+        if outputTranscriptIsFinal {
+            outputTranscriptBuffer = ""
+        }
+        outputTranscriptIsFinal = false
+        outputTranscriptBuffer += delta
+        subtitleText = outputTranscriptBuffer
+    }
+
+    private func completeOutputTranscript(_ transcript: String) {
+        outputTranscriptBuffer = transcript
+        outputTranscriptIsFinal = true
+        subtitleText = transcript
+    }
+
+    private func resetTranscript() {
+        subtitleText = ""
+        inputTranscriptBuffer = ""
+        outputTranscriptBuffer = ""
+        inputTranscriptIsFinal = false
+        outputTranscriptIsFinal = false
+    }
+
+    private func markAppStateChanged() {
+        lastToolShouldIncludeAppState = true
+    }
+
+    private func functionOutput(_ output: String) -> String {
+        guard lastToolShouldIncludeAppState else { return output }
+
+        let snapshot = handlers.appSnapshot()
+        guard snapshot != .empty,
+              let json = try? snapshot.jsonString() else {
+            return output
+        }
+        return "\(output)\n\nAPP_STATE:\n\(json)"
     }
 }
