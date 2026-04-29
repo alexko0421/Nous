@@ -13,6 +13,7 @@ final class VoiceCommandController {
     var isActive: Bool = false
     var subtitleText: String = ""
     var audioLevel: Float = 0
+    var visibleSurface: VoiceCapsuleSurface = .none
     var transcript: [VoiceTranscriptLine] = []
 
     private var handlers: VoiceActionHandlers = .empty
@@ -85,6 +86,7 @@ final class VoiceCommandController {
         sessionGeneration += 1
         session.stop()
         isActive = false
+        visibleSurface = .none
         pendingAction = nil
         status = .idle
         audioLevel = 0
@@ -122,6 +124,9 @@ final class VoiceCommandController {
             if pendingAction == nil {
                 status = .listening
             }
+
+        case .sessionEnded:
+            stop()
 
         case .outputAudioDelta:
             break
