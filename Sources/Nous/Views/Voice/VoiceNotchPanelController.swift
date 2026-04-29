@@ -92,7 +92,13 @@ final class VoiceNotchPanelController {
     }
 
     private func handleSpaceChange() {
-        // Recompute first — the new Space may flip the focus observer.
+        // Force the focus observer to re-evaluate live AppKit state right
+        // now — without waiting for its debounce or for window/app
+        // notifications. macOS does not reliably fire didBecomeKey /
+        // didBecomeActive when returning to the Space that already owns
+        // the main window, so the cached value can be stale at this
+        // instant.
+        focusObserver.forceRecomputeNow()
         recomputeFromCurrentState()
         // Then kick orderFront unconditionally if we should be on notch.
         // Even when visibleSurface didn't change, switching Spaces can drop
