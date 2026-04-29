@@ -72,6 +72,7 @@
 		3F9476D3C06B0F30A271AC5F /* GraphEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36CB503D39BB65E14D694E13 /* GraphEngine.swift */; };
 		3FA3B4F5C1E192C29BEE259F /* TurnMemoryContextBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAE291F0DA417715E94689C9 /* TurnMemoryContextBuilderTests.swift */; };
 		4032E7CC0FB56930AD4102AF /* MemoryEdge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00B4189452AEE45A8AD430A6 /* MemoryEdge.swift */; };
+		403DC6836D7E2AA502E8534D /* TurnMemoryContextBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 998ECCA254AFBAD30DB298CB /* TurnMemoryContextBuilder.swift */; };
 		410AF7748A165D45FB5BCFCB /* JudgeVerdictProvocationKindTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8F6220FBD068D395863141E /* JudgeVerdictProvocationKindTests.swift */; };
 		4116C4885DF5E1CB2FE62225 /* NodeStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 840F091AC2ADF85B26F1884A /* NodeStoreTests.swift */; };
 		41D0B1623E823F8601314C62 /* MemoryAtomEmbeddingBackfillService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79998481586F95FE0D0AAA2D /* MemoryAtomEmbeddingBackfillService.swift */; };
@@ -413,6 +414,7 @@
 		980D993D9778529752ED83B0 /* UserModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserModel.swift; sourceTree = "<group>"; };
 		98307413B1A35533835FC1ED /* NodeEdge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NodeEdge.swift; sourceTree = "<group>"; };
 		986A4BCA6E9150E04C414D3A /* UserMemoryFacade.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserMemoryFacade.swift; sourceTree = "<group>"; };
+		998ECCA254AFBAD30DB298CB /* TurnMemoryContextBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnMemoryContextBuilder.swift; sourceTree = "<group>"; };
 		99A974153DB5C96A52796407 /* NoteListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteListView.swift; sourceTree = "<group>"; };
 		9AB8C6C71AC65652DAD1E73A /* TurnPlanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnPlanner.swift; sourceTree = "<group>"; };
 		9B9F11A8A57B59E6B6F05D5D /* SkillPayloadCodableTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillPayloadCodableTests.swift; sourceTree = "<group>"; };
@@ -800,6 +802,7 @@
 				DE7BA25891C49772FFB4BCC0 /* TopicEmojiResolver.swift */,
 				8C8E0A3AC729D626855B55C4 /* TurnExecutor.swift */,
 				D581D26D1762D11D49F445EE /* TurnHousekeepingService.swift */,
+				998ECCA254AFBAD30DB298CB /* TurnMemoryContextBuilder.swift */,
 				7669455682D07783D0BF3E45 /* TurnOutcomeFactory.swift */,
 				9AB8C6C71AC65652DAD1E73A /* TurnPlanner.swift */,
 				C56F89842E01C0E5CBAA7C18 /* TurnSteward.swift */,
@@ -1243,6 +1246,7 @@
 				140A6ECC2AD69B4DCA7E72F9 /* TurnContracts.swift in Sources */,
 				38C64D2715EB4BB3BCC989EE /* TurnExecutor.swift in Sources */,
 				788E538B7EC87979E94FD6DA /* TurnHousekeepingService.swift in Sources */,
+				403DC6836D7E2AA502E8534D /* TurnMemoryContextBuilder.swift in Sources */,
 				338243FB97622C7B7EEA7D7B /* TurnOutcomeFactory.swift in Sources */,
 				BF1028C33700AB8FBCF0251F /* TurnPlanner.swift in Sources */,
 				C8D75DD55197FCC0FF7792F3 /* TurnSteward.swift in Sources */,
