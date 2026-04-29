@@ -288,7 +288,14 @@ final class VoiceCommandController {
     }
 
     func confirmPendingAction() {
-        guard let pendingAction else { return }
+        confirmWithToken(pendingActionToken)
+    }
+
+    func confirmWithToken(_ token: UUID?) {
+        guard let current = pendingActionToken,
+              let token,
+              token == current,
+              let pendingAction else { return }
         self.pendingAction = nil
         pendingActionToken = nil
 
@@ -303,6 +310,13 @@ final class VoiceCommandController {
     }
 
     func cancelPendingAction() {
+        cancelWithToken(pendingActionToken)
+    }
+
+    func cancelWithToken(_ token: UUID?) {
+        guard let current = pendingActionToken,
+              let token,
+              token == current else { return }
         pendingAction = nil
         pendingActionToken = nil
         status = .action("Cancelled")

@@ -115,6 +115,7 @@
 		656F474F5F06CCB507EE1ED6 /* QuickActionAgent.swift in Sources */ = {isa = PBXBuildFile; fileRef = D18F7D1D077A23BDBBD2B77A /* QuickActionAgent.swift */; };
 		68CE2F34053AA04B0EA7B42B /* VoiceActionRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2257F8C4D5ED497EDB832E9E /* VoiceActionRegistry.swift */; };
 		6A84B7B43C61864FEDBFDFDE /* CitableEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44C28A4978C6C55396ECB787 /* CitableEntry.swift */; };
+		6AED9B44D8410AD3C0BC496F /* VoiceCommandControllerIdempotencyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8C882918EE39BDCED210424 /* VoiceCommandControllerIdempotencyTests.swift */; };
 		6B37EE3D27ECE0C59559A4C4 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7573A5537C06A00728F5BAF0 /* main.swift */; };
 		6C325A0E0C4D177CA006A4C7 /* 03-no-tension-benign-question.json in Resources */ = {isa = PBXBuildFile; fileRef = 41F157D0F74132CE6EB9C623 /* 03-no-tension-benign-question.json */; };
 		710F27CAF3A4060C2886F172 /* SkillPayloadCodableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B9F11A8A57B59E6B6F05D5D /* SkillPayloadCodableTests.swift */; };
@@ -499,6 +500,7 @@
 		F790283A94823DBACE19C2AF /* GalaxyRelationEvalFixtureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalaxyRelationEvalFixtureTests.swift; sourceTree = "<group>"; };
 		F839455BCBC5668612A6A606 /* LLMService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMService.swift; sourceTree = "<group>"; };
 		F86B935D1EAADE74775C8652 /* VoiceCommandControllerTranscriptTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceCommandControllerTranscriptTests.swift; sourceTree = "<group>"; };
+		F8C882918EE39BDCED210424 /* VoiceCommandControllerIdempotencyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceCommandControllerIdempotencyTests.swift; sourceTree = "<group>"; };
 		F929EE116210CE8825174593 /* GalaxySceneContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalaxySceneContainer.swift; sourceTree = "<group>"; };
 		F99DD230882CC09237EDA591 /* ReflectionValidatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReflectionValidatorTests.swift; sourceTree = "<group>"; };
 		FABA17DD9995DE339580B39D /* FinderProjectSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinderProjectSyncService.swift; sourceTree = "<group>"; };
@@ -913,6 +915,7 @@
 				C94FF3DE937E45E699C4E0A2 /* VectorStoreTests.swift */,
 				0489C0AAC104652C57C82854 /* VoiceActionRegistryTests.swift */,
 				AEAB81A9BAD73AABC89F45E3 /* VoiceAudioCaptureTests.swift */,
+				F8C882918EE39BDCED210424 /* VoiceCommandControllerIdempotencyTests.swift */,
 				EFD309860C2B5F38E8EC1A9C /* VoiceCommandControllerTests.swift */,
 				A63497299EB4AA3979DE9AF4 /* VoiceMemoryFacadeTests.swift */,
 				34332DAC1DB987EEF307E380 /* WeeklyReflectionServiceTests.swift */,
@@ -1352,6 +1355,7 @@
 				E34CD9D07766CD3028575059 /* VoiceActionRegistryTests.swift in Sources */,
 				CA95BE49C08D1585A1F9BD28 /* VoiceAudioCaptureTests.swift in Sources */,
 				765216ED21BB4609F9DBE300 /* VoiceAudioLevelSmoothingTests.swift in Sources */,
+				6AED9B44D8410AD3C0BC496F /* VoiceCommandControllerIdempotencyTests.swift in Sources */,
 				E2837CFD74D35CA3FB702A87 /* VoiceCommandControllerTests.swift in Sources */,
 				2B8F1D178A0FD609518F73DB /* VoiceCommandControllerTranscriptTests.swift in Sources */,
 				8DB6F6CF58448033BB402860 /* VoiceMemoryFacadeTests.swift in Sources */,
