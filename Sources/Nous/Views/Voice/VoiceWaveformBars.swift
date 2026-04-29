@@ -49,9 +49,21 @@ struct VoiceWaveformBars: View {
         // by sitting at a stable 10pt midline rather than animating.
         if reduceMotion { return Self.minHeight + 6 }
 
+        // Baseline pulse so the bars always breathe in listening / thinking
+        // states, even when no audio is being captured (audio level == 0).
+        // Without this, a quiet mic shows a flat line and the capsule looks
+        // dead. The baseline is a slow per-bar oscillation between minHeight
+        // and ~40% of maxHeight.
+        let baselineEnvelope = 0.5 + 0.5 * sin(Double(i) * Self.phase + clock)
+        let baseline = Self.minHeight + CGFloat(baselineEnvelope) * (Self.maxHeight * 0.4 - Self.minHeight)
+
+        // Audio-driven envelope: scales the bars further when there's input.
         let envelope = 0.6 + 0.4 * sin(Double(i) * Self.phase + clock)
-        let raw = CGFloat(level) * CGFloat(envelope) * Self.maxHeight
-        return min(Self.maxHeight, max(Self.minHeight, raw))
+        let audioDriven = CGFloat(level) * CGFloat(envelope) * Self.maxHeight
+
+        // The visible height is whichever is taller — baseline ensures motion,
+        // audio-driven adds responsiveness when the user actually speaks.
+        return min(Self.maxHeight, max(baseline, audioDriven))
     }
 
     private var barColor: Color {

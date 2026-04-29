@@ -92,9 +92,13 @@ final class VoiceNotchPanelController {
     }
 
     private func handleSpaceChange() {
-        guard let voiceController else { return }
-        if voiceController.visibleSurface == .notch {
-            // Re-position (in case the active screen changed) and re-order front.
+        // Recompute first — the new Space may flip the focus observer.
+        recomputeFromCurrentState()
+        // Then kick orderFront unconditionally if we should be on notch.
+        // Even when visibleSurface didn't change, switching Spaces can drop
+        // the panel from the active Space's window stack; orderFront
+        // re-mounts it.
+        if voiceController?.visibleSurface == .notch {
             showPanel()
         }
     }
@@ -141,7 +145,13 @@ final class VoiceNotchPanelController {
     }
 
     static func isMainWorkspaceActive(appActive: Bool, focusObserverActive: Bool) -> Bool {
-        appActive || focusObserverActive
+        // Use the strict focus signal only. `appActive` (NSApp.isActive)
+        // remains true when Nous is the frontmost app even if its main
+        // window is on a different Space — that's the wrong moment to
+        // pretend we're "in-window". The focusObserver signal already
+        // bundles appActive && mainKey && !miniaturized, which is what
+        // we actually want.
+        focusObserverActive
     }
 
     private func applySurface(_ surface: VoiceCapsuleSurface) {

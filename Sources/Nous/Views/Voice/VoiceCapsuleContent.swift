@@ -41,8 +41,9 @@ struct VoiceCapsuleContent: View {
                     Text(subtitleText)
                         .font(.system(size: 12, weight: .medium, design: .rounded))
                         .foregroundStyle(AppColor.secondaryText)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
                         .contentTransition(.interpolate)
                         .animation(.easeOut(duration: 0.12), value: subtitleText)
                 }
