@@ -18,6 +18,7 @@ final class VoiceNotchPanelController {
     private var panel: NSPanel?
     private var hostingView: NSHostingView<NotchPanelRoot>?
     private var cancellables = Set<AnyCancellable>()
+    private var appActivationObservers: [NSObjectProtocol] = []
     private var screenChangeObserver: NSObjectProtocol?
     private var spaceChangeObserver: NSObjectProtocol?
 
@@ -31,6 +32,9 @@ final class VoiceNotchPanelController {
     }
 
     deinit {
+        for observer in appActivationObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
         if let obs = screenChangeObserver {
             NotificationCenter.default.removeObserver(obs)
         }
@@ -50,6 +54,16 @@ final class VoiceNotchPanelController {
         focusObserver.$isMainWindowKey
             .sink { [weak self] _ in self?.recomputeFromCurrentState() }
             .store(in: &cancellables)
+
+        let nc = NotificationCenter.default
+        for name in [NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification] {
+            let observer = nc.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.recomputeFromCurrentState()
+                }
+            }
+            appActivationObservers.append(observer)
+        }
 
         screenChangeObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
@@ -104,29 +118,30 @@ final class VoiceNotchPanelController {
         guard let voiceController else { return }
         recomputeSurface(
             isActive: voiceController.isActive,
-            isKey: focusObserver.isMainWindowKey
+            isMainWorkspaceActive: Self.isMainWorkspaceActive(
+                appActive: NSApp?.isActive ?? false,
+                focusObserverActive: focusObserver.isMainWindowKey
+            )
         )
     }
 
-    private func recomputeSurface(isActive: Bool, isKey: Bool) {
+    private func recomputeSurface(isActive: Bool, isMainWorkspaceActive: Bool) {
         guard let voiceController else { return }
-        // Frozen surface during pending confirmation (codex finding #6)
-        if voiceController.pendingAction != nil { return }
-
-        let next: VoiceCapsuleSurface
-        if !isActive {
-            next = .none
-        } else if isKey {
-            next = .inWindow
-        } else if NotchScreenDetection.currentNotchScreen() != nil {
-            next = .notch
-        } else {
-            next = .inWindow // notch-less fallback per spec § 6
-        }
+        let next = VoiceCapsuleSurfacePolicy.nextSurface(
+            isVoiceActive: isActive,
+            hasPendingAction: voiceController.pendingAction != nil,
+            currentSurface: voiceController.visibleSurface,
+            isMainWorkspaceActive: isMainWorkspaceActive,
+            hasNotchScreen: NotchScreenDetection.currentNotchScreen() != nil
+        )
         if voiceController.visibleSurface != next {
             voiceController.visibleSurface = next
             applySurface(next)
         }
+    }
+
+    static func isMainWorkspaceActive(appActive: Bool, focusObserverActive: Bool) -> Bool {
+        appActive || focusObserverActive
     }
 
     private func applySurface(_ surface: VoiceCapsuleSurface) {
@@ -146,6 +161,7 @@ final class VoiceNotchPanelController {
             createPanel(voiceController: voiceController)
         }
         positionPanel(on: screen)
+        panel?.orderFrontRegardless()
         panel?.orderFront(nil)
     }
 
@@ -165,18 +181,23 @@ final class VoiceNotchPanelController {
         // a notch overlay that should never be obscured by ordinary app
         // chrome but must defer to system-modal UI.
         panel.level = .popUpMenu
-        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
-        panel.isFloatingPanel = true
-        panel.becomesKeyOnlyIfNeeded = true
-        panel.backgroundColor = .clear
-        panel.isOpaque = false
-        panel.hasShadow = false
+        Self.configureForNotchOverlay(panel)
 
         let host = NSHostingView(rootView: NotchPanelRoot(voiceController: voiceController, bezelInset: 36))
         host.translatesAutoresizingMaskIntoConstraints = false
         panel.contentView = host
         self.hostingView = host
         self.panel = panel
+    }
+
+    static func configureForNotchOverlay(_ panel: NSPanel) {
+        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
+        panel.isFloatingPanel = true
+        panel.hidesOnDeactivate = false
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = false
     }
 
     private func positionPanel(on screen: NSScreen) {
@@ -241,9 +262,34 @@ private struct NotchPanelRoot: View {
             .padding(.vertical, 12)
             .background(NotchCapsuleBackground())
             .frame(maxWidth: 520) // Total capsule width cap (codex finding #14)
+            .contentShape(NotchCapsuleShape(cornerRadius: 24))
+            .onTapGesture {
+                Self.activateNousMainWindow()
+            }
             .allowsHitTesting(voiceController.visibleSurface == .notch)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    /// Brings Nous's main window to the front. SwiftUI `Button { }` calls
+    /// inside `VoiceCapsuleContent` (Stop / Confirm / Cancel) consume taps
+    /// before they reach this gesture, so action regions don't activate.
+    /// If the main window was closed (app persists via NousAppDelegate),
+    /// `applicationShouldHandleReopen` will recreate it on activation.
+    @MainActor
+    static func activateNousMainWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+        // Find the SwiftUI WindowGroup window and bring it forward.
+        let candidate = NSApp.windows.first(where: { $0.canBecomeMain && !$0.isExcludedFromWindowsMenu })
+        if let window = candidate {
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            window.makeKeyAndOrderFront(nil)
+        } else {
+            // No SwiftUI window currently exists — let AppKit's reopen path
+            // recreate it. NSApp.activate above triggers
+            // applicationShouldHandleReopen which reopens the WindowGroup.
+            NSApp.unhide(nil)
+        }
     }
 }
 
