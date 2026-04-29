@@ -16,6 +16,8 @@ struct ContentView: View {
     @State private var selectedProjectId: UUID?
     @State private var voiceAttachmentResetToken = UUID()
     @State private var isSetupComplete = UserDefaults.standard.bool(forKey: "nous.setup.complete")
+    @State private var voiceFocusObserver = VoiceMainWindowFocusObserver()
+    @State private var voiceNotchPanelController: VoiceNotchPanelController?
     @AppStorage("nous.appearance") private var appearanceMode = "system"
 
     private var preferredScheme: ColorScheme? {
@@ -67,6 +69,14 @@ struct ContentView: View {
                 globalVoicePill(dependencies: dependencies)
             }
             .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isSidebarVisible)
+            .onAppear {
+                if voiceNotchPanelController == nil {
+                    voiceNotchPanelController = VoiceNotchPanelController(
+                        voiceController: dependencies.voiceController,
+                        focusObserver: voiceFocusObserver
+                    )
+                }
+            }
             .task {
                 configureVoiceHandlers(dependencies: dependencies)
                 dependencies.chatVM.defaultProjectId = selectedProjectId
@@ -398,12 +408,6 @@ struct ContentView: View {
                         onConfirm: dependencies.voiceController.confirmPendingAction,
                         onCancel: dependencies.voiceController.cancelPendingAction
                     )
-                    VoiceTranscriptPanel(
-                        lines: dependencies.voiceController.transcript,
-                        isVisible: dependencies.voiceController.isActive
-                    )
-                    .padding(.top, 60)
-                    .allowsHitTesting(true)
                 }
 
                 VoiceModeButton(
