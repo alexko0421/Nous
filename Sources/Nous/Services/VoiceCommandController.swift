@@ -50,6 +50,7 @@ final class VoiceCommandController {
     func markListening() {
         isActive = true
         status = .listening
+        audioLevel = 0
         resetTranscript()
     }
 
@@ -443,7 +444,6 @@ final class VoiceCommandController {
         outputTranscriptBuffer = ""
         inputTranscriptIsFinal = false
         outputTranscriptIsFinal = false
-        audioLevel = 0
     }
 
     private func markAppStateChanged() {
