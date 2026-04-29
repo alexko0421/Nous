@@ -15,6 +15,7 @@
 		07FFF1026087C07958572C54 /* WelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B15EC86BFA4A972D811E5ADB /* WelcomeView.swift */; };
 		087613213E11E6A77C90CAA8 /* RecallRecentConversationsTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1E24B0D06643DB91388F1D /* RecallRecentConversationsTool.swift */; };
 		0897FF7F04A3BFFBA15F74C1 /* ConversationTitleBackfillService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 343400FF85DD098BEF4E8BB4 /* ConversationTitleBackfillService.swift */; };
+		08FB7FBB0F31A1014F894A1C /* VoiceNotchPanelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 629341ADDFEBDA82351115CF /* VoiceNotchPanelController.swift */; };
 		0919DDAECB019951AC02AC54 /* ContextContinuationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E81FA7AC6106C3C19BCC49 /* ContextContinuationService.swift */; };
 		09B75DE0A6B82483097AAD40 /* AgentLoopExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 146D5460820127BB59A49B56 /* AgentLoopExecutor.swift */; };
 		0A543A16EE7B4C96E7893DD2 /* GalaxyScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54D7B196613E93EAF2C72EF8 /* GalaxyScene.swift */; };
@@ -367,6 +368,7 @@
 		60337BBB3C88565635D1C1C1 /* GalaxyRelationTuning.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalaxyRelationTuning.swift; sourceTree = "<group>"; };
 		603848DA5F2646476CEFD703 /* QuickActionOpeningRunnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickActionOpeningRunnerTests.swift; sourceTree = "<group>"; };
 		61F80CE82A4CBD8E318753AF /* UserMemoryProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserMemoryProfile.swift; sourceTree = "<group>"; };
+		629341ADDFEBDA82351115CF /* VoiceNotchPanelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceNotchPanelController.swift; sourceTree = "<group>"; };
 		63558731B5D9A45DD29170B9 /* NousTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NousTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		6584D5A0074D2B750107B7CA /* PromptGovernanceTraceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptGovernanceTraceTests.swift; sourceTree = "<group>"; };
 		65BFE96BBB3B4F647460E8BE /* FinderProjectSyncServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinderProjectSyncServiceTests.swift; sourceTree = "<group>"; };
@@ -612,6 +614,7 @@
 				4D3C1F273307486B5EEB8FCD /* NotchScreenDetection.swift */,
 				56FEE69E49FFEDDDC18A2909 /* VoiceCapsuleContent.swift */,
 				6B395666704CC01A60D84CA8 /* VoiceMainWindowFocusObserver.swift */,
+				629341ADDFEBDA82351115CF /* VoiceNotchPanelController.swift */,
 				65FF9FAAED20493D36FC8629 /* VoiceTranscriptPanel.swift */,
 				56B4306968099267E4DF183A /* VoiceWaveformBars.swift */,
 			);
@@ -1282,6 +1285,7 @@
 				FBBAF5CA58AA6F72F3D686D6 /* VoiceMainWindowFocusObserver.swift in Sources */,
 				E6D3F07FC3C05F45B68A5B5E /* VoiceMemoryFacade.swift in Sources */,
 				DEA87961CBF63ADDB23F74AB /* VoiceModeModels.swift in Sources */,
+				08FB7FBB0F31A1014F894A1C /* VoiceNotchPanelController.swift in Sources */,
 				42015586AB02DBCB895C3064 /* VoiceTranscriptLine.swift in Sources */,
 				C1FA2EB6FE75A45E68A7B494 /* VoiceTranscriptPanel.swift in Sources */,
 				489E01A671D30AB98A9434E4 /* VoiceWaveformBars.swift in Sources */,
