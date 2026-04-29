@@ -155,13 +155,16 @@ final class VoiceNotchPanelController {
 
     private func createPanel(voiceController: VoiceCommandController) {
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 360, height: 100),
+            contentRect: NSRect(x: 0, y: 0, width: 360, height: 110),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
-        // Level chosen by Spike A (skipped; verify in Phase 6 QA).
-        panel.level = .statusBar
+        // popUpMenu sits above .statusBar / .floating / menu bar but below
+        // Spotlight, Control Center, and modal panels — the right slot for
+        // a notch overlay that should never be obscured by ordinary app
+        // chrome but must defer to system-modal UI.
+        panel.level = .popUpMenu
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
         panel.isFloatingPanel = true
         panel.becomesKeyOnlyIfNeeded = true
@@ -169,7 +172,7 @@ final class VoiceNotchPanelController {
         panel.isOpaque = false
         panel.hasShadow = false
 
-        let host = NSHostingView(rootView: NotchPanelRoot(voiceController: voiceController))
+        let host = NSHostingView(rootView: NotchPanelRoot(voiceController: voiceController, bezelInset: 36))
         host.translatesAutoresizingMaskIntoConstraints = false
         panel.contentView = host
         self.hostingView = host
@@ -179,20 +182,28 @@ final class VoiceNotchPanelController {
     private func positionPanel(on screen: NSScreen) {
         guard let panel else { return }
         // Position the panel so its top edge is at the absolute top of the
-        // screen — i.e., extending into the bezel/notch area. The SwiftUI
-        // 36pt Spacer at the top of NotchPanelRoot puts the visible Liquid
-        // Glass capsule directly under the bezel boundary, regardless of
-        // what `safeAreaInsets.top` reports (which can vary across macOS
-        // versions, display configs, and notch / non-notch Macs).
+        // screen, extending into the bezel/notch area. The SwiftUI Spacer
+        // at the top of NotchPanelRoot uses the screen's actual
+        // safeAreaInsets.top to absorb the bezel height (~32pt on 14"
+        // M-series, ~38-40pt on 16" / Pro Display XDR, etc.) so the
+        // visible Liquid Glass capsule's top edge sits flush with the
+        // bezel boundary on every notched Mac.
+        let bezel = max(screen.safeAreaInsets.top, 32)
         let width: CGFloat = 360
-        let height: CGFloat = 100
+        let visibleCapsuleHeight: CGFloat = 74 // 12pt padding + content + 12pt padding (~50pt content)
+        let totalHeight = bezel + visibleCapsuleHeight
         let frame = NSRect(
             x: screen.frame.midX - width/2,
-            y: screen.frame.maxY - height,
+            y: screen.frame.maxY - totalHeight,
             width: width,
-            height: height
+            height: totalHeight
         )
         panel.setFrame(frame, display: true)
+
+        // Re-host with the right bezel inset so the spacer matches this screen.
+        if let voiceController {
+            hostingView?.rootView = NotchPanelRoot(voiceController: voiceController, bezelInset: bezel)
+        }
     }
 
     private func repositionPanel() {
@@ -206,11 +217,15 @@ final class VoiceNotchPanelController {
 
 private struct NotchPanelRoot: View {
     @Bindable var voiceController: VoiceCommandController
+    let bezelInset: CGFloat
 
     var body: some View {
         VStack(spacing: 0) {
-            // Top 36pt sits behind the bezel and is masked by the hardware notch.
-            Spacer().frame(height: 36)
+            // The top `bezelInset` sits behind the hardware notch / bezel
+            // and is physically masked. Computed from the live screen's
+            // safeAreaInsets.top so the capsule sits flush with the bezel
+            // boundary on every notched Mac.
+            Spacer().frame(height: bezelInset)
 
             VoiceCapsuleContent(
                 status: voiceController.status,
