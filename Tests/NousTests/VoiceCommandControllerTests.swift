@@ -3,6 +3,29 @@ import XCTest
 
 @MainActor
 final class VoiceCommandControllerTests: XCTestCase {
+    func testVoiceModeToggleMissingKeyReportsUnavailableWithoutNavigationIntent() {
+        XCTAssertEqual(
+            VoiceModeTogglePolicy.action(isActive: false, isVoiceModeAvailable: false, apiKey: ""),
+            .unavailable("Add OpenAI API key")
+        )
+    }
+
+    func testVoiceModeToggleUsesSwitchSemanticsWhenConfigured() {
+        XCTAssertEqual(
+            VoiceModeTogglePolicy.action(isActive: false, isVoiceModeAvailable: true, apiKey: " sk-test \n"),
+            .start(apiKey: " sk-test \n")
+        )
+        XCTAssertEqual(
+            VoiceModeTogglePolicy.action(isActive: true, isVoiceModeAvailable: false, apiKey: ""),
+            .stop
+        )
+    }
+
+    func testVoiceStatusErrorsRemainVisibleWhileInactive() {
+        XCTAssertTrue(VoiceModeStatus.error("Add OpenAI API key").shouldDisplayPill)
+        XCTAssertFalse(VoiceModeStatus.idle.shouldDisplayPill)
+    }
+
     func testStartRejectsWhitespaceAPIKey() async {
         let session = FakeRealtimeVoiceSession()
         let controller = VoiceCommandController(session: session)
@@ -125,6 +148,51 @@ final class VoiceCommandControllerTests: XCTestCase {
 
         XCTAssertEqual(controller.status, .error("Voice command rejected"))
         XCTAssertEqual(session.functionOutputs, [.init(callId: "call-2", output: "Voice command rejected")])
+    }
+
+    func testGetAppStateReturnsSnapshotToolOutput() async throws {
+        let session = FakeRealtimeVoiceSession()
+        let controller = VoiceCommandController(session: session)
+        controller.configure(
+            VoiceActionHandlers(
+                navigate: { _ in },
+                setSidebarVisible: { _ in },
+                setScratchPadVisible: { _ in },
+                setComposerText: { _ in },
+                appendComposerText: { _ in },
+                clearComposer: {},
+                startNewChat: {},
+                sendMessage: { _ in },
+                createNote: { _, _ in },
+                appSnapshot: {
+                    VoiceAppSnapshot(
+                        currentTab: .settings,
+                        settingsSection: .models,
+                        composerText: "Draft from voice",
+                        selectedProjectName: "New York",
+                        sidebarVisible: true,
+                        scratchpadVisible: false,
+                        activeConversationTitle: "Voice mode"
+                    )
+                }
+            )
+        )
+
+        try await controller.start(apiKey: "sk-test")
+        await session.emit(.toolCall(.init(name: "get_app_state", arguments: #"{}"#), callId: "call-state"))
+
+        let output = try XCTUnwrap(session.functionOutputs.first?.output)
+        let data = try XCTUnwrap(output.data(using: .utf8))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        XCTAssertEqual(controller.status, .action("Reading app state"))
+        XCTAssertEqual(json["current_tab"] as? String, "settings")
+        XCTAssertEqual(json["settings_section"] as? String, "models")
+        XCTAssertEqual(json["composer_text"] as? String, "Draft from voice")
+        XCTAssertEqual(json["selected_project_name"] as? String, "New York")
+        XCTAssertEqual(json["sidebar_visible"] as? Bool, true)
+        XCTAssertEqual(json["scratchpad_visible"] as? Bool, false)
+        XCTAssertEqual(json["active_conversation_title"] as? String, "Voice mode")
     }
 
     func testSearchMemoryToolReturnsFacadeOutput() async throws {
@@ -336,6 +404,18 @@ final class VoiceCommandControllerTests: XCTestCase {
         XCTAssertEqual(controller.status, .error("Voice unavailable"))
     }
 
+    func testRealtimeQuotaErrorShowsActionableStatus() async throws {
+        let session = FakeRealtimeVoiceSession()
+        let controller = VoiceCommandController(session: session)
+
+        try await controller.start(apiKey: "sk-test")
+        await session.emit(.error("You exceeded your current quota, please check your plan and billing details."))
+
+        XCTAssertEqual(session.stopCallCount, 1)
+        XCTAssertFalse(controller.isActive)
+        XCTAssertEqual(controller.status, .error("OpenAI quota exceeded"))
+    }
+
     func testSendFunctionOutputFailureStopsVoiceMode() async throws {
         let session = FakeRealtimeVoiceSession()
         session.sendFunctionOutputError = RealtimeVoiceSocketError.notConnected
@@ -446,6 +526,63 @@ final class VoiceCommandControllerTests: XCTestCase {
         XCTAssertEqual(navigated, .galaxy)
         XCTAssertEqual(controller.status, .action("Opening Galaxy"))
         XCTAssertNil(controller.pendingAction)
+    }
+
+    func testSetAppearanceModeToolUpdatesStatusAndCallsHandler() async throws {
+        let controller = VoiceCommandController()
+        var appearanceMode: VoiceAppearanceMode?
+        controller.configure(
+            VoiceActionHandlers(
+                navigate: { _ in },
+                setSidebarVisible: { _ in },
+                setScratchPadVisible: { _ in },
+                setComposerText: { _ in },
+                appendComposerText: { _ in },
+                clearComposer: {},
+                startNewChat: {},
+                sendMessage: { _ in },
+                createNote: { _, _ in },
+                setAppearanceMode: { appearanceMode = $0 }
+            )
+        )
+
+        try await controller.handleToolCall(.init(name: "set_appearance_mode", arguments: #"{"mode":"dark"}"#))
+
+        XCTAssertEqual(appearanceMode, .dark)
+        XCTAssertEqual(controller.status, .action("Dark Mode"))
+        XCTAssertNil(controller.pendingAction)
+    }
+
+    func testOpenSettingsSectionKeepsActiveSession() async throws {
+        let session = FakeRealtimeVoiceSession()
+        let controller = VoiceCommandController(session: session)
+        var openedSection: VoiceSettingsSection?
+        controller.configure(
+            VoiceActionHandlers(
+                navigate: { _ in },
+                setSidebarVisible: { _ in },
+                setScratchPadVisible: { _ in },
+                setComposerText: { _ in },
+                appendComposerText: { _ in },
+                clearComposer: {},
+                startNewChat: {},
+                sendMessage: { _ in },
+                createNote: { _, _ in },
+                openSettingsSection: { openedSection = $0 }
+            )
+        )
+
+        try await controller.start(apiKey: "sk-test")
+        await session.emit(.toolCall(
+            .init(name: "open_settings_section", arguments: #"{"section":"models"}"#),
+            callId: "call-settings"
+        ))
+
+        XCTAssertEqual(openedSection, .models)
+        XCTAssertTrue(controller.isActive)
+        XCTAssertEqual(session.stopCallCount, 0)
+        XCTAssertEqual(controller.status, .action("Opening Model Settings"))
+        XCTAssertEqual(session.functionOutputs, [.init(callId: "call-settings", output: "Opening Model Settings")])
     }
 
     func testUnknownToolIsRejectedWithoutMutation() async {

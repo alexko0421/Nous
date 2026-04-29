@@ -57,6 +57,7 @@ enum RealtimeVoiceSocketError: Error {
 enum RealtimeVoiceEvent: Equatable {
     case sessionReady
     case toolCall(VoiceToolCall, callId: String)
+    case outputAudioDelta(String)
     case responseDone
     case error(String)
 }
@@ -85,6 +86,11 @@ enum RealtimeVoiceEventParser {
                 return .error("Invalid tool call")
             }
             return .toolCall(VoiceToolCall(name: name, arguments: arguments), callId: callId)
+        case "response.output_audio.delta", "response.audio.delta":
+            guard let delta = json["delta"] as? String else {
+                return .error("Invalid audio delta")
+            }
+            return .outputAudioDelta(delta)
         case "response.done":
             return parseResponseDone(json)
         case "error":
@@ -114,10 +120,11 @@ enum RealtimeVoiceEventParser {
 }
 
 final class RealtimeVoiceSession: RealtimeVoiceSessioning {
-    static let defaultModel = "gpt-realtime"
+    static let defaultModel = "gpt-realtime-mini"
 
     private let socket: RealtimeVoiceSocketing
     private let audioCapture: VoiceAudioCapturing?
+    private let audioPlayback: VoiceAudioPlaying?
     private let includeMemoryTools: Bool
     private var receiveTask: Task<Void, Never>?
     private var outboundQueue: RealtimeVoiceOutboundQueue?
@@ -125,10 +132,12 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
     init(
         socket: RealtimeVoiceSocketing = URLSessionRealtimeVoiceSocket(),
         audioCapture: VoiceAudioCapturing? = VoiceAudioCapture(),
+        audioPlayback: VoiceAudioPlaying? = VoiceAudioPlayback(),
         includeMemoryTools: Bool = false
     ) {
         self.socket = socket
         self.audioCapture = audioCapture
+        self.audioPlayback = audioPlayback
         self.includeMemoryTools = includeMemoryTools
     }
 
@@ -148,6 +157,7 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
 
         do {
             try await socket.connect(request: Self.makeRequest(apiKey: apiKey))
+            try audioPlayback?.start()
             let queue = RealtimeVoiceOutboundQueue(maxPendingAudioChunks: 8)
             outboundQueue = queue
             queue.start(socket: socket, onEvent: onEvent)
@@ -178,6 +188,7 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
         outboundQueue = nil
         queue?.stop()
         audioCapture?.stop()
+        audioPlayback?.stop()
         socket.close()
     }
 
@@ -190,7 +201,7 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
             "session": [
                 "type": "realtime",
                 "instructions": voiceInstructions,
-                "output_modalities": ["text"],
+                "output_modalities": ["audio"],
                 "audio": [
                     "input": [
                         "format": [
@@ -200,9 +211,10 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
                         "turn_detection": [
                             "type": "semantic_vad"
                         ]
-                    ]
+                    ],
+                    "output": audioOutputConfiguration
                 ],
-                "tools": voiceToolDeclarations(includeMemoryTools: includeMemoryTools),
+                "tools": VoiceActionRegistry.declarations(includeMemoryTools: includeMemoryTools),
                 "tool_choice": "auto"
             ]
         ]
@@ -217,6 +229,10 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
                 do {
                     guard let raw = try await socket.receive() else { break }
                     guard let event = RealtimeVoiceEventParser.parse(raw) else { continue }
+                    if case .outputAudioDelta(let base64Audio) = event {
+                        audioPlayback?.enqueue(base64PCM16Audio: base64Audio)
+                        continue
+                    }
                     await onEvent(event)
                 } catch {
                     if Task.isCancelled { break }
@@ -249,130 +265,27 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
         try JSONSerialization.data(withJSONObject: [
             "type": "response.create",
             "response": [
-                "output_modalities": ["text"]
+                "output_modalities": ["audio"],
+                "audio": [
+                    "output": audioOutputConfiguration
+                ]
             ]
         ])
     }
 
+    private static let audioOutputConfiguration: [String: Any] = [
+        "format": [
+            "type": "audio/pcm",
+            "rate": 24_000
+        ],
+        "voice": "cedar"
+    ]
+
     private static let voiceInstructions = """
     You are the voice control layer for Nous. Call tools only for explicit user intent. \
-    Use direct tools for navigation, scratchpad/sidebar visibility, and composer drafting. \
+    Use direct tools for navigation, settings sections, appearance, scratchpad/sidebar visibility, and composer drafting. \
     Use propose_* tools for sending messages or creating notes. Never claim you clicked UI.
     """
-
-    private static func voiceToolDeclarations(includeMemoryTools: Bool) -> [[String: Any]] {
-        includeMemoryTools
-            ? baseVoiceToolDeclarations + memoryVoiceToolDeclarations
-            : baseVoiceToolDeclarations
-    }
-
-    private static let baseVoiceToolDeclarations: [[String: Any]] = [
-        functionTool(
-            name: "navigate_to_tab",
-            description: "Navigate to a main Nous tab.",
-            properties: [
-                "tab": ["type": "string", "enum": ["chat", "notes", "galaxy", "settings"]]
-            ],
-            required: ["tab"]
-        ),
-        functionTool(
-            name: "set_sidebar_visibility",
-            description: "Show or hide the left sidebar.",
-            properties: ["visible": ["type": "boolean"]],
-            required: ["visible"]
-        ),
-        functionTool(
-            name: "set_scratchpad_visibility",
-            description: "Show or hide the scratchpad panel.",
-            properties: ["visible": ["type": "boolean"]],
-            required: ["visible"]
-        ),
-        functionTool(
-            name: "set_composer_text",
-            description: "Replace the current composer draft.",
-            properties: ["text": ["type": "string"]],
-            required: ["text"]
-        ),
-        functionTool(
-            name: "append_composer_text",
-            description: "Append text to the current composer draft.",
-            properties: ["text": ["type": "string"]],
-            required: ["text"]
-        ),
-        functionTool(
-            name: "clear_composer",
-            description: "Clear the current composer draft.",
-            properties: [:],
-            required: []
-        ),
-        functionTool(
-            name: "start_new_chat",
-            description: "Start a blank chat state.",
-            properties: [:],
-            required: []
-        ),
-        functionTool(
-            name: "propose_send_message",
-            description: "Propose sending a chat message. The app will ask for confirmation.",
-            properties: ["text": ["type": "string"]],
-            required: ["text"]
-        ),
-        functionTool(
-            name: "propose_note",
-            description: "Propose creating a note. The app will ask for confirmation.",
-            properties: ["title": ["type": "string"], "body": ["type": "string"]],
-            required: ["title", "body"]
-        ),
-        functionTool(
-            name: "confirm_pending_action",
-            description: "Confirm the pending send or create action.",
-            properties: [:],
-            required: []
-        ),
-        functionTool(
-            name: "cancel_pending_action",
-            description: "Cancel the pending send or create action.",
-            properties: [:],
-            required: []
-        )
-    ]
-
-    private static let memoryVoiceToolDeclarations: [[String: Any]] = [
-        functionTool(
-            name: "search_memory",
-            description: "Search Nous memory for short read-only context.",
-            properties: [
-                "query": ["type": "string"],
-                "limit": ["type": "integer"]
-            ],
-            required: ["query"]
-        ),
-        functionTool(
-            name: "recall_recent_conversations",
-            description: "Recall short read-only summaries from recent conversations.",
-            properties: ["limit": ["type": "integer"]],
-            required: []
-        )
-    ]
-
-    private static func functionTool(
-        name: String,
-        description: String,
-        properties: [String: Any],
-        required: [String]
-    ) -> [String: Any] {
-        [
-            "type": "function",
-            "name": name,
-            "description": description,
-            "parameters": [
-                "type": "object",
-                "properties": properties,
-                "required": required,
-                "additionalProperties": false
-            ]
-        ]
-    }
 }
 
 private final class RealtimeVoiceOutboundQueue {

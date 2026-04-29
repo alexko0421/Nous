@@ -8,6 +8,15 @@ enum VoiceModeStatus: Equatable {
     case needsConfirmation(String)
     case error(String)
 
+    var shouldDisplayPill: Bool {
+        switch self {
+        case .idle:
+            return false
+        case .listening, .thinking, .action, .needsConfirmation, .error:
+            return true
+        }
+    }
+
     var displayText: String {
         switch self {
         case .idle: return "Voice"
@@ -17,6 +26,30 @@ enum VoiceModeStatus: Equatable {
         case .needsConfirmation(let text): return text
         case .error(let text): return text
         }
+    }
+}
+
+enum VoiceModeToggleAction: Equatable {
+    case stop
+    case start(apiKey: String)
+    case unavailable(String)
+}
+
+enum VoiceModeTogglePolicy {
+    static func action(
+        isActive: Bool,
+        isVoiceModeAvailable: Bool,
+        apiKey: String
+    ) -> VoiceModeToggleAction {
+        if isActive {
+            return .stop
+        }
+
+        guard isVoiceModeAvailable else {
+            return .unavailable("Add OpenAI API key")
+        }
+
+        return .start(apiKey: apiKey)
     }
 }
 
@@ -34,6 +67,82 @@ enum VoiceNavigationTarget: String, CaseIterable, Equatable {
         case .settings: return "Opening Settings"
         }
     }
+}
+
+enum VoiceAppearanceMode: String, CaseIterable, Equatable {
+    case light
+    case dark
+    case system
+
+    var actionTitle: String {
+        switch self {
+        case .light: return "Light Mode"
+        case .dark: return "Dark Mode"
+        case .system: return "Auto Appearance"
+        }
+    }
+}
+
+enum VoiceSettingsSection: String, CaseIterable, Equatable {
+    case profile
+    case general
+    case models
+    case memory
+
+    var actionTitle: String {
+        switch self {
+        case .profile: return "Opening Profile Settings"
+        case .general: return "Opening General Settings"
+        case .models: return "Opening Model Settings"
+        case .memory: return "Opening Memory Settings"
+        }
+    }
+}
+
+enum VoiceActionRisk: Equatable {
+    case direct
+    case confirmationRequired
+    case readOnly
+}
+
+struct VoiceAppSnapshot: Equatable {
+    var currentTab: VoiceNavigationTarget
+    var settingsSection: VoiceSettingsSection?
+    var composerText: String
+    var selectedProjectName: String?
+    var sidebarVisible: Bool
+    var scratchpadVisible: Bool
+    var activeConversationTitle: String?
+
+    func jsonString() throws -> String {
+        let data = try JSONSerialization.data(
+            withJSONObject: [
+                "current_tab": currentTab.rawValue,
+                "settings_section": Self.stringOrNull(settingsSection?.rawValue),
+                "composer_text": composerText,
+                "selected_project_name": Self.stringOrNull(selectedProjectName),
+                "sidebar_visible": sidebarVisible,
+                "scratchpad_visible": scratchpadVisible,
+                "active_conversation_title": Self.stringOrNull(activeConversationTitle)
+            ],
+            options: [.sortedKeys]
+        )
+        return String(data: data, encoding: .utf8) ?? "{}"
+    }
+
+    private static func stringOrNull(_ value: String?) -> Any {
+        value ?? NSNull()
+    }
+
+    static let empty = VoiceAppSnapshot(
+        currentTab: .chat,
+        settingsSection: nil,
+        composerText: "",
+        selectedProjectName: nil,
+        sidebarVisible: false,
+        scratchpadVisible: false,
+        activeConversationTitle: nil
+    )
 }
 
 struct VoiceToolCall: Equatable {
@@ -64,6 +173,37 @@ struct VoiceActionHandlers {
     var startNewChat: () -> Void
     var sendMessage: (String) -> Void
     var createNote: (String, String) -> Void
+    var setAppearanceMode: (VoiceAppearanceMode) -> Void
+    var openSettingsSection: (VoiceSettingsSection) -> Void
+    var appSnapshot: () -> VoiceAppSnapshot
+
+    init(
+        navigate: @escaping (VoiceNavigationTarget) -> Void,
+        setSidebarVisible: @escaping (Bool) -> Void,
+        setScratchPadVisible: @escaping (Bool) -> Void,
+        setComposerText: @escaping (String) -> Void,
+        appendComposerText: @escaping (String) -> Void,
+        clearComposer: @escaping () -> Void,
+        startNewChat: @escaping () -> Void,
+        sendMessage: @escaping (String) -> Void,
+        createNote: @escaping (String, String) -> Void,
+        setAppearanceMode: @escaping (VoiceAppearanceMode) -> Void = { _ in },
+        openSettingsSection: @escaping (VoiceSettingsSection) -> Void = { _ in },
+        appSnapshot: @escaping () -> VoiceAppSnapshot = { .empty }
+    ) {
+        self.navigate = navigate
+        self.setSidebarVisible = setSidebarVisible
+        self.setScratchPadVisible = setScratchPadVisible
+        self.setComposerText = setComposerText
+        self.appendComposerText = appendComposerText
+        self.clearComposer = clearComposer
+        self.startNewChat = startNewChat
+        self.sendMessage = sendMessage
+        self.createNote = createNote
+        self.setAppearanceMode = setAppearanceMode
+        self.openSettingsSection = openSettingsSection
+        self.appSnapshot = appSnapshot
+    }
 
     static let empty = VoiceActionHandlers(
         navigate: { _ in },
@@ -74,6 +214,9 @@ struct VoiceActionHandlers {
         clearComposer: {},
         startNewChat: {},
         sendMessage: { _ in },
-        createNote: { _, _ in }
+        createNote: { _, _ in },
+        setAppearanceMode: { _ in },
+        openSettingsSection: { _ in },
+        appSnapshot: { .empty }
     )
 }

@@ -273,6 +273,25 @@ struct SettingsView: View {
                 }
 
                 settingsCard {
+                    sectionLabel("Voice Mode")
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("OpenAI Realtime API Key")
+                            .font(.system(size: 16, weight: .semibold, design: .rounded))
+                            .foregroundColor(AppColor.colaDarkText)
+                        Text("Voice Mode uses OpenAI Realtime separately from the default chat provider.")
+                            .font(.system(size: 13, design: .rounded))
+                            .foregroundColor(AppColor.secondaryText)
+                    }
+                    fieldShell {
+                        SecureField("OpenAI API Key", text: $vm.openaiApiKey)
+                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                            .foregroundColor(AppColor.colaDarkText)
+                            .onSubmit { vm.savePreferences() }
+                    }
+                    helperCopy("Gemini and OpenRouter keys do not start the realtime voice session.")
+                }
+
+                settingsCard {
                     sectionLabel("On-device models")
                     modelRow(label: "Local LLM",  name: vm.localModelId,     isLoaded: vm.isLLMLoaded,       progress: vm.llmDownloadProgress,       onLoad: { Task { await vm.loadLocalLLM() } })
                     modelRow(label: "Embedder",    name: vm.embeddingModelId, isLoaded: vm.isEmbeddingLoaded, progress: vm.embeddingDownloadProgress, onLoad: { Task { await vm.loadEmbeddingModel() } })

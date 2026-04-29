@@ -99,8 +99,11 @@ final class VoiceCommandController {
                 status = .listening
             }
 
-        case .error:
-            failVoiceSession(message: "Voice unavailable")
+        case .outputAudioDelta:
+            break
+
+        case .error(let message):
+            failVoiceSession(message: Self.userFacingVoiceError(for: message))
         }
     }
 
@@ -108,6 +111,10 @@ final class VoiceCommandController {
         let args = try Self.decodeArguments(call.arguments)
 
         switch call.name {
+        case "get_app_state":
+            lastToolOutput = try handlers.appSnapshot().jsonString()
+            status = .action("Reading app state")
+
         case "navigate_to_tab":
             let raw = try requiredString("tab", in: args)
             guard let target = VoiceNavigationTarget(rawValue: raw) else {
@@ -125,6 +132,24 @@ final class VoiceCommandController {
             let visible = try requiredBool("visible", in: args)
             handlers.setScratchPadVisible(visible)
             status = .action(visible ? "Opening Scratchpad" : "Closing Scratchpad")
+
+        case "set_appearance_mode":
+            let raw = try requiredString("mode", in: args)
+            guard let mode = VoiceAppearanceMode(rawValue: raw) else {
+                status = .error("Voice command rejected")
+                throw VoiceToolError.invalidArgument("mode")
+            }
+            handlers.setAppearanceMode(mode)
+            status = .action(mode.actionTitle)
+
+        case "open_settings_section":
+            let raw = try requiredString("section", in: args)
+            guard let section = VoiceSettingsSection(rawValue: raw) else {
+                status = .error("Voice command rejected")
+                throw VoiceToolError.invalidArgument("section")
+            }
+            handlers.openSettingsSection(section)
+            status = .action(section.actionTitle)
 
         case "set_composer_text":
             handlers.setComposerText(try requiredString("text", in: args))
@@ -302,6 +327,17 @@ final class VoiceCommandController {
         isActive = false
         pendingAction = nil
         status = .error(message)
+    }
+
+    private static func userFacingVoiceError(for message: String) -> String {
+        let normalized = message.lowercased()
+        if normalized.contains("insufficient_quota") ||
+            normalized.contains("exceeded your current quota") ||
+            normalized.contains("billing details") {
+            return "OpenAI quota exceeded"
+        }
+
+        return "Voice unavailable"
     }
 
     private func restorePendingConfirmationStatus() {

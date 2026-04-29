@@ -6,15 +6,15 @@ struct ChatArea: View {
     @Bindable var voiceController: VoiceCommandController
     @Binding var isSidebarVisible: Bool
     @Binding var isScratchPadVisible: Bool
-    let openAIAPIKey: String
     let voiceUnavailableReason: String?
-    let onVoiceNavigate: (VoiceNavigationTarget) -> Void
-    let onVoiceCreateNote: (String, String) -> Void
+    let voiceAttachmentResetToken: UUID
+    let onToggleVoiceMode: () -> Void
     var onNavigateToNode: (NousNode) -> Void = { _ in }
 
     @State private var attachments: [AttachedFileContext] = []
     @State private var isRelevantChatsExpanded = false
     @State private var isAttachmentMenuPresented = false
+    @State private var isActionMenuExpanded = false
     @State private var isFileImporterPresented = false
     @State private var isPhotosPickerPresented = false
     @State private var isImageDropTargeted = false
@@ -78,7 +78,11 @@ struct ChatArea: View {
                 WelcomeView(
                     inputText: $vm.inputText,
                     attachments: attachments,
-                    onPickAttachment: { isAttachmentMenuPresented = true },
+                    onPickAttachment: { isFileImporterPresented = true },
+                    onPickPhoto: { isPhotosPickerPresented = true },
+                    onVoice: { onToggleVoiceMode() },
+                    canPickPhoto: canPickPhotoAttachment,
+                    isVoiceActive: voiceController.isActive,
                     onRemoveAttachment: removeAttachment,
                     onSend: sendCurrentInput,
                     onImageDrop: handleImageDrop,
@@ -239,7 +243,7 @@ struct ChatArea: View {
                     )
 
                     // Floating Header
-                    VStack {
+                    ZStack(alignment: .top) {
                         HStack {
                             Text(vm.currentNode?.title ?? "Nous")
                                 .font(.system(size: 20, weight: .bold, design: .rounded))
@@ -250,7 +254,21 @@ struct ChatArea: View {
                         .padding(.leading, 76)
                         .padding(.trailing, 36)
                         .padding(.top, 22)
+
+                        if voiceController.isActive || voiceController.status.shouldDisplayPill || voiceController.pendingAction != nil {
+                            VoiceCapsuleView(
+                                status: voiceController.status,
+                                hasPendingConfirmation: voiceController.pendingAction != nil,
+                                onConfirm: voiceController.confirmPendingAction,
+                                onCancel: voiceController.cancelPendingAction
+                            )
+                            .padding(.top, 16)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                        }
                     }
+                    .animation(.spring(response: 0.4, dampingFraction: 0.8), value: voiceController.isActive)
+                    .animation(.spring(response: 0.4, dampingFraction: 0.8), value: voiceController.status.shouldDisplayPill)
+                    .animation(.spring(response: 0.4, dampingFraction: 0.8), value: voiceController.pendingAction != nil)
                     .padding(.bottom, 36)
                     .background(
                         LinearGradient(
@@ -288,42 +306,47 @@ struct ChatArea: View {
                             }
                         }
 
-                        if voiceController.isActive || voiceController.pendingAction != nil {
-                            VoiceActionPill(
-                                status: voiceController.status,
-                                hasPendingConfirmation: voiceController.pendingAction != nil,
-                                onConfirm: voiceController.confirmPendingAction,
-                                onCancel: voiceController.cancelPendingAction
+                        if isActionMenuExpanded {
+                            ActionMenuCapsule(
+                                onFile: {
+                                    isFileImporterPresented = true
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isActionMenuExpanded = false }
+                                },
+                                onPhoto: {
+                                    isPhotosPickerPresented = true
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isActionMenuExpanded = false }
+                                },
+                                onVoice: {
+                                    onToggleVoiceMode()
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isActionMenuExpanded = false }
+                                },
+                                canPickPhoto: canPickPhotoAttachment
                             )
+                            .transition(.move(edge: .bottom).combined(with: .opacity).combined(with: .scale(scale: 0.9, anchor: .bottomLeading)))
                         }
 
                         HStack(spacing: 12) {
-                            Button(action: toggleVoiceMode) {
+                            Button(action: {
+                                if voiceController.isActive {
+                                    onToggleVoiceMode()
+                                } else {
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                        isActionMenuExpanded.toggle()
+                                    }
+                                }
+                            }) {
                                 NativeGlassPanel(
                                     cornerRadius: 18,
                                     tintColor: voiceController.isActive
                                         ? NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.22)
                                         : AppColor.glassTint
                                 ) { EmptyView() }
-                                .frame(width: 36, height: 36)
-                                .overlay(
-                                    Image(systemName: voiceController.isActive ? "mic.fill" : "mic")
-                                        .font(.system(size: 13, weight: .semibold))
-                                        .foregroundColor(voiceController.isActive ? AppColor.colaOrange : AppColor.secondaryText)
-                                )
-                                .overlay(Circle().stroke(AppColor.panelStroke, lineWidth: 1))
-                            }
-                            .buttonStyle(.plain)
-                            .help(voiceUnavailableReason ?? (voiceController.isActive ? "Stop Voice Mode" : "Start Voice Mode"))
-                            .disabled(voiceUnavailableReason != nil)
-
-                            Button(action: { isAttachmentMenuPresented = true }) {
-                                NativeGlassPanel(cornerRadius: 18, tintColor: AppColor.glassTint) { EmptyView() }
                                     .frame(width: 36, height: 36)
                                     .overlay(
-                                        Image(systemName: "plus")
+                                        Image(systemName: voiceController.isActive ? "mic.fill" : (isActionMenuExpanded ? "xmark" : "plus"))
                                             .font(.system(size: 13, weight: .semibold))
-                                            .foregroundColor(AppColor.secondaryText)
+                                            .foregroundColor(voiceController.isActive ? AppColor.colaOrange : AppColor.secondaryText)
+                                            .rotationEffect(.degrees(isActionMenuExpanded && !voiceController.isActive ? 90 : 0))
                                     )
                                     .overlay(
                                         Circle()
@@ -331,6 +354,7 @@ struct ChatArea: View {
                                     )
                             }
                             .buttonStyle(.plain)
+                            .help(voiceController.isActive ? "Stop Voice Mode" : "Actions")
 
                             TextField("", text: $vm.inputText, axis: .vertical)
                                 .textFieldStyle(.plain)
@@ -456,9 +480,6 @@ struct ChatArea: View {
                 .padding(.trailing, 24)
             }
         }
-        .onAppear {
-            configureVoiceHandlers()
-        }
         .confirmationDialog("Add Attachment", isPresented: $isAttachmentMenuPresented, titleVisibility: .visible) {
             Button("File") {
                 isFileImporterPresented = true
@@ -496,44 +517,16 @@ struct ChatArea: View {
             attachments = []
             closeDownvotePopover()
         }
-    }
-
-    private func configureVoiceHandlers() {
-        voiceController.setMemoryContextProvider {
-            guard let conversationId = vm.currentNode?.id else { return nil }
-            return VoiceMemoryContext(
-                projectId: vm.currentNode?.projectId ?? vm.defaultProjectId,
-                conversationId: conversationId
-            )
+        .onChange(of: voiceAttachmentResetToken) { _, _ in
+            attachments = []
         }
-
-        voiceController.configure(
-            VoiceActionHandlers(
-                navigate: onVoiceNavigate,
-                setSidebarVisible: { isSidebarVisible = $0 },
-                setScratchPadVisible: { isScratchPadVisible = $0 },
-                setComposerText: { vm.inputText = $0 },
-                appendComposerText: { text in
-                    if vm.inputText.isEmpty {
-                        vm.inputText = text
-                    } else {
-                        vm.inputText += "\n" + text
-                    }
-                },
-                clearComposer: { vm.inputText = "" },
-                startNewChat: {
-                    vm.stopGenerating()
-                    vm.currentNode = nil
-                    vm.messages = []
-                    vm.citations = []
-                    vm.currentResponse = ""
-                    vm.inputText = ""
-                    isScratchPadVisible = false
-                },
-                sendMessage: sendTextFromVoice,
-                createNote: onVoiceCreateNote
-            )
-        )
+        .onChange(of: vm.inputText) { _, _ in
+            if isActionMenuExpanded {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                    isActionMenuExpanded = false
+                }
+            }
+        }
     }
 
     private func sendCurrentInput() {
@@ -549,24 +542,6 @@ struct ChatArea: View {
             return
         }
         sendCurrentInput()
-    }
-
-    private func sendTextFromVoice(_ text: String) {
-        vm.inputText = text
-        attachments = []
-        Task { await vm.send(attachments: []) }
-    }
-
-    private func toggleVoiceMode() {
-        configureVoiceHandlers()
-        if voiceController.isActive {
-            voiceController.stop()
-            return
-        }
-
-        Task {
-            try? await voiceController.start(apiKey: openAIAPIKey)
-        }
     }
 
     private func sendClarificationOption(_ option: String) {
@@ -881,6 +856,69 @@ struct AssistantFeedbackButton: View {
         .foregroundStyle(isSelected ? AppColor.colaOrange : AppColor.colaDarkText.opacity(0.5))
         .animation(.easeInOut(duration: 0.15), value: isSelected)
         .help(helpText)
+    }
+}
+
+struct ActionMenuCapsule: View {
+    let onFile: () -> Void
+    let onPhoto: () -> Void
+    let onVoice: () -> Void
+    let canPickPhoto: Bool
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ActionMenuButton(icon: "doc", title: "File", action: onFile)
+
+            ActionMenuButton(icon: "photo", title: "Photo", action: onPhoto)
+                .disabled(!canPickPhoto)
+                .opacity(canPickPhoto ? 1.0 : 0.5)
+
+            ActionMenuButton(icon: "mic", title: "Voice", action: onVoice)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 6)
+        .background(
+            NativeGlassPanel(cornerRadius: 16, tintColor: AppColor.glassTint) { EmptyView() }
+                .shadow(color: .black.opacity(0.12), radius: 12, x: 0, y: 6)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(AppColor.panelStroke, lineWidth: 1)
+        )
+    }
+}
+
+struct ActionMenuButton: View {
+    let icon: String
+    let title: String
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 16, weight: .medium))
+                Text(title)
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+            }
+            .foregroundColor(AppColor.colaDarkText)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(
+                ZStack {
+                    if isHovered {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(AppColor.colaDarkText.opacity(0.04))
+                    }
+                }
+            )
+        }
+        .buttonStyle(.plain)
+        .scaleEffect(isHovered ? 1.05 : 1.0)
+        .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isHovered)
+        .onHover { isHovered = $0 }
     }
 }
 

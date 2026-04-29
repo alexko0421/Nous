@@ -2,6 +2,12 @@ import XCTest
 @testable import Nous
 
 final class RealtimeVoiceSessionTests: XCTestCase {
+    func testDefaultRealtimeRequestUsesMiniModel() throws {
+        let request = RealtimeVoiceSession.makeRequest(apiKey: "sk-test")
+
+        XCTAssertEqual(request.url?.absoluteString, "wss://api.openai.com/v1/realtime?model=gpt-realtime-mini")
+    }
+
     func testBuildsRealtimeRequestWithBearerTokenAndModel() throws {
         let request = RealtimeVoiceSession.makeRequest(apiKey: "sk-test", model: "gpt-realtime")
 
@@ -9,18 +15,25 @@ final class RealtimeVoiceSessionTests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer sk-test")
     }
 
-    func testSessionUpdateIncludesTextOutputAndTools() throws {
+    func testSessionUpdateIncludesAudioOutputAndTools() throws {
         let data = try RealtimeVoiceSession.makeSessionUpdateEvent()
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let session = try XCTUnwrap(json["session"] as? [String: Any])
+        let audio = try XCTUnwrap(session["audio"] as? [String: Any])
+        let output = try XCTUnwrap(audio["output"] as? [String: Any])
+        let format = try XCTUnwrap(output["format"] as? [String: Any])
         let toolNames = try Self.toolNames(from: session)
 
         XCTAssertEqual(json["type"] as? String, "session.update")
         XCTAssertEqual(session["type"] as? String, "realtime")
         XCTAssertNil(session["model"])
-        XCTAssertEqual(session["output_modalities"] as? [String], ["text"])
+        XCTAssertEqual(session["output_modalities"] as? [String], ["audio"])
+        XCTAssertEqual(output["voice"] as? String, "cedar")
+        XCTAssertEqual(format["type"] as? String, "audio/pcm")
+        XCTAssertEqual(format["rate"] as? Int, 24_000)
         XCTAssertEqual(session["tool_choice"] as? String, "auto")
         XCTAssertFalse(toolNames.isEmpty)
+        XCTAssertTrue(toolNames.contains("get_app_state"))
         XCTAssertFalse(toolNames.contains("search_memory"))
         XCTAssertFalse(toolNames.contains("recall_recent_conversations"))
     }
@@ -33,6 +46,16 @@ final class RealtimeVoiceSessionTests: XCTestCase {
 
         XCTAssertTrue(toolNames.contains("search_memory"))
         XCTAssertTrue(toolNames.contains("recall_recent_conversations"))
+    }
+
+    func testSessionUpdateIncludesGlobalControlTools() throws {
+        let data = try RealtimeVoiceSession.makeSessionUpdateEvent()
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let session = try XCTUnwrap(json["session"] as? [String: Any])
+        let toolNames = try Self.toolNames(from: session)
+
+        XCTAssertTrue(toolNames.contains("set_appearance_mode"))
+        XCTAssertTrue(toolNames.contains("open_settings_section"))
     }
 
     func testParsesFunctionCallArgumentsDone() throws {
@@ -48,6 +71,12 @@ final class RealtimeVoiceSessionTests: XCTestCase {
         let event = try XCTUnwrap(RealtimeVoiceEventParser.parse(raw))
 
         XCTAssertEqual(event, .toolCall(.init(name: "navigate_to_tab", arguments: #"{"tab":"galaxy"}"#), callId: "call_123"))
+    }
+
+    func testParsesOutputAudioDelta() throws {
+        let raw = #"{"type":"response.output_audio.delta","delta":"abc123"}"#
+
+        XCTAssertEqual(RealtimeVoiceEventParser.parse(raw), .outputAudioDelta("abc123"))
     }
 
     func testParsesResponseDoneAsThinkingComplete() throws {
@@ -112,14 +141,20 @@ final class RealtimeVoiceSessionTests: XCTestCase {
         let data = try RealtimeVoiceSession.makeResponseCreateEvent()
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let response = try XCTUnwrap(json["response"] as? [String: Any])
+        let audio = try XCTUnwrap(response["audio"] as? [String: Any])
+        let output = try XCTUnwrap(audio["output"] as? [String: Any])
+        let format = try XCTUnwrap(output["format"] as? [String: Any])
 
         XCTAssertEqual(json["type"] as? String, "response.create")
-        XCTAssertEqual(response["output_modalities"] as? [String], ["text"])
+        XCTAssertEqual(response["output_modalities"] as? [String], ["audio"])
+        XCTAssertEqual(output["voice"] as? String, "cedar")
+        XCTAssertEqual(format["type"] as? String, "audio/pcm")
+        XCTAssertEqual(format["rate"] as? Int, 24_000)
     }
 
     func testStartConnectsAndSendsSessionUpdateWithoutAudioCapture() async throws {
         let socket = FakeRealtimeVoiceSocket()
-        let session = RealtimeVoiceSession(socket: socket, audioCapture: nil)
+        let session = RealtimeVoiceSession(socket: socket, audioCapture: nil, audioPlayback: nil)
 
         try await session.start(apiKey: "sk-test") { _ in }
         try await Task.sleep(nanoseconds: 50_000_000)
@@ -131,7 +166,7 @@ final class RealtimeVoiceSessionTests: XCTestCase {
 
     func testStartClosesSocketWhenSessionUpdateSendThrows() async throws {
         let socket = FakeRealtimeVoiceSocket(sendErrorAfterCount: 0)
-        let session = RealtimeVoiceSession(socket: socket, audioCapture: nil)
+        let session = RealtimeVoiceSession(socket: socket, audioCapture: nil, audioPlayback: nil)
 
         do {
             try await session.start(apiKey: "sk-test") { _ in }
@@ -147,7 +182,7 @@ final class RealtimeVoiceSessionTests: XCTestCase {
     func testAudioChunksAreSentInCaptureOrderThroughSessionQueue() async throws {
         let socket = FakeRealtimeVoiceSocket(audioSendDelays: ["first": 100_000_000])
         let audioCapture = FakeVoiceAudioCapture()
-        let session = RealtimeVoiceSession(socket: socket, audioCapture: audioCapture)
+        let session = RealtimeVoiceSession(socket: socket, audioCapture: audioCapture, audioPlayback: nil)
 
         try await session.start(apiKey: "sk-test") { _ in }
         audioCapture.emit("first")
@@ -162,7 +197,7 @@ final class RealtimeVoiceSessionTests: XCTestCase {
     func testAudioChunksEmittedAfterStopAreNotSent() async throws {
         let socket = FakeRealtimeVoiceSocket()
         let audioCapture = FakeVoiceAudioCapture()
-        let session = RealtimeVoiceSession(socket: socket, audioCapture: audioCapture)
+        let session = RealtimeVoiceSession(socket: socket, audioCapture: audioCapture, audioPlayback: nil)
 
         try await session.start(apiKey: "sk-test") { _ in }
         session.stop()
@@ -175,7 +210,7 @@ final class RealtimeVoiceSessionTests: XCTestCase {
     func testFunctionOutputWaitsBehindInFlightAudioOnSingleOutboundQueue() async throws {
         let socket = FakeRealtimeVoiceSocket(audioSendDelays: ["first": 100_000_000])
         let audioCapture = FakeVoiceAudioCapture()
-        let session = RealtimeVoiceSession(socket: socket, audioCapture: audioCapture)
+        let session = RealtimeVoiceSession(socket: socket, audioCapture: audioCapture, audioPlayback: nil)
 
         try await session.start(apiKey: "sk-test") { _ in }
         audioCapture.emit("first")
@@ -195,7 +230,7 @@ final class RealtimeVoiceSessionTests: XCTestCase {
     func testFunctionOutputAndResponseCreateStayAdjacentWhenAudioArrivesDuringToolOutput() async throws {
         let socket = FakeRealtimeVoiceSocket(eventSendDelays: ["conversation.item.create": 100_000_000])
         let audioCapture = FakeVoiceAudioCapture()
-        let session = RealtimeVoiceSession(socket: socket, audioCapture: audioCapture)
+        let session = RealtimeVoiceSession(socket: socket, audioCapture: audioCapture, audioPlayback: nil)
 
         try await session.start(apiKey: "sk-test") { _ in }
         let outputTask = Task {
@@ -220,7 +255,7 @@ final class RealtimeVoiceSessionTests: XCTestCase {
     func testAudioBacklogDropsStaleChunksWhenSocketStalls() async throws {
         let socket = FakeRealtimeVoiceSocket(audioSendDelays: ["chunk-0": 150_000_000])
         let audioCapture = FakeVoiceAudioCapture()
-        let session = RealtimeVoiceSession(socket: socket, audioCapture: audioCapture)
+        let session = RealtimeVoiceSession(socket: socket, audioCapture: audioCapture, audioPlayback: nil)
 
         try await session.start(apiKey: "sk-test") { _ in }
         for index in 0..<20 {
@@ -239,7 +274,7 @@ final class RealtimeVoiceSessionTests: XCTestCase {
 
     func testSendFunctionOutputSendsOutputThenResponseCreate() async throws {
         let socket = FakeRealtimeVoiceSocket()
-        let session = RealtimeVoiceSession(socket: socket, audioCapture: nil)
+        let session = RealtimeVoiceSession(socket: socket, audioCapture: nil, audioPlayback: nil)
 
         try await session.start(apiKey: "sk-test") { _ in }
         try await session.sendFunctionOutput(callId: "call_123", output: "Opened Galaxy")
@@ -251,7 +286,7 @@ final class RealtimeVoiceSessionTests: XCTestCase {
     func testOldOutboundQueueFailureAfterRestartDoesNotCancelNewQueue() async throws {
         let socket = FakeRealtimeVoiceSocket(heldAudioChunks: ["old-audio"])
         let audioCapture = FakeVoiceAudioCapture()
-        let session = RealtimeVoiceSession(socket: socket, audioCapture: audioCapture)
+        let session = RealtimeVoiceSession(socket: socket, audioCapture: audioCapture, audioPlayback: nil)
 
         try await session.start(apiKey: "sk-test") { _ in }
         audioCapture.emit("old-audio")
@@ -266,6 +301,27 @@ final class RealtimeVoiceSessionTests: XCTestCase {
         session.stop()
 
         XCTAssertEqual(socket.sentTypes.suffix(2), ["conversation.item.create", "response.create"])
+    }
+
+    func testReceivedOutputAudioIsPlayedWithoutControllerEvent() async throws {
+        let audioChunk = "abc123"
+        let socket = FakeRealtimeVoiceSocket(
+            receivedMessages: [#"{"type":"response.output_audio.delta","delta":"abc123"}"#]
+        )
+        let playback = FakeVoiceAudioPlayback()
+        let session = RealtimeVoiceSession(socket: socket, audioCapture: nil, audioPlayback: playback)
+        var controllerEvents: [RealtimeVoiceEvent] = []
+
+        try await session.start(apiKey: "sk-test") { event in
+            controllerEvents.append(event)
+        }
+        let stopCountAfterStart = playback.stopCount
+        try await waitUntil { playback.playedChunks == [audioChunk] }
+        session.stop()
+
+        XCTAssertEqual(playback.startCount, 1)
+        XCTAssertEqual(playback.stopCount, stopCountAfterStart + 1)
+        XCTAssertEqual(controllerEvents, [])
     }
 
     private static func toolNames(from session: [String: Any]) throws -> [String] {
@@ -295,6 +351,7 @@ private final class FakeRealtimeVoiceSocket: RealtimeVoiceSocketing {
     private let audioSendDelays: [String: UInt64]
     private let eventSendDelays: [String: UInt64]
     private let heldAudioChunks: Set<String>
+    private var receivedMessages: [String]
     private let lock = NSLock()
     private var _connectedRequest: URLRequest?
     private var _sentData: [Data] = []
@@ -306,12 +363,14 @@ private final class FakeRealtimeVoiceSocket: RealtimeVoiceSocketing {
         sendErrorAfterCount: Int? = nil,
         audioSendDelays: [String: UInt64] = [:],
         eventSendDelays: [String: UInt64] = [:],
-        heldAudioChunks: Set<String> = []
+        heldAudioChunks: Set<String> = [],
+        receivedMessages: [String] = []
     ) {
         self.sendErrorAfterCount = sendErrorAfterCount
         self.audioSendDelays = audioSendDelays
         self.eventSendDelays = eventSendDelays
         self.heldAudioChunks = heldAudioChunks
+        self.receivedMessages = receivedMessages
     }
 
     var sentTypes: [String] {
@@ -364,7 +423,10 @@ private final class FakeRealtimeVoiceSocket: RealtimeVoiceSocketing {
     }
 
     func receive() async throws -> String? {
-        nil
+        locked {
+            guard !receivedMessages.isEmpty else { return nil }
+            return receivedMessages.removeFirst()
+        }
     }
 
     func close() {
@@ -445,6 +507,37 @@ private final class FakeVoiceAudioCapture: VoiceAudioCapturing {
 
     func emit(_ chunk: String) {
         onAudio?(chunk)
+    }
+}
+
+private final class FakeVoiceAudioPlayback: VoiceAudioPlaying {
+    private let lock = NSLock()
+    private(set) var startCount = 0
+    private(set) var stopCount = 0
+    private(set) var playedChunks: [String] = []
+
+    func start() throws {
+        locked {
+            startCount += 1
+        }
+    }
+
+    func enqueue(base64PCM16Audio: String) {
+        locked {
+            playedChunks.append(base64PCM16Audio)
+        }
+    }
+
+    func stop() {
+        locked {
+            stopCount += 1
+        }
+    }
+
+    private func locked(_ work: () -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        work()
     }
 }
 

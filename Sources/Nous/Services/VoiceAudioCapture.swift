@@ -105,3 +105,89 @@ final class VoiceAudioCapture: VoiceAudioCapturing {
 enum VoiceAudioCaptureError: Error {
     case cannotCreateConverter
 }
+
+protocol VoiceAudioPlaying: AnyObject {
+    func start() throws
+    func enqueue(base64PCM16Audio: String)
+    func stop()
+}
+
+final class VoiceAudioPlayback: VoiceAudioPlaying {
+    private let engine = AVAudioEngine()
+    private let player = AVAudioPlayerNode()
+    private let format: AVAudioFormat
+    private var isConfigured = false
+
+    init?() {
+        guard let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 24_000,
+            channels: 1,
+            interleaved: false
+        ) else {
+            return nil
+        }
+        self.format = format
+    }
+
+    func start() throws {
+        if !isConfigured {
+            engine.attach(player)
+            engine.connect(player, to: engine.mainMixerNode, format: format)
+            isConfigured = true
+        }
+
+        if !engine.isRunning {
+            engine.prepare()
+            try engine.start()
+        }
+
+        if !player.isPlaying {
+            player.play()
+        }
+    }
+
+    func enqueue(base64PCM16Audio: String) {
+        guard let data = Data(base64Encoded: base64PCM16Audio),
+              let buffer = Self.makeBuffer(fromPCM16LEData: data, format: format) else {
+            return
+        }
+
+        if !engine.isRunning {
+            try? start()
+        }
+        player.scheduleBuffer(buffer, completionHandler: nil)
+    }
+
+    func stop() {
+        guard isConfigured else { return }
+        player.stop()
+        if engine.isRunning {
+            engine.stop()
+        }
+        engine.reset()
+    }
+
+    private static func makeBuffer(fromPCM16LEData data: Data, format: AVAudioFormat) -> AVAudioPCMBuffer? {
+        let sampleCount = data.count / MemoryLayout<Int16>.size
+        guard sampleCount > 0,
+              let buffer = AVAudioPCMBuffer(
+                pcmFormat: format,
+                frameCapacity: AVAudioFrameCount(sampleCount)
+              ),
+              let channel = buffer.floatChannelData?[0] else {
+            return nil
+        }
+
+        buffer.frameLength = AVAudioFrameCount(sampleCount)
+        let bytes = [UInt8](data.prefix(sampleCount * MemoryLayout<Int16>.size))
+        for index in 0..<sampleCount {
+            let low = UInt16(bytes[index * 2])
+            let high = UInt16(bytes[index * 2 + 1]) << 8
+            let sample = Int16(bitPattern: low | high)
+            channel[index] = sample == .min ? -1 : Float(sample) / Float(Int16.max)
+        }
+
+        return buffer
+    }
+}
