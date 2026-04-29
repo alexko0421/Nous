@@ -1,3 +1,4 @@
+import CoreGraphics
 import XCTest
 @testable import Nous
 
@@ -23,5 +24,15 @@ final class GhostCursorTravelDurationTests: XCTestCase {
 
     func test_aboveClampUpperBound() {
         XCTAssertEqual(GhostCursorIntent.travelDurationMs(distance: 5000), 560, accuracy: 0.001)
+    }
+
+    func test_geometryOverload_computesEuclideanDistance() {
+        // 3-4-5 triangle: hypot = 5 → 320 + 5*0.18 = 320.9 (within range, NOT clamped)
+        let d1 = GhostCursorIntent.travelDurationMs(from: .zero, to: CGPoint(x: 3, y: 4))
+        XCTAssertEqual(d1, 320.9, accuracy: 0.001)
+
+        // hypot 1000 → 320 + 1000*0.18 = 500 (matches test_belowClampUpperBound)
+        let d2 = GhostCursorIntent.travelDurationMs(from: .zero, to: CGPoint(x: 600, y: 800))
+        XCTAssertEqual(d2, 500, accuracy: 0.001)
     }
 }
