@@ -393,6 +393,7 @@ struct ContentView: View {
                     VoiceCapsuleView(
                         status: dependencies.voiceController.status,
                         subtitleText: dependencies.voiceController.subtitleText,
+                        audioLevel: dependencies.voiceController.audioLevel,
                         hasPendingConfirmation: dependencies.voiceController.pendingAction != nil,
                         onConfirm: dependencies.voiceController.confirmPendingAction,
                         onCancel: dependencies.voiceController.cancelPendingAction

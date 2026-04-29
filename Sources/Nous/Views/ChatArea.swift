@@ -259,6 +259,7 @@ struct ChatArea: View {
                             VoiceCapsuleView(
                                 status: voiceController.status,
                                 subtitleText: voiceController.subtitleText,
+                                audioLevel: voiceController.audioLevel,
                                 hasPendingConfirmation: voiceController.pendingAction != nil,
                                 onConfirm: voiceController.confirmPendingAction,
                                 onCancel: voiceController.cancelPendingAction

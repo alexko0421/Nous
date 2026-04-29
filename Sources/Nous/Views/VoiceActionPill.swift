@@ -4,14 +4,24 @@ import AppKit
 struct VoiceCapsuleView: View {
     let status: VoiceModeStatus
     let subtitleText: String
+    let audioLevel: Float
     let hasPendingConfirmation: Bool
     let onConfirm: () -> Void
     let onCancel: () -> Void
 
+    private var barState: VoiceWaveformBars.BarState {
+        switch status {
+        case .listening:                        return .listening
+        case .thinking:                         return .thinking
+        case .error:                            return .error
+        case .idle, .action, .needsConfirmation: return .idle
+        }
+    }
+
     var body: some View {
         HStack(spacing: 12) {
-            FrameSpinner(isAnimating: status == .listening || status == .thinking)
-                .frame(width: 16, height: 16)
+            VoiceWaveformBars(level: audioLevel, state: barState)
+                .frame(width: 27, height: 22)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(status.displayText)
