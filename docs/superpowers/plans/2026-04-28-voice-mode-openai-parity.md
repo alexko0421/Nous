@@ -1620,7 +1620,13 @@ struct GhostCursorOverlay: View {
         }
 
         let durationMs = GhostCursorIntent.travelDurationMs(from: origin, to: target)
-        let timing = SwiftUI.Animation.timingCurve(0.22, 0.84, 0.26, 1.0, duration: durationMs / 1000.0)
+        let curve: (Double, Double, Double, Double) = {
+            switch intent.easing {
+            case .smooth:     return (0.22, 0.84, 0.26, 1.0)
+            case .expressive: return (0.16, 1.18, 0.30, 1.0)
+            }
+        }()
+        let timing = SwiftUI.Animation.timingCurve(curve.0, curve.1, curve.2, curve.3, duration: durationMs / 1000.0)
         withAnimation(timing) {
             position = target
         }
