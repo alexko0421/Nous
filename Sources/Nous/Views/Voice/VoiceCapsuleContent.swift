@@ -69,7 +69,6 @@ struct VoiceCapsuleContent: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.9)))
             }
         }
-        .frame(maxWidth: 520) // Total capsule width cap (codex finding #14)
         .animation(.spring(response: 0.35, dampingFraction: 0.75), value: status.displayText)
         .animation(.spring(response: 0.35, dampingFraction: 0.75), value: subtitleText)
         .animation(.spring(response: 0.35, dampingFraction: 0.75), value: hasPendingConfirmation)
