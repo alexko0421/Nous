@@ -188,8 +188,9 @@ final class GhostCursorTravelDurationTests: XCTestCase {
         XCTAssertEqual(GhostCursorIntent.travelDurationMs(distance: 0), 320, accuracy: 0.001)
     }
 
-    func test_shortDistance_belowMinClamps() {
-        XCTAssertEqual(GhostCursorIntent.travelDurationMs(distance: 100), 320, accuracy: 0.001)
+    func test_shortDistance_scalesNormally() {
+        // 320 + 100 * 0.18 = 338 (above the 320 floor, no clamping)
+        XCTAssertEqual(GhostCursorIntent.travelDurationMs(distance: 100), 338, accuracy: 0.001)
     }
 
     func test_midDistance_scalesLinearly() {
