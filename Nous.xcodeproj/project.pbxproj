@@ -44,7 +44,6 @@
 		23CA175571B33B5F4EEB508C /* AttachmentExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 425ACBC47E70877CFBF7B93F /* AttachmentExtractor.swift */; };
 		25022C0F9E3F772EE187B846 /* 06-register-shift-snaps-back.json in Resources */ = {isa = PBXBuildFile; fileRef = 85F46CA7772DAA90E7710731 /* 06-register-shift-snaps-back.json */; };
 		263D6824E94F83CB158456C7 /* ClarificationCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AD979E25093AC4D81302A6 /* ClarificationCardView.swift */; };
-		27E48CB93E3A39B8A3483BAE /* PanelLevelSpike.swift in Sources */ = {isa = PBXBuildFile; fileRef = 734880CB32324AAF39F2CEC7 /* PanelLevelSpike.swift */; };
 		27F2CE2A093E509E5877161A /* PromptGovernanceTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 294DB9FC87A9A0EAF189BAAC /* PromptGovernanceTrace.swift */; };
 		293A8F632EE0107ADEF50D82 /* MemoryV2MigratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C258CFA6F991D14ED791FE3 /* MemoryV2MigratorTests.swift */; };
 		2A36809F18FC09F6476F1E1A /* SkillMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 005F660E597A4D2A248A5A2F /* SkillMatcher.swift */; };
@@ -379,7 +378,6 @@
 		6F84855652854F04A2D74C37 /* SafetyGuardrailsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafetyGuardrailsTests.swift; sourceTree = "<group>"; };
 		71F36681132B59215BCA2DB0 /* GalaxyRelationRefinementQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalaxyRelationRefinementQueue.swift; sourceTree = "<group>"; };
 		728E7385459EB842724E8BCA /* NodeStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NodeStore.swift; sourceTree = "<group>"; };
-		734880CB32324AAF39F2CEC7 /* PanelLevelSpike.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelLevelSpike.swift; sourceTree = "<group>"; };
 		747E845F5009BE1FD6085E67 /* ScratchSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchSummary.swift; sourceTree = "<group>"; };
 		7573A5537C06A00728F5BAF0 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		7669455682D07783D0BF3E45 /* TurnOutcomeFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnOutcomeFactory.swift; sourceTree = "<group>"; };
@@ -608,7 +606,6 @@
 				4D3C1F273307486B5EEB8FCD /* NotchScreenDetection.swift */,
 				65FF9FAAED20493D36FC8629 /* VoiceTranscriptPanel.swift */,
 				56B4306968099267E4DF183A /* VoiceWaveformBars.swift */,
-				74592EC6FB5A46144B4C839F /* Spikes */,
 			);
 			path = Voice;
 			sourceTree = "<group>";
@@ -641,14 +638,6 @@
 			);
 			name = ProvocationFixtureRunner;
 			path = Sources/ProvocationFixtureRunner;
-			sourceTree = "<group>";
-		};
-		74592EC6FB5A46144B4C839F /* Spikes */ = {
-			isa = PBXGroup;
-			children = (
-				734880CB32324AAF39F2CEC7 /* PanelLevelSpike.swift */,
-			);
-			path = Spikes;
 			sourceTree = "<group>";
 		};
 		866C636F5CB1DB4401488FB4 /* ReflectionFixtureRunner */ = {
@@ -1227,7 +1216,6 @@
 				44F769FBDE20CA4082FA4D00 /* NoteViewModel.swift in Sources */,
 				3E6FF46E8E6E947CF7B7AADF /* NousApp.swift in Sources */,
 				E945B227EBC4479E9F43EF34 /* NousNode.swift in Sources */,
-				27E48CB93E3A39B8A3483BAE /* PanelLevelSpike.swift in Sources */,
 				75CB071A0B8485BBBAD535BC /* PlanAgent.swift in Sources */,
 				2314061EED27031103F0CE65 /* Project.swift in Sources */,
 				46929AB76337B2B34ED785C4 /* ProjectListView.swift in Sources */,
