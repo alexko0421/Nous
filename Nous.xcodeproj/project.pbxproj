@@ -226,6 +226,7 @@
 		E6D3F07FC3C05F45B68A5B5E /* VoiceMemoryFacade.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2299867B8E4254D6B54F0BA /* VoiceMemoryFacade.swift */; };
 		E945B227EBC4479E9F43EF34 /* NousNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC28A679A68D922546206E9D /* NousNode.swift */; };
 		E9B08F46CEE6A7C2C0FF0D4D /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88CB0A79B5A731BC1D27C575 /* main.swift */; };
+		EC6C067B3398BFB0C1416CF2 /* GhostCursorRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29448F53689F04CFF6806195 /* GhostCursorRegistryTests.swift */; };
 		EEB13190252504BB2CAAAE3B /* ChatMarkdownRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CA1498BB2382E71760BE25A /* ChatMarkdownRenderer.swift */; };
 		F42EB410F4D0AA857E238C7B /* TurnStewardDecision.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E6A050AA16F737C3358C75A /* TurnStewardDecision.swift */; };
 		F9D32F9963FE1EF2437DB5FD /* SeedSkillImporterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEF476DFC481C52A24E6D9D7 /* SeedSkillImporterTests.swift */; };
@@ -285,6 +286,7 @@
 		2257F8C4D5ED497EDB832E9E /* VoiceActionRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceActionRegistry.swift; sourceTree = "<group>"; };
 		26B0833FF90A3381A73858CE /* GalaxyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalaxyView.swift; sourceTree = "<group>"; };
 		290D34EB4F73148AA708BD26 /* GalaxyRelationRefinementQueueTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalaxyRelationRefinementQueueTests.swift; sourceTree = "<group>"; };
+		29448F53689F04CFF6806195 /* GhostCursorRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhostCursorRegistryTests.swift; sourceTree = "<group>"; };
 		294DB9FC87A9A0EAF189BAAC /* PromptGovernanceTrace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptGovernanceTrace.swift; sourceTree = "<group>"; };
 		29A9E0EFFECF3C48A6B1D69F /* anchor.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = anchor.md; sourceTree = "<group>"; };
 		2C258CFA6F991D14ED791FE3 /* MemoryV2MigratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryV2MigratorTests.swift; sourceTree = "<group>"; };
@@ -653,6 +655,7 @@
 		A6DB6DA835AEB4DB10E93D07 /* Voice */ = {
 			isa = PBXGroup;
 			children = (
+				29448F53689F04CFF6806195 /* GhostCursorRegistryTests.swift */,
 				56E09B534B87A1CB827DDD6C /* GhostCursorTravelDurationTests.swift */,
 				0FDC5459D0F6D9E3CA9502C2 /* VoiceTranscriptLineReducerTests.swift */,
 			);
@@ -1231,6 +1234,7 @@
 				8D729AFF98D71911817AC300 /* GalaxyRelationRefinementQueueTests.swift in Sources */,
 				A6B3EA77213487F07EDF8854 /* GeminiPromptCacheServiceTests.swift in Sources */,
 				B2FD14E2A2396CFA0B03CA52 /* GeminiThinkingStreamTests.swift in Sources */,
+				EC6C067B3398BFB0C1416CF2 /* GhostCursorRegistryTests.swift in Sources */,
 				FA3F5F2A6BCBDFB34ED6E6F8 /* GhostCursorTravelDurationTests.swift in Sources */,
 				4D4E88E3F6E50302A15F3D83 /* GraphEngineTests.swift in Sources */,
 				BCF9612112E4F9670527753A /* JudgeEventsStoreTests.swift in Sources */,

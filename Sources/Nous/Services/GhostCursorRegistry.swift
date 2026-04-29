@@ -10,6 +10,11 @@ final class GhostCursorRegistry {
     private var frames: [String: CGRect] = [:]
     private var pulseTriggers: [String: UUID] = [:]
 
+    /// Sets the registered frame for `id`. Last writer wins; if two views share an id,
+    /// only the most recently rendered frame is reachable. `.ghostCursorTarget(id:)`
+    /// is intended for stable, eagerly-rendered chrome (tabs, toolbar, capsule);
+    /// avoid attaching it to views inside lazy containers (LazyVStack, recycled list
+    /// cells), where mount/unmount ordering can cause brief stale-frame windows.
     func update(id: String, frame: CGRect) {
         frames[id] = frame
     }
@@ -33,6 +38,10 @@ final class GhostCursorRegistry {
     }
 
     /// Triggers an arrival pulse animation on the registered target view.
+    ///
+    /// Coalesces calls within the ~180ms animation window — at most one pulse renders
+    /// per animation cycle. Suitable for cursor-arrival feedback. Not suitable for
+    /// rhythmic attention-getting effects that need every call to render distinctly.
     func pulse(id: String) {
         pulseTriggers[id] = UUID()
     }
@@ -106,6 +115,12 @@ private struct GhostCursorTargetPulse: View {
                 seenTrigger = newTrigger
                 pulse = false
                 Task { @MainActor in
+                    // ~1 frame at 60Hz: lets the pulse=false reset commit before the
+                    // pulse=true write triggers .animation(_:value:). Without this gap,
+                    // SwiftUI sometimes coalesces both writes into one transaction and
+                    // the ring disappears with no scale animation. Phase 3 live tests
+                    // should validate this is still needed (vs an explicit Transaction
+                    // disabling-animations + withAnimation pair).
                     try? await Task.sleep(nanoseconds: 16_000_000)
                     pulse = true
                 }
