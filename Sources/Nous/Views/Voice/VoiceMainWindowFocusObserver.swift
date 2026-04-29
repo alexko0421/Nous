@@ -44,6 +44,22 @@ final class VoiceMainWindowFocusObserver: ObservableObject {
             notificationObservers.append(observer)
         }
 
+        // NSWorkspace fires didActivateApplication for every cross-app focus
+        // change (including Nous coming to / leaving the front). This is the
+        // most reliable signal for cross-window/app switching — more reliable
+        // than NSApplication.didBecomeActive which sometimes lags or doesn't
+        // fire when the same app's other windows are involved.
+        let wsObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.forceRecomputeNow()
+            }
+        }
+        notificationObservers.append(wsObserver)
+
         let windowObserver = nc.addObserver(
             forName: .nousMainWindowConfigured,
             object: nil,

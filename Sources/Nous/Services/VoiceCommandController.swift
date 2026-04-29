@@ -86,8 +86,13 @@ final class VoiceCommandController {
     func stop() {
         sessionGeneration += 1
         session.stop()
+        // Don't pre-set visibleSurface here. The notch panel controller
+        // observes isActive via withObservationTracking; setting
+        // visibleSurface = .none directly defeats the recompute that
+        // would otherwise call applySurface(.none) and order the panel
+        // out. Letting the controller's recompute see isActive=false
+        // and transition the surface naturally is what hides the panel.
         isActive = false
-        visibleSurface = .none
         pendingAction = nil
         pendingActionToken = nil
         status = .idle
