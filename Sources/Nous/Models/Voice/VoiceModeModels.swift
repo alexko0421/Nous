@@ -220,3 +220,9 @@ struct VoiceActionHandlers {
         appSnapshot: { .empty }
     )
 }
+
+enum VoiceCapsuleSurface: Equatable {
+    case none
+    case inWindow
+    case notch
+}
