@@ -19,6 +19,7 @@ final class VoiceNotchPanelController {
     private var hostingView: NSHostingView<NotchPanelRoot>?
     private var cancellables = Set<AnyCancellable>()
     private var screenChangeObserver: NSObjectProtocol?
+    private var spaceChangeObserver: NSObjectProtocol?
 
     init(
         voiceController: VoiceCommandController,
@@ -32,6 +33,9 @@ final class VoiceNotchPanelController {
     deinit {
         if let obs = screenChangeObserver {
             NotificationCenter.default.removeObserver(obs)
+        }
+        if let obs = spaceChangeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(obs)
         }
     }
 
@@ -55,6 +59,29 @@ final class VoiceNotchPanelController {
             Task { @MainActor [weak self] in
                 self?.repositionPanel()
             }
+        }
+
+        // Re-show the panel after Space switches. .canJoinAllSpaces alone is not
+        // always enough — switching Spaces can drop the panel from the visible
+        // stack on the new active Space, especially after the app's main window
+        // changes spaces. Kick orderFront on every space change while the
+        // surface is supposed to be the notch.
+        spaceChangeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.handleSpaceChange()
+            }
+        }
+    }
+
+    private func handleSpaceChange() {
+        guard let voiceController else { return }
+        if voiceController.visibleSurface == .notch {
+            // Re-position (in case the active screen changed) and re-order front.
+            showPanel()
         }
     }
 
@@ -151,14 +178,17 @@ final class VoiceNotchPanelController {
 
     private func positionPanel(on screen: NSScreen) {
         guard let panel else { return }
-        // Technique chosen by Spike B: option (a) — top 36pt sits above the
-        // safe area and is physically masked by the hardware notch.
-        let safeTopY = screen.frame.maxY - screen.safeAreaInsets.top
+        // Position the panel so its top edge is at the absolute top of the
+        // screen — i.e., extending into the bezel/notch area. The SwiftUI
+        // 36pt Spacer at the top of NotchPanelRoot puts the visible Liquid
+        // Glass capsule directly under the bezel boundary, regardless of
+        // what `safeAreaInsets.top` reports (which can vary across macOS
+        // versions, display configs, and notch / non-notch Macs).
         let width: CGFloat = 360
         let height: CGFloat = 100
         let frame = NSRect(
             x: screen.frame.midX - width/2,
-            y: safeTopY - (height - 36),
+            y: screen.frame.maxY - height,
             width: width,
             height: height
         )
