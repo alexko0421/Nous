@@ -96,9 +96,15 @@ final class VoiceMainWindowFocusObserver: ObservableObject {
         isKeyWindow: Bool,
         isMainWindow: Bool
     ) -> Bool {
-        appActive &&
-        isVisible &&
-        !isMiniaturized
+        // The user is "in-window" only when Nous is the frontmost app and
+        // its main window isn't sitting in the Dock. We deliberately do
+        // NOT consult `isVisible` — its cross-Space semantics on macOS
+        // make the value flip in confusing ways (see the inverted-surface
+        // dogfood report) and our `appActive` check (driven by
+        // NSWorkspace.frontmostApplication) already covers the case where
+        // Nous is on a different Space than the user, because in that
+        // case some other app is frontmost.
+        appActive && !isMiniaturized
     }
 
     private func scheduleRecompute() {
@@ -118,7 +124,15 @@ final class VoiceMainWindowFocusObserver: ObservableObject {
     }
 
     private func recompute() {
-        let appActive = NSApp?.isActive ?? false
+        // Query NSWorkspace's frontmost app instead of NSApp.isActive.
+        // NSApp.isActive can be stale at notification fire time (race
+        // window between AppKit dispatching the notification and updating
+        // the cached active flag), which caused inverted in-window/notch
+        // behavior on focus changes. NSWorkspace.frontmostApplication is
+        // OS-level and stable.
+        let myPID = ProcessInfo.processInfo.processIdentifier
+        let frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let appActive = (frontPID == myPID)
         let main = trackedMainWindow ?? NSApp?.mainWindow
         let isKey = Self.isTrackedMainWindowActive(
             appActive: appActive,
