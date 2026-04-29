@@ -187,9 +187,9 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
             queue.start(socket: socket, onEvent: onEvent)
             try await queue.enqueueControl(Self.makeSessionUpdateEvent(includeMemoryTools: includeMemoryTools))
             startReceiveLoop(onEvent: onEvent)
-            try audioCapture?.start { chunk in
+            try audioCapture?.start(onAudio: { chunk in
                 queue.enqueueAudio(chunk)
-            }
+            }, onAudioLevel: { _ in })
         } catch {
             stop()
             throw error

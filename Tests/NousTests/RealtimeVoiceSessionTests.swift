@@ -524,7 +524,10 @@ private final class FakeVoiceAudioCapture: VoiceAudioCapturing {
     private(set) var didStop = false
     private var onAudio: (@Sendable (String) -> Void)?
 
-    func start(onAudio: @escaping @Sendable (String) -> Void) throws {
+    func start(
+        onAudio: @escaping @Sendable (String) -> Void,
+        onAudioLevel: @escaping @Sendable (Float) -> Void
+    ) throws {
         self.onAudio = onAudio
     }
 

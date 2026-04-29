@@ -31,8 +31,33 @@ enum VoiceAudioEncoder {
     }
 }
 
+/// Exponentially-smoothed peak-RMS audio level in 0...1.
+struct VoiceAudioLevelSmoother {
+    private(set) var value: Float = 0
+    private let alpha: Float = 0.2  // 0.8 prev + 0.2 current
+
+    mutating func ingest(rms: Float) {
+        let clamped = max(0, min(1, rms))
+        value = (1 - alpha) * value + alpha * clamped
+    }
+
+    mutating func reset() {
+        value = 0
+    }
+
+    static func rms(samples: [Float]) -> Float {
+        guard !samples.isEmpty else { return 0 }
+        var sumSq: Float = 0
+        for s in samples { sumSq += s * s }
+        return (sumSq / Float(samples.count)).squareRoot()
+    }
+}
+
 protocol VoiceAudioCapturing: AnyObject {
-    func start(onAudio: @escaping @Sendable (String) -> Void) throws
+    func start(
+        onAudio: @escaping @Sendable (String) -> Void,
+        onAudioLevel: @escaping @Sendable (Float) -> Void
+    ) throws
     func stop()
 }
 
@@ -40,7 +65,10 @@ final class VoiceAudioCapture: VoiceAudioCapturing {
     private let engine = AVAudioEngine()
     private var converter: AVAudioConverter?
 
-    func start(onAudio: @escaping @Sendable (String) -> Void) throws {
+    func start(
+        onAudio: @escaping @Sendable (String) -> Void,
+        onAudioLevel: @escaping @Sendable (Float) -> Void
+    ) throws {
         stop()
 
         let inputNode = engine.inputNode
@@ -55,6 +83,7 @@ final class VoiceAudioCapture: VoiceAudioCapturing {
         }
 
         self.converter = converter
+        let smootherBox = SmootherBox()
         inputNode.installTap(onBus: 0, bufferSize: 1_024, format: inputFormat) { buffer, _ in
             let frameCapacity = AVAudioFrameCount(
                 max(1, ceil(Double(buffer.frameLength) * outputFormat.sampleRate / inputFormat.sampleRate))
@@ -70,7 +99,6 @@ final class VoiceAudioCapture: VoiceAudioCapturing {
                     status.pointee = .noDataNow
                     return nil
                 }
-
                 didProvideInput = true
                 status.pointee = .haveData
                 return buffer
@@ -87,6 +115,10 @@ final class VoiceAudioCapture: VoiceAudioCapturing {
             if !chunk.isEmpty {
                 onAudio(chunk)
             }
+
+            let rms = VoiceAudioLevelSmoother.rms(samples: samples)
+            let smoothed = smootherBox.ingest(rms: rms)
+            onAudioLevel(smoothed)
         }
 
         engine.prepare()
@@ -104,6 +136,19 @@ final class VoiceAudioCapture: VoiceAudioCapturing {
 
 enum VoiceAudioCaptureError: Error {
     case cannotCreateConverter
+}
+
+/// Thread-safe smoother holder for the audio tap closure (which is @Sendable).
+private final class SmootherBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var smoother = VoiceAudioLevelSmoother()
+
+    func ingest(rms: Float) -> Float {
+        lock.lock()
+        defer { lock.unlock() }
+        smoother.ingest(rms: rms)
+        return smoother.value
+    }
 }
 
 protocol VoiceAudioPlaying: AnyObject {
