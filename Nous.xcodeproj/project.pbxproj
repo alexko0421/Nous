@@ -248,6 +248,7 @@
 		F9D32F9963FE1EF2437DB5FD /* SeedSkillImporterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEF476DFC481C52A24E6D9D7 /* SeedSkillImporterTests.swift */; };
 		FA3F5F2A6BCBDFB34ED6E6F8 /* GhostCursorTravelDurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56E09B534B87A1CB827DDD6C /* GhostCursorTravelDurationTests.swift */; };
 		FB90A9F437200B44C52367F1 /* ChatViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3074D3F24DDD3F020A52F9BA /* ChatViewModelTests.swift */; };
+		FBBAF5CA58AA6F72F3D686D6 /* VoiceMainWindowFocusObserver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B395666704CC01A60D84CA8 /* VoiceMainWindowFocusObserver.swift */; };
 		FBFAF5014584C2CD5A61E4F4 /* GalaxyRelationJudgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA8754ABB9597D44C91B429 /* GalaxyRelationJudgeTests.swift */; };
 		FC0789C7F3244CDB6AB83CF3 /* SearchMemoryTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C7B2A894772AFA9C773D1A4 /* SearchMemoryTool.swift */; };
 		FC916C83F9BFA4767BEE1004 /* RealtimeVoiceSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78A809E8B09EC79D36B24584 /* RealtimeVoiceSessionTests.swift */; };
@@ -375,6 +376,7 @@
 		69184F11E49CB01A84551833 /* ClarificationCardParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClarificationCardParserTests.swift; sourceTree = "<group>"; };
 		69868D5B206BD27D8F54B079 /* VoiceAudioCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceAudioCapture.swift; sourceTree = "<group>"; };
 		69A16176517033741C601125 /* PromptContextAssembler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptContextAssembler.swift; sourceTree = "<group>"; };
+		6B395666704CC01A60D84CA8 /* VoiceMainWindowFocusObserver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceMainWindowFocusObserver.swift; sourceTree = "<group>"; };
 		6BE2A39121FEE2767376F9B1 /* AgentToolRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentToolRegistry.swift; sourceTree = "<group>"; };
 		6E88716E75C10545B684D5FD /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModel.swift; sourceTree = "<group>"; };
 		6F6742373CDE2591DA9492D4 /* 05-soft-tension-companion-quiet.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "05-soft-tension-companion-quiet.json"; sourceTree = "<group>"; };
@@ -609,6 +611,7 @@
 			children = (
 				4D3C1F273307486B5EEB8FCD /* NotchScreenDetection.swift */,
 				56FEE69E49FFEDDDC18A2909 /* VoiceCapsuleContent.swift */,
+				6B395666704CC01A60D84CA8 /* VoiceMainWindowFocusObserver.swift */,
 				65FF9FAAED20493D36FC8629 /* VoiceTranscriptPanel.swift */,
 				56B4306968099267E4DF183A /* VoiceWaveformBars.swift */,
 			);
@@ -1276,6 +1279,7 @@
 				C12D81B7B1B0295D73FDFA69 /* VoiceAudioCapture.swift in Sources */,
 				CF956568ABE6CC7193710443 /* VoiceCapsuleContent.swift in Sources */,
 				6146D9C1D7258FD6FCF32DDB /* VoiceCommandController.swift in Sources */,
+				FBBAF5CA58AA6F72F3D686D6 /* VoiceMainWindowFocusObserver.swift in Sources */,
 				E6D3F07FC3C05F45B68A5B5E /* VoiceMemoryFacade.swift in Sources */,
 				DEA87961CBF63ADDB23F74AB /* VoiceModeModels.swift in Sources */,
 				42015586AB02DBCB895C3064 /* VoiceTranscriptLine.swift in Sources */,
