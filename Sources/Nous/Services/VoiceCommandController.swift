@@ -12,6 +12,7 @@ final class VoiceCommandController {
     var pendingAction: VoicePendingAction?
     var isActive: Bool = false
     var subtitleText: String = ""
+    var audioLevel: Float = 0
 
     private var handlers: VoiceActionHandlers = .empty
     private let session: RealtimeVoiceSessioning
@@ -31,6 +32,11 @@ final class VoiceCommandController {
     ) {
         self.session = session ?? RealtimeVoiceSession(includeMemoryTools: memory != nil)
         self.memory = memory
+        self.session.setAudioLevelHandler { [weak self] level in
+            Task { @MainActor in
+                self?.updateAudioLevel(level)
+            }
+        }
     }
 
     func configure(_ handlers: VoiceActionHandlers) {
@@ -45,6 +51,10 @@ final class VoiceCommandController {
         isActive = true
         status = .listening
         resetTranscript()
+    }
+
+    func updateAudioLevel(_ level: Float) {
+        audioLevel = max(0, min(1, level))
     }
 
     func start(apiKey: String) async throws {
@@ -75,6 +85,7 @@ final class VoiceCommandController {
         isActive = false
         pendingAction = nil
         status = .idle
+        audioLevel = 0
         resetTranscript()
     }
 
@@ -363,6 +374,7 @@ final class VoiceCommandController {
         isActive = false
         pendingAction = nil
         status = .error(message)
+        audioLevel = 0
         resetTranscript()
     }
 
@@ -431,6 +443,7 @@ final class VoiceCommandController {
         outputTranscriptBuffer = ""
         inputTranscriptIsFinal = false
         outputTranscriptIsFinal = false
+        audioLevel = 0
     }
 
     private func markAppStateChanged() {
