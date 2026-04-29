@@ -198,7 +198,7 @@ struct ChatArea: View {
                                     .id(bottomScrollAnchor)
                             }
                             .padding(.horizontal, 36)
-                            .padding(.top, floatingHeaderHeight + 24)
+                            .padding(.top, 76)
                             .padding(.bottom, 8)
                         }
                         .onAppear {
@@ -255,7 +255,8 @@ struct ChatArea: View {
                         .padding(.trailing, 36)
                         .padding(.top, 22)
 
-                        if voiceController.isActive || voiceController.status.shouldDisplayPill || voiceController.pendingAction != nil {
+                        if voiceController.visibleSurface == .inWindow &&
+                           (voiceController.isActive || voiceController.status.shouldDisplayPill || voiceController.pendingAction != nil) {
                             VoiceCapsuleView(
                                 status: voiceController.status,
                                 subtitleText: voiceController.subtitleText,
@@ -266,12 +267,7 @@ struct ChatArea: View {
                             )
                             .padding(.top, 16)
                             .transition(.move(edge: .top).combined(with: .opacity))
-                            VoiceTranscriptPanel(
-                                lines: voiceController.transcript,
-                                isVisible: voiceController.isActive
-                            )
-                            .padding(.top, 60)
-                            .allowsHitTesting(true)
+                            .allowsHitTesting(voiceController.visibleSurface == .inWindow)
                         }
                     }
                     .animation(.spring(response: 0.4, dampingFraction: 0.8), value: voiceController.isActive)
