@@ -9,56 +9,17 @@ struct VoiceCapsuleView: View {
     let onConfirm: () -> Void
     let onCancel: () -> Void
 
-    private var barState: VoiceWaveformBars.BarState {
-        switch status {
-        case .listening:                        return .listening
-        case .thinking:                         return .thinking
-        case .error:                            return .error
-        case .idle, .action, .needsConfirmation: return .idle
-        }
-    }
-
     var body: some View {
-        HStack(spacing: 12) {
-            VoiceWaveformBars(level: audioLevel, state: barState)
-                .frame(width: 27, height: 22)
-                .accessibilityHidden(true)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(status.displayText)
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    .foregroundStyle(AppColor.colaDarkText)
-                    .lineLimit(1)
-                    .contentTransition(.interpolate)
-                    .animation(.easeOut(duration: 0.15), value: status.displayText)
-
-                if !subtitleText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text(subtitleText)
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
-                        .foregroundStyle(AppColor.secondaryText)
-                        .lineLimit(1)
-                        .contentTransition(.interpolate)
-                        .animation(.easeOut(duration: 0.12), value: subtitleText)
-                }
-            }
-            .frame(maxWidth: 420, alignment: .leading)
-
-            if hasPendingConfirmation {
-                HStack(spacing: 8) {
-                    Button("Confirm", action: onConfirm)
-                        .font(.system(size: 13, weight: .bold, design: .rounded))
-                        .buttonStyle(.plain)
-                        .foregroundStyle(AppColor.colaOrange)
-
-                    Button("Cancel", action: onCancel)
-                        .font(.system(size: 13, weight: .bold, design: .rounded))
-                        .buttonStyle(.plain)
-                        .foregroundStyle(AppColor.secondaryText)
-                }
-                .padding(.leading, 4)
-                .transition(.opacity.combined(with: .scale(scale: 0.95)))
-            }
-        }
+        VoiceCapsuleContent(
+            status: status,
+            subtitleText: subtitleText,
+            audioLevel: audioLevel,
+            hasPendingConfirmation: hasPendingConfirmation,
+            showsStopButton: false, // in-window relies on VoiceModeButton for start/stop
+            onConfirm: onConfirm,
+            onCancel: onCancel,
+            onStop: {} // no-op; not shown in-window
+        )
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
         .background(
@@ -69,9 +30,6 @@ struct VoiceCapsuleView: View {
             Capsule()
                 .stroke(AppColor.panelStroke.opacity(0.6), lineWidth: 1)
         )
-        .animation(.spring(response: 0.35, dampingFraction: 0.75), value: status.displayText)
-        .animation(.spring(response: 0.35, dampingFraction: 0.75), value: subtitleText)
-        .animation(.spring(response: 0.35, dampingFraction: 0.75), value: hasPendingConfirmation)
     }
 }
 
