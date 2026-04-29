@@ -33,4 +33,40 @@ final class VoiceTranscriptLineReducerTests: XCTestCase {
         XCTAssertTrue(lines[0].isFinal)
         XCTAssertEqual(lines[0].text, "Opening Gala")
     }
+
+    func test_appendingDelta_afterFinalizedSameRoleLine_opensNewLine() {
+        var lines: [VoiceTranscriptLine] = []
+        VoiceTranscriptLine.finalize(text: "Hi.", role: .user, into: &lines)
+        VoiceTranscriptLine.appendDelta("Again", role: .user, into: &lines, now: Date(timeIntervalSince1970: 1))
+        XCTAssertEqual(lines.count, 2)
+        XCTAssertTrue(lines[0].isFinal)
+        XCTAssertEqual(lines[0].text, "Hi.")
+        XCTAssertFalse(lines[1].isFinal)
+        XCTAssertEqual(lines[1].text, "Again")
+    }
+
+    func test_finalize_withNoPriorDeltas_appendsFinalLine() {
+        var lines: [VoiceTranscriptLine] = []
+        VoiceTranscriptLine.finalize(text: "Hello.", role: .user, into: &lines)
+        XCTAssertEqual(lines.count, 1)
+        XCTAssertTrue(lines[0].isFinal)
+        XCTAssertEqual(lines[0].role, .user)
+        XCTAssertEqual(lines[0].text, "Hello.")
+    }
+
+    func test_bargeInSealsLatestAssistant_isNoOp_whenLatestIsUser() {
+        var lines: [VoiceTranscriptLine] = []
+        VoiceTranscriptLine.appendDelta("typing", role: .user, into: &lines)
+        let before = lines
+        VoiceTranscriptLine.bargeInSealsLatestAssistant(into: &lines)
+        XCTAssertEqual(lines, before)
+    }
+
+    func test_bargeInSealsLatestAssistant_isNoOp_whenLatestAssistantIsAlreadyFinal() {
+        var lines: [VoiceTranscriptLine] = []
+        VoiceTranscriptLine.finalize(text: "Done.", role: .assistant, into: &lines)
+        let before = lines
+        VoiceTranscriptLine.bargeInSealsLatestAssistant(into: &lines)
+        XCTAssertEqual(lines, before)
+    }
 }

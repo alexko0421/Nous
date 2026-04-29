@@ -1,7 +1,7 @@
 import Foundation
 
-struct VoiceTranscriptLine: Identifiable, Equatable {
-    enum Role: Equatable {
+struct VoiceTranscriptLine: Identifiable, Equatable, Codable {
+    enum Role: String, Codable, Equatable {
         case user
         case assistant
     }
