@@ -800,6 +800,40 @@ final class VoiceCommandControllerTests: XCTestCase {
             XCTAssertEqual(error as? VoiceToolError, .invalidArgument("tab"))
         }
     }
+
+    func test_controllerRegistersAudioLevelHandlerInInit() {
+        let session = FakeRealtimeVoiceSession()
+        _ = VoiceCommandController(session: session)
+        XCTAssertNotNil(session.audioLevelHandlerForTest)
+    }
+
+    func test_handlerForwardsLevelToControllerOnMainActor() async {
+        let session = FakeRealtimeVoiceSession()
+        let controller = VoiceCommandController(session: session)
+        XCTAssertEqual(controller.audioLevel, 0, accuracy: 0.0001)
+
+        session.emitAudioLevel(0.7)
+        // The handler hops to @MainActor via Task; yield once so it runs.
+        await Task.yield()
+        await MainActor.run {}
+
+        XCTAssertEqual(controller.audioLevel, 0.7, accuracy: 0.0001)
+    }
+
+    func test_audioLevelClampedForOutOfRangeInputs() async {
+        let session = FakeRealtimeVoiceSession()
+        let controller = VoiceCommandController(session: session)
+
+        session.emitAudioLevel(1.5)
+        await Task.yield()
+        await MainActor.run {}
+        XCTAssertEqual(controller.audioLevel, 1.0, accuracy: 0.0001)
+
+        session.emitAudioLevel(-0.3)
+        await Task.yield()
+        await MainActor.run {}
+        XCTAssertEqual(controller.audioLevel, 0.0, accuracy: 0.0001)
+    }
 }
 
 private func XCTAssertThrowsErrorAsync<T>(
@@ -830,6 +864,8 @@ private final class FakeRealtimeVoiceSession: RealtimeVoiceSessioning {
     var startGates: [StartGate] = []
 
     private var onEvent: (@MainActor (RealtimeVoiceEvent) async -> Void)?
+    private var audioLevelHandler: (@Sendable (Float) -> Void)?
+    var audioLevelHandlerForTest: (@Sendable (Float) -> Void)? { audioLevelHandler }
 
     func start(
         apiKey: String,
@@ -855,6 +891,14 @@ private final class FakeRealtimeVoiceSession: RealtimeVoiceSessioning {
 
     func stop() {
         stopCallCount += 1
+    }
+
+    func setAudioLevelHandler(_ handler: @escaping @Sendable (Float) -> Void) {
+        self.audioLevelHandler = handler
+    }
+
+    func emitAudioLevel(_ level: Float) {
+        audioLevelHandler?(level)
     }
 
     func emit(_ event: RealtimeVoiceEvent) async {

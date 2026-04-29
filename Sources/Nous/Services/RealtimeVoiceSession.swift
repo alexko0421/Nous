@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 protocol RealtimeVoiceSocketing: AnyObject {
     func connect(request: URLRequest) async throws
@@ -73,9 +74,6 @@ protocol RealtimeVoiceSessioning: AnyObject {
     func setAudioLevelHandler(_ handler: @escaping @Sendable (Float) -> Void)
 }
 
-extension RealtimeVoiceSessioning {
-    func setAudioLevelHandler(_ handler: @escaping @Sendable (Float) -> Void) {}
-}
 
 enum RealtimeVoiceEventParser {
     static func parse(_ raw: String) -> RealtimeVoiceEvent? {
@@ -157,7 +155,7 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
     private let includeMemoryTools: Bool
     private var receiveTask: Task<Void, Never>?
     private var outboundQueue: RealtimeVoiceOutboundQueue?
-    private var audioLevelHandler: (@Sendable (Float) -> Void)?
+    private let audioLevelHandlerLock = OSAllocatedUnfairLock<(@Sendable (Float) -> Void)?>(initialState: nil)
 
     init(
         socket: RealtimeVoiceSocketing = URLSessionRealtimeVoiceSocket(),
@@ -172,7 +170,7 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
     }
 
     func setAudioLevelHandler(_ handler: @escaping @Sendable (Float) -> Void) {
-        self.audioLevelHandler = handler
+        audioLevelHandlerLock.withLock { $0 = handler }
     }
 
     static func makeRequest(apiKey: String, model: String = defaultModel) -> URLRequest {
@@ -200,7 +198,9 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
             try audioCapture?.start(onAudio: { chunk in
                 queue.enqueueAudio(chunk)
             }, onAudioLevel: { [weak self] level in
-                self?.audioLevelHandler?(level)
+                guard let self else { return }
+                let handler = self.audioLevelHandlerLock.withLock { $0 }
+                handler?(level)
             })
         } catch {
             stop()
