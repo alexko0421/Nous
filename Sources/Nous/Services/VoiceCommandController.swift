@@ -14,6 +14,7 @@ final class VoiceCommandController {
     var subtitleText: String = ""
     var audioLevel: Float = 0
     var visibleSurface: VoiceCapsuleSurface = .none
+    var pendingActionToken: UUID?
     var transcript: [VoiceTranscriptLine] = []
 
     private var handlers: VoiceActionHandlers = .empty
@@ -88,6 +89,7 @@ final class VoiceCommandController {
         isActive = false
         visibleSurface = .none
         pendingAction = nil
+        pendingActionToken = nil
         status = .idle
         audioLevel = 0
         resetTranscript()
@@ -254,18 +256,22 @@ final class VoiceCommandController {
 
         case "propose_send_message":
             try rejectIfPendingActionExists()
-            pendingAction = .sendMessage(text: try requiredString("text", in: args))
+            setPendingAction(
+                .sendMessage(text: try requiredString("text", in: args)),
+                prompt: "Confirm send?"
+            )
             markAppStateChanged()
-            status = .needsConfirmation("Confirm send?")
 
         case "propose_note":
             try rejectIfPendingActionExists()
-            pendingAction = .createNote(
-                title: try requiredString("title", in: args),
-                body: try requiredString("body", in: args)
+            setPendingAction(
+                .createNote(
+                    title: try requiredString("title", in: args),
+                    body: try requiredString("body", in: args)
+                ),
+                prompt: "Create note?"
             )
             markAppStateChanged()
-            status = .needsConfirmation("Create note?")
 
         case "confirm_pending_action":
             confirmPendingAction()
@@ -284,6 +290,7 @@ final class VoiceCommandController {
     func confirmPendingAction() {
         guard let pendingAction else { return }
         self.pendingAction = nil
+        pendingActionToken = nil
 
         switch pendingAction {
         case .sendMessage(let text):
@@ -297,7 +304,14 @@ final class VoiceCommandController {
 
     func cancelPendingAction() {
         pendingAction = nil
+        pendingActionToken = nil
         status = .action("Cancelled")
+    }
+
+    private func setPendingAction(_ action: VoicePendingAction, prompt: String) {
+        pendingAction = action
+        pendingActionToken = UUID()
+        status = .needsConfirmation(prompt)
     }
 
     private static func decodeArguments(_ json: String) throws -> [String: Any] {
