@@ -22,6 +22,7 @@ struct VoiceCapsuleView: View {
         HStack(spacing: 12) {
             VoiceWaveformBars(level: audioLevel, state: barState)
                 .frame(width: 27, height: 22)
+                .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(status.displayText)
