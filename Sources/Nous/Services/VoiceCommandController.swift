@@ -13,6 +13,7 @@ final class VoiceCommandController {
     var isActive: Bool = false
     var subtitleText: String = ""
     var audioLevel: Float = 0
+    var transcript: [VoiceTranscriptLine] = []
 
     private var handlers: VoiceActionHandlers = .empty
     private let session: RealtimeVoiceSessioning
@@ -410,17 +411,19 @@ final class VoiceCommandController {
         outputTranscriptIsFinal = false
         inputTranscriptBuffer += delta
         subtitleText = inputTranscriptBuffer
+        VoiceTranscriptLine.appendDelta(delta, role: .user, into: &transcript)
     }
 
-    private func completeInputTranscript(_ transcript: String) {
-        inputTranscriptBuffer = transcript
+    private func completeInputTranscript(_ text: String) {
+        inputTranscriptBuffer = text
         inputTranscriptIsFinal = true
         outputTranscriptBuffer = ""
         outputTranscriptIsFinal = false
-        subtitleText = transcript
+        subtitleText = text
         if pendingAction == nil {
             status = .thinking
         }
+        VoiceTranscriptLine.finalize(text: text, role: .user, into: &transcript)
     }
 
     private func appendOutputTranscript(_ delta: String) {
@@ -430,12 +433,14 @@ final class VoiceCommandController {
         outputTranscriptIsFinal = false
         outputTranscriptBuffer += delta
         subtitleText = outputTranscriptBuffer
+        VoiceTranscriptLine.appendDelta(delta, role: .assistant, into: &transcript)
     }
 
-    private func completeOutputTranscript(_ transcript: String) {
-        outputTranscriptBuffer = transcript
+    private func completeOutputTranscript(_ text: String) {
+        outputTranscriptBuffer = text
         outputTranscriptIsFinal = true
-        subtitleText = transcript
+        subtitleText = text
+        VoiceTranscriptLine.finalize(text: text, role: .assistant, into: &transcript)
     }
 
     private func resetTranscript() {
@@ -444,6 +449,7 @@ final class VoiceCommandController {
         outputTranscriptBuffer = ""
         inputTranscriptIsFinal = false
         outputTranscriptIsFinal = false
+        transcript = []
     }
 
     private func markAppStateChanged() {
