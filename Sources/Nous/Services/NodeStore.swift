@@ -804,8 +804,8 @@ final class NodeStore {
 
     func insertMessage(_ message: Message) throws {
         let stmt = try db.prepare("""
-            INSERT INTO messages (id, nodeId, role, content, timestamp, thinking_content, agent_trace_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?);
+            INSERT INTO messages (id, nodeId, role, content, timestamp, thinking_content, agent_trace_json, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?);
         """)
         try stmt.bind(message.id.uuidString, at: 1)
         try stmt.bind(message.nodeId.uuidString, at: 2)
@@ -814,6 +814,7 @@ final class NodeStore {
         try stmt.bind(message.timestamp.timeIntervalSince1970, at: 5)
         try stmt.bind(message.thinkingContent, at: 6)
         try stmt.bind(message.agentTraceJson, at: 7)
+        try stmt.bind(message.source.rawValue, at: 8)
         try stmt.step()
         notifyNodesDidChange()
     }
@@ -827,7 +828,7 @@ final class NodeStore {
 
     func fetchMessages(nodeId: UUID) throws -> [Message] {
         let stmt = try db.prepare("""
-            SELECT id, nodeId, role, content, timestamp, thinking_content, agent_trace_json
+            SELECT id, nodeId, role, content, timestamp, thinking_content, agent_trace_json, source
             FROM messages WHERE nodeId=? ORDER BY timestamp ASC;
         """)
         try stmt.bind(nodeId.uuidString, at: 1)
@@ -840,6 +841,8 @@ final class NodeStore {
             let timestamp = Date(timeIntervalSince1970: stmt.double(at: 4))
             let thinkingContent = stmt.text(at: 5)
             let agentTraceJson = stmt.text(at: 6)
+            let sourceRaw = stmt.text(at: 7) ?? "typed"
+            let source = MessageSource(rawValue: sourceRaw) ?? .typed
             results.append(Message(
                 id: id,
                 nodeId: nId,
@@ -847,7 +850,8 @@ final class NodeStore {
                 content: content,
                 timestamp: timestamp,
                 thinkingContent: thinkingContent,
-                agentTraceJson: agentTraceJson
+                agentTraceJson: agentTraceJson,
+                source: source
             ))
         }
         return results
