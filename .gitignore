@@ -3,3 +3,6 @@
 xcuserdata/
 .DS_Store
 .claude/scheduled_tasks.lock
+
+# Git worktrees (for parallel feature implementation)
+.worktrees/
