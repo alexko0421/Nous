@@ -453,7 +453,8 @@ final class VoiceCommandController {
         if pendingAction == nil {
             status = .thinking
         }
-        VoiceTranscriptLine.finalize(text: text, role: .user, into: &transcript)
+        let line = VoiceTranscriptLine.finalize(text: text, role: .user, into: &transcript)
+        onUserUtteranceFinalized?(line)
     }
 
     private func appendOutputTranscript(_ delta: String) {
