@@ -230,6 +230,7 @@
 		DC5505E77AAAF3CC7A339F9D /* MemoryQueryPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94A8FFEAD37B4D3F0819439A /* MemoryQueryPlanner.swift */; };
 		DDBD058147B497D397D7DAC0 /* UserMemoryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1F0851321FDD912EBEA901F /* UserMemoryService.swift */; };
 		DE14FEF788D9AFA302DC7A02 /* MemoryGraphInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FDE22A4088C97B7F2B65171 /* MemoryGraphInspector.swift */; };
+		DE65DCBCE05E824CACB4CB4C /* VoiceTranscriptCommitter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91879267C0CCCFF0F3994129 /* VoiceTranscriptCommitter.swift */; };
 		DE8F51349E0FA0FA45C61D09 /* LocalLLMService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92D5AA1CB7980A98700AB726 /* LocalLLMService.swift */; };
 		DEA87961CBF63ADDB23F74AB /* VoiceModeModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0C50F078221D0CEB1207D74 /* VoiceModeModels.swift */; };
 		DFE079488AB48757AAF51504 /* AgentTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4391E2B1C1A45D8BC4E6D211 /* AgentTool.swift */; };
@@ -425,6 +426,7 @@
 		903D3C6C02E50AC59FB4FB46 /* NoteViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteViewModelTests.swift; sourceTree = "<group>"; };
 		908B3A0E9135905E5FFB061B /* MemoryEvidenceSnippet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryEvidenceSnippet.swift; sourceTree = "<group>"; };
 		91308DA5781DDB5D15415B14 /* VoiceActionPill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceActionPill.swift; sourceTree = "<group>"; };
+		91879267C0CCCFF0F3994129 /* VoiceTranscriptCommitter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceTranscriptCommitter.swift; sourceTree = "<group>"; };
 		92D5AA1CB7980A98700AB726 /* LocalLLMService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalLLMService.swift; sourceTree = "<group>"; };
 		94A8FFEAD37B4D3F0819439A /* MemoryQueryPlanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryQueryPlanner.swift; sourceTree = "<group>"; };
 		9767256444564BD36BC3ADB1 /* 04-soft-tension-strategist-provokes.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "04-soft-tension-strategist-provokes.json"; sourceTree = "<group>"; };
@@ -846,6 +848,7 @@
 				69868D5B206BD27D8F54B079 /* VoiceAudioCapture.swift */,
 				02AC12449EDE4D32637B0A15 /* VoiceCommandController.swift */,
 				F2299867B8E4254D6B54F0BA /* VoiceMemoryFacade.swift */,
+				91879267C0CCCFF0F3994129 /* VoiceTranscriptCommitter.swift */,
 				7A2FA2F104CB9B8CF401CE9D /* WeeklyReflectionService.swift */,
 			);
 			path = Services;
@@ -1302,6 +1305,7 @@
 				E6D3F07FC3C05F45B68A5B5E /* VoiceMemoryFacade.swift in Sources */,
 				DEA87961CBF63ADDB23F74AB /* VoiceModeModels.swift in Sources */,
 				08FB7FBB0F31A1014F894A1C /* VoiceNotchPanelController.swift in Sources */,
+				DE65DCBCE05E824CACB4CB4C /* VoiceTranscriptCommitter.swift in Sources */,
 				42015586AB02DBCB895C3064 /* VoiceTranscriptLine.swift in Sources */,
 				C1FA2EB6FE75A45E68A7B494 /* VoiceTranscriptPanel.swift in Sources */,
 				489E01A671D30AB98A9434E4 /* VoiceWaveformBars.swift in Sources */,
