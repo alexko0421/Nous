@@ -107,7 +107,9 @@ struct ChatArea: View {
                                             agentTraceRecords: msg.decodedAgentTraceRecords,
                                             isThinkingStreaming: false,
                                             isAgentTraceStreaming: false,
-                                            isUser: msg.role == .user
+                                            isUser: msg.role == .user,
+                                            source: msg.source,
+                                            timestamp: msg.timestamp
                                         )
                                         if shouldShowRelevantChats(after: msg) {
                                             RAGCitationView(
@@ -181,7 +183,9 @@ struct ChatArea: View {
                                             agentTraceRecords: vm.currentAgentTrace,
                                             isThinkingStreaming: vm.currentResponse.isEmpty,
                                             isAgentTraceStreaming: !vm.currentAgentTrace.isEmpty && vm.currentResponse.isEmpty,
-                                            isUser: false
+                                            isUser: false,
+                                            source: .typed,
+                                            timestamp: Date()
                                         )
                                         if !vm.citations.isEmpty {
                                             RAGCitationView(
@@ -662,6 +666,8 @@ struct MessageBubble: View {
     let isThinkingStreaming: Bool
     let isAgentTraceStreaming: Bool
     let isUser: Bool
+    let source: MessageSource
+    let timestamp: Date
 
     private let userBubbleMaxWidth: CGFloat = 520
     private let userParagraphSpacing: CGFloat = 10
