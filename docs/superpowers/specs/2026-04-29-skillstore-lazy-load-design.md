@@ -28,7 +28,7 @@ Nous P1 deviates on three deliberate axes:
 - **Lifetime** — Conversation-sticky, not session-sticky. The NousNode is the natural boundary; "session" in Nous is ambiguous (app launch? conversation switch? user idle?).
 - **Storage** — Relational tables (consistent with `memory_fact_entries`), not files.
 
-Trade-off: cache stability for the skill block is slightly weaker than pure Hermes (mode switches invalidate Block 3), in exchange for stronger mode discipline. Block 1 (anchor + policies) and Block 2 (slow memory + memory evidence) remain cached for the duration of a conversation regardless of skill activity.
+Trade-off: only the ~150-token INDEX section invalidates on mode switch; ACTIVE skill content (the bulk of Block 3's volume) preserves cache across mode switches via the 4-marker split (see "Prompt structure" below). Block 1 (anchor + policies) and Block 2 (slow memory + memory evidence) remain cached regardless of skill activity. Net: cache behavior is within ~150 tokens of Hermes-level stability per mode switch; the unrecoverable gap is the deliberate cost of mode-as-first-class-filter.
 
 We label the resulting design **mode-scoped, conversation-sticky lazy-load**.
 
@@ -42,7 +42,7 @@ We label the resulting design **mode-scoped, conversation-sticky lazy-load**.
 - New filtering logic in `PromptContextAssembler.renderSkillIndex` to exclude already-loaded skills (matcher protocol unchanged).
 - New `PromptContextAssembler` rendering for `ACTIVE SKILLS` and `SKILL INDEX` sections.
 - New `loadSkill` tool registered with foreground LLM (Sonnet 4.6 via OpenRouter).
-- Three `cache_control: ephemeral` breakpoints across the stable prefix (after Block 1, Block 2, and Block 3; volatile section unmarked).
+- Four `cache_control: ephemeral` breakpoints across the stable prefix (after Block 1, Block 2, Block 3a, Block 3b; volatile section unmarked). The 3a/3b split isolates `ACTIVE SKILLS` from `SKILL INDEX` so mode switches invalidate only INDEX.
 - Removal of the full-injection path in `QuickActionAddendumResolver`.
 - Build-time backfill script (Gemini 2.5 Pro) for `useWhen` field on existing seed skills.
 - Unit, integration, and cache-wire-format tests.
@@ -206,12 +206,18 @@ System prompt assembly order, most stable to most volatile:
 
 1. **Block 1** (`cache_control: ephemeral`) — `anchor.md` + policies (memory interpretation, safety, grounding, real-world decision, summary output, conversation-title output).
 2. **Block 2** (`cache_control: ephemeral`) — slow memory (global / project / conversation) + memory evidence snippets.
-3. **Block 3** (`cache_control: ephemeral`) — `ACTIVE SKILLS` section + `SKILL INDEX` section.
-4. **Volatile** (no `cache_control`) — chat mode addendum (plain text only, no skill content) + citations + attachments + safety gate + interactive clarification UI + user message.
+3. **Block 3a** (`cache_control: ephemeral`) — `ACTIVE SKILLS` section (skills loaded earlier this conversation, full `action.content`).
+4. **Block 3b** (`cache_control: ephemeral`) — `SKILL INDEX` section (mode-matched skills, name + description + use-when only).
+5. **Volatile** (no `cache_control`) — chat mode addendum (plain text only, no skill content) + citations + attachments + safety gate + interactive clarification UI + user message.
 
-Sonnet supports up to 4 `cache_control` breakpoints. This layout uses 3 markers (after Block 1, Block 2, and Block 3); the volatile section is unmarked. The 4th breakpoint slot is reserved for future granularity (e.g., separating anchor from policies if memory governance later mutates policies more frequently).
+Sonnet supports up to 4 `cache_control` breakpoints; this layout uses all 4 (after Blocks 1, 2, 3a, 3b).
 
-### Block 3 rendering
+**Order is load-bearing**: `ACTIVE` (Block 3a) must come BEFORE `INDEX` (Block 3b). Cache markers cache everything up to that marker, so:
+
+- Mode switch mutates Block 3b (INDEX content changes) → cache hit at the 3a marker → `ACTIVE` content preserved (~500–2,500 tokens of loaded skill content), only ~150 tokens of INDEX reprocessed.
+- Reversing the order (INDEX before ACTIVE) would invalidate ACTIVE on every mode switch — defeats the purpose of the split.
+
+### Block 3a + 3b rendering
 
 ```
 ═══════════════════════════════════════════════
@@ -246,12 +252,12 @@ SKILL INDEX (this mode — call loadSkill(name) to use)
 
 ### Deterministic rendering
 
-To preserve cache hits, Block 3 contents must be byte-identical when underlying state is unchanged:
+To preserve cache hits, Blocks 3a and 3b must be byte-identical when underlying state is unchanged:
 
-- `ACTIVE` order: `loaded_at ASC` (new entries append to tail; never re-sort).
-- `SKILL INDEX` order: `priority DESC, name ASC` (deterministic per mode).
+- `ACTIVE` (Block 3a) order: `loaded_at ASC` (new entries append to tail; never re-sort — re-sorting would invalidate cache on every load).
+- `SKILL INDEX` (Block 3b) order: `priority DESC, name ASC` (deterministic per mode).
 - No timestamps in rendered text.
-- No `loaded_skill_count` or similar derived counters in Blocks 1, 2, or 3.
+- No `loaded_skill_count` or similar derived counters in Blocks 1, 2, 3a, or 3b.
 
 ## Cache strategy
 
@@ -259,15 +265,19 @@ Provider: OpenRouter Sonnet 4.6 (foreground), with `cache_control: {type: "ephem
 
 Invalidation table:
 
-| Trigger | Blocks invalidated |
-|---|---|
-| `anchor.md` modified (frozen, near-zero in practice) | 1, 2, 3 |
-| Slow memory governance refresh (~weekly) | 2, 3 |
-| New skill loaded (`ACTIVE` grows) | **3 only** |
-| Mode switch (`SKILL INDEX` content changes) | **3 only** |
-| New user turn | Volatile only (no cached prefix change) |
+| Trigger | Blocks invalidated | Reprocessed token cost |
+|---|---|---|
+| `anchor.md` modified (frozen; near-zero in practice) | 1, 2, 3a, 3b | Full stable prefix |
+| Slow memory governance refresh (~weekly) | 2, 3a, 3b | Slow memory + skill blocks |
+| New skill loaded (`ACTIVE` grows) | **3a + 3b** | New `action.content` (~500 tokens) + INDEX reorder (~150 tokens) |
+| Mode switch (`SKILL INDEX` changes; `ACTIVE` unchanged) | **3b only** | INDEX section only (~150 tokens) — `ACTIVE` content preserved |
+| New user turn | Volatile only | No cached prefix change |
 
-Invariant: within a single conversation, Block 1 + Block 2 hit cache from turn 2 onward regardless of any skill-related event.
+Invariants:
+
+- Block 1 + Block 2 hit cache from turn 2 onward, regardless of any skill-related event.
+- Block 3a (`ACTIVE`) hits cache after a mode switch, so loaded skill content does not re-process.
+- Skill loads are rare (typically 1–2 per conversation, in early turns); mode switches mid-conversation only invalidate ~150 tokens.
 
 Fallback: cache is an optimization, not a correctness guarantee. If Sonnet's cache misbehaves, the system degrades to "no caching" with full token cost — still ~70% cheaper than the current full-injection baseline.
 
@@ -281,7 +291,7 @@ Fallback: cache is an optimization, not a correctness guarantee. If Sonnet's cac
 | `Sources/Nous/Services/SkillStore.swift` | Add `loadedSkills(in:)`, `markSkillLoaded(_:in:at:)`, `unloadAllSkills(in:)` |
 | `Sources/Nous/Models/Skill.swift` | Bump `payloadVersion` accepted range to `1...2`; add `useWhen: String?` |
 | `Sources/Nous/Services/SkillMatcher.swift` | No protocol change — existing `matchingSkills(from:context:cap:)` stays |
-| `Sources/Nous/Services/PromptContextAssembler.swift` | Add `renderActiveSkills()`, `renderSkillIndex()`; index renderer queries `SkillStore.loadedSkills(in:)` and filters out loaded ids; insert before volatile section; place 3 `cache_control` markers |
+| `Sources/Nous/Services/PromptContextAssembler.swift` | Add `renderActiveSkills()`, `renderSkillIndex()`; index renderer queries `SkillStore.loadedSkills(in:)` and filters out loaded ids; insert before volatile section; place 4 `cache_control` markers (one each after Blocks 1, 2, 3a, 3b — the 3a/3b split between Active and Index is what isolates mode-switch invalidation) |
 | `Sources/Nous/Services/QuickActionAddendumResolver.swift` | Remove line 71 (`matched.map { $0.payload.action.content }.joined(separator: "\n\n")`); the resolver still computes matched skills (for tracker fire) but no longer concatenates `action.content` into the addendum string |
 | `Sources/Nous/Services/LLMService.swift` | Register `loadSkill` tool with Sonnet 4.6 / OpenRouter; route `loadSkill` tool calls to SkillStore |
 
@@ -346,7 +356,7 @@ PromptContextAssemblerTests:
   - useWhenNil_fallsBackToDescription
   - activeSkills_orderedByLoadedAtAsc
   - skillIndex_orderedByPriorityDescThenName
-  - cacheControlMarkers_placedAtThreeBoundaries
+  - cacheControlMarkers_placedAtFourBoundaries_activeBeforeIndex
 
 LoadSkillToolTests:
   - tool_returnsContent_onSuccess
@@ -373,9 +383,9 @@ LoadSkillToolTests:
 
 `testCacheBreakpoints`:
 
-- 3 `cache_control` markers placed at correct positions (after Block 1, Block 2, Block 3) in the assembled message.
-- After adding a loaded skill: Block 1 + Block 2 byte-identical to pre-load (cache key preserved).
-- After mode switch: Block 1 + Block 2 byte-identical (only Block 3 changes).
+- 4 `cache_control` markers placed at correct positions (after Block 1, Block 2, Block 3a, Block 3b) in the assembled message.
+- After adding a loaded skill: Block 1 + Block 2 byte-identical to pre-load (cache key preserved); Block 3a grows by one entry; Block 3b unchanged unless the loaded skill was previously in INDEX (then 3b loses that row).
+- After mode switch: Block 1 + Block 2 + **Block 3a** byte-identical (Active preserved); only Block 3b changes.
 
 ## Risks and mitigation
 
@@ -394,7 +404,7 @@ P1 is judged "good ship" when:
 1. **Direction mode + EverMind-envy prompt**: live-test reply quality matches or beats current output (memory-verified validation harness, 2026-04-28).
 2. **倾观点 mode + philosophical prompt**: mode discipline distinct from Direction mode (no cross-mode bleed).
 3. **Token cost**: Direction-mode turn skill section < 250 tokens (vs current ~2,500), ≥ 80% reduction.
-4. **Cache hit ratio**: same-conversation Block 1 + Block 2 hit ratio > 95% from turn 2 onward.
+4. **Cache hit ratio**: same-conversation Block 1 + Block 2 hit ratio > 95% from turn 2 onward. After mid-conversation mode switch, Block 3a (Active) also hits cache (only Block 3b reprocessed).
 5. **Mid-conversation mode switch**: `ACTIVE` skills retained correctly; new `SKILL INDEX` reflects new mode.
 
 Tests 1 and 2 must pass before merge (live-test on fresh conversations, per the 2026-04-26 surgical-edit discipline). Tests 3-5 monitored post-merge.
@@ -411,11 +421,12 @@ Tests 1 and 2 must pass before merge (live-test on fresh conversations, per the 
 | Mode concept | None | First-class hard filter | Nous design principle, not Hermes-style open dispatch |
 | Idempotent duplicate-load | Unspecified in article | Explicit `already_loaded` status | Avoid false-error model state |
 
-Performance comparison:
+Performance comparison (after 4-marker split):
 
 - Token efficiency: Nous index ~150 tokens (matched-only) vs Hermes index ~500+ tokens (all skills). Nous lighter by design.
-- Cache stability: Nous slightly weaker for the skill block (mode switches invalidate Block 3). Hermes index is fully stable across mode-equivalent state.
-- Net: comparable in low-mode-switch scenarios; minor regression vs Hermes in high-mode-switch scenarios; both far superior to current full-injection.
+- Cache stability: Nous nearly matches Hermes. Mode switches invalidate only ~150 tokens (Block 3b INDEX); Block 3a (loaded skill content, the bulk of Block 3 volume) is preserved. Skill loads invalidate Block 3a + 3b — unavoidable, since new content must be processed; Hermes has the same property at session-load time.
+- Remaining gap: ~150 tokens per mode switch. This is the deliberate cost of mode-as-first-class-filter; Hermes pays zero only because it has no mode concept.
+- Net: comparable to Hermes in nearly all scenarios; both far superior to current full-injection.
 
 What we deliberately do NOT borrow from Hermes:
 
@@ -428,7 +439,7 @@ What we deliberately do NOT borrow from Hermes:
 
 1. **Data layer** — `NodeStore` migration; `SkillStore` new methods; `Skill` payload v2 (`useWhen` field).
 2. **Backfill** (separate commit, not part of PR diff) — Gemini batch-generate `useWhen` for existing seed skills; manual review; patch `seed-skills.json`.
-3. **Rendering layer** — `PromptContextAssembler.renderActiveSkills` + `renderSkillIndex` (the latter queries `SkillStore.loadedSkills(in:)` and filters matched skills accordingly); place 3 `cache_control` markers.
+3. **Rendering layer** — `PromptContextAssembler.renderActiveSkills` + `renderSkillIndex` (the latter queries `SkillStore.loadedSkills(in:)` and filters matched skills accordingly); place 4 `cache_control` markers in this exact order: Block 1 end → Block 2 end → Block 3a (Active) end → Block 3b (Index) end. Active-before-Index is mandatory — see "Order is load-bearing" in §Prompt structure.
 4. **Tool layer** — `loadSkill` tool registration + dispatch in `LLMService`; route tool calls to `SkillStore.markSkillLoaded`.
 5. **Cleanup** — strip line 71 of `QuickActionAddendumResolver` so the addendum no longer concatenates `action.content`.
 6. **Tests** — 3 unit test suites (`SkillStoreTests`, `PromptContextAssemblerTests`, `LoadSkillToolTests`), 1 integration scenario, 1 cache wire-format scenario.
