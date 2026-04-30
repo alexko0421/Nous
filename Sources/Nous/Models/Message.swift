@@ -13,6 +13,7 @@ struct Message: Identifiable, Codable {
     let timestamp: Date
     var thinkingContent: String?
     var agentTraceJson: String?
+    var source: MessageSource
 
     init(
         id: UUID = UUID(),
@@ -21,7 +22,8 @@ struct Message: Identifiable, Codable {
         content: String,
         timestamp: Date = Date(),
         thinkingContent: String? = nil,
-        agentTraceJson: String? = nil
+        agentTraceJson: String? = nil,
+        source: MessageSource = .typed
     ) {
         self.id = id
         self.nodeId = nodeId
@@ -30,5 +32,6 @@ struct Message: Identifiable, Codable {
         self.timestamp = timestamp
         self.thinkingContent = thinkingContent
         self.agentTraceJson = agentTraceJson
+        self.source = source
     }
 }
