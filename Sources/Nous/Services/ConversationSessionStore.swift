@@ -12,6 +12,12 @@ struct CommittedAssistantTurn {
     let messagesAfterAssistantAppend: [Message]
 }
 
+struct CommittedVoiceTurn {
+    let node: NousNode
+    let userMessage: Message
+    let messagesAfterAppend: [Message]
+}
+
 enum ConversationSessionStoreError: Error {
     case missingNode(UUID)
     case invalidRegenerationTarget
@@ -188,5 +194,39 @@ final class ConversationSessionStore {
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? firstUser
         guard !queryOnly.isEmpty else { return nil }
         return String(queryOnly.prefix(40)).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+extension ConversationSessionStore {
+    /// Append a voice user message to the given conversation. Inserts into
+    /// `messages` (with `source: .voice`) and updates `nodes.content` via
+    /// `persistTranscript`. Throws `missingNode` if the conversation does
+    /// not exist (e.g. user deleted it mid-session).
+    func appendVoiceUserMessage(
+        nodeId: UUID,
+        text: String,
+        timestamp: Date
+    ) throws -> CommittedVoiceTurn {
+        guard let node = try nodeStore.fetchNode(id: nodeId) else {
+            throw ConversationSessionStoreError.missingNode(nodeId)
+        }
+
+        let userMessage = Message(
+            nodeId: node.id,
+            role: .user,
+            content: text,
+            timestamp: timestamp,
+            source: .voice
+        )
+        try nodeStore.insertMessage(userMessage)
+
+        let messagesAfterAppend = try nodeStore.fetchMessages(nodeId: node.id)
+        let updatedNode = try persistTranscript(nodeId: node.id, messages: messagesAfterAppend)
+
+        return CommittedVoiceTurn(
+            node: updatedNode,
+            userMessage: userMessage,
+            messagesAfterAppend: messagesAfterAppend
+        )
     }
 }
