@@ -99,26 +99,9 @@ enum OpenRouterSSEParser {
         #endif
 
         var events: [ReasoningStreamEvent] = []
-        if let reasoningDetails = delta["reasoning_details"] as? [[String: Any]] {
-            for detail in reasoningDetails {
-                guard let type = detail["type"] as? String else { continue }
-                switch type {
-                case "reasoning.text":
-                    if let text = detail["text"] as? String, !text.isEmpty {
-                        events.append(.thinkingDelta(text))
-                    }
-                case "reasoning.summary":
-                    if let summary = detail["summary"] as? String, !summary.isEmpty {
-                        events.append(.thinkingDelta(summary))
-                    }
-                default:
-                    continue
-                }
-            }
-        } else if let reasoning = delta["reasoning"] as? String, !reasoning.isEmpty {
-            events.append(.thinkingDelta(reasoning))
-        } else if let reasoning = delta["reasoning_content"] as? String, !reasoning.isEmpty {
-            events.append(.thinkingDelta(reasoning))
+        let thinking = OpenRouterReasoningExtractor.visibleThinking(in: delta)
+        if !thinking.isEmpty {
+            events.append(.thinkingDelta(thinking))
         }
 
         if let text = delta["content"] as? String, !text.isEmpty {
@@ -126,6 +109,44 @@ enum OpenRouterSSEParser {
         }
 
         return events
+    }
+}
+
+enum OpenRouterReasoningExtractor {
+    static func visibleThinking(in payload: [String: Any]) -> String {
+        var pieces: [String] = []
+        if let reasoningDetails = payload["reasoning_details"] as? [[String: Any]] {
+            pieces.append(contentsOf: visibleThinkingPieces(in: reasoningDetails))
+        }
+
+        if pieces.isEmpty {
+            if let reasoning = payload["reasoning"] as? String, !reasoning.isEmpty {
+                pieces.append(reasoning)
+            } else if let reasoning = payload["reasoning_content"] as? String, !reasoning.isEmpty {
+                pieces.append(reasoning)
+            }
+        }
+
+        return pieces.joined()
+    }
+
+    private static func visibleThinkingPieces(in reasoningDetails: [[String: Any]]) -> [String] {
+        reasoningDetails.compactMap { detail in
+            guard let type = detail["type"] as? String else { return nil }
+            switch type {
+            case "reasoning.text":
+                return nonEmptyString(detail["text"])
+            case "reasoning.summary":
+                return nonEmptyString(detail["summary"])
+            default:
+                return nil
+            }
+        }
+    }
+
+    private static func nonEmptyString(_ value: Any?) -> String? {
+        guard let string = value as? String, !string.isEmpty else { return nil }
+        return string
     }
 }
 
@@ -430,7 +451,8 @@ extension OpenRouterLLMService: ToolCallingLLMService {
             messages: messages,
             tools: tools,
             allowToolCalls: allowToolCalls,
-            includeWebSearch: webSearchEnabled
+            includeWebSearch: webSearchEnabled,
+            reasoningBudgetTokens: reasoningBudgetTokens
         )
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
 
@@ -450,20 +472,25 @@ extension OpenRouterLLMService: ToolCallingLLMService {
         messages: [AgentLoopMessage],
         tools: [AgentToolDeclaration],
         allowToolCalls: Bool,
-        includeWebSearch: Bool = false
+        includeWebSearch: Bool = false,
+        reasoningBudgetTokens: Int? = nil
     ) throws -> [String: Any] {
         var serializedTools = try Self.serializeToolDeclarations(tools)
         if includeWebSearch {
             serializedTools.append(Self.webSearchServerTool())
         }
 
-        return [
+        var requestBody: [String: Any] = [
             "model": model,
             "stream": false,
             "messages": Self.serializeAgentMessages(system: system, messages: messages),
             "tools": serializedTools,
             "tool_choice": allowToolCalls ? "auto" : "none"
         ]
+        if let reasoningBudgetTokens {
+            requestBody["reasoning"] = Self.reasoningRequestBody(maxTokens: reasoningBudgetTokens)
+        }
+        return requestBody
     }
 
     static func buildStreamingRequestBody(
@@ -488,13 +515,17 @@ extension OpenRouterLLMService: ToolCallingLLMService {
             requestBody["tools"] = [Self.webSearchServerTool()]
         }
         if let reasoningBudgetTokens {
-            requestBody["reasoning"] = [
-                "max_tokens": reasoningBudgetTokens,
-                "enabled": true,
-                "exclude": false
-            ]
+            requestBody["reasoning"] = Self.reasoningRequestBody(maxTokens: reasoningBudgetTokens)
         }
         return requestBody
+    }
+
+    private static func reasoningRequestBody(maxTokens: Int) -> [String: Any] {
+        [
+            "max_tokens": maxTokens,
+            "enabled": true,
+            "exclude": false
+        ]
     }
 
     static func webSearchServerTool() -> [String: Any] {
@@ -561,7 +592,7 @@ extension OpenRouterLLMService: ToolCallingLLMService {
         return array
     }
 
-    private static func parseToolResponse(_ data: Data) throws -> AgentToolLLMResponse {
+    static func parseToolResponse(_ data: Data) throws -> AgentToolLLMResponse {
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let choices = json["choices"] as? [[String: Any]],
               let first = choices.first,
@@ -570,6 +601,7 @@ extension OpenRouterLLMService: ToolCallingLLMService {
         }
 
         let text = message["content"] as? String ?? ""
+        let thinkingContent = OpenRouterReasoningExtractor.visibleThinking(in: message)
         let toolCalls = (message["tool_calls"] as? [[String: Any]] ?? []).compactMap(parseToolCall)
         let assistantMessage: AgentLoopMessage = toolCalls.isEmpty
             ? .text(role: "assistant", content: text)
@@ -580,7 +612,8 @@ extension OpenRouterLLMService: ToolCallingLLMService {
         return AgentToolLLMResponse(
             text: text,
             assistantMessage: assistantMessage,
-            toolCalls: toolCalls
+            toolCalls: toolCalls,
+            thinkingContent: thinkingContent.isEmpty ? nil : thinkingContent
         )
     }
 

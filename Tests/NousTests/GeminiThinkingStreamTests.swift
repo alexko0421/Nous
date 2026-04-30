@@ -188,6 +188,16 @@ final class ProviderThinkingStreamTests: XCTestCase {
         XCTAssertEqual(events, [.thinkingDelta("thinking...")])
     }
 
+    func testOpenRouterParserFallsBackToReasoningWhenDetailsHaveNoVisibleText() {
+        let lines = [
+            #"data: {"choices":[{"delta":{"content":"","role":"assistant","reasoning":"visible reasoning","reasoning_details":[{"type":"reasoning.encrypted","data":"opaque","format":"anthropic-claude-v1","index":0}]}}]}"#
+        ]
+
+        let events = parseOpenRouter(lines)
+
+        XCTAssertEqual(events, [.thinkingDelta("visible reasoning")])
+    }
+
     func testClaudeBodyEmitsCacheControlWhenStablePrefixMatches() {
         let stable = "ANCHOR + persisted memory"
         let volatile = "PER-TURN focus block"

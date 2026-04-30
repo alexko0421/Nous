@@ -29,6 +29,21 @@ final class SlowStreamingLLMService: LLMService {
     }
 }
 
+final class ChatStreamingPresentationTests: XCTestCase {
+    func testKeepsThinkingExpandedWhileAnswerTextStreams() {
+        let presentation = StreamingAssistantPresentation(
+            isGenerating: true,
+            currentThinking: "First, identify the actual constraint.",
+            currentResponse: "The short answer is",
+            currentAgentTraceIsEmpty: true
+        )
+
+        XCTAssertTrue(presentation.showsAssistantDraft)
+        XCTAssertEqual(presentation.draftThinkingContent, "First, identify the actual constraint.")
+        XCTAssertTrue(presentation.isDraftThinkingStreaming)
+    }
+}
+
 final class SingleReplyLLMService: LLMService {
     let output: String
 

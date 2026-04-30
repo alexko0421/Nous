@@ -63,7 +63,7 @@ final class QuickActionOpeningRunner {
             guard let result = try await turnExecutor.execute(
                 plan: plan,
                 sink: sink,
-                captureThinking: false
+                captureThinking: true
             ) else {
                 await sink.emit(.aborted(abortReason()))
                 return nil
@@ -83,7 +83,7 @@ final class QuickActionOpeningRunner {
                 nodeId: node.id,
                 currentMessages: [],
                 assistantContent: executionResult.assistantContent,
-                thinkingContent: nil,
+                thinkingContent: executionResult.persistedThinking,
                 conversationTitle: executionResult.conversationTitle
             )
         } catch {

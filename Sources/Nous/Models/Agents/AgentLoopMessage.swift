@@ -16,4 +16,17 @@ struct AgentToolLLMResponse: Equatable, Sendable {
     let text: String
     let assistantMessage: AgentLoopMessage
     let toolCalls: [AgentToolCall]
+    let thinkingContent: String?
+
+    init(
+        text: String,
+        assistantMessage: AgentLoopMessage,
+        toolCalls: [AgentToolCall],
+        thinkingContent: String? = nil
+    ) {
+        self.text = text
+        self.assistantMessage = assistantMessage
+        self.toolCalls = toolCalls
+        self.thinkingContent = thinkingContent
+    }
 }

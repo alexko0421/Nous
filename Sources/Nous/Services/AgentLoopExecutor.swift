@@ -18,17 +18,20 @@ final class AgentLoopExecutor {
     private let registry: AgentToolRegistry
     private let perToolTimeoutSeconds: Double
     private let totalTurnTimeoutSeconds: Double
+    private let shouldPersistAssistantThinking: () -> Bool
 
     init(
         llmService: any ToolCallingLLMService,
         registry: AgentToolRegistry,
         perToolTimeoutSeconds: Double = 5,
-        totalTurnTimeoutSeconds: Double = 60
+        totalTurnTimeoutSeconds: Double = 60,
+        shouldPersistAssistantThinking: @escaping () -> Bool = { true }
     ) {
         self.llmService = llmService
         self.registry = registry
         self.perToolTimeoutSeconds = perToolTimeoutSeconds
         self.totalTurnTimeoutSeconds = totalTurnTimeoutSeconds
+        self.shouldPersistAssistantThinking = shouldPersistAssistantThinking
     }
 
     func execute(
@@ -45,6 +48,7 @@ final class AgentLoopExecutor {
             }
             var trace: [AgentTraceRecord] = []
             var toolContext = context
+            var thinkingContent = ""
 
             for _ in 0..<Self.maxIterations {
                 try Self.checkDeadline(deadline, totalSeconds: totalTurnTimeoutSeconds)
@@ -60,11 +64,20 @@ final class AgentLoopExecutor {
                         allowToolCalls: true
                     )
                 }
+                await Self.appendThinking(
+                    response.thinkingContent,
+                    to: &thinkingContent,
+                    sink: sink
+                )
                 transcript.append(response.assistantMessage)
 
                 guard !response.toolCalls.isEmpty else {
                     await sink.emit(.textDelta(response.text))
-                    return Self.executionResult(from: response.text, trace: trace)
+                    return Self.executionResult(
+                        from: response.text,
+                        trace: trace,
+                        thinkingContent: persistedThinking(from: thinkingContent)
+                    )
                 }
 
                 var batchDiscoveredNodeIds: Set<UUID> = []
@@ -133,28 +146,56 @@ final class AgentLoopExecutor {
                     messages: messagesForFinalCall,
                     tools: self.registry.declarations,
                     allowToolCalls: false
-                )
-            }
+                    )
+                }
+            await Self.appendThinking(
+                finalResponse.thinkingContent,
+                to: &thinkingContent,
+                sink: sink
+            )
             await sink.emit(.textDelta(finalResponse.text))
-            return Self.executionResult(from: finalResponse.text, trace: trace)
+            return Self.executionResult(
+                from: finalResponse.text,
+                trace: trace,
+                thinkingContent: persistedThinking(from: thinkingContent)
+            )
         } catch is CancellationError {
             return nil
         }
     }
 
+    private func persistedThinking(from thinkingContent: String) -> String? {
+        guard shouldPersistAssistantThinking() else { return nil }
+        let trimmed = thinkingContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : thinkingContent
+    }
+
     private static func executionResult(
         from rawAssistantContent: String,
-        trace: [AgentTraceRecord]
+        trace: [AgentTraceRecord],
+        thinkingContent: String?
     ) -> TurnExecutionResult {
         let normalized = AssistantTurnNormalizer.normalize(rawAssistantContent)
         return TurnExecutionResult(
             rawAssistantContent: normalized.rawAssistantContent,
             assistantContent: normalized.assistantContent,
-            persistedThinking: nil,
+            persistedThinking: thinkingContent,
             conversationTitle: normalized.conversationTitle,
             didHitBudgetExhaustion: false,
             agentTraceJson: AgentTraceCodec.encode(trace)
         )
+    }
+
+    private static func appendThinking(
+        _ delta: String?,
+        to thinkingContent: inout String,
+        sink: TurnSequencedEventSink
+    ) async {
+        guard let delta, !delta.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+        thinkingContent.append(delta)
+        await sink.emit(.thinkingDelta(delta))
     }
 
     private static func context(_ context: AgentToolContext, adding nodeIds: Set<UUID>) -> AgentToolContext {

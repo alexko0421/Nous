@@ -89,10 +89,22 @@ final class ChatViewModel {
             agentLoopExecutorFactory: { [weak self] mode, _, _ in
                 guard let self,
                       self.currentProviderProvider() == .openrouter,
-                      let toolLLM = self.llmServiceProvider() as? any ToolCallingLLMService,
-                      toolLLM.supportsAgentToolUse else {
+                      let llm = self.llmServiceProvider() else {
                     return nil
                 }
+
+                let toolLLM: any ToolCallingLLMService
+                if var openRouter = llm as? OpenRouterLLMService {
+                    openRouter.reasoningBudgetTokens = 1024
+                    toolLLM = openRouter
+                } else if let candidate = llm as? any ToolCallingLLMService {
+                    toolLLM = candidate
+                } else {
+                    return nil
+                }
+
+                guard toolLLM.supportsAgentToolUse else { return nil }
+
                 let registry = AgentToolRegistry
                     .standard(
                         nodeStore: self.nodeStore,
@@ -101,7 +113,11 @@ final class ChatViewModel {
                         contradictionProvider: self.userMemoryService.contradictionReader
                     )
                     .subset(mode.agent().toolNames)
-                return AgentLoopExecutor(llmService: toolLLM, registry: registry)
+                return AgentLoopExecutor(
+                    llmService: toolLLM,
+                    registry: registry,
+                    shouldPersistAssistantThinking: self.shouldPersistAssistantThinking
+                )
             },
             outcomeFactory: turnOutcomeFactory,
             shadowLearningSignalRecorder: shadowLearningSignalRecorder,

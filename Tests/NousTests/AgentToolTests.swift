@@ -340,6 +340,70 @@ final class OpenRouterToolEncodingTests: XCTestCase {
         XCTAssertTrue(tools.contains { $0["type"] as? String == "openrouter:web_search" })
     }
 
+    func testToolRequestBodyCanIncludeOpenRouterReasoningBudget() throws {
+        let body = try OpenRouterLLMService.buildToolRequestBody(
+            model: "anthropic/claude-sonnet-4.6",
+            system: "system",
+            messages: [.text(role: "user", content: "search memory")],
+            tools: [],
+            allowToolCalls: true,
+            reasoningBudgetTokens: 1024
+        )
+
+        let reasoning = try XCTUnwrap(body["reasoning"] as? [String: Any])
+        XCTAssertEqual(reasoning["max_tokens"] as? Int, 1024)
+        XCTAssertEqual(reasoning["enabled"] as? Bool, true)
+        XCTAssertEqual(reasoning["exclude"] as? Bool, false)
+    }
+
+    func testToolResponseExtractsOpenRouterReasoningForThinkingPill() throws {
+        let data = """
+        {
+          "choices": [
+            {
+              "message": {
+                "role": "assistant",
+                "content": "Final answer",
+                "reasoning": "I checked the constraint before answering."
+              }
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let response = try OpenRouterLLMService.parseToolResponse(data)
+
+        XCTAssertEqual(response.text, "Final answer")
+        XCTAssertEqual(response.thinkingContent, "I checked the constraint before answering.")
+    }
+
+    func testToolResponseExtractsReasoningDetailsForThinkingPill() throws {
+        let data = """
+        {
+          "choices": [
+            {
+              "message": {
+                "role": "assistant",
+                "content": "Final answer",
+                "reasoning_details": [
+                  {
+                    "type": "reasoning.text",
+                    "text": "I checked the notes first.",
+                    "format": "anthropic-claude-v1",
+                    "index": 0
+                  }
+                ]
+              }
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let response = try OpenRouterLLMService.parseToolResponse(data)
+
+        XCTAssertEqual(response.thinkingContent, "I checked the notes first.")
+    }
+
     func testToolRequestBodySerializesTranscriptAndToolChoice() throws {
         let declaration = AgentToolDeclaration(
             function: AgentToolFunctionDeclaration(
@@ -410,6 +474,44 @@ final class OpenRouterToolEncodingTests: XCTestCase {
 }
 
 final class AgentLoopExecutorTests: XCTestCase {
+    func testEmitsThinkingDeltaFromToolCallingResponse() async throws {
+        let turnId = UUID()
+        let node = NousNode(type: .conversation, title: "Current")
+        let userMessage = Message(nodeId: node.id, role: .user, content: "Find context")
+        let llm = ScriptedToolCallingLLM(responses: [
+            AgentToolLLMResponse(
+                text: "Final answer",
+                assistantMessage: .text(role: "assistant", content: "Final answer"),
+                toolCalls: [],
+                thinkingContent: "I checked memory before answering."
+            )
+        ])
+        let executor = AgentLoopExecutor(
+            llmService: llm,
+            registry: AgentToolRegistry(tools: []),
+            perToolTimeoutSeconds: 1,
+            totalTurnTimeoutSeconds: 5
+        )
+        let capture = CapturingTurnEventSink()
+        let sink = TurnSequencedEventSink(turnId: turnId, sink: capture)
+
+        let result = try await executor.execute(
+            plan: makeAgentLoopPlan(turnId: turnId, node: node, userMessage: userMessage),
+            request: makeAgentLoopRequest(turnId: turnId, node: node, userMessage: userMessage),
+            sink: sink,
+            context: makeAgentToolContext(node: node, userMessage: userMessage)
+        )
+
+        XCTAssertEqual(result?.persistedThinking, "I checked memory before answering.")
+        let events = await capture.events()
+        XCTAssertTrue(events.contains { envelope in
+            guard case .thinkingDelta("I checked memory before answering.") = envelope.event else {
+                return false
+            }
+            return true
+        })
+    }
+
     func testUnknownToolCallIsReturnedAsToolErrorBeforeFinalSynthesis() async throws {
         let turnId = UUID()
         let node = NousNode(type: .conversation, title: "Current")

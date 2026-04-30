@@ -72,6 +72,15 @@ struct ChatArea: View {
         vm.citations.map(\.node.id)
     }
 
+    private var streamingPresentation: StreamingAssistantPresentation {
+        StreamingAssistantPresentation(
+            isGenerating: vm.isGenerating,
+            currentThinking: vm.currentThinking,
+            currentResponse: vm.currentResponse,
+            currentAgentTraceIsEmpty: vm.currentAgentTrace.isEmpty
+        )
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if isWelcomeState {
@@ -175,16 +184,16 @@ struct ChatArea: View {
                                         }
                                     }
                                 }
-                                if vm.isGenerating && vm.currentResponse.isEmpty && vm.currentAgentTrace.isEmpty {
+                                if streamingPresentation.showsPendingThinking {
                                     HStack {
                                         ThinkingAccordion(
-                                            content: vm.currentThinking,
+                                            content: streamingPresentation.pendingThinkingContent,
                                             isStreaming: true
                                         )
                                         Spacer(minLength: 0)
                                     }
                                 }
-                                if vm.isGenerating && !vm.currentAgentTrace.isEmpty && vm.currentResponse.isEmpty {
+                                if streamingPresentation.showsPendingAgentTrace {
                                     HStack {
                                         AgentTraceAccordion(
                                             records: vm.currentAgentTrace,
@@ -193,14 +202,14 @@ struct ChatArea: View {
                                         Spacer(minLength: 0)
                                     }
                                 }
-                                if vm.isGenerating && !vm.currentResponse.isEmpty {
+                                if streamingPresentation.showsAssistantDraft {
                                     VStack(alignment: .leading, spacing: 4) {
                                         MessageBubble(
                                             text: vm.currentResponse,
-                                            thinkingContent: vm.currentThinking.isEmpty ? nil : vm.currentThinking,
+                                            thinkingContent: streamingPresentation.draftThinkingContent,
                                             agentTraceRecords: vm.currentAgentTrace,
-                                            isThinkingStreaming: false,
-                                            isAgentTraceStreaming: false,
+                                            isThinkingStreaming: streamingPresentation.isDraftThinkingStreaming,
+                                            isAgentTraceStreaming: streamingPresentation.isDraftAgentTraceStreaming,
                                             isUser: false,
                                             source: .typed,
                                             timestamp: Date()
@@ -842,6 +851,42 @@ struct MessageBubble: View {
             .count
 
         return sentenceEndCount <= 2
+    }
+}
+
+struct StreamingAssistantPresentation {
+    let isGenerating: Bool
+    let currentThinking: String
+    let currentResponse: String
+    let currentAgentTraceIsEmpty: Bool
+
+    var showsPendingThinking: Bool {
+        isGenerating && currentResponse.isEmpty && currentAgentTraceIsEmpty
+    }
+
+    var pendingThinkingContent: String {
+        currentThinking
+    }
+
+    var showsPendingAgentTrace: Bool {
+        isGenerating && !currentAgentTraceIsEmpty && currentResponse.isEmpty
+    }
+
+    var showsAssistantDraft: Bool {
+        isGenerating && !currentResponse.isEmpty
+    }
+
+    var draftThinkingContent: String? {
+        guard showsAssistantDraft, !currentThinking.isEmpty else { return nil }
+        return currentThinking
+    }
+
+    var isDraftThinkingStreaming: Bool {
+        showsAssistantDraft && !currentThinking.isEmpty
+    }
+
+    var isDraftAgentTraceStreaming: Bool {
+        false
     }
 }
 
