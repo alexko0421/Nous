@@ -1,11 +1,67 @@
 import SwiftUI
 
+struct ShadowPatternDebugRow: Equatable {
+    let label: String
+    let kind: String
+    let status: String
+    let weight: String
+    let confidence: String
+    let evidenceCount: String
+    let summary: String
+}
+
+enum ShadowPatternDebugFormatting {
+    static func rows(from patterns: [ShadowLearningPattern]) -> [ShadowPatternDebugRow] {
+        patterns
+            .sorted(by: ordering)
+            .map { pattern in
+                ShadowPatternDebugRow(
+                    label: pattern.label,
+                    kind: pattern.kind.rawValue,
+                    status: pattern.status.rawValue,
+                    weight: String(format: "%.2f", pattern.weight),
+                    confidence: String(format: "%.2f", pattern.confidence),
+                    evidenceCount: "\(pattern.evidenceMessageIds.count)",
+                    summary: pattern.summary
+                )
+            }
+    }
+
+    private static func ordering(_ lhs: ShadowLearningPattern, _ rhs: ShadowLearningPattern) -> Bool {
+        let lhsRank = rank(lhs.status)
+        let rhsRank = rank(rhs.status)
+        if lhsRank != rhsRank {
+            return lhsRank < rhsRank
+        }
+        if lhs.weight != rhs.weight {
+            return lhs.weight > rhs.weight
+        }
+        return lhs.label.localizedCaseInsensitiveCompare(rhs.label) == .orderedAscending
+    }
+
+    private static func rank(_ status: ShadowPatternStatus) -> Int {
+        switch status {
+        case .strong:
+            return 0
+        case .soft:
+            return 1
+        case .observed:
+            return 2
+        case .fading:
+            return 3
+        case .retired:
+            return 4
+        }
+    }
+}
+
 struct MemoryDebugInspector: View {
     let nodeStore: NodeStore
     let skillStore: SkillStore
     let userMemoryService: UserMemoryService
     let telemetry: GovernanceTelemetryStore
     let galaxyRelationTelemetry: GalaxyRelationTelemetry
+    let shadowLearningStore: ShadowLearningStore?
 
     private enum MemoryFocus: String, CaseIterable {
         case active = "All"
@@ -52,6 +108,8 @@ struct MemoryDebugInspector: View {
 
     @State private var entries: [MemoryEntry] = []
     @State private var skills: [Skill] = []
+    @State private var shadowPatterns: [ShadowLearningPattern] = []
+    @State private var learningEvents: [LearningEvent] = []
     @State private var projectTitles: [UUID: String] = [:]
     @State private var nodeTitles: [UUID: String] = [:]
     @State private var searchText = ""
@@ -72,6 +130,7 @@ struct MemoryDebugInspector: View {
                 browseCard
                 #if DEBUG
                 skillsCard
+                shadowLearningCard
                 #endif
                 MemoryGraphInspector(nodeStore: nodeStore)
 
@@ -233,6 +292,51 @@ struct MemoryDebugInspector: View {
                     LazyVStack(alignment: .leading, spacing: 10) {
                         ForEach(sortedSkills) { skill in
                             skillRow(skill)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var shadowLearningCard: some View {
+        card {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        sectionLabel("Shadow Learning")
+                        Text("Read-only thinking and response patterns learned from repeated user turns.")
+                            .font(.system(size: 12, design: .rounded))
+                            .foregroundColor(AppColor.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Spacer()
+
+                    statPill(title: "Patterns", value: "\(shadowPatterns.count)")
+                    statPill(title: "Events", value: "\(learningEvents.count)")
+                }
+
+                if shadowPatterns.isEmpty {
+                    Text("No shadow patterns have been observed yet.")
+                        .font(.system(size: 13, design: .rounded))
+                        .foregroundColor(AppColor.secondaryText)
+                        .padding(.vertical, 8)
+                } else {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(ShadowPatternDebugFormatting.rows(from: shadowPatterns), id: \.label) { row in
+                            shadowPatternRow(row)
+                        }
+                    }
+                }
+
+                if !learningEvents.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        sectionLabel("Recent Events")
+                        LazyVStack(alignment: .leading, spacing: 8) {
+                            ForEach(learningEvents.prefix(5)) { event in
+                                learningEventRow(event)
+                            }
                         }
                     }
                 }
@@ -691,6 +795,92 @@ struct MemoryDebugInspector: View {
                 .stroke(AppColor.panelStroke, lineWidth: 1)
         )
     }
+
+    @ViewBuilder
+    private func shadowPatternRow(_ row: ShadowPatternDebugRow) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(row.label)
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundColor(AppColor.colaDarkText)
+                        .lineLimit(1)
+
+                    Text(row.summary)
+                        .font(.system(size: 12, design: .rounded))
+                        .foregroundColor(AppColor.secondaryText)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 12)
+
+                badge(
+                    text: row.status,
+                    tint: shadowStatusTint(row.status),
+                    textColor: shadowStatusTextColor(row.status)
+                )
+            }
+
+            HStack(spacing: 8) {
+                badge(
+                    text: shadowKindDisplay(row.kind),
+                    tint: AppColor.surfacePrimary,
+                    textColor: AppColor.colaDarkText.opacity(0.78)
+                )
+                badge(
+                    text: "w \(row.weight)",
+                    tint: AppColor.colaOrange.opacity(0.12),
+                    textColor: AppColor.colaDarkText
+                )
+                badge(
+                    text: "c \(row.confidence)",
+                    tint: AppColor.surfacePrimary,
+                    textColor: AppColor.secondaryText
+                )
+                Text("\(row.evidenceCount) evidence")
+                    .font(.system(size: 11, design: .rounded))
+                    .foregroundColor(AppColor.secondaryText)
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppColor.surfacePrimary)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(AppColor.panelStroke, lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private func learningEventRow(_ event: LearningEvent) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            badge(
+                text: learningEventDisplay(event.eventType),
+                tint: AppColor.surfacePrimary,
+                textColor: AppColor.colaDarkText.opacity(0.78)
+            )
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(event.note)
+                    .font(.system(size: 12, design: .rounded))
+                    .foregroundColor(AppColor.colaDarkText.opacity(0.86))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(Self.relative(event.createdAt))
+                    .font(.system(size: 11, design: .rounded))
+                    .foregroundColor(AppColor.secondaryText)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppColor.surfacePrimary.opacity(0.72))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
     #endif
 
     @ViewBuilder
@@ -934,6 +1124,13 @@ struct MemoryDebugInspector: View {
             entries = userMemoryService.allMemoryEntries()
             #if DEBUG
             skills = try skillStore.fetchAllSkills(userId: "alex")
+            if let shadowLearningStore {
+                shadowPatterns = try shadowLearningStore.fetchPatterns(userId: "alex")
+                learningEvents = try shadowLearningStore.fetchRecentEvents(userId: "alex", limit: 12)
+            } else {
+                shadowPatterns = []
+                learningEvents = []
+            }
             #endif
 
             let projects = try nodeStore.fetchAllProjects()
@@ -1244,6 +1441,46 @@ struct MemoryDebugInspector: View {
     private func skillModesDisplay(_ skill: Skill) -> String {
         let modes = skill.payload.trigger.modes.map(\.label).joined(separator: ", ")
         return modes.isEmpty ? "No modes" : modes
+    }
+
+    private func shadowKindDisplay(_ kind: String) -> String {
+        kind.replacingOccurrences(of: "_", with: " ").capitalized
+    }
+
+    private func learningEventDisplay(_ eventType: LearningEventType) -> String {
+        eventType.rawValue.capitalized
+    }
+
+    private func shadowStatusTint(_ status: String) -> Color {
+        switch status {
+        case ShadowPatternStatus.strong.rawValue:
+            return AppColor.colaOrange.opacity(0.14)
+        case ShadowPatternStatus.soft.rawValue:
+            return Color.blue.opacity(0.12)
+        case ShadowPatternStatus.observed.rawValue:
+            return AppColor.surfacePrimary
+        case ShadowPatternStatus.fading.rawValue:
+            return Color.yellow.opacity(0.18)
+        case ShadowPatternStatus.retired.rawValue:
+            return Color.gray.opacity(0.16)
+        default:
+            return AppColor.surfacePrimary
+        }
+    }
+
+    private func shadowStatusTextColor(_ status: String) -> Color {
+        switch status {
+        case ShadowPatternStatus.strong.rawValue:
+            return AppColor.colaDarkText
+        case ShadowPatternStatus.soft.rawValue:
+            return Color.blue.opacity(0.75)
+        case ShadowPatternStatus.fading.rawValue:
+            return Color(red: 0.56, green: 0.42, blue: 0.08)
+        case ShadowPatternStatus.retired.rawValue:
+            return AppColor.colaDarkText.opacity(0.62)
+        default:
+            return AppColor.secondaryText
+        }
     }
     #endif
 

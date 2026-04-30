@@ -274,6 +274,28 @@ final class ProvocationOrchestrationTests: XCTestCase {
     }
 
     @MainActor
+    func testOrdinaryChatDoesNotRecordGraphRecallWhenPromptDropsGraphBlock() async throws {
+        try store.insertMemoryAtom(MemoryAtom(
+            type: .preference,
+            statement: "Alex never wants em dashes in final copy.",
+            scope: .global,
+            confidence: 0.93,
+            eventTime: Date(timeIntervalSince1970: 30),
+            createdAt: Date(timeIntervalSince1970: 30),
+            updatedAt: Date(timeIntervalSince1970: 31)
+        ))
+
+        viewModel.inputText = "你記得我對 em dash 有咩偏好？"
+        await viewModel.send()
+
+        let system = llm.receivedSystem ?? ""
+        XCTAssertFalse(system.contains("GRAPH MEMORY RECALL"),
+                       "ordinary chat currently drops graph recall from the prompt")
+        XCTAssertTrue(try store.fetchMemoryRecallEvents(limit: 10).isEmpty,
+                      "ordinary chat must not record graph recall events for recall the prompt never saw")
+    }
+
+    @MainActor
     func testNonProvokedAssistantReplyStillSupportsFeedback() async throws {
         judge.nextVerdict = JudgeVerdict(
             tensionExists: false, userState: .exploring,
@@ -328,6 +350,58 @@ final class ProvocationOrchestrationTests: XCTestCase {
         XCTAssertTrue(system.contains("RELEVANT PRIOR MEMORY"))
         XCTAssertTrue(system.contains("Do not compete on price."),
                       "hard-recall fact text should be usable as the focus block source")
+    }
+
+    @MainActor
+    func testJudgeFocusSuppressesDuplicateGraphRecallInQuickActionTurn() async throws {
+        let memoryText = "Alex never wants em dashes in final copy."
+        let fact = MemoryFactEntry(
+            scope: .global,
+            kind: .boundary,
+            content: memoryText,
+            confidence: 0.93,
+            stability: .stable,
+            createdAt: Date(timeIntervalSince1970: 30),
+            updatedAt: Date(timeIntervalSince1970: 31)
+        )
+        try store.insertMemoryFactEntry(fact)
+        try store.insertMemoryAtom(MemoryAtom(
+            type: .preference,
+            statement: memoryText,
+            scope: .global,
+            confidence: 0.93,
+            eventTime: Date(timeIntervalSince1970: 30),
+            createdAt: Date(timeIntervalSince1970: 30),
+            updatedAt: Date(timeIntervalSince1970: 31)
+        ))
+
+        llm.replyOutput = """
+        <phase>understanding</phase>
+        What are we planning around?
+        """
+        await viewModel.beginQuickActionConversation(.plan)
+
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: true,
+            userState: .deciding,
+            shouldProvoke: true,
+            entryId: fact.id.uuidString,
+            reason: "style memory should be surfaced once",
+            inferredMode: .companion
+        )
+        llm.replyOutput = "Use no em dashes."
+        viewModel.inputText = "你記得我對 em dash 有咩偏好？"
+        await viewModel.send()
+
+        let system = try XCTUnwrap(
+            llm.receivedSystems.compactMap { $0 }.last {
+                $0.contains("ACTIVE QUICK MODE: Plan")
+            }
+        )
+        XCTAssertTrue(system.contains("RELEVANT PRIOR MEMORY"))
+        XCTAssertTrue(system.contains(memoryText))
+        XCTAssertFalse(system.contains("GRAPH MEMORY RECALL"),
+                       "the same memory should not be injected once as graph recall and again as judge focus")
     }
 
     @MainActor

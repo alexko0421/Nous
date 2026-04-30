@@ -9,12 +9,12 @@ final class UserMemoryService: MemorySynthesizing, @unchecked Sendable {
     typealias PersonalInferenceDisposition = UserMemoryCore.PersonalInferenceDisposition
     typealias AnnotatedContradictionFact = UserMemoryCore.AnnotatedContradictionFact
 
-    static let globalBudget = UserMemoryCore.globalBudget
-    static let essentialStoryBudget = UserMemoryCore.essentialStoryBudget
-    static let projectBudget = UserMemoryCore.projectBudget
-    static let conversationBudget = UserMemoryCore.conversationBudget
-    static let evidenceSnippetBudget = UserMemoryCore.evidenceSnippetBudget
-    static let userModelFacetLimit = UserMemoryCore.userModelFacetLimit
+    static let globalBudget = MemoryProjectionService.globalBudget
+    static let essentialStoryBudget = MemoryProjectionService.essentialStoryBudget
+    static let projectBudget = MemoryProjectionService.projectBudget
+    static let conversationBudget = MemoryProjectionService.conversationBudget
+    static let evidenceSnippetBudget = MemoryProjectionService.evidenceSnippetBudget
+    static let userModelFacetLimit = MemoryProjectionService.userModelFacetLimit
     static let contradictionFactKinds = UserMemoryCore.contradictionFactKinds
 
     private let core: UserMemoryCore
@@ -47,7 +47,7 @@ final class UserMemoryService: MemorySynthesizing, @unchecked Sendable {
             embedFunction: embedFunction
         )
         self.core = core
-        self.projectionService = MemoryProjectionService(core: core)
+        self.projectionService = MemoryProjectionService(nodeStore: nodeStore)
         self.contradictionService = ContradictionMemoryService(core: core)
         self.synthesisService = MemorySynthesisService(core: core)
     }

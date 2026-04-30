@@ -194,6 +194,7 @@ struct ContentView: View {
                     userMemoryService: dependencies.userMemoryService,
                     telemetry: dependencies.governanceTelemetry,
                     galaxyRelationTelemetry: dependencies.galaxyRelationTelemetry,
+                    shadowLearningStore: dependencies.shadowLearningStore,
                     onBack: { selectedTab = .chat }
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -468,6 +469,8 @@ struct ContentView: View {
                 await rollover()
             }
         }
+
+        dependencies.heartbeatCoordinator.scheduleShadowLearningAfterIdle()
     }
 }
 

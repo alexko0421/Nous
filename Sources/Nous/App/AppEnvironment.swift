@@ -13,6 +13,11 @@ struct AppDependencies {
     let skillMatcher: SkillMatcher
     let skillTracker: SkillTracker
     let seedSkillImporter: SeedSkillImporter
+    let shadowLearningStore: ShadowLearningStore
+    let shadowLearningSignalRecorder: ShadowLearningSignalRecorder
+    let shadowPatternPromptProvider: ShadowPatternPromptProvider
+    let shadowLearningSteward: ShadowLearningSteward
+    let heartbeatCoordinator: HeartbeatCoordinator
     let vectorStore: VectorStore
     let embeddingService: EmbeddingService
     let localLLM: LocalLLMService
@@ -109,6 +114,10 @@ final class AppEnvironment {
         let skillMatcher = SkillMatcher()
         let skillTracker = SkillTracker(store: skillStore)
         let seedSkillImporter = SeedSkillImporter(store: skillStore)
+        let shadowLearningStore = ShadowLearningStore(nodeStore: nodeStore)
+        let shadowLearningSignalRecorder = ShadowLearningSignalRecorder(store: shadowLearningStore)
+        let shadowPatternPromptProvider = ShadowPatternPromptProvider(store: shadowLearningStore)
+        let shadowLearningSteward = ShadowLearningSteward(store: shadowLearningStore)
         do {
             try seedSkillImporter.importSeeds()
         } catch {
@@ -122,6 +131,10 @@ final class AppEnvironment {
             embeddingService: embeddingService,
             localLLM: localLLM,
             nodeStore: nodeStore
+        )
+        let heartbeatCoordinator = HeartbeatCoordinator(
+            shadowLearningSteward: shadowLearningSteward,
+            isEnabled: { settingsVM.backgroundAnalysisEnabled }
         )
         let galaxyRelationTelemetry = GalaxyRelationTelemetry()
         let graphEngine = GraphEngine(
@@ -150,11 +163,11 @@ final class AppEnvironment {
         )
         let conversationTitleBackfill = ConversationTitleBackfillService(
             nodeStore: nodeStore,
-            llmServiceProvider: { settingsVM.makeLLMService() }
+            llmServiceProvider: { settingsVM.makeLLMService(openRouterWebSearchEnabled: false) }
         )
         let memoryGraphMessageBackfill = MemoryGraphMessageBackfillService(
             nodeStore: nodeStore,
-            llmServiceProvider: { settingsVM.makeLLMService() }
+            llmServiceProvider: { settingsVM.makeLLMService(openRouterWebSearchEnabled: false) }
         )
         let memoryAtomEmbeddingBackfill = MemoryAtomEmbeddingBackfillService(
             nodeStore: nodeStore,
@@ -167,7 +180,7 @@ final class AppEnvironment {
         let scratchPadStore = ScratchPadStore(nodeStore: nodeStore)
         let userMemoryService = UserMemoryService(
             nodeStore: nodeStore,
-            llmServiceProvider: { settingsVM.makeLLMService() },
+            llmServiceProvider: { settingsVM.makeLLMService(openRouterWebSearchEnabled: false) },
             governanceTelemetry: governanceTelemetry,
             embedFunction: { [embeddingService] text in
                 guard embeddingService.isLoaded else { return nil }
@@ -187,7 +200,7 @@ final class AppEnvironment {
             userMemoryService: userMemoryService,
             userMemoryScheduler: scheduler,
             conversationSessionStore: conversationSessionStore,
-            llmServiceProvider: { settingsVM.makeLLMService() },
+            llmServiceProvider: { settingsVM.makeLLMService(openRouterWebSearchEnabled: settingsVM.openRouterWebSearchEnabled) },
             currentProviderProvider: { settingsVM.selectedProvider },
             judgeLLMServiceFactory: { settingsVM.makeJudgeLLMService() },
             skillStore: skillStore,
@@ -195,6 +208,9 @@ final class AppEnvironment {
             skillTracker: skillTracker,
             governanceTelemetry: governanceTelemetry,
             scratchPadStore: scratchPadStore,
+            shadowLearningSignalRecorder: shadowLearningSignalRecorder,
+            shadowPatternPromptProvider: shadowPatternPromptProvider,
+            heartbeatCoordinator: heartbeatCoordinator,
             shouldUseGeminiHistoryCache: { settingsVM.geminiHistoryCacheEnabled },
             shouldPersistAssistantThinking: { settingsVM.assistantThinkingEnabled }
         )
@@ -244,6 +260,11 @@ final class AppEnvironment {
             skillMatcher: skillMatcher,
             skillTracker: skillTracker,
             seedSkillImporter: seedSkillImporter,
+            shadowLearningStore: shadowLearningStore,
+            shadowLearningSignalRecorder: shadowLearningSignalRecorder,
+            shadowPatternPromptProvider: shadowPatternPromptProvider,
+            shadowLearningSteward: shadowLearningSteward,
+            heartbeatCoordinator: heartbeatCoordinator,
             vectorStore: vectorStore,
             embeddingService: embeddingService,
             localLLM: localLLM,

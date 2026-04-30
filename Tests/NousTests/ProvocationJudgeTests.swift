@@ -135,6 +135,25 @@ final class ProvocationJudgeTests: XCTestCase {
         }
     }
 
+    func testDefaultTimeoutAllowsNormalCloudJudgeLatency() async throws {
+        let fake = FakeLLMService(output: """
+        {"tension_exists":false,"user_state":"exploring","should_provoke":false,
+         "entry_id":null,"reason":"ok","inferred_mode":"companion"}
+        """)
+        fake.delay = 2.0
+        let judge = ProvocationJudge(llmService: fake)
+
+        let verdict = try await judge.judge(
+            userMessage: "hi",
+            citablePool: pool(),
+            previousMode: .companion,
+            provider: .openrouter,
+            feedbackLoop: nil
+        )
+
+        XCTAssertFalse(verdict.shouldProvoke)
+    }
+
     func testPromptEmbedsPoolAndPreviousMode() async throws {
         let fake = FakeLLMService(output: """
         {"tension_exists":false,"user_state":"exploring","should_provoke":false,

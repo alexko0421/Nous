@@ -56,6 +56,41 @@ final class VoiceTranscriptCommitterTests: XCTestCase {
         XCTAssertTrue(committer.committedLineIds.contains(line.id))
     }
 
+    func testVoiceUserLineRecordsShadowSignal() throws {
+        let conversation = try sessionStore.startConversation(title: "Test")
+        let shadowStore = ShadowLearningStore(nodeStore: nodeStore)
+        let recorder = ShadowLearningSignalRecorder(store: shadowStore)
+        let viewModel = makeChatViewModel(
+            currentNode: conversation,
+            shadowLearningSignalRecorder: recorder
+        )
+        let controller = VoiceCommandController()
+        let committer = VoiceTranscriptCommitter(
+            voiceController: controller,
+            chatViewModel: viewModel
+        )
+
+        controller.boundConversationId = conversation.id
+        let line = VoiceTranscriptLine(
+            id: UUID(),
+            role: .user,
+            text: "用第一性原理帮我想这个产品决定",
+            isFinal: true,
+            createdAt: Date()
+        )
+
+        controller.onUserUtteranceFinalized?(line)
+
+        let pattern = try shadowStore.fetchPattern(
+            userId: "alex",
+            kind: .thinkingMove,
+            label: "first_principles_decision_frame"
+        )
+        XCTAssertNotNil(pattern)
+        XCTAssertEqual(pattern?.evidenceMessageIds.count, 1)
+        XCTAssertTrue(committer.committedLineIds.contains(line.id))
+    }
+
     func testIgnoresAssistantLines() throws {
         let conversation = try sessionStore.startConversation(title: "Test")
         let viewModel = makeChatViewModel(currentNode: conversation)
@@ -134,7 +169,10 @@ final class VoiceTranscriptCommitterTests: XCTestCase {
 
     // MARK: - Helpers
 
-    private func makeChatViewModel(currentNode: NousNode?) -> ChatViewModel {
+    private func makeChatViewModel(
+        currentNode: NousNode?,
+        shadowLearningSignalRecorder: ShadowLearningSignalRecorder? = nil
+    ) -> ChatViewModel {
         let vectorStore = VectorStore(nodeStore: nodeStore)
         let embeddingService = EmbeddingService()
         let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
@@ -156,7 +194,8 @@ final class VoiceTranscriptCommitterTests: XCTestCase {
             llmServiceProvider: { nil },
             currentProviderProvider: { .local },
             judgeLLMServiceFactory: { nil },
-            scratchPadStore: scratchPadStore
+            scratchPadStore: scratchPadStore,
+            shadowLearningSignalRecorder: shadowLearningSignalRecorder
         )
         vm.currentNode = currentNode
         return vm

@@ -114,6 +114,49 @@ final class UserMemoryServiceTests: XCTestCase {
                       "prompt must explicitly make Alex's latest correction override older memory")
     }
 
+    func testRefreshConversationAddsPreviousQuestionContextForShortReplies() async throws {
+        let capture = PromptSequenceCapture()
+        let mock = QueueMockLLMService(
+            capture: capture,
+            replies: [
+                "- Alex confirmed the Evo SL is buyable where he is",
+                #"{"facts":[],"decision_chains":[],"semantic_atoms":[]}"#
+            ]
+        )
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let node = NousNode(type: .conversation, title: "Shoe decision", content: "")
+        try store.insertNode(node)
+
+        let assistantQuestion = "你而家系话 EVO SL 喺美国买唔买到㗎？\n\n买唔买到先？"
+        let userReply = "咁梗系买到啦"
+        let messages: [Message] = [
+            Message(
+                nodeId: node.id,
+                role: .assistant,
+                content: assistantQuestion,
+                timestamp: Date(timeIntervalSince1970: 1)
+            ),
+            Message(
+                nodeId: node.id,
+                role: .user,
+                content: userReply,
+                timestamp: Date(timeIntervalSince1970: 2)
+            )
+        ]
+
+        await service.refreshConversation(nodeId: node.id, projectId: nil, messages: messages)
+
+        let prompts = await capture.prompts()
+        XCTAssertGreaterThanOrEqual(prompts.count, 2)
+        for prompt in prompts.prefix(2) {
+            XCTAssertTrue(prompt.contains("previous_nous_question_context_only"))
+            XCTAssertTrue(prompt.contains("EVO SL 喺美国买唔买到"))
+            XCTAssertTrue(prompt.contains(userReply))
+            XCTAssertTrue(prompt.contains("Do not treat Nous context as source evidence"))
+        }
+    }
+
     /// P0 fix from post-commit /plan-eng-review: Alex routinely pastes Nous's
     /// prior reply into his next user turn as a markdown blockquote (`> …`)
     /// when asking for clarification. The role filter alone would let that
@@ -2034,6 +2077,29 @@ final class UserMemoryServiceTests: XCTestCase {
     }
 
     // MARK: - v2.2c read-path cutover
+
+    func testMemoryProjectionServiceOwnsEntryReadProjectionWithoutUserMemoryCore() throws {
+        let projection = MemoryProjectionService(nodeStore: store)
+
+        try store.insertMemoryEntry(
+            MemoryEntry(
+                scope: .global,
+                scopeRefId: nil,
+                kind: .identity,
+                stability: .stable,
+                content: "Projection service reads canonical entries directly",
+                sourceNodeIds: [],
+                createdAt: Date(),
+                updatedAt: Date(),
+                lastConfirmedAt: Date()
+            )
+        )
+
+        XCTAssertEqual(
+            projection.currentGlobal(),
+            "Projection service reads canonical entries directly"
+        )
+    }
 
     /// v2.2c: reads must come from the active memory_entries row, not the v2.1
     /// blob. Seeds DIVERGENT blob vs entry content — if the reader returns the

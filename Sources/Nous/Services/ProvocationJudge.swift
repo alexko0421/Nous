@@ -20,10 +20,12 @@ protocol Judging {
 extension ProvocationJudge: Judging {}
 
 final class ProvocationJudge {
+    static let defaultTimeout: TimeInterval = 8.0
+
     private let llmService: any LLMService
     private let timeout: TimeInterval
 
-    init(llmService: any LLMService, timeout: TimeInterval = 1.5) {
+    init(llmService: any LLMService, timeout: TimeInterval = ProvocationJudge.defaultTimeout) {
         self.llmService = llmService
         self.timeout = timeout
     }

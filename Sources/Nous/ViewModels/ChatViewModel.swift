@@ -56,6 +56,9 @@ final class ChatViewModel {
     private let governanceTelemetry: GovernanceTelemetryStore
     private let geminiPromptCache: GeminiPromptCacheService
     private let scratchPadStore: ScratchPadStore
+    private let shadowLearningSignalRecorder: ShadowLearningSignalRecorder?
+    private let shadowPatternPromptProvider: (any ShadowPatternPromptProviding)?
+    private let heartbeatCoordinator: HeartbeatCoordinator?
     private let shouldUseGeminiHistoryCache: () -> Bool
     private let shouldPersistAssistantThinking: () -> Bool
     @ObservationIgnored private var cachedTurnPlanner: TurnPlanner?
@@ -101,6 +104,7 @@ final class ChatViewModel {
                 return AgentLoopExecutor(llmService: toolLLM, registry: registry)
             },
             outcomeFactory: turnOutcomeFactory,
+            shadowLearningSignalRecorder: shadowLearningSignalRecorder,
             onPlanReady: { [governanceTelemetry] plan in
                 governanceTelemetry.recordPromptTrace(plan.promptTrace)
                 if let event = plan.judgeEventDraft {
@@ -130,6 +134,7 @@ final class ChatViewModel {
             skillStore: skillStore,
             skillMatcher: skillMatcher ?? SkillMatcher(),
             skillTracker: skillTracker,
+            shadowPatternPromptProvider: shadowPatternPromptProvider,
             runJudge: { [weak self] operation in
                 guard let self else { throw CancellationError() }
                 return try await self.executeJudgeTask(operation)
@@ -253,6 +258,9 @@ final class ChatViewModel {
         governanceTelemetry: GovernanceTelemetryStore = GovernanceTelemetryStore(),
         geminiPromptCache: GeminiPromptCacheService = GeminiPromptCacheService(),
         scratchPadStore: ScratchPadStore,
+        shadowLearningSignalRecorder: ShadowLearningSignalRecorder? = nil,
+        shadowPatternPromptProvider: (any ShadowPatternPromptProviding)? = nil,
+        heartbeatCoordinator: HeartbeatCoordinator? = nil,
         shouldUseGeminiHistoryCache: @escaping () -> Bool = { true },
         shouldPersistAssistantThinking: @escaping () -> Bool = { true },
         defaultProjectId: UUID? = nil
@@ -275,6 +283,9 @@ final class ChatViewModel {
         self.governanceTelemetry = governanceTelemetry
         self.geminiPromptCache = geminiPromptCache
         self.scratchPadStore = scratchPadStore
+        self.shadowLearningSignalRecorder = shadowLearningSignalRecorder
+        self.shadowPatternPromptProvider = shadowPatternPromptProvider
+        self.heartbeatCoordinator = heartbeatCoordinator
         self.shouldUseGeminiHistoryCache = shouldUseGeminiHistoryCache
         self.shouldPersistAssistantThinking = shouldPersistAssistantThinking
         self.defaultProjectId = defaultProjectId
@@ -390,6 +401,7 @@ final class ChatViewModel {
         }
         await contextContinuationService.run(completion.continuationPlan)
         turnHousekeepingService.run(completion.housekeepingPlan)
+        scheduleShadowLearningHeartbeat()
     }
 
     // MARK: - Voice persistence
@@ -452,11 +464,19 @@ final class ChatViewModel {
         if currentNode?.id == nodeId {
             self.messages = result.messagesAfterAppend
         }
+        if let shadowLearningSignalRecorder {
+            do {
+                try shadowLearningSignalRecorder.recordSignals(from: result.userMessage)
+            } catch {
+                print("[ShadowLearning] failed to record voice signal: \(error)")
+            }
+        }
         let plan = voiceUserHousekeepingPlan(
             node: result.node,
             messagesAfterAppend: result.messagesAfterAppend
         )
         turnHousekeepingService.run(plan)
+        scheduleShadowLearningHeartbeat()
     }
 
     // MARK: - Send (RAG Pipeline)
@@ -557,6 +577,7 @@ final class ChatViewModel {
         bumpJudgeFeedbackVersion()
         await contextContinuationService.run(completion.continuationPlan)
         turnHousekeepingService.run(completion.housekeepingPlan)
+        scheduleShadowLearningHeartbeat()
     }
 
     @MainActor
@@ -629,6 +650,7 @@ final class ChatViewModel {
         bumpJudgeFeedbackVersion()
         await contextContinuationService.run(completion.continuationPlan)
         turnHousekeepingService.run(completion.housekeepingPlan)
+        scheduleShadowLearningHeartbeat()
     }
 
     @MainActor
@@ -653,6 +675,10 @@ final class ChatViewModel {
     @MainActor
     private func handleTurnEvent(_ envelope: TurnEventEnvelope) {
         guard isActiveResponseTask(envelope.turnId) else { return }
+
+        #if DEBUG
+        NSLog("[NousTurn] event turn=%@ seq=%d kind=%@", envelope.turnId.uuidString, envelope.sequence, Self.debugEventName(envelope.event))
+        #endif
 
         switch envelope.event {
         case .prepared(let prepared):
@@ -774,6 +800,9 @@ final class ChatViewModel {
 
     @MainActor
     private func cancelInFlightResponse(clearDraft: Bool, reason: TurnAbortReason) {
+        #if DEBUG
+        NSLog("[NousTurn] cancel response task=%@ reason=%@", inFlightResponseTaskId?.uuidString ?? "nil", String(describing: reason))
+        #endif
         if inFlightResponseTaskId != nil {
             inFlightResponseAbortReason = reason
         }
@@ -800,6 +829,23 @@ final class ChatViewModel {
         inFlightResponseTask = nil
         inFlightResponseTaskId = nil
         inFlightResponseAbortReason = nil
+    }
+
+    @MainActor
+    private func scheduleShadowLearningHeartbeat() {
+        heartbeatCoordinator?.scheduleShadowLearningAfterIdle()
+    }
+
+    private static func debugEventName(_ event: TurnEvent) -> String {
+        switch event {
+        case .prepared: return "prepared"
+        case .thinkingDelta: return "thinkingDelta"
+        case .agentTraceDelta: return "agentTraceDelta"
+        case .textDelta: return "textDelta"
+        case .completed: return "completed"
+        case .aborted(let reason): return "aborted(\(reason))"
+        case .failed(let failure): return "failed(\(failure.stage))"
+        }
     }
 
 }

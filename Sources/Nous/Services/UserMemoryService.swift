@@ -12,14 +12,6 @@ final class UserMemoryCore {
         case rejected
     }
 
-    // Per-layer token budgets from plan §6. Cap at read time so the database
-    // can hold longer content if needed but the prompt stays bounded.
-    static let globalBudget = 600
-    static let essentialStoryBudget = 500
-    static let projectBudget = 400
-    static let conversationBudget = 200
-    static let evidenceSnippetBudget = 180
-    static let userModelFacetLimit = 3
     static let contradictionFactKinds: [MemoryKind] = [.decision, .boundary, .constraint]
     private static let evidenceTimestampFormatter = ISO8601DateFormatter()
 
@@ -34,6 +26,11 @@ final class UserMemoryCore {
         let relevanceScore: Double
     }
 
+    private struct EvidencePromptTurn {
+        let message: Message
+        let previousAssistantQuestion: String?
+    }
+
     init(
         nodeStore: NodeStore,
         llmServiceProvider: @escaping () -> (any LLMService)?,
@@ -46,236 +43,8 @@ final class UserMemoryCore {
         self.embedFunction = embedFunction
     }
 
-    // MARK: - Read (used by ChatViewModel.assembleContext)
-
-    /// v2.2d: reads come exclusively from `memory_entries`. The v2.1 blob
-    /// fallback from v2.2c is gone — entries are now the sole source of truth.
-    /// Pre-v2.2 blobs are still read once by `MemoryEntriesMigrator` at first
-    /// boot to seed the entries table; after that, blobs are frozen and never
-    /// touched.
-    func currentGlobal() -> String? {
-        let content = readActiveEntry(scope: .global, scopeRefId: nil)
-        return Self.cap(content, budget: Self.globalBudget)
-    }
-
-    func currentProject(projectId: UUID) -> String? {
-        let content = readActiveEntry(scope: .project, scopeRefId: projectId)
-        return Self.cap(content, budget: Self.projectBudget)
-    }
-
-    func currentConversation(nodeId: UUID) -> String? {
-        let content = readActiveEntry(scope: .conversation, scopeRefId: nodeId)
-        return Self.cap(content, budget: Self.conversationBudget)
-    }
-
-    /// Derived "wake-up" layer between stable identity and scoped/project
-    /// memory. This is intentionally not a second canonical store — it is a
-    /// bounded blend of current project context and recent live threads, with
-    /// one stable backdrop line from global memory when available.
-    func currentEssentialStory(
-        projectId: UUID?,
-        excludingConversationId: UUID? = nil
-    ) -> String? {
-        let globalMemory = readActiveEntry(scope: .global, scopeRefId: nil)
-
-        var projectTitle: String?
-        var projectMemory: String = ""
-        if let projectId {
-            projectTitle = (try? nodeStore.fetchProject(id: projectId))?.title ?? "Untitled Project"
-            projectMemory = readActiveEntry(scope: .project, scopeRefId: projectId)
-        }
-
-        let recentConversations = (try? nodeStore.fetchRecentConversationMemories(
-            limit: 2,
-            excludingId: excludingConversationId
-        )) ?? []
-
-        var lines: [String] = []
-        var seen: Set<String> = []
-
-        for line in Self.extractSummaryLines(from: projectMemory, limit: 2) {
-            let formatted = "- Current project (\(projectTitle ?? "Untitled Project")): \(line)"
-            let key = Self.normalizedLine(formatted)
-            if seen.insert(key).inserted {
-                lines.append(formatted)
-            }
-        }
-
-        for conversation in recentConversations {
-            let summary = Self.extractSummaryLines(from: conversation.memory, limit: 1).first
-                ?? Self.preview(conversation.memory, maxChars: 140)
-            guard !summary.isEmpty else { continue }
-            let formatted = "- Recent thread (\(conversation.title)): \(summary)"
-            let key = Self.normalizedLine(formatted)
-            if seen.insert(key).inserted {
-                lines.append(formatted)
-            }
-        }
-
-        if !lines.isEmpty,
-           let backdrop = Self.extractSummaryLines(from: globalMemory, limit: 1).first {
-            let formatted = "- Stable backdrop: \(backdrop)"
-            let key = Self.normalizedLine(formatted)
-            if seen.insert(key).inserted {
-                lines.insert(formatted, at: 0)
-            }
-        }
-
-        guard !lines.isEmpty else { return nil }
-        return Self.cap(lines.joined(separator: "\n"), budget: Self.essentialStoryBudget)
-    }
-
-    /// Selects a tiny amount of raw supporting evidence for the memory layers
-    /// most likely to matter in the current turn. This keeps the prompt
-    /// grounded without dumping large transcript blocks back into context.
-    func currentBoundedEvidence(
-        projectId: UUID?,
-        excludingConversationId: UUID? = nil,
-        limit: Int = 2
-    ) -> [MemoryEvidenceSnippet] {
-        guard limit > 0 else { return [] }
-
-        var candidates: [(label: String, entry: MemoryEntry)] = []
-
-        if let projectId,
-           let projectEntry = try? nodeStore.fetchActiveMemoryEntry(scope: .project, scopeRefId: projectId),
-           !projectEntry.sourceNodeIds.isEmpty {
-            candidates.append(("Project context", projectEntry))
-        }
-
-        let recentConversationEntries = ((try? nodeStore.fetchMemoryEntries()) ?? [])
-            .filter { $0.scope == .conversation && $0.status == .active }
-            .filter { entry in
-                guard let scopeRefId = entry.scopeRefId else { return false }
-                return scopeRefId != excludingConversationId
-            }
-            .sorted { $0.updatedAt > $1.updatedAt }
-            .prefix(2)
-
-        for entry in recentConversationEntries where !entry.sourceNodeIds.isEmpty {
-            candidates.append(("Recent thread", entry))
-        }
-
-        if let globalEntry = try? nodeStore.fetchActiveMemoryEntry(scope: .global, scopeRefId: nil),
-           !globalEntry.sourceNodeIds.isEmpty {
-            candidates.append(("Long-term memory", globalEntry))
-        }
-
-        var snippets: [MemoryEvidenceSnippet] = []
-        var usedSourceNodeIds: Set<UUID> = []
-
-        for candidate in candidates {
-            guard let snippet = selectEvidenceSnippet(
-                for: candidate.entry,
-                label: candidate.label,
-                excludingConversationId: excludingConversationId,
-                usedSourceNodeIds: &usedSourceNodeIds
-            ) else {
-                continue
-            }
-            snippets.append(snippet)
-            if snippets.count == limit { break }
-        }
-
-        return snippets
-    }
-
-    func currentIdentityModel() -> [String] {
-        guard let globalEntry = try? nodeStore.fetchActiveMemoryEntry(scope: .global, scopeRefId: nil),
-              globalEntry.confidence >= 0.8 else {
-            return []
-        }
-        return Array(
-            Self.extractSummaryLines(from: globalEntry.content, limit: Self.userModelFacetLimit)
-                .prefix(Self.userModelFacetLimit)
-        )
-    }
-
-    func currentGoalModel(projectId: UUID?, conversationId: UUID? = nil) -> [String] {
-        var lines: [String] = []
-        var seen: Set<String> = []
-
-        if let projectId,
-           let project = try? nodeStore.fetchProject(id: projectId),
-           !project.goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let trimmedGoal = project.goal.trimmingCharacters(in: .whitespacesAndNewlines)
-            let key = Self.normalizedLine(trimmedGoal)
-            if seen.insert(key).inserted {
-                lines.append(trimmedGoal)
-            }
-        }
-
-        for line in facetLines(
-            from: goalModelEntries(projectId: projectId, conversationId: conversationId),
-            keywords: [
-                "goal", "build", "ship", "trying to", "want to", "wants to",
-                "priority", "focus", "plan to", "need to"
-            ],
-            minConfidence: 0.8,
-            limit: Self.userModelFacetLimit
-        ) {
-            let key = Self.normalizedLine(line)
-            guard seen.insert(key).inserted else { continue }
-            lines.append(line)
-            if lines.count == Self.userModelFacetLimit { break }
-        }
-
-        return lines
-    }
-
-    func currentWorkStyleModel(projectId: UUID?, conversationId: UUID? = nil) -> [String] {
-        facetLines(
-            from: workStyleEntries(projectId: projectId, conversationId: conversationId),
-            keywords: [
-                "prefer", "prefers", "direct", "simple", "first principles",
-                "challenge", "support", "framing", "concise", "control",
-                "fast", "deliberate"
-            ],
-            minConfidence: 0.85,
-            limit: Self.userModelFacetLimit
-        )
-    }
-
-    func currentMemoryBoundary(projectId: UUID?, conversationId: UUID? = nil) -> [String] {
-        facetLines(
-            from: boundaryEntries(projectId: projectId, conversationId: conversationId),
-            keywords: [
-                "remember", "memory", "store", "stored", "privacy",
-                "permission", "ask first", "boundary", "do not store",
-                "don't store", "do not keep", "consent", "ask before"
-            ],
-            minConfidence: 0.8,
-            limit: 2
-        )
-    }
-
-    func currentUserModel(projectId: UUID?, conversationId: UUID? = nil) -> UserModel? {
-        let model = UserModel(
-            identity: currentIdentityModel(),
-            goals: currentGoalModel(projectId: projectId, conversationId: conversationId),
-            workStyle: currentWorkStyleModel(projectId: projectId, conversationId: conversationId),
-            memoryBoundary: currentMemoryBoundary(projectId: projectId, conversationId: conversationId)
-        )
-        return model.isEmpty ? nil : model
-    }
-
-    func shouldPersistMemory(messages: [Message], projectId: UUID?) -> Bool {
-        guard let latestUserMessage = messages.reversed().first(where: { $0.role == .user }) else {
-            return true
-        }
-
-        let latestContent = Self.stripQuoteBlocks(latestUserMessage.content)
-        if SafetyGuardrails.containsHardMemoryOptOut(latestContent) {
-            return false
-        }
-
-        let boundaries = currentMemoryBoundary(projectId: projectId)
-        if SafetyGuardrails.requiresConsentForSensitiveMemory(boundaryLines: boundaries),
-           SafetyGuardrails.containsSensitiveMemory(latestContent) {
-            return false
-        }
-
-        return true
+    private var projectionReader: MemoryProjectionService {
+        MemoryProjectionService(nodeStore: nodeStore)
     }
 
     func allMemoryEntries() -> [MemoryEntry] {
@@ -356,14 +125,6 @@ final class UserMemoryCore {
             #endif
             return false
         }
-    }
-
-    /// Returns the active entry's content trimmed, or "" if no active entry.
-    private func readActiveEntry(scope: MemoryScope, scopeRefId: UUID?) -> String {
-        guard let entry = try? nodeStore.fetchActiveMemoryEntry(scope: scope, scopeRefId: scopeRefId) else {
-            return ""
-        }
-        return entry.content.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// True when this project has accumulated `threshold` or more conversation
@@ -456,43 +217,13 @@ final class UserMemoryCore {
     /// dropped. This protects invariant #4 when Alex pastes Nous's reply back
     /// into his next message (a common clarification pattern).
     func refreshConversation(nodeId: UUID, projectId: UUID?, messages: [Message]) async {
-        let priorAssistantTurns: [String] = messages
-            .filter { $0.role == .assistant }
-            .map { Self.stripQuoteBlocks($0.content) }
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-
-        let cleanedUserMessages: [Message] = messages
-            .filter { $0.role == .user }
-            .compactMap { msg -> Message? in
-                let stripped = Self.stripQuoteBlocks(msg.content)
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !stripped.isEmpty else { return nil }
-                for prior in priorAssistantTurns {
-                    if Self.tokenJaccard(stripped, prior) >= 0.6 {
-                        return nil
-                    }
-                }
-                return Message(
-                    id: msg.id,
-                    nodeId: msg.nodeId,
-                    role: msg.role,
-                    content: stripped,
-                    timestamp: msg.timestamp,
-                    thinkingContent: nil
-                )
-            }
-
-        let recentUserMessages = Array(cleanedUserMessages.suffix(8))
-        let userTurns = recentUserMessages
-            .map(\.content)
-            .suffix(8)
-            .joined(separator: "\n---\n")
+        let recentEvidenceTurns = Array(Self.cleanedEvidenceTurns(from: messages).suffix(8))
+        let userTurns = Self.evidencePromptTurns(from: recentEvidenceTurns)
 
         guard !userTurns.isEmpty else { return }
         guard let llm = llmServiceProvider() else { return }
 
-        let existing = currentConversation(nodeId: nodeId) ?? ""
+        let existing = projectionReader.currentConversation(nodeId: nodeId) ?? ""
         let existingBlock = existing.isEmpty ? "[none yet]" : existing
 
         let prompt = """
@@ -508,6 +239,13 @@ final class UserMemoryCore {
         - Do NOT include general facts about Alex — those belong in other memory layers.
         - Preserve temporal state exactly: planned/future/waiting actions must stay
           planned/future/waiting, not be rewritten as completed events.
+        - Preserve exact price, currency, country, city, store, and availability
+          wording. If Alex says "$220" or "两百二十蚊", do not rewrite it as
+          HKD/USD/CNY unless he said that unit.
+        - If a line includes [previous_nous_question_context_only], use it only
+          to resolve what Alex's short reply refers to. Do not treat Nous context as source evidence or persist it unless Alex's reply confirms it.
+        - If a short reply remains ambiguous, mark it as unclear instead of
+          choosing the most likely interpretation.
         - If Alex gives a latest correction or says Nous misunderstood, the latest
           correction overrides existing thread memory and earlier ambiguous phrasing.
         - Keep under 6 bullet points. Markdown only.
@@ -551,7 +289,7 @@ final class UserMemoryCore {
             )
             await refreshConversationFacts(
                 nodeId: nodeId,
-                userMessages: recentUserMessages,
+                evidenceTurns: recentEvidenceTurns,
                 now: now
             )
             if let projectId = projectId {
@@ -595,7 +333,7 @@ final class UserMemoryCore {
         guard let llm = llmServiceProvider() else { return }
 
         let joined = convoBlobs.joined(separator: "\n\n---\n\n")
-        let existing = currentProject(projectId: projectId) ?? ""
+        let existing = projectionReader.currentProject(projectId: projectId) ?? ""
         let existingBlock = existing.isEmpty ? "[none yet]" : existing
 
         let prompt = """
@@ -685,7 +423,7 @@ final class UserMemoryCore {
 
         guard let llm = llmServiceProvider() else { return false }
 
-        let existing = currentGlobal() ?? ""
+        let existing = projectionReader.currentGlobal() ?? ""
         let existingBlock = existing.isEmpty ? "[none yet]" : existing
 
         let prompt = """
@@ -785,31 +523,6 @@ final class UserMemoryCore {
         }
     }
 
-    private func selectEvidenceSnippet(
-        for entry: MemoryEntry,
-        label: String,
-        excludingConversationId: UUID?,
-        usedSourceNodeIds: inout Set<UUID>
-    ) -> MemoryEvidenceSnippet? {
-        for sourceNodeId in dedupeSourceNodeIds(entry.sourceNodeIds) {
-            if let excludingConversationId, sourceNodeId == excludingConversationId {
-                continue
-            }
-            guard !usedSourceNodeIds.contains(sourceNodeId) else { continue }
-            guard let node = try? nodeStore.fetchNode(id: sourceNodeId) else { continue }
-            let snippet = extractEvidenceSnippet(from: node)
-            guard !snippet.isEmpty else { continue }
-            usedSourceNodeIds.insert(sourceNodeId)
-            return MemoryEvidenceSnippet(
-                label: label,
-                sourceNodeId: sourceNodeId,
-                sourceTitle: node.title,
-                snippet: snippet
-            )
-        }
-        return nil
-    }
-
     private func mutateMemoryEntry(
         id: UUID,
         transform: (inout MemoryEntry) -> Bool
@@ -877,11 +590,11 @@ final class UserMemoryCore {
 
         for line in Self.extractSummaryLines(from: node.content, limit: 1) {
             if !line.isEmpty {
-                return Self.preview(line, maxChars: Self.evidenceSnippetBudget)
+                return Self.preview(line, maxChars: MemoryProjectionService.evidenceSnippetBudget)
             }
         }
 
-        return Self.preview(node.content, maxChars: Self.evidenceSnippetBudget)
+        return Self.preview(node.content, maxChars: MemoryProjectionService.evidenceSnippetBudget)
     }
 
     private func scopeLabel(for scope: MemoryScope) -> String {
@@ -897,95 +610,6 @@ final class UserMemoryCore {
         }
     }
 
-    private func goalModelEntries(projectId: UUID?, conversationId: UUID?) -> [MemoryEntry] {
-        var entries: [MemoryEntry] = []
-        if let projectId,
-           let projectEntry = try? nodeStore.fetchActiveMemoryEntry(scope: .project, scopeRefId: projectId) {
-            entries.append(projectEntry)
-        }
-        if let conversationId,
-           let conversationEntry = try? nodeStore.fetchActiveMemoryEntry(scope: .conversation, scopeRefId: conversationId) {
-            entries.append(conversationEntry)
-        }
-        entries.append(contentsOf: recentActiveConversationEntries(excludingConversationId: conversationId, limit: 2))
-        return entries
-    }
-
-    private func workStyleEntries(projectId: UUID?, conversationId: UUID?) -> [MemoryEntry] {
-        var entries: [MemoryEntry] = []
-        if let globalEntry = try? nodeStore.fetchActiveMemoryEntry(scope: .global, scopeRefId: nil) {
-            entries.append(globalEntry)
-        }
-        if let projectId,
-           let projectEntry = try? nodeStore.fetchActiveMemoryEntry(scope: .project, scopeRefId: projectId) {
-            entries.append(projectEntry)
-        }
-        if let conversationId,
-           let conversationEntry = try? nodeStore.fetchActiveMemoryEntry(scope: .conversation, scopeRefId: conversationId) {
-            entries.append(conversationEntry)
-        }
-        return entries
-    }
-
-    private func boundaryEntries(projectId: UUID?, conversationId: UUID?) -> [MemoryEntry] {
-        var entries: [MemoryEntry] = []
-        if let globalEntry = try? nodeStore.fetchActiveMemoryEntry(scope: .global, scopeRefId: nil) {
-            entries.append(globalEntry)
-        }
-        if let projectId,
-           let projectEntry = try? nodeStore.fetchActiveMemoryEntry(scope: .project, scopeRefId: projectId) {
-            entries.append(projectEntry)
-        }
-        if let conversationId,
-           let conversationEntry = try? nodeStore.fetchActiveMemoryEntry(scope: .conversation, scopeRefId: conversationId) {
-            entries.append(conversationEntry)
-        }
-        entries.append(contentsOf: recentActiveConversationEntries(excludingConversationId: conversationId, limit: 2))
-        return entries
-    }
-
-    private func recentActiveConversationEntries(
-        excludingConversationId: UUID?,
-        limit: Int
-    ) -> [MemoryEntry] {
-        guard limit > 0 else { return [] }
-        return ((try? nodeStore.fetchMemoryEntries()) ?? [])
-            .filter { $0.scope == .conversation && $0.status == .active }
-            .filter { entry in
-                guard let scopeRefId = entry.scopeRefId else { return false }
-                return scopeRefId != excludingConversationId
-            }
-            .sorted { $0.updatedAt > $1.updatedAt }
-            .prefix(limit)
-            .map { $0 }
-    }
-
-    private func facetLines(
-        from entries: [MemoryEntry],
-        keywords: [String],
-        minConfidence: Double,
-        limit: Int
-    ) -> [String] {
-        guard limit > 0 else { return [] }
-
-        let normalizedKeywords = keywords.map(Self.normalizedLine)
-        var lines: [String] = []
-        var seen: Set<String> = []
-
-        for entry in entries where entry.status == .active && entry.confidence >= minConfidence {
-            for line in Self.extractSummaryLines(from: entry.content, limit: 12) {
-                let normalized = Self.normalizedLine(line)
-                guard !normalized.isEmpty else { continue }
-                guard normalizedKeywords.contains(where: { normalized.contains($0) }) else { continue }
-                guard seen.insert(normalized).inserted else { continue }
-                lines.append(line)
-                if lines.count == limit { return lines }
-            }
-        }
-
-        return lines
-    }
-
     private func recentUserEvidence(nodeId: UUID) -> String? {
         guard let messages = try? nodeStore.fetchMessages(nodeId: nodeId) else { return nil }
 
@@ -993,7 +617,7 @@ final class UserMemoryCore {
             let cleaned = Self.stripQuoteBlocks(message.content)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard !cleaned.isEmpty else { continue }
-            return Self.preview(cleaned, maxChars: Self.evidenceSnippetBudget)
+            return Self.preview(cleaned, maxChars: MemoryProjectionService.evidenceSnippetBudget)
         }
 
         return nil
@@ -1007,7 +631,7 @@ final class UserMemoryCore {
             let content = trimmed.dropFirst("Alex:".count)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard !content.isEmpty else { continue }
-            return Self.preview(content, maxChars: Self.evidenceSnippetBudget)
+            return Self.preview(content, maxChars: MemoryProjectionService.evidenceSnippetBudget)
         }
         return nil
     }
@@ -1115,11 +739,12 @@ final class UserMemoryCore {
 
     private func refreshConversationFacts(
         nodeId: UUID,
-        userMessages: [Message],
+        evidenceTurns: [EvidencePromptTurn],
         now: Date
     ) async {
         guard let llm = llmServiceProvider() else { return }
-        let userTurns = Self.evidenceUserTurns(from: userMessages)
+        let userMessages = evidenceTurns.map(\.message)
+        let userTurns = Self.evidencePromptTurns(from: evidenceTurns)
         guard !userTurns.isEmpty else { return }
 
         let existingBlock = activeFactBlock(scope: .conversation, scopeRefId: nodeId)
@@ -1172,6 +797,12 @@ final class UserMemoryCore {
         - pattern = a recurring behaviour or thought pattern Alex notices about himself
         - For corrections that retract a specific prior belief / preference / goal / plan / rule, include `corrects` matching that prior claim's wording — omit the field when the retraction is generic
         - Every decision_chain and every semantic_atom MUST include evidence_message_id and evidence_quote from one listed Alex message
+        - If a line includes [previous_nous_question_context_only], use it only
+          to resolve what Alex's short reply refers to. Do not treat Nous context as source evidence; evidence_quote must still come from Alex's message.
+        - Preserve exact price, currency, country, city, store, and availability
+          wording. Do not invent HKD/USD/CNY, locations, or stock availability.
+        - If a short reply remains ambiguous after its context-only question,
+          omit the fact instead of guessing.
         - Only keep facts Alex himself said or clearly implied
         - Only keep facts that still seem active for this chat
         - If there are none, return {"facts":[],"decision_chains":[],"semantic_atoms":[]}
@@ -1389,10 +1020,7 @@ final class UserMemoryCore {
     /// Removes markdown blockquote lines (`> …` or `>> …`) from content.
     /// Used to drop quoted assistant text that Alex pastes into his next turn.
     static func stripQuoteBlocks(_ content: String) -> String {
-        content
-            .components(separatedBy: .newlines)
-            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix(">") }
-            .joined(separator: "\n")
+        MemoryProjectionService.stripQuoteBlocks(content)
     }
 
     /// Jaccard similarity over lowercased whitespace-split tokens. Returns a
@@ -1473,13 +1101,101 @@ final class UserMemoryCore {
         return String(trimmed[..<limit]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static func evidenceUserTurns(from messages: [Message]) -> String {
-        messages
-            .map { message in
-                let timestamp = evidenceTimestampFormatter.string(from: message.timestamp)
-                return "[message_id=\(message.id.uuidString) timestamp=\(timestamp)] \(message.content)"
+    private static func cleanedEvidenceTurns(from messages: [Message]) -> [EvidencePromptTurn] {
+        let assistantTurns: [String] = messages
+            .filter { $0.role == .assistant }
+            .map { Self.stripQuoteBlocks($0.content) }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        return messages.enumerated().compactMap { offset, msg -> EvidencePromptTurn? in
+            guard msg.role == .user else { return nil }
+            let stripped = Self.stripQuoteBlocks(msg.content)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !stripped.isEmpty else { return nil }
+            for assistantTurn in assistantTurns {
+                if Self.tokenJaccard(stripped, assistantTurn) >= 0.6 {
+                    return nil
+                }
+            }
+            let cleaned = Message(
+                id: msg.id,
+                nodeId: msg.nodeId,
+                role: msg.role,
+                content: stripped,
+                timestamp: msg.timestamp,
+                thinkingContent: nil
+            )
+            return EvidencePromptTurn(
+                message: cleaned,
+                previousAssistantQuestion: previousAssistantQuestion(
+                    before: offset,
+                    in: messages,
+                    userContent: stripped
+                )
+            )
+        }
+    }
+
+    private static func evidencePromptTurns(from turns: [EvidencePromptTurn]) -> String {
+        turns
+            .map { turn in
+                let timestamp = evidenceTimestampFormatter.string(from: turn.message.timestamp)
+                var lines: [String] = []
+                if let previous = turn.previousAssistantQuestion {
+                    lines.append("[previous_nous_question_context_only] \(previous)")
+                }
+                lines.append("[message_id=\(turn.message.id.uuidString) timestamp=\(timestamp)] \(turn.message.content)")
+                return lines.joined(separator: "\n")
             }
             .joined(separator: "\n---\n")
+    }
+
+    private static func previousAssistantQuestion(
+        before index: Int,
+        in messages: [Message],
+        userContent: String
+    ) -> String? {
+        guard needsPreviousQuestionContext(userContent) else { return nil }
+        guard index > 0 else { return nil }
+
+        for candidateIndex in stride(from: index - 1, through: 0, by: -1) {
+            let candidate = messages[candidateIndex]
+            if candidate.role == .user { continue }
+            guard candidate.role == .assistant else { continue }
+            return assistantQuestionExcerpt(candidate.content)
+        }
+        return nil
+    }
+
+    private static func needsPreviousQuestionContext(_ content: String) -> Bool {
+        content.trimmingCharacters(in: .whitespacesAndNewlines).count <= 40
+    }
+
+    private static func assistantQuestionExcerpt(_ content: String) -> String? {
+        let cleaned = stripQuoteBlocks(content)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return nil }
+
+        let lines = cleaned
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard let questionLine = lines.last(where: { isQuestionLike($0) }) else {
+            return nil
+        }
+        if cleaned.count <= 180 {
+            return preview(cleaned, maxChars: 180)
+        }
+        if let questionIndex = lines.lastIndex(where: { isQuestionLike($0) }) {
+            let start = max(lines.startIndex, lines.index(questionIndex, offsetBy: -1, limitedBy: lines.startIndex) ?? lines.startIndex)
+            return preview(lines[start...questionIndex].joined(separator: " "), maxChars: 180)
+        }
+        return preview(questionLine, maxChars: 180)
+    }
+
+    private static func isQuestionLike(_ content: String) -> Bool {
+        content.contains("?") || content.contains("？")
     }
 
     private static func verifiedDecisionChain(
@@ -1780,121 +1496,6 @@ final class UserMemoryCore {
         }
     }
 
-    func currentDecisionGraphRecall(
-        currentMessage: String,
-        projectId: UUID?,
-        conversationId: UUID,
-        limit: Int = 3,
-        now: Date = Date()
-    ) -> [String] {
-        MemoryQueryPlanner(nodeStore: nodeStore).recall(
-            currentMessage: currentMessage,
-            projectId: projectId,
-            conversationId: conversationId,
-            limit: limit,
-            allowedIntents: [.decisionHistory],
-            now: now
-        )
-    }
-
-    func currentGraphMemoryRecall(
-        currentMessage: String,
-        projectId: UUID?,
-        conversationId: UUID,
-        limit: Int = 4,
-        queryEmbedding: [Float]? = nil,
-        now: Date = Date()
-    ) -> [String] {
-        MemoryQueryPlanner(nodeStore: nodeStore).recall(
-            currentMessage: currentMessage,
-            projectId: projectId,
-            conversationId: conversationId,
-            limit: limit,
-            queryEmbedding: queryEmbedding,
-            now: now
-        )
-    }
-
-    private func isGraphRecallScope(_ atom: MemoryAtom, projectId: UUID?, conversationId: UUID) -> Bool {
-        switch atom.scope {
-        case .global:
-            return true
-        case .project:
-            return atom.scopeRefId == projectId
-        case .conversation:
-            // Cross-chat recall is the point of this graph layer: a direct
-            // "what did we reject before?" question should search old chats too.
-            return atom.scopeRefId != nil || atom.scopeRefId == conversationId
-        case .selfReflection:
-            return false
-        }
-    }
-
-    private func formatDecisionChainRecall(_ chain: MemoryDecisionChain) -> String {
-        let eventTime = chain.rejection.eventTime.map { Self.evidenceTimestampFormatter.string(from: $0) } ?? "unknown"
-        let sourceNode = chain.rejection.sourceNodeId?.uuidString ?? "unknown"
-        let sourceMessage = chain.rejection.sourceMessageId?.uuidString ?? "unknown"
-        let sourceQuote = sourceQuote(for: chain.rejection)
-        var parts = [
-            "- MEMORY_CHAIN atom_id=\(chain.rejection.id.uuidString) status=\(chain.rejection.status.rawValue) event_time=\(eventTime)",
-            "  source_node_id=\(sourceNode) source_message_id=\(sourceMessage)",
-            "  rejected_proposal: \(chain.rejectedProposal?.statement ?? "[unknown proposal]")",
-            "  rejection: \(chain.rejection.statement)"
-        ]
-        if !chain.reasons.isEmpty {
-            parts.append("  reason: \(chain.reasons.map(\.statement).joined(separator: " / "))")
-        }
-        if let replacement = chain.replacement {
-            parts.append("  replacement_current_direction: \(replacement.statement)")
-        }
-        if let sourceQuote {
-            parts.append("  source_quote: \(sourceQuote)")
-        }
-        return parts.joined(separator: "\n")
-    }
-
-    private func sourceQuote(for atom: MemoryAtom) -> String? {
-        guard let sourceNodeId = atom.sourceNodeId,
-              let sourceMessageId = atom.sourceMessageId,
-              let messages = try? nodeStore.fetchMessages(nodeId: sourceNodeId),
-              let message = messages.first(where: { $0.id == sourceMessageId })
-        else {
-            return nil
-        }
-        return Self.preview(Self.stripQuoteBlocks(message.content), maxChars: 140)
-    }
-
-    private static func shouldRecallDecisionGraph(for message: String) -> Bool {
-        let normalized = message.lowercased()
-        let historicalCues = [
-            "之前", "上次", "三周", "3周", "three weeks", "last time",
-            "remember", "memory", "以前", "之前有", "we had", "did we"
-        ]
-        let decisionCues = [
-            "否決", "否决", "否定", "reject", "rejected", "rejection",
-            "decision", "decide", "decided", "方案", "plan", "why",
-            "點解", "点解", "為什麼", "为什么", "原因"
-        ]
-
-        let hasHistoricalCue = historicalCues.contains { normalized.contains($0) }
-        let hasDecisionCue = decisionCues.contains { normalized.contains($0) }
-        return hasDecisionCue && (hasHistoricalCue || normalized.contains("否決") || normalized.contains("否决") || normalized.contains("reject"))
-    }
-
-    private static func graphRecallScore(query: String, text: String) -> Double {
-        let jaccard = tokenJaccard(query, text)
-        let normalizedQuery = normalizedLine(query)
-        let normalizedText = normalizedLine(text)
-        let queryTokens = normalizedQuery
-            .split(whereSeparator: \.isWhitespace)
-            .map(String.init)
-            .filter { token in
-                token.count >= 3
-                    && !["what", "why", "when", "did", "the", "that", "this", "before"].contains(token)
-            }
-        let tokenHits = queryTokens.filter { normalizedText.contains($0) }.count
-        return jaccard + min(Double(tokenHits) * 0.08, 0.4)
-    }
 }
 
 extension UserMemoryCore {
@@ -1961,8 +1562,18 @@ extension UserMemoryCore {
         // weeks don't crowd out the freshest read. Scope-safe: free-chat
         // (projectId=nil) matches NULL-projectId reflection rows.
         if reflectionSeed > 0 && out.count < capacity {
+            let stableGlobalMemoryKeys = stableGlobalMemoryClaimKeys()
             let reflections = (try? nodeStore.fetchActiveReflectionClaims(projectId: projectId)) ?? []
-            for claim in reflections.prefix(reflectionSeed) {
+            var admittedReflections = 0
+            for claim in reflections {
+                guard admittedReflections < reflectionSeed else { break }
+                guard !Self.claimOverlapsStableMemory(
+                    claim.claim,
+                    stableGlobalMemoryKeys: stableGlobalMemoryKeys
+                ) else {
+                    continue
+                }
+                let countBefore = out.count
                 admit(CitableEntry(
                     id: claim.id.uuidString,
                     text: claim.claim,
@@ -1970,6 +1581,9 @@ extension UserMemoryCore {
                     kind: nil,
                     promptAnnotation: "weekly-reflection"
                 ))
+                if out.count > countBefore {
+                    admittedReflections += 1
+                }
                 if out.count >= capacity { break }
             }
         }
@@ -2024,5 +1638,73 @@ extension UserMemoryCore {
             .filter { $0.status == .active && $0.scope == scope && $0.scopeRefId == scopeRefId }
             .prefix(limit)
             .map { $0 }
+    }
+
+    private func stableGlobalMemoryClaimKeys() -> Set<String> {
+        guard let entry = try? nodeStore.fetchActiveMemoryEntry(scope: .global, scopeRefId: nil) else {
+            return []
+        }
+        return Self.normalizedMemoryClaimKeys(from: entry.content)
+    }
+
+    private static func claimOverlapsStableMemory(
+        _ claim: String,
+        stableGlobalMemoryKeys: Set<String>
+    ) -> Bool {
+        let claimKey = normalizedMemoryClaim(claim)
+        guard !claimKey.isEmpty else { return false }
+
+        return stableGlobalMemoryKeys.contains { stableKey in
+            guard stableKey.split(separator: " ").count >= 3 else { return false }
+            return claimKey == stableKey ||
+                claimKey.contains(stableKey) ||
+                stableKey.contains(claimKey)
+        }
+    }
+
+    private static func normalizedMemoryClaimKeys(from content: String) -> Set<String> {
+        var keys = Set<String>()
+        for line in content.components(separatedBy: .newlines) {
+            let key = normalizedMemoryClaim(line)
+            if !key.isEmpty { keys.insert(key) }
+        }
+
+        let whole = normalizedMemoryClaim(content)
+        if !whole.isEmpty { keys.insert(whole) }
+        return keys
+    }
+
+    private static func normalizedMemoryClaim(_ content: String) -> String {
+        strippedMemoryLine(content)
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    private static func strippedMemoryLine(_ content: String) -> String {
+        var trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        while trimmed.hasPrefix("#") {
+            trimmed.removeFirst()
+            trimmed = trimmed.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        for marker in ["- ", "* "] {
+            if trimmed.hasPrefix(marker) {
+                return String(trimmed.dropFirst(marker.count))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+
+        if let dot = trimmed.firstIndex(of: ".") {
+            let prefix = trimmed[..<dot]
+            if !prefix.isEmpty && prefix.allSatisfy(\.isNumber) {
+                return String(trimmed[trimmed.index(after: dot)...])
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+
+        return trimmed
     }
 }

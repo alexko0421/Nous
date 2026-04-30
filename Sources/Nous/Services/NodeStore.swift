@@ -463,6 +463,56 @@ final class NodeStore {
             );
         """)
 
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS shadow_patterns (
+                id                   TEXT PRIMARY KEY,
+                user_id              TEXT NOT NULL DEFAULT 'alex',
+                kind                 TEXT NOT NULL,
+                label                TEXT NOT NULL,
+                summary              TEXT NOT NULL,
+                prompt_fragment      TEXT NOT NULL,
+                trigger_hint         TEXT NOT NULL,
+                confidence           REAL NOT NULL DEFAULT 0,
+                weight               REAL NOT NULL DEFAULT 0,
+                status               TEXT NOT NULL,
+                evidence_message_ids TEXT NOT NULL DEFAULT '[]',
+                first_seen_at        REAL NOT NULL,
+                last_seen_at         REAL NOT NULL,
+                last_reinforced_at   REAL,
+                last_corrected_at    REAL,
+                active_from          REAL,
+                active_until         REAL
+            );
+        """)
+
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS learning_events (
+                id                TEXT PRIMARY KEY,
+                user_id           TEXT NOT NULL DEFAULT 'alex',
+                pattern_id        TEXT REFERENCES shadow_patterns(id) ON DELETE SET NULL,
+                source_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+                event_type        TEXT NOT NULL,
+                note              TEXT NOT NULL DEFAULT '',
+                created_at        REAL NOT NULL
+            );
+        """)
+
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS shadow_learning_state (
+                user_id                 TEXT PRIMARY KEY,
+                last_run_at             REAL,
+                last_scanned_message_at REAL,
+                last_scanned_message_id TEXT,
+                last_consolidated_at    REAL
+            );
+        """)
+
+        try ensureColumnExists(
+            table: "shadow_learning_state",
+            column: "last_scanned_message_id",
+            alterSQL: "ALTER TABLE shadow_learning_state ADD COLUMN last_scanned_message_id TEXT;"
+        )
+
         // Indexes
         try db.exec("CREATE INDEX IF NOT EXISTS idx_nodes_projectId  ON nodes(projectId);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_messages_nodeId  ON messages(nodeId);")
@@ -488,6 +538,10 @@ final class NodeStore {
         try db.exec("CREATE INDEX IF NOT EXISTS idx_judge_events_fallback ON judge_events(fallbackReason);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_reflection_runs_project_week ON reflection_runs(project_id, week_end);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_skills_active ON skills(user_id, state);")
+        try db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_shadow_patterns_user_kind_label ON shadow_patterns(user_id, kind, label);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_shadow_patterns_user_status ON shadow_patterns(user_id, status);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_learning_events_user_created ON learning_events(user_id, created_at);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_learning_events_pattern ON learning_events(pattern_id);")
         // SQLite treats NULLs as distinct in UNIQUE constraints, so the free-chat
         // scope (project_id IS NULL) would accept duplicate rows for the same week.
         // COALESCE folds NULL to '' and restores the single-row-per-(scope, week) invariant.
