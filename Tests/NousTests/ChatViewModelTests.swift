@@ -696,7 +696,7 @@ final class ChatViewModelTests: XCTestCase {
     }
 
     func testGovernanceTraceIncludesSummaryOutputPolicyLayer() {
-        let trace = ChatViewModel.governanceTrace(
+        let trace = PromptContextAssembler.governanceTrace(
             globalMemory: nil,
             projectMemory: nil,
             conversationMemory: nil,
@@ -719,7 +719,7 @@ final class ChatViewModelTests: XCTestCase {
     }
 
     func testAssembleContextStableIncludesSummaryInstruction() {
-        let slice = ChatViewModel.assembleContext(
+        let slice = PromptContextAssembler.assembleContext(
             globalMemory: nil,
             projectMemory: nil,
             conversationMemory: nil,

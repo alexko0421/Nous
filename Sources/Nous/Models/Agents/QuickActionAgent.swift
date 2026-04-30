@@ -3,17 +3,16 @@ import Foundation
 /// Per-mode runtime contract for quick actions. Each agent owns:
 /// - the opening prompt text sent on the synthetic turn-0 invocation
 /// - per-turn volatile context addenda
-/// - a memory access policy that the dispatcher (ChatViewModel.runQuickActionConversation
-///   or TurnPlanner.plan) consults to gate memory fetches
+/// - a memory access policy that quick-action and turn planning consult to gate
+///   memory fetches
 /// - a per-turn directive that drives whether activeQuickActionMode is preserved
 ///
 /// Voice (anchor.md) is NOT owned by the agent; it stays in the shared stable layer
-/// of `ChatViewModel.assembleContext`. Agents only contribute to volatile.
+/// of `PromptContextAssembler.assembleContext`. Agents only contribute to volatile.
 protocol QuickActionAgent {
     var mode: QuickActionMode { get }
 
     /// Called once when the user taps the quick-action chip.
-    /// Replaces `ChatViewModel.quickActionOpeningPrompt(for:)` for this mode.
     func openingPrompt() -> String
 
     /// Called every turn while activeQuickActionMode == self.mode.

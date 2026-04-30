@@ -290,6 +290,56 @@ final class FindContradictionsToolTests: XCTestCase {
 }
 
 final class OpenRouterToolEncodingTests: XCTestCase {
+    func testStreamingRequestBodyCanIncludeOpenRouterWebSearchServerTool() throws {
+        let body = try OpenRouterLLMService.buildStreamingRequestBody(
+            model: "anthropic/claude-sonnet-4.6",
+            system: "system prompt",
+            messages: [
+                LLMMessage(role: "user", content: "Can I buy Adidas EVO SL in the US today?")
+            ],
+            includeWebSearch: true
+        )
+
+        XCTAssertEqual(body["model"] as? String, "anthropic/claude-sonnet-4.6")
+        XCTAssertEqual(body["stream"] as? Bool, true)
+        let tools = try XCTUnwrap(body["tools"] as? [[String: Any]])
+        XCTAssertEqual(tools.count, 1)
+        XCTAssertEqual(tools.first?["type"] as? String, "openrouter:web_search")
+        let parameters = try XCTUnwrap(tools.first?["parameters"] as? [String: Any])
+        XCTAssertEqual(parameters["engine"] as? String, "auto")
+        XCTAssertEqual(parameters["max_results"] as? Int, 5)
+        XCTAssertEqual(parameters["max_total_results"] as? Int, 10)
+        XCTAssertEqual(parameters["search_context_size"] as? String, "low")
+    }
+
+    func testFunctionToolRequestBodyCanAlsoIncludeOpenRouterWebSearchServerTool() throws {
+        let declaration = AgentToolDeclaration(
+            function: AgentToolFunctionDeclaration(
+                name: AgentToolNames.searchMemory,
+                description: "Search memory.",
+                parameters: AgentToolSchema(
+                    properties: [
+                        "query": AgentToolSchemaProperty(type: .string, description: "Query")
+                    ],
+                    required: ["query"]
+                )
+            )
+        )
+
+        let body = try OpenRouterLLMService.buildToolRequestBody(
+            model: "anthropic/claude-sonnet-4.6",
+            system: "system prompt",
+            messages: [.text(role: "user", content: "Find context and verify current facts")],
+            tools: [declaration],
+            allowToolCalls: true,
+            includeWebSearch: true
+        )
+
+        let tools = try XCTUnwrap(body["tools"] as? [[String: Any]])
+        XCTAssertTrue(tools.contains { $0["type"] as? String == "function" })
+        XCTAssertTrue(tools.contains { $0["type"] as? String == "openrouter:web_search" })
+    }
+
     func testToolRequestBodySerializesTranscriptAndToolChoice() throws {
         let declaration = AgentToolDeclaration(
             function: AgentToolFunctionDeclaration(
@@ -803,7 +853,7 @@ private func makeChatTurnRunner(
     agentLoopExecutorFactory: AgentLoopExecutorFactory?
 ) -> ChatTurnRunner {
     let core = UserMemoryCore(nodeStore: nodeStore, llmServiceProvider: { nil })
-    let memoryProjection = MemoryProjectionService(core: core)
+    let memoryProjection = MemoryProjectionService(nodeStore: nodeStore)
     let contradiction = ContradictionMemoryService(core: core)
     let planner = TurnPlanner(
         nodeStore: nodeStore,

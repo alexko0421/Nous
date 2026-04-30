@@ -13,6 +13,202 @@ final class RAGPipelineTests: XCTestCase {
 
     // MARK: - Test 1: RAG search returns the most relevant node
 
+    func testPromptContextAssemblerOwnsContextAssemblyWithoutChatViewModel() {
+        let context = PromptContextAssembler.assembleContext(
+            globalMemory: "- Alex owns the data layer.",
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: "Clean the memory architecture"
+        ).combined
+
+        XCTAssertTrue(context.contains("LONG-TERM MEMORY ABOUT ALEX"))
+        XCTAssertTrue(context.contains("Clean the memory architecture"))
+    }
+
+    func testAssembleContextIncludesRealWorldDecisionPolicy() {
+        let context = PromptContextAssembler.assembleContext(
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        ).combined
+
+        XCTAssertTrue(context.contains("REAL-WORLD DECISION POLICY"))
+        XCTAssertTrue(context.contains("does not have live web or shop search"))
+        XCTAssertTrue(context.contains("If OpenRouter web search is available"))
+        XCTAssertTrue(context.contains("Do not infer that something is unavailable"))
+    }
+
+    func testMemoryPromptPacketOwnsStableMemoryBlockOrdering() {
+        let evidence = MemoryEvidenceSnippet(
+            label: "Project context",
+            sourceNodeId: UUID(),
+            sourceTitle: "Memory architecture",
+            snippet: "Jurisdiction should prevent duplicate memory claims."
+        )
+        let userModel = UserModel(
+            identity: ["Alex is a solo founder."],
+            goals: ["Ship memory jurisdiction"],
+            workStyle: ["Prefers direct, evidence-grounded answers."],
+            memoryBoundary: []
+        )
+
+        let packet = MemoryPromptPacket(
+            globalMemory: "- Alex owns the data layer.",
+            essentialStory: "- Stable backdrop: memory trust is the current bottleneck.",
+            userModel: userModel,
+            memoryEvidence: [evidence],
+            projectMemory: "- Project memory stays scoped.",
+            conversationMemory: "- This chat is about memory jurisdiction.",
+            recentConversations: [("Prior memory audit", "Current memory is mostly conversation-scoped.")],
+            projectGoal: "Make memory layers explicit"
+        )
+
+        let context = packet.stableBlocks.joined(separator: "\n\n")
+
+        XCTAssertLessThan(
+            context.range(of: "LONG-TERM MEMORY ABOUT ALEX")!.lowerBound,
+            context.range(of: "BROADER SITUATION RIGHT NOW")!.lowerBound
+        )
+        XCTAssertLessThan(
+            context.range(of: "THIS PROJECT'S CONTEXT")!.lowerBound,
+            context.range(of: "THIS CHAT'S THREAD SO FAR")!.lowerBound
+        )
+        XCTAssertLessThan(
+            context.range(of: "SHORT SOURCE EVIDENCE FOR THE ABOVE MEMORY")!.lowerBound,
+            context.range(of: "DERIVED USER MODEL")!.lowerBound
+        )
+        XCTAssertTrue(context.contains("CURRENT PROJECT GOAL: Make memory layers explicit"))
+        XCTAssertTrue(context.contains("\"Prior memory audit\": Current memory is mostly conversation-scoped."))
+        XCTAssertFalse(context.contains("Identity:\n- Alex is a solo founder."),
+                       "identity facet should not duplicate when global memory is already present")
+    }
+
+    func testMemoryPromptPacketDoesNotDuplicateProjectGoalInsideUserModelGoals() {
+        let packet = MemoryPromptPacket(
+            globalMemory: nil,
+            essentialStory: nil,
+            userModel: UserModel(
+                identity: [],
+                goals: [
+                    "Ship memory jurisdiction",
+                    "Keep memory evidence grounded"
+                ],
+                workStyle: [],
+                memoryBoundary: []
+            ),
+            memoryEvidence: [],
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            projectGoal: "Ship memory jurisdiction"
+        )
+
+        let context = packet.stableBlocks.joined(separator: "\n\n")
+
+        XCTAssertTrue(context.contains("CURRENT PROJECT GOAL: Ship memory jurisdiction"))
+        XCTAssertFalse(context.contains("Goals:\n- Ship memory jurisdiction"),
+                       "project goal should be owned by the project-goal block, not repeated in user model")
+        XCTAssertTrue(context.contains("Goals:\n- Keep memory evidence grounded"))
+    }
+
+    func testMemoryPromptPacketFiltersRecentConversationAlreadyOwnedByCurrentThreadMemory() {
+        let packet = MemoryPromptPacket(
+            globalMemory: nil,
+            essentialStory: nil,
+            userModel: nil,
+            memoryEvidence: [],
+            projectMemory: nil,
+            conversationMemory: "- Current chat is about memory jurisdiction.",
+            recentConversations: [
+                ("Duplicate current chat", "- Current chat is about memory jurisdiction."),
+                ("Separate thread", "- Alex compared memory layers to project lanes.")
+            ],
+            projectGoal: nil
+        )
+
+        let context = packet.stableBlocks.joined(separator: "\n\n")
+
+        XCTAssertTrue(context.contains("THIS CHAT'S THREAD SO FAR"))
+        XCTAssertTrue(context.contains("Current chat is about memory jurisdiction."))
+        XCTAssertTrue(context.contains("RECENT CONVERSATIONS WITH ALEX"))
+        XCTAssertFalse(context.contains("Duplicate current chat"),
+                       "recent-conversation memory should not repeat the current thread summary")
+        XCTAssertTrue(context.contains("Separate thread"))
+    }
+
+    func testMemoryPromptPacketFiltersEvidenceSnippetAlreadyOwnedByScopedMemory() {
+        let packet = MemoryPromptPacket(
+            globalMemory: nil,
+            essentialStory: nil,
+            userModel: nil,
+            memoryEvidence: [
+                MemoryEvidenceSnippet(
+                    label: "Project context",
+                    sourceNodeId: UUID(),
+                    sourceTitle: "Memory architecture",
+                    snippet: "Jurisdiction should prevent duplicate memory claims."
+                )
+            ],
+            projectMemory: "- Jurisdiction should prevent duplicate memory claims.",
+            conversationMemory: nil,
+            recentConversations: [],
+            projectGoal: nil
+        )
+
+        let context = packet.stableBlocks.joined(separator: "\n\n")
+
+        XCTAssertTrue(context.contains("THIS PROJECT'S CONTEXT"))
+        XCTAssertTrue(context.contains("Jurisdiction should prevent duplicate memory claims."))
+        XCTAssertFalse(context.contains("SHORT SOURCE EVIDENCE FOR THE ABOVE MEMORY"),
+                       "exact evidence already represented by a scoped summary should not be repeated")
+        XCTAssertFalse(context.contains("Memory architecture"))
+    }
+
+    func testAssembleContextFiltersCitationWhenMemoryEvidenceAlreadyUsesSameSourceNode() {
+        let duplicatedSource = NousNode(
+            type: .note,
+            title: "Memory architecture source",
+            content: "Raw duplicate citation content should not be repeated."
+        )
+        let separateSource = NousNode(
+            type: .note,
+            title: "Runway source",
+            content: "Cash runway still matters."
+        )
+        let evidence = MemoryEvidenceSnippet(
+            label: "Project context",
+            sourceNodeId: duplicatedSource.id,
+            sourceTitle: duplicatedSource.title,
+            snippet: "Memory evidence already carries this source."
+        )
+
+        let context = PromptContextAssembler.assembleContext(
+            globalMemory: nil,
+            memoryEvidence: [evidence],
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [
+                SearchResult(node: duplicatedSource, similarity: 0.91),
+                SearchResult(node: separateSource, similarity: 0.87)
+            ],
+            projectGoal: nil
+        ).combined
+
+        XCTAssertTrue(context.contains("SHORT SOURCE EVIDENCE FOR THE ABOVE MEMORY"))
+        XCTAssertTrue(context.contains("Memory evidence already carries this source."))
+        XCTAssertFalse(context.contains("[1] \"Memory architecture source\""),
+                       "citation from a source already represented as memory evidence should be filtered")
+        XCTAssertFalse(context.contains("Raw duplicate citation content should not be repeated."))
+        XCTAssertTrue(context.contains("[1] \"Runway source\""),
+                      "remaining citations should be renumbered after filtering")
+    }
+
     func testBuildContextIncludesRelevantNodes() throws {
         // Insert a node with embedding close to query
         var matchNode = NousNode(type: .note, title: "Swift concurrency guide")
@@ -79,7 +275,7 @@ final class RAGPipelineTests: XCTestCase {
             memoryBoundary: ["Ask before storing unusually sensitive material."]
         )
 
-        let context = ChatViewModel.assembleContext(
+        let context = PromptContextAssembler.assembleContext(
             globalMemory: userMemory,
             essentialStory: essentialStory,
             userModel: userModel,
@@ -153,7 +349,7 @@ final class RAGPipelineTests: XCTestCase {
     }
 
     func testAssembleContextDefaultsToCompanionMode() {
-        let context = ChatViewModel.assembleContext(
+        let context = PromptContextAssembler.assembleContext(
             globalMemory: nil,
             projectMemory: nil,
             conversationMemory: nil,
@@ -175,7 +371,7 @@ final class RAGPipelineTests: XCTestCase {
           Replacement/current direction: Observe and coexist with emotions.
         """
 
-        let context = ChatViewModel.assembleContext(
+        let context = PromptContextAssembler.assembleContext(
             currentUserInput: "我哋之前否決過邊個方案，點解？",
             globalMemory: nil,
             memoryGraphRecall: [recall],
@@ -186,7 +382,7 @@ final class RAGPipelineTests: XCTestCase {
             projectGoal: nil,
             activeQuickActionMode: .plan
         ).combined
-        let trace = ChatViewModel.governanceTrace(
+        let trace = PromptContextAssembler.governanceTrace(
             currentUserInput: "我哋之前否決過邊個方案，點解？",
             globalMemory: nil,
             memoryGraphRecall: [recall],
@@ -206,7 +402,7 @@ final class RAGPipelineTests: XCTestCase {
 
     func testAssembleContextOmitsGraphMemoryRecallInNormalChat() {
         let recall = "- Rejected proposal: Build Nous around solving emotions."
-        let context = ChatViewModel.assembleContext(
+        let context = PromptContextAssembler.assembleContext(
             currentUserInput: "我哋之前否決過邊個方案，點解？",
             globalMemory: nil,
             memoryGraphRecall: [recall],
@@ -222,7 +418,7 @@ final class RAGPipelineTests: XCTestCase {
     }
 
     func testAssembleContextStrategistModeChangesPromptBehaviorWithoutDroppingContinuity() {
-        let context = ChatViewModel.assembleContext(
+        let context = PromptContextAssembler.assembleContext(
             chatMode: .strategist,
             globalMemory: "- Alex is a solo founder.",
             essentialStory: "- Stable backdrop: Alex is shipping under pressure.",
@@ -250,7 +446,7 @@ final class RAGPipelineTests: XCTestCase {
             updatedAt: now.addingTimeInterval(-60 * 86_400)
         )
 
-        let context = ChatViewModel.assembleContext(
+        let context = PromptContextAssembler.assembleContext(
             chatMode: .strategist,
             currentUserInput: "I am thinking about applying to YC now.",
             globalMemory: nil,
@@ -278,7 +474,7 @@ final class RAGPipelineTests: XCTestCase {
             updatedAt: now.addingTimeInterval(-60 * 86_400)
         )
 
-        let context = ChatViewModel.assembleContext(
+        let context = PromptContextAssembler.assembleContext(
             chatMode: .companion,
             currentUserInput: "I think I might finally do it.",
             globalMemory: nil,
@@ -307,7 +503,7 @@ final class RAGPipelineTests: XCTestCase {
         let distinctive = "F-1 visa constraints shape investing approach"
         let recent = (title: "Old chat", memory: distinctive)
 
-        let context = ChatViewModel.assembleContext(
+        let context = PromptContextAssembler.assembleContext(
             globalMemory: nil,
             projectMemory: nil,
             conversationMemory: nil,
@@ -325,7 +521,7 @@ final class RAGPipelineTests: XCTestCase {
     }
 
     func testAssembleContextOmitsEvidenceSectionWhenNoSnippetsExist() {
-        let context = ChatViewModel.assembleContext(
+        let context = PromptContextAssembler.assembleContext(
             globalMemory: nil,
             projectMemory: nil,
             conversationMemory: nil,
@@ -347,7 +543,7 @@ final class RAGPipelineTests: XCTestCase {
             updatedAt: now.addingTimeInterval(-80 * 86_400)
         )
 
-        let context = ChatViewModel.assembleContext(
+        let context = PromptContextAssembler.assembleContext(
             chatMode: .strategist,
             currentUserInput: "I am thinking out loud.",
             globalMemory: nil,
@@ -369,7 +565,7 @@ final class RAGPipelineTests: XCTestCase {
             content: "Alex: Coffee chat.\n\nNous: Also coffee chat."
         )
 
-        let context = ChatViewModel.assembleContext(
+        let context = PromptContextAssembler.assembleContext(
             globalMemory: nil,
             projectMemory: nil,
             conversationMemory: nil,
@@ -398,7 +594,7 @@ final class RAGPipelineTests: XCTestCase {
             updatedAt: now.addingTimeInterval(-60 * 86_400)
         )
 
-        let context = ChatViewModel.assembleContext(
+        let context = PromptContextAssembler.assembleContext(
             chatMode: .strategist,
             currentUserInput: "I am thinking about applying to YC now.",
             globalMemory: nil,
@@ -422,7 +618,7 @@ final class RAGPipelineTests: XCTestCase {
     }
 
     func testAssembleContextIncludesHypothesisLanguagePolicy() {
-        let context = ChatViewModel.assembleContext(
+        let context = PromptContextAssembler.assembleContext(
             globalMemory: nil,
             projectMemory: nil,
             conversationMemory: nil,
@@ -439,7 +635,7 @@ final class RAGPipelineTests: XCTestCase {
     }
 
     func testAssembleContextInvokesHighRiskSafetyModeWhenQueryIsDangerous() {
-        let context = ChatViewModel.assembleContext(
+        let context = PromptContextAssembler.assembleContext(
             currentUserInput: "I want to kill myself tonight.",
             globalMemory: nil,
             projectMemory: nil,
@@ -455,7 +651,7 @@ final class RAGPipelineTests: XCTestCase {
     }
 
     func testGovernanceTraceMarksSafetyInvocationAndPromptLayers() {
-        let trace = ChatViewModel.governanceTrace(
+        let trace = PromptContextAssembler.governanceTrace(
             chatMode: .strategist,
             currentUserInput: "I want to die.",
             globalMemory: "- Alex is a solo founder.",
@@ -500,7 +696,7 @@ final class RAGPipelineTests: XCTestCase {
             updatedAt: now.addingTimeInterval(-60 * 86_400)
         )
 
-        let trace = ChatViewModel.governanceTrace(
+        let trace = PromptContextAssembler.governanceTrace(
             chatMode: .strategist,
             currentUserInput: "I am thinking about applying to YC now.",
             globalMemory: nil,
@@ -516,8 +712,87 @@ final class RAGPipelineTests: XCTestCase {
         XCTAssertTrue(trace.promptLayers.contains("long_gap_bridge_guidance"))
     }
 
+    func testGovernanceTraceUsesFilteredCitationsAfterMemoryEvidenceCoversSource() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let oldNode = NousNode(
+            type: .note,
+            title: "Memory source already covered",
+            content: "This source is already represented by memory evidence.",
+            createdAt: now.addingTimeInterval(-80 * 86_400),
+            updatedAt: now.addingTimeInterval(-80 * 86_400)
+        )
+
+        let trace = PromptContextAssembler.governanceTrace(
+            currentUserInput: "Does this connect to what I said before?",
+            globalMemory: nil,
+            memoryEvidence: [
+                MemoryEvidenceSnippet(
+                    label: "Project context",
+                    sourceNodeId: oldNode.id,
+                    sourceTitle: oldNode.title,
+                    snippet: "The evidence already carries this source."
+                )
+            ],
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [SearchResult(node: oldNode, similarity: 0.75, lane: .longGap)],
+            projectGoal: nil,
+            now: now
+        )
+
+        XCTAssertTrue(trace.promptLayers.contains("memory_evidence"))
+        XCTAssertFalse(trace.promptLayers.contains("citations"))
+        XCTAssertFalse(trace.promptLayers.contains("long_gap_bridge_guidance"))
+    }
+
+    func testGovernanceTraceOmitsUserModelLayerWhenOnlyPromptUserModelGoalDuplicatesProjectGoal() {
+        let trace = PromptContextAssembler.governanceTrace(
+            globalMemory: nil,
+            userModel: UserModel(
+                identity: [],
+                goals: ["Ship memory jurisdiction"],
+                workStyle: [],
+                memoryBoundary: []
+            ),
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: "Ship memory jurisdiction"
+        )
+
+        XCTAssertTrue(trace.promptLayers.contains("project_goal"))
+        XCTAssertFalse(trace.promptLayers.contains("user_model"))
+    }
+
+    func testGovernanceTraceUsesFilteredMemoryEvidenceAndRecents() {
+        let trace = PromptContextAssembler.governanceTrace(
+            globalMemory: nil,
+            memoryEvidence: [
+                MemoryEvidenceSnippet(
+                    label: "Project context",
+                    sourceNodeId: UUID(),
+                    sourceTitle: "Memory architecture",
+                    snippet: "Jurisdiction should prevent duplicate memory claims."
+                )
+            ],
+            projectMemory: "- Jurisdiction should prevent duplicate memory claims.",
+            conversationMemory: "- Current chat is about memory jurisdiction.",
+            recentConversations: [("Duplicate current chat", "- Current chat is about memory jurisdiction.")],
+            citations: [],
+            projectGoal: nil
+        )
+
+        XCTAssertTrue(trace.promptLayers.contains("project_memory"))
+        XCTAssertTrue(trace.promptLayers.contains("conversation_memory"))
+        XCTAssertFalse(trace.promptLayers.contains("memory_evidence"))
+        XCTAssertFalse(trace.evidenceAttached)
+        XCTAssertFalse(trace.promptLayers.contains("recent_conversations"))
+    }
+
     func testGovernanceTraceIncludesStoicGroundingLayer() {
-        let trace = ChatViewModel.governanceTrace(
+        let trace = PromptContextAssembler.governanceTrace(
             globalMemory: nil,
             projectMemory: nil,
             conversationMemory: nil,
@@ -530,7 +805,7 @@ final class RAGPipelineTests: XCTestCase {
     }
 
     func testAssembleContextIncludesIdentityFacetWhenGlobalMemoryIsEmpty() {
-        let context = ChatViewModel.assembleContext(
+        let context = PromptContextAssembler.assembleContext(
             globalMemory: nil,
             userModel: UserModel(
                 identity: ["Alex is a solo founder."],
@@ -550,7 +825,7 @@ final class RAGPipelineTests: XCTestCase {
     }
 
     func testInteractiveClarificationInstructionsAppearOnlyWhenEnabled() {
-        let enabled = ChatViewModel.assembleContext(
+        let enabled = PromptContextAssembler.assembleContext(
             globalMemory: nil,
             projectMemory: nil,
             conversationMemory: nil,
@@ -560,7 +835,7 @@ final class RAGPipelineTests: XCTestCase {
             activeQuickActionMode: .direction,
             allowInteractiveClarification: true
         ).combined
-        let disabled = ChatViewModel.assembleContext(
+        let disabled = PromptContextAssembler.assembleContext(
             globalMemory: nil,
             projectMemory: nil,
             conversationMemory: nil,
@@ -591,31 +866,31 @@ final class RAGPipelineTests: XCTestCase {
         ]
 
         XCTAssertTrue(
-            ChatViewModel.shouldAllowInteractiveClarification(
+            TurnInteractionPolicy.shouldAllowInteractiveClarification(
                 activeQuickActionMode: .plan,
                 messages: firstReply
             )
         )
         XCTAssertFalse(
-            ChatViewModel.shouldAllowInteractiveClarification(
+            TurnInteractionPolicy.shouldAllowInteractiveClarification(
                 activeQuickActionMode: .plan,
                 messages: secondReply
             )
         )
         XCTAssertFalse(
-            ChatViewModel.shouldAllowInteractiveClarification(
+            TurnInteractionPolicy.shouldAllowInteractiveClarification(
                 activeQuickActionMode: .direction,
                 messages: firstReply
             )
         )
         XCTAssertFalse(
-            ChatViewModel.shouldAllowInteractiveClarification(
+            TurnInteractionPolicy.shouldAllowInteractiveClarification(
                 activeQuickActionMode: .brainstorm,
                 messages: firstReply
             )
         )
         XCTAssertFalse(
-            ChatViewModel.shouldAllowInteractiveClarification(
+            TurnInteractionPolicy.shouldAllowInteractiveClarification(
                 activeQuickActionMode: nil,
                 messages: firstReply
             )
@@ -643,7 +918,7 @@ final class RAGPipelineTests: XCTestCase {
         // distinctions are now made by the agent's contextAddendum, not the directive.
         // These assertions still hold with turnIndex chosen to match expected outcome.
         XCTAssertEqual(
-            ChatViewModel.updatedQuickActionMode(
+            TurnInteractionPolicy.updatedQuickActionMode(
                 currentMode: .direction,
                 assistantContent: clarificationReply,
                 turnIndex: 0
@@ -651,7 +926,7 @@ final class RAGPipelineTests: XCTestCase {
             .direction
         )
         XCTAssertEqual(
-            ChatViewModel.updatedQuickActionMode(
+            TurnInteractionPolicy.updatedQuickActionMode(
                 currentMode: .direction,
                 assistantContent: understandingQuestion,
                 turnIndex: 0
@@ -659,7 +934,7 @@ final class RAGPipelineTests: XCTestCase {
             .direction
         )
         XCTAssertNil(
-            ChatViewModel.updatedQuickActionMode(
+            TurnInteractionPolicy.updatedQuickActionMode(
                 currentMode: .direction,
                 assistantContent: normalReply,
                 turnIndex: 1
@@ -678,7 +953,7 @@ final class RAGPipelineTests: XCTestCase {
     }
 
     func testAssembleContextIncludesChatFormatPolicyForQuickActionModes() {
-        let context = ChatViewModel.assembleContext(
+        let context = PromptContextAssembler.assembleContext(
             globalMemory: nil,
             projectMemory: nil,
             conversationMemory: nil,
@@ -700,7 +975,7 @@ final class RAGPipelineTests: XCTestCase {
     }
 
     func testAssembleContextOmitsChatFormatPolicyInNormalChat() {
-        let context = ChatViewModel.assembleContext(
+        let context = PromptContextAssembler.assembleContext(
             globalMemory: nil,
             projectMemory: nil,
             conversationMemory: nil,

@@ -23,7 +23,8 @@ final class TurnExecutor {
 
     func execute(
         plan: TurnPlan,
-        sink: TurnSequencedEventSink
+        sink: TurnSequencedEventSink,
+        captureThinking: Bool = true
     ) async throws -> TurnExecutionResult? {
         guard let latestMessage = plan.transcriptMessages.last, latestMessage.role == "user" else {
             throw TurnExecutionFailure.invalidPlan(
@@ -62,7 +63,7 @@ final class TurnExecutor {
                 from: configuredGeminiService(from: llm, cacheEntry: resolvedCacheEntry),
                 sink: sink,
                 state: state,
-                captureThinking: true,
+                captureThinking: captureThinking,
                 cacheableSystemPrefix: resolvedCacheEntry == nil ? plan.turnSlice.stable : nil
             ).generate(
                 messages: requestMessages,
@@ -93,7 +94,7 @@ final class TurnExecutor {
             streamedText = "(I ran out of thinking budget on that one. Try asking again, maybe a touch simpler.)"
         }
         let persistedThinking: String?
-        if shouldPersistAssistantThinking() {
+        if captureThinking && shouldPersistAssistantThinking() {
             persistedThinking = await state.persistedThinking
         } else {
             persistedThinking = nil

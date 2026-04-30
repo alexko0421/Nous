@@ -263,7 +263,7 @@ final class SkillIntegrationTests: XCTestCase {
             nodeStore: nodeStore,
             vectorStore: VectorStore(nodeStore: nodeStore),
             embeddingService: EmbeddingService(),
-            memoryProjectionService: MemoryProjectionService(core: core),
+            memoryProjectionService: MemoryProjectionService(nodeStore: nodeStore),
             contradictionMemoryService: ContradictionMemoryService(core: core),
             currentProviderProvider: { .gemini },
             judgeLLMServiceFactory: { nil },

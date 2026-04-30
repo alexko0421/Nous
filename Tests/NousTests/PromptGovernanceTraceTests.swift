@@ -53,7 +53,7 @@ final class PromptGovernanceTraceTests: XCTestCase {
             reason: "explicit direction cue"
         )
 
-        let trace = ChatViewModel.governanceTrace(
+        let trace = PromptContextAssembler.governanceTrace(
             globalMemory: nil,
             projectMemory: nil,
             conversationMemory: nil,

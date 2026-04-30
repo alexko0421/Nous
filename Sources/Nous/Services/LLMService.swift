@@ -339,6 +339,7 @@ struct OpenAILLMService: LLMService {
 struct OpenRouterLLMService: LLMService {
     let apiKey: String
     var model: String = "anthropic/claude-sonnet-4.6"
+    var webSearchEnabled: Bool = false
     var reasoningBudgetTokens: Int? = nil
     var onThinkingDelta: ThinkingDeltaHandler? = nil
 
@@ -351,23 +352,13 @@ struct OpenRouterLLMService: LLMService {
         request.setValue("https://nous.app", forHTTPHeaderField: "HTTP-Referer")
         request.setValue("Nous", forHTTPHeaderField: "X-Title")
 
-        var allMessages: [[String: String]] = []
-        if let system {
-            allMessages.append(["role": "system", "content": system])
-        }
-        allMessages.append(contentsOf: messages.map { ["role": $0.role, "content": $0.content] })
-
-        let body: [String: Any] = [
-            "model": model,
-            "stream": true,
-            "messages": allMessages
-        ]
-        var requestBody = body
-        if let reasoningBudgetTokens {
-            requestBody["reasoning"] = [
-                "max_tokens": reasoningBudgetTokens
-            ]
-        }
+        let requestBody = try Self.buildStreamingRequestBody(
+            model: model,
+            system: system,
+            messages: messages,
+            includeWebSearch: webSearchEnabled,
+            reasoningBudgetTokens: reasoningBudgetTokens
+        )
 
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
         let capturedOnThinkingDelta = onThinkingDelta
@@ -434,7 +425,8 @@ extension OpenRouterLLMService: ToolCallingLLMService {
             system: system,
             messages: messages,
             tools: tools,
-            allowToolCalls: allowToolCalls
+            allowToolCalls: allowToolCalls,
+            includeWebSearch: webSearchEnabled
         )
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
 
@@ -453,14 +445,61 @@ extension OpenRouterLLMService: ToolCallingLLMService {
         system: String,
         messages: [AgentLoopMessage],
         tools: [AgentToolDeclaration],
-        allowToolCalls: Bool
+        allowToolCalls: Bool,
+        includeWebSearch: Bool = false
     ) throws -> [String: Any] {
-        [
+        var serializedTools = try Self.serializeToolDeclarations(tools)
+        if includeWebSearch {
+            serializedTools.append(Self.webSearchServerTool())
+        }
+
+        return [
             "model": model,
             "stream": false,
             "messages": Self.serializeAgentMessages(system: system, messages: messages),
-            "tools": try Self.serializeToolDeclarations(tools),
+            "tools": serializedTools,
             "tool_choice": allowToolCalls ? "auto" : "none"
+        ]
+    }
+
+    static func buildStreamingRequestBody(
+        model: String,
+        system: String?,
+        messages: [LLMMessage],
+        includeWebSearch: Bool,
+        reasoningBudgetTokens: Int? = nil
+    ) throws -> [String: Any] {
+        var allMessages: [[String: String]] = []
+        if let system {
+            allMessages.append(["role": "system", "content": system])
+        }
+        allMessages.append(contentsOf: messages.map { ["role": $0.role, "content": $0.content] })
+
+        var requestBody: [String: Any] = [
+            "model": model,
+            "stream": true,
+            "messages": allMessages
+        ]
+        if includeWebSearch {
+            requestBody["tools"] = [Self.webSearchServerTool()]
+        }
+        if let reasoningBudgetTokens {
+            requestBody["reasoning"] = [
+                "max_tokens": reasoningBudgetTokens
+            ]
+        }
+        return requestBody
+    }
+
+    static func webSearchServerTool() -> [String: Any] {
+        [
+            "type": "openrouter:web_search",
+            "parameters": [
+                "engine": "auto",
+                "max_results": 5,
+                "max_total_results": 10,
+                "search_context_size": "low"
+            ]
         ]
     }
 

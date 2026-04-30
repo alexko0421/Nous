@@ -7,10 +7,11 @@ struct TurnOutcomeFactory: Sendable {
     init(
         shouldPersistMemory: @escaping @Sendable ([Message], UUID?) -> Bool,
         resolveNextQuickActionMode: @escaping @Sendable (QuickActionMode?, String, Int) -> QuickActionMode? = { currentMode, assistantContent, turnIndex in
-            guard let currentMode else { return nil }
-            let parsed = ClarificationCardParser.parse(assistantContent)
-            let directive = currentMode.agent().turnDirective(parsed: parsed, turnIndex: turnIndex)
-            return directive == .keepActive ? currentMode : nil
+            TurnInteractionPolicy.updatedQuickActionMode(
+                currentMode: currentMode,
+                assistantContent: assistantContent,
+                turnIndex: turnIndex
+            )
         }
     ) {
         self.shouldPersistMemory = shouldPersistMemory
