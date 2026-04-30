@@ -1,7 +1,7 @@
-# SkillStore Lazy-Load — Mode-Scoped, Conversation-Sticky Index Design (v2)
+# SkillStore Lazy-Load — Mode-Scoped, Conversation-Sticky Index Design (v3)
 
 **Date:** 2026-04-29
-**Status:** P1 of a 5-tier Hermes-inspired memory upgrade roadmap. Revised v2 addressing Codex review findings (4 × P1, 6 × P2). Builds on Phase 2.1 SkillStore (shipped 2026-04-28).
+**Status:** P1 of a 5-tier Hermes-inspired memory upgrade roadmap. v2 addressed first round of Codex findings (10 of 10 cleared); v3 addresses second round (4 × P1 + 2 × P2 about implementation-layer correctness: agent loop reachability, INDEX-validation in `loadSkill`, transaction discipline, tool-call path serialization, `TurnSystemSlice` backward compat, INDEX tiebreaker). Builds on Phase 2.1 SkillStore (shipped 2026-04-28).
 **Branch context:** Builds on `alexko0421/quick-action-agents`.
 **Author:** Alex Ko, with assistance.
 
@@ -58,17 +58,38 @@ let registry = AgentToolRegistry.standard(...)  // full set, no subset call
 
 The `loadSkill` tool (this spec) joins the registry permanently and is callable in all modes. Internal validation: `loadSkill` returns `not_applicable` when no skill index is rendered (i.e., when no `activeQuickActionMode` is present).
 
-### Invariant 2 — SKILL INDEX renders only when `activeQuickActionMode != nil`
+#### Invariant 1.a — Every QuickActionAgent enters the agent loop
+
+Currently `ChatTurnRunner.swift:141-143` only enters the agent loop when `mode.agent().useAgentLoop == true`, and `useAgentLoop` derives from a non-empty pre-existing `toolNames` (`QuickActionAgent.swift:30-44`). For modes whose agent has no other tools, `useAgentLoop` is false and `loadSkill` is unreachable even after registering it always-on.
+
+**Required change**: `useAgentLoop` must return `true` for **every** `QuickActionAgent` in P1. Rationale: `loadSkill` is universally available in any quick-action mode, so the agent loop must run on every quick-action turn so the model has the chance to call it. If the model issues no tool call, the loop terminates after one inference — same cost as the non-agent path. This is a deliberate latency cost paid for cache correctness.
+
+Modes without an `activeQuickActionMode` (default companion / strategist chat) keep their existing non-agent path; nothing in this spec applies there.
+
+### Invariant 2 — SKILL INDEX renders only when `activeQuickActionMode != nil`, and `loadSkill` validates against current INDEX before mutating state
 
 `SkillMatcher.matchingSkills(...)` (`SkillMatcher.swift:22`) returns `[]` when `context.mode == nil`. The `PromptContextAssembler` always has a `ChatMode` but may have `activeQuickActionMode == nil` (default companion / strategist chat without a quick action chip).
 
-In v2, "current mode" for skill matching = `activeQuickActionMode`. When it is nil:
+In P1, "current mode" for skill matching = `activeQuickActionMode`. When it is nil:
 
 - `SKILL INDEX` section is omitted entirely.
 - `ACTIVE SKILLS` section still renders if any skills were loaded earlier this conversation under any mode (sticky persists; see Invariant 3).
-- `loadSkill` tool returns `not_applicable` if invoked in this state (model should never invoke it without an INDEX).
+- `loadSkill` tool returns `not_applicable` if invoked in this state.
 
-This makes `loadSkill` proactively useful only in chip-tap modes, matching today's `QuickActionAddendumResolver` semantics.
+#### Invariant 2.a — `loadSkill` handler validates id is in current INDEX before persisting
+
+Without this validation, the model could `loadSkill(id: <any-active-skill-uuid>)` and persist a load that was never offered in the current mode's index — defeating the spec's mode-scoped INDEX discipline.
+
+`LoadSkillToolHandler.execute` runs these checks **in order** before invoking `SkillStore.markSkillLoaded`:
+
+1. If `activeQuickActionMode == nil` → return `not_applicable`.
+2. Compute `loadedIDs = Set(SkillStore.loadedSkills(in: conversationID).map(\.skillID))`. If `id ∈ loadedIDs` → return `already_loaded` immediately (no mode check; sticky is cross-mode by design, Invariant 3).
+3. Compute `eligibleIDs = Set(SkillMatcher.matchingSkills(from: fetchActiveSkills(...), context: SkillMatchContext(mode: activeQuickActionMode, ...), cap: 5).map(\.id))`. If `id ∉ eligibleIDs` → return `not_in_current_index` error with the eligible `id|name` pairs as `available`.
+4. Call `SkillStore.markSkillLoaded(skillID: id, in: conversationID, at: now)` and translate the `MarkSkillLoadedResult` to the tool response shape.
+
+Order matters: step 2 (already-loaded short-circuit) precedes step 3 (mode check) so already-loaded skills do not get rejected after a mode switch.
+
+This makes `loadSkill` proactively useful only in chip-tap modes, matching today's `QuickActionAddendumResolver` semantics, and prevents UUID-fishing across the user's entire skill library.
 
 ### Invariant 3 — Loaded skill content is snapshotted, not joined-by-FK
 
@@ -86,9 +107,14 @@ This is the only way to honor the spec's "loaded skills do not disappear mid-con
 - New `SystemPromptBlock` abstraction in `TurnContracts` to carry block-structured system content with cache breakpoints.
 - `PromptContextAssembler` rewrite to emit `[SystemPromptBlock]` instead of `stable: String + volatile: String`.
 - `LLMService` rewrite to honor block-structured system content and emit `cache_control: ephemeral` markers at the right boundaries for OpenRouter / Anthropic.
-- New `loadSkill` tool registered always-on with id-based parameter, prompt-injection wrapper for returned content, and structured error for all failure modes.
+- New `loadSkill` tool registered always-on with id-based parameter, prompt-injection wrapper for returned content, and structured error for all failure modes including `not_in_current_index`.
+- New `LoadSkillToolHandler` performing 4-step validation (`not_applicable` → `already_loaded` short-circuit → INDEX-membership check → `markSkillLoaded`) before any state mutation. Mode-scoped INDEX discipline is enforced at the handler boundary, not just in rendering.
+- `QuickActionAgent.useAgentLoop` returns `true` for every quick-action mode (so `loadSkill` is reachable; without this the registry change in `ChatViewModel` is dead weight in modes that previously had no tools).
 - Removal of `.subset(mode.agent().toolNames)` in `ChatViewModel` — full registry registered always, individual tools validate mode internally.
 - Removal of the full-injection path in `QuickActionAddendumResolver` (line 71) AND the matched-skill tracker fire (line 64–69) — the latter is replaced by `markSkillLoaded`-driven `fired_count` semantics.
+- `SkillStore.incrementFiredCount` split into public (transaction-opening) and internal `_incrementFiredCount` (transaction-internal) variants to avoid `NSLock` self-deadlock when called from `markSkillLoaded`.
+- `TurnSystemSlice` backward-compat: `combinedString`, `stable` (cache-marked blocks only), `volatile` (unmarked tail) properties preserve existing call sites in `ChatTurnRunner`, `TurnExecutor`, `QuickActionOpeningRunner`.
+- `LLMService` cache-block emission on **both** call paths: non-tool (`callWithoutTools`) and tool (`callWithTools`). The tool path is the one `loadSkill` actually runs through; if only the non-tool path is updated, every loadSkill turn loses the cache.
 - Build-time backfill script (Gemini 2.5 Pro) for `useWhen` field on existing seed skills.
 - Unit, integration, and cache-wire-format tests, co-located with each implementation step.
 
@@ -210,10 +236,37 @@ Semantics:
   1. Fetch skill from `skills`. If not found → `.missingSkill`.
   2. If `state ∈ {retired, disabled}` → `.unavailable(state)` and do NOT insert.
   3. Else: `INSERT OR IGNORE` into `conversation_loaded_skills` with snapshot columns. Use `db.changes()` to detect actual insert.
-  4. If row was newly inserted: call `incrementFiredCount(id: skillID, firedAt: at)`. Return `.inserted(loadedSkill)`.
+  4. If row was newly inserted: call the **internal** `_incrementFiredCount(id:firedAt:)` helper (see "Transaction discipline" below). Return `.inserted(loadedSkill)`.
   5. Else: row pre-existed. Return `.alreadyLoaded(existingLoadedSkill)` without incrementing fired_count.
 - All steps run in a single `nodeStore.inTransaction { ... }` block.
 - `unloadAllSkills(in:)` is a debug API. No user-facing UI in P1.
+
+#### Transaction discipline (avoid nested-lock deadlock)
+
+`NodeStore.inTransaction` (`NodeStore.swift:828-839`) uses a non-recursive `NSLock`. The current public `incrementFiredCount(id:firedAt:)` (`SkillStore.swift:126-138`) opens its own `inTransaction` block. Calling it from inside `markSkillLoaded`'s transaction would self-deadlock.
+
+**Required change to SkillStore**: split `incrementFiredCount` into two methods:
+
+```swift
+// Public — used by external callers (none in P1; reserved for future use)
+func incrementFiredCount(id: UUID, firedAt: Date) throws {
+    try nodeStore.inTransaction {
+        try _incrementFiredCount(id: id, firedAt: firedAt)
+    }
+}
+
+// Internal — caller MUST already hold the transaction lock
+private func _incrementFiredCount(id: UUID, firedAt: Date) throws {
+    let stmt = try database.prepare(
+        "UPDATE skills SET fired_count = fired_count + 1, last_fired_at = ? WHERE id = ?;"
+    )
+    try stmt.bind(firedAt.timeIntervalSince1970, at: 1)
+    try stmt.bind(id.uuidString, at: 2)
+    try stmt.step()
+}
+```
+
+`markSkillLoaded` uses `_incrementFiredCount` from inside its outer `inTransaction`. The public `incrementFiredCount` is preserved for protocol compatibility but is unused in P1.
 
 ### `SkillMatcher` (unchanged)
 
@@ -278,14 +331,15 @@ The model is instructed via tool description to pass the id (UUID-like substring
 
 ### Tool result contract
 
-| Outcome | `MarkSkillLoadedResult` | Tool response shape |
+| Outcome | `MarkSkillLoadedResult` / handler step | Tool response shape |
 |---|---|---|
-| Newly loaded | `.inserted` | `{"status": "loaded", "id": "...", "name": "...", "content": "<<skill source=user>>...<<end-skill>>"}` |
-| Already loaded (idempotent) | `.alreadyLoaded` | `{"status": "already_loaded", "id": "...", "name": "..."}` |
-| Id not in skills table | `.missingSkill` | `{"status": "error", "code": "not_found", "available": [{"id":"...","name":"..."}]}` |
-| Skill retired or disabled | `.unavailable` | `{"status": "error", "code": "unavailable", "reason": "retired"}` (or `"disabled"`) |
-| No INDEX this turn | (validation step) | `{"status": "error", "code": "not_applicable", "reason": "..."}` |
-| Internal failure (DB error) | (caught) | `{"status": "error", "code": "internal", "retry": true}` |
+| Newly loaded | `.inserted` (handler step 4 → markSkillLoaded) | `{"status": "loaded", "id": "...", "name": "...", "content": "<<skill source=user>>...<<end-skill>>"}` |
+| Already loaded (idempotent) | handler step 2 (short-circuit before mode check) | `{"status": "already_loaded", "id": "...", "name": "..."}` |
+| Id not in current mode's INDEX | handler step 3 (validation, before markSkillLoaded) | `{"status": "error", "code": "not_in_current_index", "available": [{"id":"...","name":"..."}]}` |
+| Id not in skills table | `.missingSkill` (handler step 4) | `{"status": "error", "code": "not_found", "available": [{"id":"...","name":"..."}]}` |
+| Skill retired or disabled | `.unavailable` (handler step 4) | `{"status": "error", "code": "unavailable", "reason": "retired"}` (or `"disabled"`) |
+| No INDEX this turn | handler step 1 | `{"status": "error", "code": "not_applicable", "reason": "..."}` |
+| Internal failure (DB error) | (caught anywhere) | `{"status": "error", "code": "internal", "retry": true}` |
 
 `already_loaded` is intentionally not an error — the model occasionally misjudges and we don't want to surface false negatives.
 
@@ -324,8 +378,32 @@ enum CacheControlMarker: Equatable {
 struct TurnSystemSlice: Equatable {
     let blocks: [SystemPromptBlock]
 
+    /// Full concatenation of all blocks (cache-marked + volatile). Used by
+    /// non-block-aware code paths that still want a single string.
     var combinedString: String {
         blocks.map(\.content).filter { !$0.isEmpty }.joined(separator: "\n\n")
+    }
+
+    /// Backward-compat: concatenation of cache-marked blocks only (Block 1
+    /// through 3b). Replaces the prior `stable: String` field consumed by
+    /// `ChatTurnRunner` (Gemini cache refresh hook), `TurnExecutor`, and
+    /// `QuickActionOpeningRunner`.
+    var stable: String {
+        blocks
+            .filter { $0.cacheControl != nil }
+            .map(\.content)
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
+    }
+
+    /// Backward-compat: the unmarked tail (everything after the last cache
+    /// marker). Replaces the prior `volatile: String` field.
+    var volatile: String {
+        blocks
+            .filter { $0.cacheControl == nil }
+            .map(\.content)
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
     }
 }
 ```
@@ -411,8 +489,8 @@ and the user's current intent.
 
 Required for cache stability:
 
-- ACTIVE order: `loaded_at ASC` (new entries append; never re-sort).
-- INDEX order: `priority DESC, name ASC` (deterministic per mode).
+- ACTIVE order: `loaded_at ASC, skill_id ASC` (new entries append; tie-break on UUID for the rare same-millisecond load case; never re-sort).
+- INDEX order: `priority DESC, name ASC, id.uuidString ASC` (deterministic per mode; the UUID tiebreaker mirrors `SkillMatcher.swift:45-51` and is necessary because `payload.name` is not unique in the schema).
 - No timestamps in rendered text. No counters. No per-turn-derived fields anywhere in Blocks 1–3b.
 
 ## Cache strategy
@@ -452,7 +530,8 @@ Fallback: cache is an optimization, not a correctness guarantee. Wire-format tes
 | `Sources/Nous/Services/SkillMatcher.swift` | No protocol change |
 | `Sources/Nous/Models/TurnContracts.swift` | Replace `TurnSystemSlice {stable, volatile}` with block-structured `[SystemPromptBlock]`. Add `SystemPromptBlock`, `BlockID`, `CacheControlMarker` types. Provide `combinedString` for backward compatibility. |
 | `Sources/Nous/Services/PromptContextAssembler.swift` | Emit `[SystemPromptBlock]`. Add `renderActiveSkills()` (queries `SkillStore.loadedSkills(in:)`) and `renderSkillIndex()` (queries `SkillMatcher.matchingSkills(...)` + filters by loaded ids). INDEX renders only when `activeQuickActionMode != nil`. |
-| `Sources/Nous/Services/LLMService.swift` | Update OpenRouter request builder to consume `[SystemPromptBlock]` and emit per-block `cache_control` markers in the system array. Register `loadSkill` tool always-on. Route `loadSkill` tool calls to a new `LoadSkillToolHandler` that calls `SkillStore.markSkillLoaded` and formats the result per the contract. |
+| `Sources/Nous/Services/LLMService.swift` | Update **both** the non-tool path (`callWithoutTools`) AND the tool-call path (`callWithTools`, lines 469–487 / 543–550) to consume `[SystemPromptBlock]` and emit per-block `cache_control` markers in the system array. The tool-call path is the one `loadSkill` actually runs through (via `AgentLoopExecutor.swift:60-64`); without this update the cache claims hold only for non-tool turns. Register `loadSkill` tool always-on. Route `loadSkill` tool calls to a new `LoadSkillToolHandler` that performs the 4-step validation flow (Invariant 2.a) and formats the result per the contract. |
+| `Sources/Nous/Models/Agents/QuickActionAgent.swift` | `useAgentLoop` returns `true` for **every** `QuickActionAgent` (Invariant 1.a). Without this, `loadSkill` is unreachable in modes whose agent has no other tools. |
 | `Sources/Nous/ViewModels/ChatViewModel.swift` | Remove `.subset(mode.agent().toolNames)` at line 115; pass full `AgentToolRegistry.standard(...)` instead. Each tool's `execute` validates mode internally. |
 | `Sources/Nous/Services/QuickActionAddendumResolver.swift` | Delete `Task.detached { skillTracker.recordFire(...) }` block (lines 64–69). Delete `matched.map { $0.payload.action.content }.joined(...)` (line 71); the resolver now returns the agent addendum text only. |
 | Mode-specific tool implementations (e.g., plan-mode tools) | Add internal mode validation: `guard context.activeQuickActionMode == .plan else { return .error(.wrongMode) }`. |
@@ -549,8 +628,10 @@ PromptContextAssemblerLazyLoadTests:
 
 ```
 LoadSkillToolHandlerTests:
-  - tool_returnsLoaded_whenSkillFreshlyLoaded
+  - tool_returnsLoaded_whenSkillFreshlyLoadedAndInCurrentIndex
   - tool_returnsAlreadyLoaded_whenDuplicateCall
+  - tool_returnsAlreadyLoaded_shortCircuitsBeforeIndexCheck (preserves cross-mode sticky)
+  - tool_returnsNotInCurrentIndex_whenIdValidButOutsideCurrentMode_withAvailableList
   - tool_returnsNotFound_withAvailableIdNamePairs_onUnknownId
   - tool_returnsUnavailable_onRetiredSkill
   - tool_returnsUnavailable_onDisabledSkill
@@ -561,6 +642,7 @@ LoadSkillToolHandlerTests:
 ToolRegistryStabilityTests:
   - registry_isByteIdenticalAcrossModeSwitches
   - perModeTool_returnsWrongMode_whenInvokedOutsideValidMode
+  - quickActionAgent_useAgentLoopReturnsTrueForAllModes
 ```
 
 ### Step 5 (cleanup) tests — co-locate with QuickActionAddendumResolver changes
@@ -582,20 +664,26 @@ QuickActionAddendumResolverTests:
 5. Turn 2: assert ACTIVE renders direction-skeleton from snapshot; INDEX excludes it.
 6. Switch to `activeQuickActionMode == .brainstorm`.
 7. Turn 3: assert ACTIVE still renders direction-skeleton (cross-mode persistence); INDEX shows brainstorm-mode matched skills.
-8. Re-call `loadSkill(id: <direction-skeleton.id>)` → assert `already_loaded` returned, no duplicate row, no extra `fired_count` increment.
-9. Hard-delete direction-skeleton from `skills`. Re-render Turn 4: assert ACTIVE still renders direction-skeleton from snapshot.
-10. Switch `activeQuickActionMode = nil` (drop quick action). Assert INDEX absent; ACTIVE still renders.
+8. Re-call `loadSkill(id: <direction-skeleton.id>)` → assert `already_loaded` returned (short-circuit before mode check; preserves cross-mode sticky), no duplicate row, no extra `fired_count` increment.
+9. **Mode-scope rejection**: in brainstorm mode, attempt `loadSkill(id: <some-direction-only-skill-not-yet-loaded>)`. Assert tool returns `not_in_current_index` with `available` list of brainstorm-mode skills; `conversation_loaded_skills` unchanged; `fired_count` unchanged.
+10. Hard-delete direction-skeleton from `skills`. Re-render Turn 4: assert ACTIVE still renders direction-skeleton from snapshot.
+11. Switch `activeQuickActionMode = nil` (drop quick action). Assert INDEX absent; ACTIVE still renders.
+12. With `activeQuickActionMode == nil`, attempt `loadSkill(id: <any>)`. Assert tool returns `not_applicable`; no state mutation.
 
 ### Cache wire-format tests
 
-`testCacheWireFormat`:
+`testCacheWireFormat_nonToolPath`:
 
-- 4 `cache_control` markers placed at correct positions when all blocks present.
+- 4 `cache_control` markers placed at correct positions when all blocks present (`callWithoutTools` path).
 - Block 3a omitted from system array (no marker) when no loaded skills exist.
 - Block 3b omitted from system array (no marker) when `activeQuickActionMode == nil`.
 - Adding a loaded skill: Block 1 + Block 2 byte-identical to pre-load.
 - Mode switch: Block 1 + Block 2 + Block 3a byte-identical (only Block 3b changes).
 - Tool list (`tools` array in request) byte-identical across mode switches.
+
+`testCacheWireFormat_toolCallPath`:
+
+- Same assertions as above, but for the `callWithTools` path. This is the path `loadSkill` actually traverses via `AgentLoopExecutor`. If the tool path serializes system as a single string (current behavior), the test fails — guards against the `LLMService.swift:543-550` regression codex flagged.
 
 ## Risks and mitigation
 
@@ -607,6 +695,9 @@ QuickActionAddendumResolverTests:
 | User perceives +1 round-trip on first skill load | Medium | Acceptable for Path B private use; first-turn UI hint deferred |
 | Skill content > 2K tokens bloats ACTIVE | Low | Existing seeds ~500 tokens; chunking deferred until observed |
 | **Mode-specific tools removed from subset; cross-mode invocation possible** | Medium | Each mode-specific tool's `execute` checks `activeQuickActionMode` and returns `wrongMode` error. Test coverage in `ToolRegistryStabilityTests`. |
+| **Model UUID-fishing across user's full skill library** | Medium | `LoadSkillToolHandler` validates id ∈ current mode's INDEX before mutating state (Invariant 2.a). Already-loaded short-circuit precedes mode check so cross-mode persistence still works. Test coverage in `LoadSkillToolHandlerTests`. |
+| **`incrementFiredCount` self-deadlock when called from `markSkillLoaded`** | High (would crash UI on every load) | Split into public + internal `_incrementFiredCount` variants. Internal helper assumes the lock is already held; public method opens its own transaction. Test coverage in `SkillStoreLazyLoadTests.markSkillLoaded_inserted_returnsInsertedAndIncrementsFiredCount` (the call would hang without the split). |
+| **Cache markers absent on tool-call turns (silent perf regression specific to loadSkill turns)** | Medium | LLMService update covers BOTH paths (non-tool and tool). Test coverage in cache wire-format tests. |
 | **Prompt injection via skill content** | Medium | `<<skill>>...<<end-skill>>` envelope on every tool result; system hint in INDEX header reinforces subordination to anchor. Path B trust model assumes Alex authors all skills. |
 | **Snapshot drift: ACTIVE shows old content after skill update** | Low | By design — sticky semantics. To "refresh" a loaded skill, user must `unloadAllSkills` + reload (debug only in P1). |
 | `cache_control` placement bug invalidates caching (silent perf regression) | Medium | `cacheControlMarkers_emittedAtFourBoundaries_activeBeforeIndex` test asserts wire format. Manual `cache_creation_input_tokens` spot-check first week. |
@@ -626,7 +717,7 @@ Tests 1, 2, and 6 must pass before merge (live-test on fresh conversations + man
 
 ## Comparison to Hermes
 
-| Dimension | Hermes | Nous P1 v2 | Reason for divergence |
+| Dimension | Hermes | Nous P1 | Reason for divergence |
 |---|---|---|---|
 | Index scope | All skills always | Mode-matched only | Per-mode-not-per-reply principle |
 | Index format | name + description | + `useWhen` hint, id-based lookup | Reduce mis-loads; names not unique in Nous |
