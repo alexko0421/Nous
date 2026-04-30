@@ -124,7 +124,8 @@ final class NodeStore {
                 role             TEXT NOT NULL,
                 content          TEXT NOT NULL,
                 timestamp        REAL NOT NULL,
-                thinking_content TEXT
+                thinking_content TEXT,
+                source           TEXT NOT NULL DEFAULT 'typed'
             );
         """)
 
@@ -138,6 +139,12 @@ final class NodeStore {
             table: "messages",
             column: "agent_trace_json",
             alterSQL: "ALTER TABLE messages ADD COLUMN agent_trace_json TEXT;"
+        )
+
+        try ensureColumnExists(
+            table: "messages",
+            column: "source",
+            alterSQL: "ALTER TABLE messages ADD COLUMN source TEXT NOT NULL DEFAULT 'typed';"
         )
 
         try db.exec("""
