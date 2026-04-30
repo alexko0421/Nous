@@ -693,30 +693,52 @@ struct MessageBubble: View {
                 if isUser {
                     HStack {
                         Spacer(minLength: 60)
-                        VStack(alignment: .leading, spacing: userParagraphSpacing) {
-                            ForEach(Array(userParagraphTexts.enumerated()), id: \.offset) { _, paragraph in
-                                Text(paragraph)
-                                    .font(.system(size: 14, weight: .regular))
-                                    .foregroundColor(AppColor.colaDarkText)
-                                    .lineSpacing(6)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .textSelection(.enabled)
+                        VStack(alignment: .trailing, spacing: 2) {
+                            VStack(alignment: .leading, spacing: userParagraphSpacing) {
+                                ForEach(Array(userParagraphTexts.enumerated()), id: \.offset) { _, paragraph in
+                                    Text(paragraph)
+                                        .font(.system(size: 14, weight: .regular))
+                                        .foregroundColor(AppColor.colaDarkText)
+                                        .lineSpacing(6)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .textSelection(.enabled)
+                                }
                             }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 12)
+                            .background(AppColor.colaBubble)
+                            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                            timestampRow
+                                .padding(.trailing, 4)
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                        .background(AppColor.colaBubble)
-                        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                         .frame(maxWidth: userBubbleMaxWidth, alignment: .trailing)
                     }
                 } else {
-                    HStack {
-                        AssistantBubbleContent(displayText: assistantDisplayText)
-                        Spacer(minLength: 0)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            AssistantBubbleContent(displayText: assistantDisplayText)
+                            Spacer(minLength: 0)
+                        }
+                        timestampRow
                     }
                 }
             }
         }
+    }
+
+    private var timestampRow: some View {
+        HStack(spacing: 4) {
+            Text(timestamp, style: .time)
+                .font(.system(size: 10, weight: .regular, design: .rounded))
+                .foregroundStyle(AppColor.secondaryText)
+            if source == .voice {
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(AppColor.colaOrange.opacity(0.6))
+                    .accessibilityLabel("Voice")
+            }
+        }
+        .padding(.top, 2)
     }
 
     private static func normalizedParagraphs(from text: String) -> [String] {
