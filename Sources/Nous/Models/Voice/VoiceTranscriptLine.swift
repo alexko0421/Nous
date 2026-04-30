@@ -34,19 +34,22 @@ struct VoiceTranscriptLine: Identifiable, Equatable, Codable {
         lines.append(VoiceTranscriptLine(role: role, text: delta, isFinal: false, createdAt: now))
     }
 
+    @discardableResult
     static func finalize(
         text: String,
         role: Role,
         into lines: inout [VoiceTranscriptLine],
         now: Date = Date()
-    ) {
+    ) -> VoiceTranscriptLine {
         if var last = lines.last, last.role == role, last.isFinal == false {
             last.text = text
             last.isFinal = true
             lines[lines.count - 1] = last
-            return
+            return last
         }
-        lines.append(VoiceTranscriptLine(role: role, text: text, isFinal: true, createdAt: now))
+        let newLine = VoiceTranscriptLine(role: role, text: text, isFinal: true, createdAt: now)
+        lines.append(newLine)
+        return newLine
     }
 
     static func bargeInSealsLatestAssistant(into lines: inout [VoiceTranscriptLine]) {
