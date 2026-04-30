@@ -27,6 +27,7 @@ struct AppDependencies {
     let galaxyRelationTelemetry: GalaxyRelationTelemetry
     let scratchPadStore: ScratchPadStore
     let voiceController: VoiceCommandController
+    let voiceTranscriptCommitter: VoiceTranscriptCommitter
     let settingsVM: SettingsViewModel
     let chatVM: ChatViewModel
     let noteVM: NoteViewModel
@@ -197,6 +198,10 @@ final class AppEnvironment {
             shouldUseGeminiHistoryCache: { settingsVM.geminiHistoryCacheEnabled },
             shouldPersistAssistantThinking: { settingsVM.assistantThinkingEnabled }
         )
+        let voiceTranscriptCommitter = VoiceTranscriptCommitter(
+            voiceController: voiceController,
+            chatViewModel: chatVM
+        )
         let noteVM = NoteViewModel(
             nodeStore: nodeStore,
             vectorStore: vectorStore,
@@ -253,6 +258,7 @@ final class AppEnvironment {
             galaxyRelationTelemetry: galaxyRelationTelemetry,
             scratchPadStore: scratchPadStore,
             voiceController: voiceController,
+            voiceTranscriptCommitter: voiceTranscriptCommitter,
             settingsVM: settingsVM,
             chatVM: chatVM,
             noteVM: noteVM,
