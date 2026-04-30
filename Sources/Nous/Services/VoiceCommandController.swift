@@ -53,6 +53,10 @@ final class VoiceCommandController {
         memoryContextProvider = provider
     }
 
+    func setConfiguration(_ configuration: RealtimeVoiceConfiguration) {
+        session.setConfiguration(configuration)
+    }
+
     func markListening() {
         isActive = true
         status = .listening

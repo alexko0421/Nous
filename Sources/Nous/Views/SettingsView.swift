@@ -24,6 +24,7 @@ struct SettingsView: View {
     let userMemoryService: UserMemoryService
     let telemetry: GovernanceTelemetryStore
     let galaxyRelationTelemetry: GalaxyRelationTelemetry
+    let shadowLearningStore: ShadowLearningStore
     var onBack: (() -> Void)? = nil
 
     @AppStorage("nous.username")   private var username       = "ALEX"
@@ -81,7 +82,8 @@ struct SettingsView: View {
                         skillStore: skillStore,
                         userMemoryService: userMemoryService,
                         telemetry: telemetry,
-                        galaxyRelationTelemetry: galaxyRelationTelemetry
+                        galaxyRelationTelemetry: galaxyRelationTelemetry,
+                        shadowLearningStore: shadowLearningStore
                     )
                 }
             }
@@ -228,6 +230,27 @@ struct SettingsView: View {
                     }
                 }
 
+                if vm.shouldShowSupplementalGeminiKeyField {
+                    settingsCard {
+                        sectionLabel("Gemini support key")
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Gemini API Key")
+                                .font(.system(size: 16, weight: .semibold, design: .rounded))
+                                .foregroundColor(AppColor.colaDarkText)
+                            Text("Used for judge checks and weekly reflections when your foreground chat uses another provider.")
+                                .font(.system(size: 13, design: .rounded))
+                                .foregroundColor(AppColor.secondaryText)
+                        }
+                        fieldShell {
+                            SecureField("Gemini API Key", text: $vm.geminiApiKey)
+                                .font(.system(size: 14, weight: .medium, design: .rounded))
+                                .foregroundColor(AppColor.colaDarkText)
+                                .onSubmit { vm.savePreferences() }
+                        }
+                        helperCopy("Leave empty to skip those Gemini-backed background checks.")
+                    }
+                }
+
                 settingsCard {
                     sectionLabel("Privacy-sensitive automation")
                     toggleRow(
@@ -240,6 +263,13 @@ struct SettingsView: View {
                         subtitle: "Allow launch-time chat-title repair and weekly reflections. With cloud providers, this can send existing chats to the active model. Off by default.",
                         isOn: preferenceBinding(\.backgroundAnalysisEnabled)
                     )
+                    if vm.selectedProvider == .openrouter {
+                        toggleRow(
+                            title: "OpenRouter web search",
+                            subtitle: "Allow OpenRouter to use its web search server tool for current facts such as prices, stock, laws, schedules, and product availability.",
+                            isOn: preferenceBinding(\.openRouterWebSearchEnabled)
+                        )
+                    }
                     toggleRow(
                         title: "Store assistant thinking",
                         subtitle: "Keep assistant reasoning traces in local chat history and Finder export. Turning this off clears previously stored thinking from SQLite. Off by default.",
@@ -290,7 +320,11 @@ struct SettingsView: View {
                             .foregroundColor(AppColor.colaDarkText)
                             .onSubmit { vm.savePreferences() }
                     }
-                    helperCopy("Gemini and OpenRouter keys do not start the realtime voice session.")
+                    VStack(alignment: .leading, spacing: 14) {
+                        voicePickerRow
+                        languagePickerRow
+                    }
+                    helperCopy("Gemini and OpenRouter keys do not start the realtime voice session. Voice changes apply to the next voice session.")
                 }
 
                 settingsCard {
@@ -407,6 +441,100 @@ struct SettingsView: View {
                 vm.savePreferences()
             }
         )
+    }
+
+    private var voiceOutputVoiceBinding: Binding<VoiceOutputVoice> {
+        Binding(
+            get: { vm.voiceOutputVoice },
+            set: { newValue in
+                vm.voiceOutputVoice = newValue
+                vm.savePreferences()
+            }
+        )
+    }
+
+    private var voiceLanguageBinding: Binding<VoiceLanguage> {
+        Binding(
+            get: { vm.voiceLanguage },
+            set: { newValue in
+                vm.voiceLanguage = newValue
+                vm.savePreferences()
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var voicePickerRow: some View {
+        HStack(alignment: .center, spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Voice")
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .foregroundColor(AppColor.colaDarkText)
+                Text("Choose how Nous sounds before starting Voice Mode.")
+                    .font(.system(size: 13, design: .rounded))
+                    .foregroundColor(AppColor.secondaryText)
+            }
+
+            Spacer()
+
+            Picker("Voice", selection: voiceOutputVoiceBinding) {
+                ForEach(VoiceOutputVoice.allCases) { voice in
+                    Text(voice.displayName).tag(voice)
+                }
+            }
+            .labelsHidden()
+            .frame(width: 132)
+
+            Button {
+                Task { await vm.previewSelectedVoice() }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: vm.isPreviewingVoice ? "waveform" : "play.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text(vm.isPreviewingVoice ? "Playing" : "Preview")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                }
+                .foregroundColor(.white)
+                .padding(.horizontal, 12)
+                .frame(height: 30)
+                .background(AppColor.colaOrange)
+                .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(vm.isPreviewingVoice || vm.openaiApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .opacity(vm.openaiApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.45 : 1)
+        }
+
+        if let voicePreviewError = vm.voicePreviewError {
+            Text(voicePreviewError)
+                .font(.system(size: 12, design: .rounded))
+                .foregroundColor(.red.opacity(0.85))
+        }
+    }
+
+    @ViewBuilder
+    private var languagePickerRow: some View {
+        HStack(alignment: .center, spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Language")
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .foregroundColor(AppColor.colaDarkText)
+                Text("Cantonese keeps Nous from drifting into Mandarin.")
+                    .font(.system(size: 13, design: .rounded))
+                    .foregroundColor(AppColor.secondaryText)
+            }
+
+            Spacer()
+
+            Picker("Language", selection: voiceLanguageBinding) {
+                ForEach(VoiceLanguage.allCases) { language in
+                    Text(language.displayName).tag(language)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 230)
+        }
     }
 
     @ViewBuilder

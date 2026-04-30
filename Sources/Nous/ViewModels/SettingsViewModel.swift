@@ -34,8 +34,13 @@ final class SettingsViewModel {
     var openrouterApiKey: String = ""
     var finderSyncEnabled: Bool = false
     var backgroundAnalysisEnabled: Bool = false
+    var openRouterWebSearchEnabled: Bool = true
     var geminiHistoryCacheEnabled: Bool = false
     var assistantThinkingEnabled: Bool = false
+    var voiceOutputVoice: VoiceOutputVoice = .cedar
+    var voiceLanguage: VoiceLanguage = .automatic
+    var isPreviewingVoice: Bool = false
+    var voicePreviewError: String?
 
     // MARK: - Model identifiers
 
@@ -61,6 +66,7 @@ final class SettingsViewModel {
     let nodeStore: NodeStore
     private let defaults: UserDefaults
     private let secretStore: any SecretStore
+    private let voicePreviewer: any VoicePreviewing
 
     var credentialStorageDescription: String {
         secretStore.storageDescription
@@ -68,6 +74,10 @@ final class SettingsViewModel {
 
     var isVoiceModeAvailable: Bool {
         !openaiApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var shouldShowSupplementalGeminiKeyField: Bool {
+        selectedProvider != .gemini
     }
 
     var voiceModeUnavailableReason: String? {
@@ -106,8 +116,11 @@ final class SettingsViewModel {
         static let embedModelId = "nous.embedding.modelid"
         static let finderSyncEnabled = "nous.finder.sync.enabled"
         static let backgroundAnalysisEnabled = "nous.background.analysis.enabled"
+        static let openRouterWebSearchEnabled = "nous.openrouter.websearch.enabled"
         static let geminiHistoryCacheEnabled = "nous.gemini.history.cache.enabled"
         static let assistantThinkingEnabled = "nous.assistant.thinking.enabled"
+        static let voiceOutputVoice = "nous.voice.outputVoice"
+        static let voiceLanguage = "nous.voice.language"
     }
 
     // MARK: - Init
@@ -117,13 +130,15 @@ final class SettingsViewModel {
         localLLM: LocalLLMService,
         nodeStore: NodeStore,
         defaults: UserDefaults = .standard,
-        secretStore: any SecretStore = SettingsViewModel.defaultSecretStore()
+        secretStore: any SecretStore = SettingsViewModel.defaultSecretStore(),
+        voicePreviewer: any VoicePreviewing = OpenAIVoicePreviewService()
     ) {
         self.embeddingService = embeddingService
         self.localLLM = localLLM
         self.nodeStore = nodeStore
         self.defaults = defaults
         self.secretStore = secretStore
+        self.voicePreviewer = voicePreviewer
         loadPreferences()
         syncModelState()
     }
@@ -141,6 +156,7 @@ final class SettingsViewModel {
         openrouterApiKey = loadSecret(account: Keys.openrouterApiKey)
         finderSyncEnabled = defaults.bool(forKey: Keys.finderSyncEnabled)
         backgroundAnalysisEnabled = defaults.bool(forKey: Keys.backgroundAnalysisEnabled)
+        openRouterWebSearchEnabled = defaults.object(forKey: Keys.openRouterWebSearchEnabled) as? Bool ?? true
         geminiHistoryCacheEnabled = defaults.bool(forKey: Keys.geminiHistoryCacheEnabled)
         assistantThinkingEnabled = defaults.bool(forKey: Keys.assistantThinkingEnabled)
         if let id = defaults.string(forKey: Keys.localModelId) {
@@ -149,6 +165,14 @@ final class SettingsViewModel {
         if let id = defaults.string(forKey: Keys.embedModelId) {
             embeddingModelId = id
         }
+        if let raw = defaults.string(forKey: Keys.voiceOutputVoice),
+           let voice = VoiceOutputVoice(rawValue: raw) {
+            voiceOutputVoice = voice
+        }
+        if let raw = defaults.string(forKey: Keys.voiceLanguage),
+           let language = VoiceLanguage(rawValue: raw) {
+            voiceLanguage = language
+        }
         enforcePrivacyPreferences()
     }
 
@@ -156,15 +180,41 @@ final class SettingsViewModel {
         defaults.set(selectedProvider.rawValue, forKey: Keys.provider)
         defaults.set(finderSyncEnabled, forKey: Keys.finderSyncEnabled)
         defaults.set(backgroundAnalysisEnabled, forKey: Keys.backgroundAnalysisEnabled)
+        defaults.set(openRouterWebSearchEnabled, forKey: Keys.openRouterWebSearchEnabled)
         defaults.set(geminiHistoryCacheEnabled, forKey: Keys.geminiHistoryCacheEnabled)
         defaults.set(assistantThinkingEnabled, forKey: Keys.assistantThinkingEnabled)
         defaults.set(localModelId, forKey: Keys.localModelId)
         defaults.set(embeddingModelId, forKey: Keys.embedModelId)
+        defaults.set(voiceOutputVoice.rawValue, forKey: Keys.voiceOutputVoice)
+        defaults.set(voiceLanguage.rawValue, forKey: Keys.voiceLanguage)
         persistSecret(geminiApiKey, account: Keys.geminiApiKey)
         persistSecret(claudeApiKey, account: Keys.claudeApiKey)
         persistSecret(openaiApiKey, account: Keys.openaiApiKey)
         persistSecret(openrouterApiKey, account: Keys.openrouterApiKey)
         enforcePrivacyPreferences()
+    }
+
+    @MainActor
+    func previewSelectedVoice() async {
+        let apiKey = openaiApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !apiKey.isEmpty else {
+            voicePreviewError = "Add OpenAI Realtime API key first."
+            return
+        }
+
+        isPreviewingVoice = true
+        voicePreviewError = nil
+        defer { isPreviewingVoice = false }
+
+        do {
+            try await voicePreviewer.preview(
+                apiKey: apiKey,
+                voice: voiceOutputVoice,
+                language: voiceLanguage
+            )
+        } catch {
+            voicePreviewError = "Could not preview voice."
+        }
     }
 
     // MARK: - Model loading
@@ -197,7 +247,7 @@ final class SettingsViewModel {
 
     // MARK: - LLM factory
 
-    func makeLLMService() -> (any LLMService)? {
+    func makeLLMService(openRouterWebSearchEnabled webSearchOverride: Bool? = nil) -> (any LLMService)? {
         switch selectedProvider {
         case .local:
             guard localLLM.isLoaded else { return nil }
@@ -213,7 +263,11 @@ final class SettingsViewModel {
             return OpenAILLMService(apiKey: openaiApiKey, model: ModelCatalog.openAIForeground)
         case .openrouter:
             guard !openrouterApiKey.isEmpty else { return nil }
-            return OpenRouterLLMService(apiKey: openrouterApiKey, model: ModelCatalog.openRouterForeground)
+            return OpenRouterLLMService(
+                apiKey: openrouterApiKey,
+                model: ModelCatalog.openRouterForeground,
+                webSearchEnabled: webSearchOverride ?? openRouterWebSearchEnabled
+            )
         }
     }
 
@@ -281,7 +335,7 @@ final class SettingsViewModel {
         case .openai:
             return ModelCatalog.openAIJudge
         case .openrouter:
-            return geminiApiKey.isEmpty ? "Disabled" : ModelCatalog.geminiJudge
+            return ModelCatalog.geminiJudge
         }
     }
 
@@ -290,6 +344,9 @@ final class SettingsViewModel {
         case .local:
             return "Judge tasks are skipped on Local because the structured-output path is disabled there."
         case .gemini:
+            if geminiApiKey.isEmpty {
+                return "Missing Gemini API key; judge checks are currently skipped."
+            }
             return "Separate lightweight judge model for retrieval and provocation decisions."
         case .claude:
             return "Separate lightweight judge model for retrieval and provocation decisions."
@@ -297,7 +354,7 @@ final class SettingsViewModel {
             return "Separate lightweight judge model for retrieval and provocation decisions."
         case .openrouter:
             if geminiApiKey.isEmpty {
-                return "Add a Google AI Studio Gemini API key to run judge checks while OpenRouter handles foreground chat."
+                return "Missing Gemini API key; judge checks are currently skipped while OpenRouter handles foreground chat."
             }
             return "Uses Google AI Studio Gemini 2.5 Pro for judge checks while OpenRouter handles foreground chat."
         }

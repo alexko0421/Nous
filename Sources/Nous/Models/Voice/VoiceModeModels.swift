@@ -105,6 +105,92 @@ enum VoiceActionRisk: Equatable {
     case readOnly
 }
 
+enum VoiceOutputVoice: String, CaseIterable, Identifiable {
+    case cedar
+    case marin
+    case verse
+    case coral
+    case sage
+    case shimmer
+    case alloy
+    case ash
+    case ballad
+    case echo
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        rawValue.capitalized
+    }
+}
+
+enum VoiceLanguage: String, CaseIterable, Identifiable {
+    case automatic
+    case cantonese
+    case english
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .automatic: return "Auto"
+        case .cantonese: return "粵語"
+        case .english: return "English"
+        }
+    }
+
+    var transcriptionLanguageCode: String? {
+        switch self {
+        case .automatic: return nil
+        case .cantonese: return "zh"
+        case .english: return "en"
+        }
+    }
+
+    var realtimeInstruction: String {
+        switch self {
+        case .automatic:
+            return "Mirror the user's language and dialect. If Alex speaks Cantonese, respond in colloquial Cantonese, not Mandarin."
+        case .cantonese:
+            return "Use colloquial Cantonese by default. Preserve Cantonese wording and particles. Do not silently convert Cantonese into Mandarin."
+        case .english:
+            return "Use English by default unless Alex explicitly asks for another language."
+        }
+    }
+
+    var previewText: String {
+        switch self {
+        case .automatic:
+            return "Hi Alex, I am Nous. I can listen, think with you, and help you turn scattered thoughts into memory."
+        case .cantonese:
+            return "Alex，我係 Nous。我會聽住你講，幫你整理諗法，唔會將你嘅廣東話硬轉做普通話。"
+        case .english:
+            return "Hi Alex, I am Nous. I can listen, think with you, and help you turn scattered thoughts into memory."
+        }
+    }
+
+    var previewInstructions: String {
+        switch self {
+        case .automatic:
+            return "Sound calm, direct, and thoughtful. Match the language of the text."
+        case .cantonese:
+            return "Speak natural Hong Kong Cantonese. Keep the tone calm, direct, and thoughtful."
+        case .english:
+            return "Speak in calm, direct English with a thoughtful tone."
+        }
+    }
+}
+
+struct RealtimeVoiceConfiguration: Equatable {
+    var voice: VoiceOutputVoice
+    var language: VoiceLanguage
+
+    static let `default` = RealtimeVoiceConfiguration(
+        voice: .cedar,
+        language: .automatic
+    )
+}
+
 struct VoiceAppSnapshot: Equatable {
     var currentTab: VoiceNavigationTarget
     var settingsSection: VoiceSettingsSection?

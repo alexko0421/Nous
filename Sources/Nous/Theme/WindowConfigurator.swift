@@ -40,6 +40,7 @@ struct WindowConfigurator: NSViewRepresentable {
 
             // Ensure window is key for text input
             window.makeKey()
+            NotificationCenter.default.post(name: .nousMainWindowConfigured, object: window)
         }
         return view
     }
@@ -52,6 +53,7 @@ struct WindowConfigurator: NSViewRepresentable {
             }
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
+            NotificationCenter.default.post(name: .nousMainWindowConfigured, object: window)
         }
     }
 }

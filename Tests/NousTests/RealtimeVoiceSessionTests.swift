@@ -51,6 +51,23 @@ final class RealtimeVoiceSessionTests: XCTestCase {
         XCTAssertTrue(toolNames.contains("recall_recent_conversations"))
     }
 
+    func testSessionUpdateAppliesVoiceAndLanguageConfiguration() throws {
+        let data = try RealtimeVoiceSession.makeSessionUpdateEvent(
+            configuration: .init(voice: .verse, language: .cantonese)
+        )
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let session = try XCTUnwrap(json["session"] as? [String: Any])
+        let audio = try XCTUnwrap(session["audio"] as? [String: Any])
+        let input = try XCTUnwrap(audio["input"] as? [String: Any])
+        let transcription = try XCTUnwrap(input["transcription"] as? [String: Any])
+        let output = try XCTUnwrap(audio["output"] as? [String: Any])
+        let instructions = try XCTUnwrap(session["instructions"] as? String)
+
+        XCTAssertEqual(output["voice"] as? String, "verse")
+        XCTAssertEqual(transcription["language"] as? String, "zh")
+        XCTAssertTrue(instructions.contains("colloquial Cantonese"))
+    }
+
     func testSessionUpdateIncludesGlobalControlTools() throws {
         let data = try RealtimeVoiceSession.makeSessionUpdateEvent()
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -330,7 +347,7 @@ final class RealtimeVoiceSessionTests: XCTestCase {
         XCTAssertEqual(socket.sentTypes.suffix(2), ["conversation.item.create", "response.create"])
     }
 
-    func testReceivedOutputAudioIsPlayedWithoutControllerEvent() async throws {
+    func testReceivedOutputAudioIsPlayedWithoutAudioControllerEvent() async throws {
         let audioChunk = "abc123"
         let socket = FakeRealtimeVoiceSocket(
             receivedMessages: [#"{"type":"response.output_audio.delta","delta":"abc123"}"#]
@@ -348,7 +365,21 @@ final class RealtimeVoiceSessionTests: XCTestCase {
 
         XCTAssertEqual(playback.startCount, 1)
         XCTAssertEqual(playback.stopCount, stopCountAfterStart + 1)
-        XCTAssertEqual(controllerEvents, [])
+        XCTAssertFalse(controllerEvents.contains(.outputAudioDelta(audioChunk)))
+        XCTAssertEqual(controllerEvents, [.sessionEnded])
+    }
+
+    func testCleanSocketCloseEmitsSessionEnded() async throws {
+        let socket = FakeRealtimeVoiceSocket()
+        let session = RealtimeVoiceSession(socket: socket, audioCapture: nil, audioPlayback: nil)
+        var controllerEvents: [RealtimeVoiceEvent] = []
+
+        try await session.start(apiKey: "sk-test") { event in
+            controllerEvents.append(event)
+        }
+
+        try await waitUntil { controllerEvents == [.sessionEnded] }
+        session.stop()
     }
 
     private static func toolNames(from session: [String: Any]) throws -> [String] {

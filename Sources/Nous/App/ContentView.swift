@@ -344,6 +344,12 @@ struct ContentView: View {
             dependencies.voiceController.boundConversationId = conversationId
 
             Task {
+                dependencies.voiceController.setConfiguration(
+                    RealtimeVoiceConfiguration(
+                        voice: dependencies.settingsVM.voiceOutputVoice,
+                        language: dependencies.settingsVM.voiceLanguage
+                    )
+                )
                 try? await dependencies.voiceController.start(apiKey: apiKey)
             }
         }

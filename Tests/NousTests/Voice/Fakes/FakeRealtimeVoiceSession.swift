@@ -9,6 +9,7 @@ final class FakeRealtimeVoiceSession: RealtimeVoiceSessioning {
 
     var startedAPIKeys: [String] = []
     var functionOutputs: [FunctionOutput] = []
+    var configurations: [RealtimeVoiceConfiguration] = []
     var stopCallCount = 0
     var sendFunctionOutputError: Error?
     var sendFunctionOutputGate: SendFunctionOutputGate?
@@ -46,6 +47,10 @@ final class FakeRealtimeVoiceSession: RealtimeVoiceSessioning {
 
     func setAudioLevelHandler(_ handler: @escaping @Sendable (Float) -> Void) {
         self.audioLevelHandler = handler
+    }
+
+    func setConfiguration(_ configuration: RealtimeVoiceConfiguration) {
+        configurations.append(configuration)
     }
 
     func emitAudioLevel(_ level: Float) {

@@ -73,6 +73,7 @@ protocol RealtimeVoiceSessioning: AnyObject {
     func sendFunctionOutput(callId: String, output: String) async throws
     func stop()
     func setAudioLevelHandler(_ handler: @escaping @Sendable (Float) -> Void)
+    func setConfiguration(_ configuration: RealtimeVoiceConfiguration)
 }
 
 
@@ -157,6 +158,7 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
     private var receiveTask: Task<Void, Never>?
     private var outboundQueue: RealtimeVoiceOutboundQueue?
     private let audioLevelHandlerLock = OSAllocatedUnfairLock<(@Sendable (Float) -> Void)?>(initialState: nil)
+    private let configurationLock = OSAllocatedUnfairLock<RealtimeVoiceConfiguration>(initialState: .default)
 
     init(
         socket: RealtimeVoiceSocketing = URLSessionRealtimeVoiceSocket(),
@@ -172,6 +174,10 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
 
     func setAudioLevelHandler(_ handler: @escaping @Sendable (Float) -> Void) {
         audioLevelHandlerLock.withLock { $0 = handler }
+    }
+
+    func setConfiguration(_ configuration: RealtimeVoiceConfiguration) {
+        configurationLock.withLock { $0 = configuration }
     }
 
     static func makeRequest(apiKey: String, model: String = defaultModel) -> URLRequest {
@@ -194,7 +200,11 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
             let queue = RealtimeVoiceOutboundQueue(maxPendingAudioChunks: 8)
             outboundQueue = queue
             queue.start(socket: socket, onEvent: onEvent)
-            try await queue.enqueueControl(Self.makeSessionUpdateEvent(includeMemoryTools: includeMemoryTools))
+            let configuration = configurationLock.withLock { $0 }
+            try await queue.enqueueControl(Self.makeSessionUpdateEvent(
+                includeMemoryTools: includeMemoryTools,
+                configuration: configuration
+            ))
             startReceiveLoop(onEvent: onEvent)
             try audioCapture?.start(onAudio: { chunk in
                 queue.enqueueAudio(chunk)
@@ -214,7 +224,7 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
 
         try await outboundQueue.enqueueControls([
             Self.makeFunctionOutputEvent(callId: callId, output: output),
-            Self.makeResponseCreateEvent()
+            Self.makeResponseCreateEvent(configuration: configurationLock.withLock { $0 })
         ])
     }
 
@@ -231,13 +241,21 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
 
     static func makeSessionUpdateEvent(
         model: String = defaultModel,
-        includeMemoryTools: Bool = false
+        includeMemoryTools: Bool = false,
+        configuration: RealtimeVoiceConfiguration = .default
     ) throws -> Data {
+        var transcription: [String: Any] = [
+            "model": "gpt-4o-mini-transcribe"
+        ]
+        if let languageCode = configuration.language.transcriptionLanguageCode {
+            transcription["language"] = languageCode
+        }
+
         let body: [String: Any] = [
             "type": "session.update",
             "session": [
                 "type": "realtime",
-                "instructions": voiceInstructions,
+                "instructions": voiceInstructions(configuration: configuration),
                 "output_modalities": ["audio"],
                 "audio": [
                     "input": [
@@ -248,14 +266,12 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
                         "noise_reduction": [
                             "type": "near_field"
                         ],
-                        "transcription": [
-                            "model": "gpt-4o-mini-transcribe"
-                        ],
+                        "transcription": transcription,
                         "turn_detection": [
                             "type": "semantic_vad"
                         ]
                     ],
-                    "output": audioOutputConfiguration
+                    "output": audioOutputConfiguration(configuration: configuration)
                 ],
                 "tools": VoiceActionRegistry.declarations(includeMemoryTools: includeMemoryTools),
                 "tool_choice": "auto"
@@ -309,32 +325,36 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
         ], options: [.sortedKeys])
     }
 
-    static func makeResponseCreateEvent() throws -> Data {
+    static func makeResponseCreateEvent(configuration: RealtimeVoiceConfiguration = .default) throws -> Data {
         try JSONSerialization.data(withJSONObject: [
             "type": "response.create",
             "response": [
                 "output_modalities": ["audio"],
                 "audio": [
-                    "output": audioOutputConfiguration
+                    "output": audioOutputConfiguration(configuration: configuration)
                 ]
             ]
         ])
     }
 
-    private static let audioOutputConfiguration: [String: Any] = [
-        "format": [
-            "type": "audio/pcm",
-            "rate": 24_000
-        ],
-        "voice": "cedar"
-    ]
+    private static func audioOutputConfiguration(configuration: RealtimeVoiceConfiguration) -> [String: Any] {
+        [
+            "format": [
+                "type": "audio/pcm",
+                "rate": 24_000
+            ],
+            "voice": configuration.voice.rawValue
+        ]
+    }
 
-    private static let voiceInstructions = """
-    You are the voice control layer for Nous. Call tools only for explicit user intent. \
-    Use direct tools for navigation, settings sections, appearance, scratchpad/sidebar visibility, and composer drafting. \
-    Use propose_note for creating notes. Voice user utterances are automatically recorded into the chat history. \
-    Never claim you clicked UI.
-    """
+    private static func voiceInstructions(configuration: RealtimeVoiceConfiguration) -> String {
+        """
+        You are the voice control layer for Nous. Call tools only for explicit user intent. \
+        Use direct tools for navigation, settings sections, appearance, scratchpad/sidebar visibility, and composer drafting. \
+        Use propose_note for creating notes. Voice user utterances are automatically recorded into the chat history. \
+        Never claim you clicked UI. Language: \(configuration.language.realtimeInstruction)
+        """
+    }
 }
 
 private final class RealtimeVoiceOutboundQueue {
