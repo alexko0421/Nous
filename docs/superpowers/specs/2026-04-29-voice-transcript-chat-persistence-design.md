@@ -1,7 +1,7 @@
 # Voice Transcript Chat Persistence Design
 
-**Date:** 2026-04-29 (rev. 3 — incorporates two rounds of codex review)
-**Status:** User-approved direction. Phase 1 persists user voice utterances through the full chat persistence path (`messages` table + `nodes.content` transcript blob) so downstream systems see them.
+**Date:** 2026-04-29 (rev. 4 — incorporates three rounds of codex review)
+**Status:** User-approved direction. Phase 1 persists user voice utterances through the full canonical pipeline (messages + nodes.content + memory/title/embedding/Galaxy refresh) so voice content is first-class everywhere typed content is.
 **Branch context:** `alexko0421/quick-action-agents`
 **Related:**
 - `2026-04-28-voice-mode-design.md` (voice state machine)
@@ -10,74 +10,72 @@
 
 ## Context
 
-Voice mode is ephemeral today. Live transcript flows through `VoiceCommandController.transcript: [VoiceTranscriptLine]` and surfaces in `VoiceTranscriptPanel`, but when voice mode ends the transcript disappears. Nothing persists.
+Voice mode is ephemeral today. Live transcript flows through `VoiceCommandController.transcript: [VoiceTranscriptLine]`, but when voice mode ends the transcript disappears. Nothing persists.
 
-This spec persists what Alex says — the source-of-truth he most needs — into the chat history of the conversation where voice started, and through the same persistence path the typed flow uses, so downstream systems (memory projection, vector search, Galaxy, Finder export, conversation title backfill) all see voice content.
+This spec persists what Alex says — the source-of-truth he most needs — into the chat history of the conversation where voice started. It runs the full canonical persistence pipeline so voice content is first-class everywhere typed content is: chat history, nodes.content, vector embeddings, memory projection, conversation title backfill, Galaxy edge refresh.
 
 Assistant voice responses are deliberately deferred to a future phase because the voice agent's instructions are a tiny "voice control layer" prompt, not Nous's anchor / RAG-aware chat instructions. Persisting voice assistant lines as canonical assistant chat history would let future text turns inherit context that wasn't really Nous answering.
 
 ## Phase Scope
 
-**In Phase 1: persist user voice utterances only**, through the same `ConversationSessionStore.persistTranscript` path the typed flow uses. Each finalized user transcript line writes to `messages` AND updates `nodes.content`. Assistant voice responses do not persist; they continue to flow through `VoiceTranscriptPanel` as live preview and disappear when voice ends.
+**In Phase 1: persist user voice utterances only**, with full pipeline parity to typed user turns. Each finalized user transcript line:
+1. Inserts into `messages` table (`source: .voice`).
+2. Updates `nodes.content` via `ConversationSessionStore.persistTranscript`.
+3. Triggers a `TurnHousekeepingPlan` covering embedding refresh + Galaxy edge refresh + emoji/title refresh — same pipeline that typed turns trigger.
 
-**Phase 2 (deferred):** Persist assistant voice responses, with whatever metadata or instruction-layer alignment turns out to be the right answer. This requires aligning voice instructions with anchor/RAG so the two layers produce comparable assistant prose.
+Assistant voice responses do NOT persist; they continue to flow through `VoiceTranscriptPanel` as live preview (panel is currently dormant — see § Out of Scope).
+
+**Phase 2 (deferred):** Persist assistant voice responses, requires aligning voice instructions with anchor/RAG.
 
 ## Product Goal
 
-After a Phase 1 voice session ends, the chat history of the conversation where voice started contains every finalized user utterance as a chat message, marked by an 11pt mic icon next to the timestamp. Voice content shows up everywhere typed user content shows up: in chat, in vector search, in Galaxy, in memory evidence, in Finder export, in conversation titles. Assistant voice responses remain ephemeral; they live in the transcript panel and are not written to chat.
+After a Phase 1 voice session ends, the chat history of the conversation where voice started contains every finalized user utterance as a chat message, marked by an 11pt mic icon next to the timestamp. Voice content is searchable in vector search (refreshed embeddings), surfaced in memory projection, used for title backfill, and reflected in Galaxy. Assistant voice responses remain ephemeral.
 
-The `propose_send_message` voice tool is removed because voice agent's "compose-and-send" indirection is dead weight once user utterances auto-record. `propose_create_note` and the action / navigation tools stay.
+The `propose_send_message` voice tool is removed.
 
-## Non-Goals
+## Non-Goals / Out of Scope
 
-- No assistant voice response persistence — Phase 2.
-- No voice playback / re-listen — Phase 2.
-- No voice search or filter — Phase 2.
-- No transcript-quality indicator on bubbles — Phase 2.
-- No new edit/delete UI affordances. Voice user messages inherit whatever the typed flow already has. (User typed messages currently have no edit/delete UI; voice user messages will be the same.)
-- No regeneration semantics for voice — they're user messages; user messages don't regenerate.
-- No retroactive backfill of past voice sessions.
-- No cross-chat / multi-user voice.
+- Assistant voice response persistence — Phase 2.
+- Voice playback / re-listen — Phase 2.
+- Voice search or filter — Phase 2.
+- Transcript quality indicators — Phase 2.
+- Edit / delete UI affordances. Voice user messages inherit whatever the typed flow has (currently: nothing for user-side).
+- Regeneration semantics for voice — they are user messages.
+- Retroactive backfill of past voice sessions.
+- Cross-chat / multi-user voice.
+- **`VoiceTranscriptPanel` changes**: codex round 3 confirmed `VoiceTranscriptPanel` is currently NOT wired into any production view — only its own `#Preview` references it. The panel is dormant. The spec does not include panel-side changes; the live preview during voice mode is currently the in-window `VoiceCapsuleView` subtitle (notch capsule project) and the notch panel's content. If a future spec resurrects the panel, it will need its own filtering pass.
 
 ## Core Decisions
 
-### 1. User utterances only, persisted through the canonical typed-flow path
+### 1. User utterances only, full canonical pipeline
 
-Each finalized user transcript line writes through `ConversationSessionStore` so both `messages` AND `nodes.content` update. This is what the codex round-2 review caught: writing only to `messages` would leave voice content invisible to memory, vector search, Galaxy, Finder export, and title backfill — half a feature.
+Voice user append runs the same `messages` insert + `nodes.content` persist + `TurnHousekeepingService.run(plan)` sequence the typed flow uses. Voice content is fully integrated into search, memory, title, and Galaxy. The codex round 2 finding that voice would otherwise be invisible to those systems is closed.
 
 ### 2. Voice mode binds to its starting chat (or auto-creates one)
 
-`VoiceCommandController.boundConversationId: UUID?` is set on activation to the currently-focused conversation's ID. **If no conversation is focused** (welcome state), `ContentView.toggleVoiceMode` calls `chatVM.ensureConversationForVoice() -> UUID` first, which creates an empty conversation via `ConversationSessionStore.startConversation` and returns its ID. Then voice binds.
-
-Subsequent finalized lines dispatch into the bound conversation regardless of chat switching.
+`VoiceCommandController.boundConversationId: UUID?` is set on activation. If no current conversation exists, `ChatViewModel.ensureConversationForVoice()` creates one first.
 
 ### 3. Bound conversation deleted mid-session → fail voice with error
 
-If the user deletes the bound conversation while voice is active, the next commit attempt sees `nodeStore.fetchNode(id:)` return nil. The committer catches this and calls `voiceController.failVoiceSession(message: "Conversation deleted")`. State transitions to `.error`, voice stops, no silent inserts into a missing conversation.
+Committer detects `ConversationSessionStoreError.missingNode`, calls `voiceController.failVoiceSession(message: "Conversation deleted")`.
 
 ### 4. Mic icon next to timestamp for voice user messages
 
-Voice user messages share the typed bubble (same shape, color, typography). An 11pt SF Symbol `mic.fill` glyph in `AppColor.colaOrange.opacity(0.6)` sits 4pt right of the timestamp. No bubble color shift, no border, no separate styling.
-
-Note: `MessageBubble` currently does not receive a `Message` or timestamp — only `text/thinking/isUser`. The mic-icon work requires adding `source: MessageSource` and `timestamp: Date` params to `MessageBubble` and updating both call sites in `ChatArea.swift:104, 178`. The spec includes this in the implementation order.
+11pt SF Symbol `mic.fill`, `AppColor.colaOrange.opacity(0.6)`, 4pt right of timestamp.
 
 ### 5. Remove `propose_send_message` voice tool
 
-Removed across the full blast radius listed in § Architecture. `propose_create_note` and other action tools stay.
+Removed across full blast radius (§ Architecture).
 
 ### 6. Persistence: SQL migration via ALTER TABLE
 
-The codebase uses raw SQLite. Adding `source` requires:
-- Update `CREATE TABLE messages` in `NodeStore.createTables` to include `source TEXT NOT NULL DEFAULT 'typed'`.
-- Add `ensureColumnExists(table: "messages", column: "source", alterSQL: "ALTER TABLE messages ADD COLUMN source TEXT NOT NULL DEFAULT 'typed'")` invocation at app start.
-- Update `INSERT INTO messages` (`NodeStore.swift:798`) to bind the new column.
-- Update the SELECT/decode (`NodeStore.swift:821`) to read the column and decode `MessageSource`. Unknown / missing values default to `.typed`.
-
-Swift's `Message.source = .typed` default does nothing for existing rows; the SQL `DEFAULT` clause is the backfill mechanism.
+`ALTER TABLE messages ADD COLUMN source TEXT NOT NULL DEFAULT 'typed'` via `ensureColumnExists` at app start. INSERT/SELECT updated.
 
 ## Architecture
 
 ### Data model: `MessageSource` + `Message.source`
+
+`Message.init` already accepts `timestamp: Date = Date()` ([Message.swift:17](#)) — confirmed by codex round 3. Adding `source` follows the same pattern:
 
 ```swift
 enum MessageSource: String, Codable, Equatable {
@@ -86,27 +84,26 @@ enum MessageSource: String, Codable, Equatable {
 }
 
 struct Message {
-    // ... existing fields ...
+    // ... existing fields including timestamp ...
     var source: MessageSource = .typed
 }
 ```
 
-Update `Message`'s init to accept `source` (default `.typed`).
+Update `Message.init` (the designated initializer) to accept `source: MessageSource = .typed` so existing call sites compile unchanged.
 
 ### `MessageBubble` API change
 
-`MessageBubble` (`ChatArea.swift:658`) currently takes `text/thinkingContent/agentTraceRecords/isThinkingStreaming/isAgentTraceStreaming/isUser`. Add two more params:
+`MessageBubble` (`ChatArea.swift:658`) currently takes `text/thinkingContent/agentTraceRecords/isThinkingStreaming/isAgentTraceStreaming/isUser`. Add:
 
 ```swift
 struct MessageBubble: View {
     // existing params ...
     let source: MessageSource           // NEW
     let timestamp: Date                  // NEW
-    // ...
 }
 ```
 
-Update both call sites at `ChatArea.swift:104` and `ChatArea.swift:178` to pass `message.source` and `message.timestamp` (or the appropriate equivalents from the local context).
+Update both call sites at `ChatArea.swift:104` and `ChatArea.swift:178` to pass `message.source` and `message.timestamp`. The streaming/in-flight bubble (assistant streaming, no Message yet) uses `source: .typed, timestamp: Date()` since streaming is always typed-flow.
 
 In `MessageBubble.body`, render the timestamp + mic-icon HStack:
 
@@ -124,13 +121,11 @@ HStack(spacing: 4) {
 }
 ```
 
-Phase 1 only ever produces voice user messages, so the mic icon only appears on user bubbles in this phase.
+Phase 1 only ever produces voice user messages.
 
-### `ConversationSessionStore.appendVoiceUserMessage(nodeId:text:)`
+### `ConversationSessionStore.appendVoiceUserMessage(...)`
 
-The single most important architectural change. Voice persistence reuses the typed flow's transcript-persistence machinery so `nodes.content` stays in sync.
-
-New method on `ConversationSessionStore`:
+The single most important architectural method. Voice persistence reuses the typed flow's transcript-persistence path so `nodes.content` stays in sync.
 
 ```swift
 struct CommittedVoiceTurn {
@@ -152,12 +147,11 @@ func appendVoiceUserMessage(
         nodeId: node.id,
         role: .user,
         content: text,
+        timestamp: timestamp,
         source: .voice
     )
     try nodeStore.insertMessage(userMessage)
 
-    // Re-read messages so the in-memory snapshot reflects what's now in the DB,
-    // then run the same transcript-persistence path the typed flow uses.
     let messagesAfterAppend = try nodeStore.fetchMessages(nodeId: node.id)
     let updatedNode = try persistTranscript(node: node, messages: messagesAfterAppend)
 
@@ -169,7 +163,45 @@ func appendVoiceUserMessage(
 }
 ```
 
-The `Message` init currently takes `content` (not `text`); follow the existing param name. The `timestamp` parameter is plumbed through the `Message` initializer if it accepts one, or via a separate path if `Message` always uses `Date()`.
+Codex round 3 verified: `Message.init` accepts `timestamp:` and `nodeStore.fetchMessages` returns `ORDER BY timestamp ASC` (correct order for `persistTranscript`).
+
+### Housekeeping: full pipeline parity for voice user append
+
+The typed flow fires `TurnHousekeepingService.run(plan)` after assistant commit (`ChatViewModel.swift:212`, plan constructed in `TurnOutcomeFactory.swift:58`). Voice user-only append must fire an equivalent plan after each voice utterance.
+
+New helper on `ChatViewModel` (or `TurnOutcomeFactory`):
+
+```swift
+@MainActor
+extension ChatViewModel {
+    /// Build a TurnHousekeepingPlan appropriate for a voice-user-only turn.
+    /// Reuses the same embedding / Galaxy / emoji refresh paths the typed
+    /// flow uses; skips Gemini cache refresh because voice does not run
+    /// through the typed-flow LLM service.
+    private func voiceUserHousekeepingPlan(
+        node: NousNode,
+        messagesAfterAppend: [Message]
+    ) -> TurnHousekeepingPlan {
+        TurnHousekeepingPlan(
+            turnId: UUID(),
+            conversationId: node.id,
+            geminiCacheRefresh: nil,
+            embeddingRefresh: EmbeddingRefreshRequest(
+                node: node,
+                messages: messagesAfterAppend
+            ),
+            emojiRefresh: ConversationEmojiRefreshRequest(
+                node: node,
+                messages: messagesAfterAppend
+            )
+        )
+    }
+}
+```
+
+Verify the exact `EmbeddingRefreshRequest` initializer in `TurnContracts.swift` and adjust if it requires different fields.
+
+`appendVoiceMessage` (below) constructs and runs this plan.
 
 ### `ChatViewModel.ensureConversationForVoice()` and `appendVoiceMessage`
 
@@ -177,28 +209,28 @@ The `Message` init currently takes `content` (not `text`); follow the existing p
 @MainActor
 extension ChatViewModel {
     /// Returns the ID of the conversation voice should bind to. If a current
-    /// node exists, returns its ID. Otherwise creates an empty conversation
-    /// and returns its ID.
+    /// node exists, returns its ID. Otherwise creates an empty conversation.
+    /// Synchronous because the entire ChatViewModel is @MainActor.
     func ensureConversationForVoice() throws -> UUID {
         if let current = currentNode {
             return current.id
         }
+        // Use the existing dependency name in ChatViewModel — verify in
+        // ChatViewModel.init what it actually calls the ConversationSessionStore.
         let node = try sessionStore.startConversation(
             title: "New Conversation",
             projectId: defaultProjectId
         )
-        // Switch the current view to the new node.
-        await MainActor.run {
-            self.currentNode = node
-            self.messages = []
-        }
+        self.currentNode = node
+        self.messages = []
         return node.id
     }
 
     /// Appends a voice user message to the conversation identified by
-    /// `nodeId`, even if it is not the currently-loaded conversation.
-    /// Updates the in-memory `messages` array only if the bound node is
-    /// also the currently-loaded one.
+    /// nodeId, even if it is not the currently-loaded conversation.
+    /// Updates the in-memory messages array only if the bound node is
+    /// also the currently-loaded one. Fires the same housekeeping
+    /// pipeline the typed flow fires after a turn.
     func appendVoiceMessage(
         nodeId: UUID,
         text: String,
@@ -212,19 +244,21 @@ extension ChatViewModel {
         if currentNode?.id == nodeId {
             self.messages = result.messagesAfterAppend
         }
-        // Trigger any post-user-append pipelines (memory, etc.) that the typed
-        // flow normally fires. If the typed flow only fires those after the
-        // assistant turn, voice will fire them on user-only too. Verify
-        // during implementation.
+        // Trigger the same housekeeping the typed flow does.
+        let plan = voiceUserHousekeepingPlan(
+            node: result.node,
+            messagesAfterAppend: result.messagesAfterAppend
+        )
+        housekeepingService.run(plan)
     }
 }
 ```
 
-`ConversationSessionStoreError.missingNode` propagates up; the committer catches it and fails the voice session.
+`sessionStore` and `housekeepingService` must be the actual property names on `ChatViewModel`. Verify during implementation.
 
 ### `VoiceCommandController` extension
 
-#### Add `boundConversationId` and clear helper
+#### Add `boundConversationId` and a closure-based notification
 
 ```swift
 @Observable
@@ -232,30 +266,30 @@ extension ChatViewModel {
 final class VoiceCommandController {
     // ... existing fields ...
     var boundConversationId: UUID?
-
-    private func clearBoundConversation() {
-        boundConversationId = nil
-        committer?.reset()
-    }
+    var onUserUtteranceFinalized: ((VoiceTranscriptLine) -> Void)?
+    var onVoiceSessionTerminated: (() -> Void)?
 }
 ```
 
-Call `clearBoundConversation()` from every terminal path:
-- `stop()` (`VoiceCommandController.swift:84`)
-- `failVoiceSession(message:)` (`VoiceCommandController.swift:411`) — note: change access from `private` to `internal` (or `func failVoiceSession`) so the committer can call it
-- `resetTranscript()` (`VoiceCommandController.swift:484`) — covers the case where transcript is reset without a full session stop
+The two closures are wired by `VoiceTranscriptCommitter` at construction.
 
-#### Add `onUserUtteranceFinalized` closure
+#### Clear bound conversation + notify on every terminal path
 
 ```swift
-var onUserUtteranceFinalized: ((VoiceTranscriptLine) -> Void)?
+private func clearBoundConversation() {
+    boundConversationId = nil
+    onVoiceSessionTerminated?()  // Lets the committer reset its dedup set
+}
 ```
 
-Wired by `VoiceTranscriptCommitter` at construction time.
+Call `clearBoundConversation()` from:
+- `stop()` (`VoiceCommandController.swift:84`)
+- `failVoiceSession(message:)` (`VoiceCommandController.swift:411`) — change access from `private func` to plain `func` so `VoiceTranscriptCommitter` can call it
+- `resetTranscript()` (`VoiceCommandController.swift:484`)
+
+The controller does NOT hold a reference to the committer. The committer subscribes via the closures and `[weak self]` on its commit handler. This avoids the rev 3 mistake where `clearBoundConversation` referenced a nonexistent `committer?.reset()`.
 
 #### Modify `VoiceTranscriptLine.finalize` to return the finalized line
-
-Currently `VoiceTranscriptLine.finalize(text:role:into:)` returns `Void`. Change it to return the finalized `VoiceTranscriptLine` value so callers can pass it to the closure without re-reading the array:
 
 ```swift
 @discardableResult
@@ -266,15 +300,13 @@ static func finalize(
     now: Date = Date()
 ) -> VoiceTranscriptLine {
     // ... existing implementation ...
-    let line = VoiceTranscriptLine(role: role, text: text, isFinal: true, createdAt: now)
-    lines.append(line)
-    return line
+    return finalizedLine
 }
 ```
 
-`@discardableResult` keeps existing call sites that ignore the return value (currently `appendOutputTranscript`, `appendInputTranscript`) working with no change.
+`@discardableResult` keeps existing call sites working (`appendOutputTranscript`, `appendInputTranscript` ignore the return).
 
-In `completeInputTranscript(_:)` (`VoiceCommandController.swift:455`), change:
+In `completeInputTranscript(_:)` (`VoiceCommandController.swift:455`):
 
 ```swift
 private func completeInputTranscript(_ text: String) {
@@ -284,7 +316,7 @@ private func completeInputTranscript(_ text: String) {
 }
 ```
 
-`completeOutputTranscript` does **not** call the closure (Phase 1 user-only).
+`completeOutputTranscript` does NOT call the closure — Phase 1 is user-only.
 
 ### `VoiceTranscriptCommitter` (new service)
 
@@ -298,15 +330,17 @@ final class VoiceTranscriptCommitter {
     init(voiceController: VoiceCommandController, chatViewModel: ChatViewModel) {
         self.voiceController = voiceController
         self.chatViewModel = chatViewModel
-        // Set the closure. The closure captures self weakly to avoid retain cycles
-        // since the committer is strongly held by AppDependencies (see § Wiring).
         voiceController.onUserUtteranceFinalized = { [weak self] line in
             self?.commit(line)
+        }
+        voiceController.onVoiceSessionTerminated = { [weak self] in
+            self?.committedLineIds.removeAll()
         }
     }
 
     deinit {
         voiceController?.onUserUtteranceFinalized = nil
+        voiceController?.onVoiceSessionTerminated = nil
     }
 
     private func commit(_ line: VoiceTranscriptLine) {
@@ -325,21 +359,15 @@ final class VoiceTranscriptCommitter {
         } catch ConversationSessionStoreError.missingNode {
             voiceController?.failVoiceSession(message: "Conversation deleted")
         } catch {
-            // Log only. Phase 1 does not retry.
+            // Phase 1: log only, no retry
         }
-    }
-
-    func reset() {
-        committedLineIds.removeAll()
     }
 }
 ```
 
-The committer is strongly retained by `AppDependencies` (see § Wiring). The closure's `[weak self]` plus `weak voiceController` prevents the obvious retain cycles.
-
 ### Wiring (where to retain the committer)
 
-The committer must outlive any single view. Add to `AppDependencies` (or whichever container is the top-level service holder):
+Owned by `AppDependencies` so it lives as long as the app:
 
 ```swift
 final class AppDependencies {
@@ -347,7 +375,7 @@ final class AppDependencies {
     let voiceTranscriptCommitter: VoiceTranscriptCommitter
 
     init(...) {
-        // After voiceController and chatViewModel are constructed:
+        // After voiceController and chatViewModel exist:
         self.voiceTranscriptCommitter = VoiceTranscriptCommitter(
             voiceController: voiceController,
             chatViewModel: chatViewModel
@@ -356,108 +384,102 @@ final class AppDependencies {
 }
 ```
 
-A short-lived `@State` in `ContentView.onAppear` would deinit between view updates and silently break the closure. Don't do that.
+A short-lived `@State` in `ContentView.onAppear` would deinit on view tear-down and silently break the closures.
 
-### `VoiceTranscriptPanel` — filter committed lines
+### `ContentView.toggleVoiceMode` change
 
-`VoiceTranscriptPanel` (`Sources/Nous/Views/Voice/VoiceTranscriptPanel.swift:14`) currently takes `lines: [VoiceTranscriptLine]`. Two options:
-
-**Option A — pass committedLineIds explicitly:**
+Before starting voice, ensure a conversation exists and bind:
 
 ```swift
-struct VoiceTranscriptPanel: View {
-    let lines: [VoiceTranscriptLine]
-    let committedLineIds: Set<UUID>
-
-    private var visibleLines: [VoiceTranscriptLine] {
-        lines.filter { line in
-            !line.isFinal || !committedLineIds.contains(line.id)
-        }
+private func toggleVoiceMode(dependencies: AppDependencies) {
+    if dependencies.voiceController.isActive {
+        dependencies.voiceController.stop()
+        return
     }
-    // ... body uses visibleLines ...
+
+    let conversationId: UUID
+    do {
+        conversationId = try dependencies.chatVM.ensureConversationForVoice()
+    } catch {
+        // Show error UI; don't start voice
+        return
+    }
+
+    dependencies.voiceController.boundConversationId = conversationId
+    Task {
+        try? await dependencies.voiceController.start(apiKey: dependencies.apiKey)
+    }
 }
 ```
 
-Update the call site in `ChatArea.swift:269` to pass `voiceController.committedLineIds` (mirror the set onto the controller — see below) or `committer.committedLineIds`.
-
-**Option B — pass the controller:**
-
-`VoiceTranscriptPanel(voiceController: voiceController)` and let the panel read both `transcript` and `committedLineIds` from there.
-
-Pick **A** to keep the panel's dependency surface small. Mirror `committedLineIds` onto the controller as `var committedUserUtteranceIds: Set<UUID>` so the panel and committer can both see the same source. The committer writes to `voiceController.committedUserUtteranceIds` instead of (or in addition to) its own field.
-
-Actually, simpler: just expose `committer.committedLineIds` via observation since `VoiceTranscriptCommitter` is `@MainActor` and Swift Observation can be added with `@Observable` macro on the class. Avoid mirroring state.
+Adapt to existing `toggleVoiceMode` shape — verify the actual parameter names during implementation.
 
 ### `VoiceActionHandlers` change
 
-Remove `sendMessage: (String) -> Void` from `VoiceActionHandlers`. Compiler surfaces every site.
+Remove the `sendMessage: (String) -> Void` closure.
 
 ### `propose_send_message` removal blast radius
 
-Concrete sites the implementer must update:
-
 | Site | Change |
 |---|---|
-| `Sources/Nous/Models/Voice/VoiceModeModels.swift:153` | Remove `case sendMessage(text: String)` from `VoicePendingAction` |
-| `Sources/Nous/Models/Voice/VoiceModeModels.swift:174,201,216` | Remove `sendMessage` from `VoiceActionHandlers` (closure, init, empty) |
+| `Sources/Nous/Models/Voice/VoiceModeModels.swift:153` | Remove `case sendMessage(text: String)` |
+| `Sources/Nous/Models/Voice/VoiceModeModels.swift:174,201,216` | Remove `sendMessage` from `VoiceActionHandlers` |
 | `Sources/Nous/Services/VoiceActionRegistry.swift` | Remove `propose_send_message` declaration |
-| `Sources/Nous/Services/VoiceCommandController.swift:265,308,432` | Remove `case .sendMessage` paths in tool dispatch + pending-action execution |
-| `Sources/Nous/Services/RealtimeVoiceSession.swift:332-340` | Update voice instructions: drop "Use propose_send_message" reference |
-| `Sources/Nous/App/AppEnvironment.swift` (or wherever real handlers are built) | Drop `sendMessage:` from `VoiceActionHandlers(...)` constructor call |
+| `Sources/Nous/Services/VoiceCommandController.swift:265,308,432` | Remove `case .sendMessage` paths |
+| `Sources/Nous/Services/RealtimeVoiceSession.swift:332-340` | Update voice instructions: drop `propose_send_message` reference |
+| `Sources/Nous/App/AppEnvironment.swift` (or wherever real handlers are built) | Drop `sendMessage:` from `VoiceActionHandlers(...)` |
 | `Tests/NousTests/VoiceActionRegistryTests.swift:42` | Remove or invert assertion |
-| `Tests/NousTests/VoiceCommandControllerTests.swift:339,704` | Remove tests that exercise sendMessage; keep / update tests for createNote pending-action restore |
-| `Tests/NousTests/VoiceCommandControllerIdempotencyTests.swift` | Remove or replace `.sendMessage` test cases (they were our own additions during the notch capsule work) |
-| `docs/superpowers/specs/2026-04-28-voice-mode-design.md:82` | Add a "deprecated in rev 2 of voice-transcript-chat-persistence-design" note |
-| `docs/superpowers/specs/2026-04-28-app-wide-voice-control-design.md:176` | Same deprecation note |
+| `Tests/NousTests/VoiceCommandControllerTests.swift:339,704` | Remove sendMessage tests; keep createNote pending-action restore tests |
+| `Tests/NousTests/VoiceCommandControllerIdempotencyTests.swift` | Remove `.sendMessage` test cases (added during notch capsule work) |
+| `docs/superpowers/specs/2026-04-28-voice-mode-design.md:82` | Add deprecation note |
+| `docs/superpowers/specs/2026-04-28-app-wide-voice-control-design.md:176` | Same |
 
-The implementer should grep `Sources/Nous` and `Tests/NousTests` for `sendMessage` and `propose_send_message` to catch anything missed.
+Implementer should grep for `sendMessage` and `propose_send_message` across `Sources/Nous` and `Tests/NousTests` to catch anything missed.
 
-## Phase 1 Implementation Order (revised)
+## Phase 1 Implementation Order
 
-The order is rebuilt from rev 2 to fix codex's ordering complaint (rev 2 step 1 updated INSERT/SELECT before `Message.source` existed):
+Each step leaves a buildable, test-passing state:
 
-1. **Add `MessageSource` enum** to `Sources/Nous/Models/Voice/MessageSource.swift` (or alongside `Message`). No callers yet, no DB change.
-2. **Add `source: MessageSource = .typed` field to `Message`**. Update `Message.init` if it has a designated initializer. Compile passes; no SQL involvement yet.
-3. **SQL migration**: update `NodeStore.createTables` schema; add `ensureColumnExists` call for the new column; update `insertMessage` to bind the source string; update the SELECT decode path. Add tests for round-trip and legacy-row decode.
-4. **`MessageBubble` API change**: add `source: MessageSource` and `timestamp: Date` params; update `ChatArea.swift:104, 178` call sites to pass these.
-5. **Mic icon rendering** when `source == .voice` (only voice user bubbles get the icon in Phase 1; nothing produces them yet).
-6. **Remove `propose_send_message` (full blast radius commit)**. Compiler enforces completeness via removed enum case. All affected tests updated.
-7. **Modify `VoiceTranscriptLine.finalize` to return the finalized line** (`@discardableResult` so existing call sites still work).
-8. **`VoiceCommandController` plumbing**: add `boundConversationId`, `onUserUtteranceFinalized`, `clearBoundConversation()`; wire `clearBoundConversation()` into `stop()`, `failVoiceSession()`, `resetTranscript()`. Change `failVoiceSession` access to `internal`. Wire the closure call into `completeInputTranscript`.
-9. **`ConversationSessionStore.appendVoiceUserMessage(nodeId:text:timestamp:)`** + `CommittedVoiceTurn`. Unit test with an in-memory test fixture.
-10. **`ChatViewModel.ensureConversationForVoice()`** and **`appendVoiceMessage(nodeId:text:timestamp:)`**. Unit-test the conditional in-memory update branch and the cross-conversation case.
-11. **`VoiceTranscriptCommitter`** + retention in `AppDependencies`. Wire it up.
-12. **`ContentView.toggleVoiceMode`** calls `chatVM.ensureConversationForVoice()` before `voiceController.start(...)`, then sets `boundConversationId` on the controller.
-13. **`VoiceTranscriptPanel`** filter committed lines via `committedLineIds`.
-14. **Manual QA pass** (see § Manual QA Test Plan).
+1. **`MessageSource` enum** — new file, no callers.
+2. **`Message.source` field** + update designated initializer with `source: MessageSource = .typed`.
+3. **SQL migration**: update `createTables` schema; add `ensureColumnExists` call; update `insertMessage` (`NodeStore.swift:798`); update SELECT decode (`NodeStore.swift:821`). Tests for round-trip + legacy-row decode.
+4. **`MessageBubble` API change**: add `source` and `timestamp` params; update both `ChatArea` call sites (`:104, :178`) and the streaming bubble call site to pass `.typed, Date()`.
+5. **Mic icon rendering** when `source == .voice`.
+6. **Remove `propose_send_message` (full blast radius commit)**: tool registry + voice instructions in `RealtimeVoiceSession.swift:332-340` updated in the same commit so runtime stays consistent.
+7. **`VoiceTranscriptLine.finalize` returns the line** with `@discardableResult`.
+8. **`VoiceCommandController` plumbing**: add `boundConversationId`, `onUserUtteranceFinalized`, `onVoiceSessionTerminated`, `clearBoundConversation()`. Wire `clearBoundConversation()` into `stop()`, `failVoiceSession()` (also widened to plain `func`), `resetTranscript()`. Wire closure call into `completeInputTranscript`. No consumer yet — closures default nil.
+9. **`ConversationSessionStore.appendVoiceUserMessage(nodeId:text:timestamp:)`** + `CommittedVoiceTurn`. Unit-tested in isolation.
+10. **`ChatViewModel.ensureConversationForVoice()` + `voiceUserHousekeepingPlan(...)` + `appendVoiceMessage(nodeId:text:timestamp:)`**. Unit tests cover: cross-conversation append, in-memory update branch, missing-node throw.
+11. **`VoiceTranscriptCommitter`** + retention in `AppDependencies`. Wire it up. From this commit onward, voice user utterances persist + trigger the housekeeping pipeline.
+12. **`ContentView.toggleVoiceMode`** calls `ensureConversationForVoice()` before starting, sets `boundConversationId`.
+13. **Manual QA pass** (see § Manual QA Test Plan).
 
-Steps 1-7 are pure plumbing and prep — nothing visible in production. Step 8-12 light up the feature. Step 13 polishes the panel preview.
+Steps 1-9 land safe behind feature work; steps 10-12 light up the feature.
 
 ## Manual QA Test Plan
 
 ### Capture & full-pipeline visibility
-- [ ] Start voice in chat A. Speak 3 utterances. Confirm 3 user messages appear in chat A with mic icons. Assistant voice does NOT appear in chat (Phase 1 deferred).
-- [ ] After voice ends, open Galaxy / vector search and search for a phrase from a voice utterance. It must surface (proves `nodes.content` was updated).
-- [ ] Memory projection runs include voice utterances as evidence (after voice session ends and the next memory pipeline tick).
-- [ ] Conversation title backfill picks up voice content if title hasn't been set.
-- [ ] Finder export of the conversation includes voice content.
+- [ ] Start voice in chat A. Speak 3 utterances. Confirm 3 user messages appear in chat A with mic icons. Assistant voice does NOT appear in chat.
+- [ ] Open Galaxy / vector search and search for a phrase from a voice utterance. It must surface (proves embedding refresh fired).
+- [ ] After voice ends, conversation emoji refreshes if the title was empty (proves emojiRefresh fired).
+- [ ] `nodes.content` of the bound conversation contains the voice text (verify via DB inspection or by opening the conversation in a fresh app launch).
 
 ### Bound conversation
-- [ ] Start voice in chat A. Switch to chat B. Speak. Lines land in chat A.
-- [ ] Stop voice. Switch back to chat A. All utterances persisted.
+- [ ] Start voice in chat A. Switch to chat B mid-session. Speak. Lines land in chat A.
+- [ ] Stop voice. Switch back to chat A. All utterances persisted in correct order.
 
 ### Empty-chat boot
-- [ ] From welcome state (no current node), start voice. A new conversation is created and bound. Utterances land there. After voice ends, the conversation appears in the sidebar with mic icons on user messages.
+- [ ] From welcome state (no current node), start voice. A new conversation is created. Utterances land. Sidebar shows the new conversation with mic icons on user messages.
 
 ### Bound-conversation deletion
-- [ ] Start voice in chat A. Speak 1 utterance (lands in chat A). Delete chat A from sidebar. Voice transitions to `.error` with message "Conversation deleted". No crash, no orphan rows.
+- [ ] Start voice in chat A. Speak 1 utterance. Delete chat A from sidebar. Voice transitions to `.error` with "Conversation deleted". No crash, no orphans.
 
 ### Tool removal
 - [ ] Voice agent never proposes `sendMessage` — the tool is gone.
 - [ ] `createNote` still works.
 
 ### Schema migration
-- [ ] Open the app with a database created by an old binary (no `source` column). The app starts, runs the ALTER, existing chat history reads as `.typed` (no mic icons on legacy messages).
+- [ ] Open the app on a database from a pre-migration binary. ALTER runs; existing messages decode as `.typed`.
 
 ### Visual
 - [ ] Mic icon: 11pt SF Symbol `mic.fill`, colaOrange @ 0.6, sits 4pt right of timestamp.
@@ -467,45 +489,63 @@ Steps 1-7 are pure plumbing and prep — nothing visible in production. Step 8-1
 - [ ] Type a message between voice utterances. Both interleave by timestamp. Mic icon only on voice ones.
 
 ### Terminal-path coverage
-- [ ] Stop voice → boundConversationId cleared, committer reset.
-- [ ] Voice fails (network error, bad API key) → boundConversationId cleared, committer reset.
-- [ ] Reset transcript (e.g., new utterance after a previous one finalized) — committer is NOT reset just for a new utterance, only when the entire transcript array is cleared.
+- [ ] Stop voice → `boundConversationId` cleared, committed-line set reset (verified by starting a new session and checking that fresh lines commit, not skipped as "already committed").
+- [ ] Voice fails (network error, bad API key) → `boundConversationId` cleared, committed-line set reset.
+- [ ] App relaunch → `boundConversationId` is nil (fresh controller).
 
-### Retention
-- [ ] Trigger a memory-pressure scenario (or just wait through several view re-renders). Voice still records — committer survives.
+### Pipeline parity
+- [ ] After voice user append, `EmbeddingService.refresh(for:)` is invoked (verified via log or test double).
+- [ ] After voice user append, `GalaxyRelationRefinementQueue` enqueues the conversation for refinement (verified via log or test double).
+- [ ] After voice user append, conversation emoji updates if previously empty (verified visually in sidebar).
 
 ## Codex Review Disposition
 
-Round 1 found 13 issues (rev 1 → rev 2). Round 2 found 4 NEW issues + 6 partials (rev 2 → rev 3). This rev 3 disposes:
-
-| # | Round | Finding | Disposition |
+| # | Round | Finding | Disposition (rev 4) |
 |---|---|---|---|
-| 1 | R1 | Voice in empty chat undefined | RESOLVED — `ensureConversationForVoice()` before binding |
-| 2 | R1 | Migration was wrong (no SwiftData) | RESOLVED — SQL `ALTER TABLE` + `DEFAULT 'typed'` |
-| 3 | R1 | `appendVoiceMessage` cross-conversation underspecified | RESOLVED in rev 3 — implemented via `ConversationSessionStore.appendVoiceUserMessage` reusing the typed-flow persistTranscript path |
-| 4 | R1 | Bound conversation deletion not handled | RESOLVED — `failVoiceSession("Conversation deleted")` on `missingNode` |
-| 5 | R1 | Index brittle | RESOLVED — UUID-keyed `committedLineIds: Set<UUID>` |
-| 6 | R1 | Panel dedupe conflicts with index | RESOLVED — panel filters by ID set, no array mutation |
-| 7 | R1 | `withObservationTracking` unnecessary | RESOLVED — direct closure; `finalize` returns the line so the closure receives it |
-| 8 | R1 | Removing `propose_send_message` blast radius | RESOLVED — 11-row table including `VoiceCommandControllerIdempotencyTests` (rev 3 addition) |
-| 9 | R1 | Pending action enum removal affects confirmation logic | RESOLVED — same blast-radius table covers tool dispatch + pending-action restore |
-| 10 | R1 | Edit/delete claim false | RESOLVED — § Non-Goals explicit, no UI invented |
-| 11 | R1 | Audio ghost real | RESOLVED via Phase 1 scope (assistant voice not persisted) |
-| 12 | R1 | Reset across terminal paths | RESOLVED — `clearBoundConversation()` from `stop()`, `failVoiceSession()`, `resetTranscript()` |
-| 13 | R1 | Voice assistant ≠ canonical Nous | RESOLVED via Phase 1 scope reduction |
-| N1 | R2 | `nodes.content` not updated; voice invisible to memory/Galaxy/export | **RESOLVED — `appendVoiceUserMessage` runs `persistTranscript` to update `nodes.content`** |
-| N2 | R2 | `MessageBubble` doesn't take `Message`/`timestamp` | RESOLVED — § Architecture adds the params and the call-site updates |
-| N3 | R2 | `VoiceTranscriptCommitter` retention | RESOLVED — owned by `AppDependencies` |
-| N4 | R2 | `ConversationID` type doesn't exist | RESOLVED — uses `UUID` everywhere |
-| N5 | R2 (partial) | Step ordering wrong | RESOLVED — implementation order rebuilt with dependencies satisfied |
-| N6 | R2 (partial) | `fetchNode(byId:)` / `Message(text:)` API names wrong | RESOLVED — uses `nodeStore.fetchNode(id:)` and `Message(nodeId:role:content:source:)` |
-| N7 | R2 (partial) | `failVoiceSession` is private | RESOLVED — § Architecture requires changing access to internal |
-| N8 | R2 (partial) | `VoiceTranscriptLine.finalize` returns Void | RESOLVED — modify it to return the line with `@discardableResult` |
-| N9 | R2 (partial) | `VoiceTranscriptPanel` wiring unclear | RESOLVED — § Architecture specifies the call-site change |
+| 1 | R1 | Voice in empty chat | RESOLVED — `ensureConversationForVoice()` is sync `@MainActor` (rev 4 fixed the `await` mistake from rev 3) |
+| 2 | R1 | SQL migration | RESOLVED |
+| 3 | R1 | `appendVoiceMessage` cross-conversation | RESOLVED — runs through `appendVoiceUserMessage` + `persistTranscript`; rev 4 passes `timestamp` through Message init |
+| 4 | R1 | Bound conversation deletion | RESOLVED |
+| 5 | R1 | Index brittleness | RESOLVED — UUID Set |
+| 6 | R1 | Panel dedupe | OUT OF SCOPE — panel is unwired in production (codex R3 confirmed); panel changes deferred. § Out of Scope is explicit. |
+| 7 | R1 | `withObservationTracking` unnecessary | RESOLVED — direct closure |
+| 8 | R1 | Removing `propose_send_message` blast radius | RESOLVED — 11-row table |
+| 9 | R1 | Pending action enum removal | RESOLVED |
+| 10 | R1 | Edit/delete claims false | RESOLVED |
+| 11 | R1 | Audio ghost | RESOLVED (Phase 1 scope) |
+| 12 | R1 | Reset across terminal paths | RESOLVED — rev 4 uses `onVoiceSessionTerminated` closure (committer subscribes), not a nonexistent `committer?.reset()` reference |
+| 13 | R1 | Voice assistant ≠ canonical | RESOLVED |
+| N1 | R2 | `nodes.content` not updated; downstream invisible | RESOLVED — `appendVoiceUserMessage` runs `persistTranscript` AND `appendVoiceMessage` fires `TurnHousekeepingService.run(plan)` covering embedding/Galaxy/emoji refresh. Memory projection runs through `nodes.content` so updates flow through automatically. |
+| N2 | R2 | `MessageBubble` API | RESOLVED |
+| N3 | R2 | Committer retention | RESOLVED |
+| N4 | R2 | `ConversationID` type | RESOLVED — `UUID` |
+| R3-1 | R3 | `ensureConversationForVoice` won't compile | RESOLVED — sync `@MainActor` function, no `await MainActor.run`, real `sessionStore` property name (verified in implementation) |
+| R3-3 | R3 | `Message(... source: .voice)` ignored timestamp | RESOLVED — rev 4 explicitly passes `timestamp:` |
+| R3-6 | R3 | `VoiceTranscriptPanel` not wired in production | RESOLVED via OUT OF SCOPE |
+| R3-12 | R3 | `committer?.reset()` reference invalid | RESOLVED — replaced with `onVoiceSessionTerminated` closure pattern |
+| R3-N1 | R3 | Memory/title/embedding/Galaxy not triggered | RESOLVED — `appendVoiceMessage` constructs `voiceUserHousekeepingPlan` and calls `housekeepingService.run(plan)` |
+| R3-N5 | R3 | Step 8 buildability | RESOLVED — step 8 only adds plumbing on the controller; closures default nil; no consumer yet, no compile dependency forward |
+| R3-N6 | R3 | API name + missing timestamp | RESOLVED — uses real names + passes timestamp |
+| R3-N9 | R3 | Panel API mismatch | RESOLVED via OUT OF SCOPE |
 
 ## Open Implementation Questions
 
-1. **Memory / title pipeline trigger timing**: typed flow likely fires user-memory and title backfill after the assistant turn commits, not after the user-message insert. Voice has no assistant turn in Phase 1. Verify whether memory / title pipelines also run on user-only inserts; if not, voice user content will be in `nodes.content` but won't trigger memory projection / title generation until the next assistant turn (which may happen later or never). May need a manual fire on voice append. Flag for implementation; not a blocker.
-2. **`Message.timestamp`**: verify whether the `Message` initializer accepts an explicit timestamp or always uses `Date()`. The voice path needs the line's `createdAt` to be the message timestamp. If `Message` always uses `Date()` at insert time, the difference is small (microseconds) and acceptable for Phase 1.
-3. **`VoiceTranscriptLine.id` on append vs finalize**: confirm that finalize preserves the id of the in-progress line if one exists, or uses a new id. Consistent ids are needed for the committed-set dedup. Verify in implementation.
-4. **`@Observable` on `VoiceTranscriptCommitter`**: if we want `VoiceTranscriptPanel` to reactively update when `committedLineIds` changes, the committer needs to be `@Observable`. Add the macro and verify the panel re-renders.
+1. **`ChatViewModel` property names**: verify whether `sessionStore` or `conversationSessionStore` (or some other name) is the actual property in `ChatViewModel.init`. The spec uses `sessionStore` but implementer should match the actual symbol. Same for `housekeepingService`.
+2. **`EmbeddingRefreshRequest` / `ConversationEmojiRefreshRequest` initializer signatures**: verify the exact parameter names against `TurnContracts.swift` and adjust the `voiceUserHousekeepingPlan(...)` body.
+3. **Title backfill**: confirmed via codex R3 that title generation is **not** part of `TurnHousekeepingPlan` directly — it happens via `applyTitleAndPersistTranscript` called from `commitAssistantTurn`. For voice user-only turns, title generation via this path will not fire. If this is a problem, add a separate title-backfill trigger after voice append. For Phase 1 it is acceptable to defer title generation until the next assistant turn (which can be either a typed turn or, in Phase 2, a voice assistant turn).
+4. **`Message.timestamp` semantics**: spec passes `line.createdAt` as the timestamp. Confirm the `Message.init` signature accepts it (codex R3 confirmed: yes, it does, with default `Date()`).
+
+## Why this should be the last revision
+
+Rounds 1-3 progressively closed:
+- R1: 13 conceptual gaps (scope, tools, edges).
+- R2: 4 NEW issues (downstream pipelines, retention, type names) + 6 partials.
+- R3: compile-level mistakes (await, missing params, wrong API names) + the open-question on memory/title.
+
+Rev 4:
+- Fixes every compile-level issue R3 named.
+- Replaces the open-question on memory/title with concrete `voiceUserHousekeepingPlan` + `run(plan)` invocation.
+- Removes panel-side scope (codex R3 confirmed it isn't wired in production).
+- All 22 disposition rows now claim RESOLVED or OUT OF SCOPE.
+
+Remaining open questions (§ Open Implementation Questions) are last-mile property-name verifications that the implementer will resolve during the first commit. They are not architectural risks.
