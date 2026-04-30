@@ -110,6 +110,118 @@ final class ShadowPatternPromptProviderTests: XCTestCase {
         XCTAssertTrue(hints.isEmpty)
     }
 
+    func testCantoneseAliasInjectsPatternWhenTokenOverlapWouldFail() throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let store = ShadowLearningStore(nodeStore: nodeStore)
+        let now = Date(timeIntervalSince1970: 10_100)
+        try store.upsertPattern(pattern(
+            label: "pain_test_for_product_scope",
+            kind: .thinkingMove,
+            trigger: "product scope pain test",
+            fragment: "Ask whether the absence would hurt.",
+            weight: 0.80,
+            now: now
+        ))
+        let provider = ShadowPatternPromptProvider(store: store)
+
+        let hints = try provider.promptHints(
+            userId: "alex",
+            currentInput: "呢个 feature 冇呢样嘢，会痛唔痛？",
+            activeQuickActionMode: nil,
+            now: now
+        )
+
+        XCTAssertEqual(hints, ["Ask whether the absence would hurt."])
+    }
+
+    func testUnrelatedCantoneseDoesNotInjectPattern() throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let store = ShadowLearningStore(nodeStore: nodeStore)
+        let now = Date(timeIntervalSince1970: 10_200)
+        try store.upsertPattern(pattern(
+            label: "pain_test_for_product_scope",
+            kind: .thinkingMove,
+            trigger: "product scope pain test",
+            fragment: "Ask whether the absence would hurt.",
+            weight: 0.80,
+            now: now
+        ))
+        let provider = ShadowPatternPromptProvider(store: store)
+
+        let hints = try provider.promptHints(
+            userId: "alex",
+            currentInput: "今日食咩好？",
+            activeQuickActionMode: nil,
+            now: now
+        )
+
+        XCTAssertTrue(hints.isEmpty)
+    }
+
+    func testEnglishAliasAndTokenOverlapDoNotDoubleCount() throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let store = ShadowLearningStore(nodeStore: nodeStore)
+        let now = Date(timeIntervalSince1970: 10_300)
+        try store.upsertPattern(pattern(
+            label: "pain_test_for_product_scope",
+            kind: .thinkingMove,
+            trigger: "pain test product scope",
+            fragment: "Pain test fragment.",
+            weight: 0.25,
+            now: now
+        ))
+        try store.upsertPattern(pattern(
+            label: "concrete_over_generic",
+            kind: .responseBehavior,
+            trigger: "product",
+            fragment: "Competitor fragment.",
+            weight: 1.00,
+            now: now
+        ))
+        let provider = ShadowPatternPromptProvider(store: store)
+
+        let hints = try provider.promptHints(
+            userId: "alex",
+            currentInput: "pain test product scope",
+            activeQuickActionMode: nil,
+            now: now
+        )
+
+        XCTAssertEqual(hints.first, "Competitor fragment.")
+    }
+
+    func testMultipleAliasHitsDoNotAccumulate() throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let store = ShadowLearningStore(nodeStore: nodeStore)
+        let now = Date(timeIntervalSince1970: 10_400)
+        try store.upsertPattern(pattern(
+            label: "pain_test_for_product_scope",
+            kind: .thinkingMove,
+            trigger: "scope",
+            fragment: "Pain test fragment.",
+            weight: 0.25,
+            now: now
+        ))
+        try store.upsertPattern(pattern(
+            label: "concrete_over_generic",
+            kind: .responseBehavior,
+            trigger: "feature",
+            fragment: "Competitor fragment.",
+            weight: 1.00,
+            now: now
+        ))
+        let provider = ShadowPatternPromptProvider(store: store)
+
+        let hints = try provider.promptHints(
+            userId: "alex",
+            currentInput: "呢个 feature 冇呢样嘢，会痛唔痛？",
+            activeQuickActionMode: nil,
+            now: now
+        )
+
+        XCTAssertEqual(hints.first, "Competitor fragment.")
+    }
+
     private func pattern(
         label: String,
         kind: ShadowPatternKind,

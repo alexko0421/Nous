@@ -23,7 +23,7 @@ final class ShadowLearningStewardTests: XCTestCase {
         let node = NousNode(type: .conversation, title: "Learning")
         try nodeStore.insertNode(node)
         try insertUserMessage(nodeStore, nodeId: node.id, text: "先用 first principles", offset: 1)
-        try insertUserMessage(nodeStore, nodeId: node.id, text: "这个太 generic 了", offset: 2)
+        try insertUserMessage(nodeStore, nodeId: node.id, text: "这个讲到太泛，给具体例子", offset: 2)
         try insertUserMessage(nodeStore, nodeId: node.id, text: "用 pain test 看一下", offset: 3)
 
         let result = await steward.runIfDue(

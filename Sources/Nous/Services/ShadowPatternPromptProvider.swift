@@ -11,9 +11,11 @@ protocol ShadowPatternPromptProviding {
 
 final class ShadowPatternPromptProvider: ShadowPatternPromptProviding {
     private let store: any ShadowLearningStoring
+    private let lexicon: ShadowPatternLexicon
 
-    init(store: any ShadowLearningStoring) {
+    init(store: any ShadowLearningStoring, lexicon: ShadowPatternLexicon = .shared) {
         self.store = store
+        self.lexicon = lexicon
     }
 
     func promptHints(
@@ -28,7 +30,12 @@ final class ShadowPatternPromptProvider: ShadowPatternPromptProviding {
 
         return patterns
             .compactMap { pattern -> (pattern: ShadowLearningPattern, score: Double)? in
-                guard let score = score(pattern, inputTerms: inputTerms, modeTerms: modeTerms) else {
+                guard let score = score(
+                    pattern,
+                    currentInput: currentInput,
+                    inputTerms: inputTerms,
+                    modeTerms: modeTerms
+                ) else {
                     return nil
                 }
                 return (pattern, score)
@@ -45,22 +52,26 @@ final class ShadowPatternPromptProvider: ShadowPatternPromptProviding {
 
     private func score(
         _ pattern: ShadowLearningPattern,
+        currentInput: String,
         inputTerms: Set<String>,
         modeTerms: Set<String>
     ) -> Double? {
         let triggerTerms = terms(from: pattern.triggerHint)
         let inputOverlap = triggerTerms.intersection(inputTerms).count
         let modeOverlap = triggerTerms.intersection(modeTerms).count
-        guard inputOverlap > 0 || modeOverlap > 0 else {
+        let aliasMatchBonus = lexicon.aliasMatchBonus(label: pattern.label, text: currentInput)
+
+        guard inputOverlap > 0 || modeOverlap > 0 || aliasMatchBonus > 0 else {
             return nil
         }
 
-        let overlapScore = min(0.45, Double(inputOverlap) * 0.15)
+        let tokenOverlapScore = min(0.45, Double(inputOverlap) * 0.15)
+        let relevanceScore = max(tokenOverlapScore, aliasMatchBonus)
         let modeScore = min(0.10, Double(modeOverlap) * 0.05)
         let responseBehaviorBonus = pattern.kind == .responseBehavior ? 0.08 : 0.0
         return pattern.weight * 0.30
             + pattern.confidence * 0.20
-            + overlapScore
+            + relevanceScore
             + modeScore
             + responseBehaviorBonus
     }
