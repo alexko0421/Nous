@@ -681,6 +681,9 @@ final class ChatViewModel {
         #endif
 
         switch envelope.event {
+        case .userMessageAppended(let appended):
+            currentNode = appended.node
+            messages = appended.messagesAfterUserAppend
         case .prepared(let prepared):
             currentNode = prepared.node
             messages = prepared.messagesAfterUserAppend
@@ -838,6 +841,7 @@ final class ChatViewModel {
 
     private static func debugEventName(_ event: TurnEvent) -> String {
         switch event {
+        case .userMessageAppended: return "userMessageAppended"
         case .prepared: return "prepared"
         case .thinkingDelta: return "thinkingDelta"
         case .agentTraceDelta: return "agentTraceDelta"

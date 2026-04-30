@@ -64,6 +64,17 @@ final class ChatTurnRunner {
             return nil
         }
 
+        await sink.emit(
+            .userMessageAppended(
+                TurnUserMessageAppended(
+                    turnId: request.turnId,
+                    node: prepared.node,
+                    userMessage: prepared.userMessage,
+                    messagesAfterUserAppend: prepared.messagesAfterUserAppend
+                )
+            )
+        )
+
         return await runPreparedTurn(
             prepared: prepared,
             request: request,

@@ -94,6 +94,10 @@ enum OpenRouterSSEParser {
             return []
         }
 
+        #if DEBUG
+        NSLog("[NousSSE] delta keys=%@", Array(delta.keys).sorted().description)
+        #endif
+
         var events: [ReasoningStreamEvent] = []
         if let reasoningDetails = delta["reasoning_details"] as? [[String: Any]] {
             for detail in reasoningDetails {
@@ -485,7 +489,9 @@ extension OpenRouterLLMService: ToolCallingLLMService {
         }
         if let reasoningBudgetTokens {
             requestBody["reasoning"] = [
-                "max_tokens": reasoningBudgetTokens
+                "max_tokens": reasoningBudgetTokens,
+                "enabled": true,
+                "exclude": false
             ]
         }
         return requestBody

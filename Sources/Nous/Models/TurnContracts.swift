@@ -85,6 +85,13 @@ struct TurnPrepared {
     let effectiveMode: ChatMode
 }
 
+struct TurnUserMessageAppended {
+    let turnId: UUID
+    let node: NousNode
+    let userMessage: Message
+    let messagesAfterUserAppend: [Message]
+}
+
 enum TurnAbortReason {
     case cancelledByUser
     case supersededByNewTurn
@@ -114,6 +121,7 @@ struct TurnCompletion {
 }
 
 enum TurnEvent {
+    case userMessageAppended(TurnUserMessageAppended)
     case prepared(TurnPrepared)
     case thinkingDelta(String)
     case agentTraceDelta(AgentTraceRecord)

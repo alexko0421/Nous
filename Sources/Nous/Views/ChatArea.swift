@@ -175,14 +175,32 @@ struct ChatArea: View {
                                         }
                                     }
                                 }
-                                if vm.isGenerating && (!vm.currentThinking.isEmpty || !vm.currentResponse.isEmpty || !vm.currentAgentTrace.isEmpty) {
+                                if vm.isGenerating && vm.currentResponse.isEmpty && vm.currentAgentTrace.isEmpty {
+                                    HStack {
+                                        ThinkingAccordion(
+                                            content: vm.currentThinking,
+                                            isStreaming: true
+                                        )
+                                        Spacer(minLength: 0)
+                                    }
+                                }
+                                if vm.isGenerating && !vm.currentAgentTrace.isEmpty && vm.currentResponse.isEmpty {
+                                    HStack {
+                                        AgentTraceAccordion(
+                                            records: vm.currentAgentTrace,
+                                            isStreaming: true
+                                        )
+                                        Spacer(minLength: 0)
+                                    }
+                                }
+                                if vm.isGenerating && !vm.currentResponse.isEmpty {
                                     VStack(alignment: .leading, spacing: 4) {
                                         MessageBubble(
                                             text: vm.currentResponse,
                                             thinkingContent: vm.currentThinking.isEmpty ? nil : vm.currentThinking,
                                             agentTraceRecords: vm.currentAgentTrace,
-                                            isThinkingStreaming: vm.currentResponse.isEmpty,
-                                            isAgentTraceStreaming: !vm.currentAgentTrace.isEmpty && vm.currentResponse.isEmpty,
+                                            isThinkingStreaming: false,
+                                            isAgentTraceStreaming: false,
                                             isUser: false,
                                             source: .typed,
                                             timestamp: Date()

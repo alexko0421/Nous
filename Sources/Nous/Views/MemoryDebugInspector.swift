@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ShadowPatternDebugRow: Equatable {
+    let id: UUID
     let label: String
     let kind: String
     let status: String
@@ -16,6 +17,7 @@ enum ShadowPatternDebugFormatting {
             .sorted(by: ordering)
             .map { pattern in
                 ShadowPatternDebugRow(
+                    id: pattern.id,
                     label: pattern.label,
                     kind: pattern.kind.rawValue,
                     status: pattern.status.rawValue,
@@ -324,7 +326,7 @@ struct MemoryDebugInspector: View {
                         .padding(.vertical, 8)
                 } else {
                     LazyVStack(alignment: .leading, spacing: 10) {
-                        ForEach(ShadowPatternDebugFormatting.rows(from: shadowPatterns), id: \.label) { row in
+                        ForEach(ShadowPatternDebugFormatting.rows(from: shadowPatterns), id: \.id) { row in
                             shadowPatternRow(row)
                         }
                     }
