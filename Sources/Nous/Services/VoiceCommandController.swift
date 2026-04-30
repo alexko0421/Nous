@@ -16,6 +16,9 @@ final class VoiceCommandController {
     var visibleSurface: VoiceCapsuleSurface = .none
     var pendingActionToken: UUID?
     var transcript: [VoiceTranscriptLine] = []
+    var boundConversationId: UUID?
+    var onUserUtteranceFinalized: ((VoiceTranscriptLine) -> Void)?
+    var onVoiceSessionTerminated: (() -> Void)?
 
     private var handlers: VoiceActionHandlers = .empty
     private let session: RealtimeVoiceSessioning
@@ -475,6 +478,11 @@ final class VoiceCommandController {
         inputTranscriptIsFinal = false
         outputTranscriptIsFinal = false
         transcript = []
+    }
+
+    private func clearBoundConversation() {
+        boundConversationId = nil
+        onVoiceSessionTerminated?()
     }
 
     private func markAppStateChanged() {
