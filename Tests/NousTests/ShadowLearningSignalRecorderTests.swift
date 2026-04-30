@@ -38,7 +38,7 @@ final class ShadowLearningSignalRecorderTests: XCTestCase {
         let recorder = ShadowLearningSignalRecorder(store: store)
         let first = userMessage(
             id: "00000000-0000-0000-0000-000000003011",
-            content: "这个决定先看本质",
+            content: "这个决定先用第一性原理",
             timestamp: 1_000
         )
         let second = userMessage(
@@ -194,7 +194,7 @@ final class ShadowLearningSignalRecorderTests: XCTestCase {
         let recorder = ShadowLearningSignalRecorder(store: store)
         let message = userMessage(
             id: "00000000-0000-0000-0000-000000003013",
-            content: "这个判断先从底层拆",
+            content: "这个判断先从根上拆",
             timestamp: 1_200
         )
         try persist([message], in: nodeStore)
@@ -218,6 +218,56 @@ final class ShadowLearningSignalRecorderTests: XCTestCase {
         let events = try store.fetchRecentEvents(userId: "alex", limit: 10)
         XCTAssertEqual(events.count, 1)
         XCTAssertEqual(events.first?.eventType, .observed)
+    }
+
+    func testRecordsCantonesePainTestThroughSharedLexicon() throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let store = ShadowLearningStore(nodeStore: nodeStore)
+        let recorder = ShadowLearningSignalRecorder(store: store)
+        let message = userMessage(
+            id: "00000000-0000-0000-0000-000000003014",
+            content: "呢个 feature 冇呢样嘢，会痛唔痛？",
+            timestamp: 1_300
+        )
+        try persist([message], in: nodeStore)
+
+        try recorder.recordSignals(from: message, userId: "alex")
+
+        let patterns = try store.fetchPatterns(userId: "alex")
+        XCTAssertEqual(patterns.map(\.label), ["pain_test_for_product_scope"])
+    }
+
+    func testRecordsChinesePushbackThroughSharedLexicon() throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let store = ShadowLearningStore(nodeStore: nodeStore)
+        let recorder = ShadowLearningSignalRecorder(store: store)
+        let message = userMessage(
+            id: "00000000-0000-0000-0000-000000003015",
+            content: "如果我错，直接说，不要顺着我。",
+            timestamp: 1_400
+        )
+        try persist([message], in: nodeStore)
+
+        try recorder.recordSignals(from: message, userId: "alex")
+
+        let patterns = try store.fetchPatterns(userId: "alex")
+        XCTAssertEqual(patterns.map(\.label), ["direct_pushback_when_wrong"])
+    }
+
+    func testDoesNotRecordStandaloneGenericShortAlias() throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let store = ShadowLearningStore(nodeStore: nodeStore)
+        let recorder = ShadowLearningSignalRecorder(store: store)
+        let message = userMessage(
+            id: "00000000-0000-0000-0000-000000003016",
+            content: "具体",
+            timestamp: 1_500
+        )
+        try persist([message], in: nodeStore)
+
+        try recorder.recordSignals(from: message, userId: "alex")
+
+        XCTAssertTrue(try store.fetchPatterns(userId: "alex").isEmpty)
     }
 
     func testIgnoresNonUserMessages() throws {

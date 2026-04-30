@@ -2,9 +2,11 @@ import Foundation
 
 final class ShadowLearningSignalRecorder {
     private let store: any ShadowLearningStoring
+    private let lexicon: ShadowPatternLexicon
 
-    init(store: any ShadowLearningStoring) {
+    init(store: any ShadowLearningStoring, lexicon: ShadowPatternLexicon = .shared) {
         self.store = store
+        self.lexicon = lexicon
     }
 
     func recordSignals(
@@ -49,7 +51,7 @@ final class ShadowLearningSignalRecorder {
         }
 
         var recordedCount = 0
-        for definition in Self.definitions where definition.matches(text) {
+        for definition in Self.definitions where lexicon.matchesObservation(label: definition.label, text: text) {
             if let maxSignals, recordedCount >= maxSignals {
                 break
             }
@@ -121,8 +123,7 @@ final class ShadowLearningSignalRecorder {
                 || text.contains("不要")
                 || text.contains("not use")
                 || text.contains("don't use")
-            let namesPattern = text.contains("第一性原理")
-                || text.contains("first principle")
+            let namesPattern = lexicon.matchesObservation(label: label, text: text)
             return negates && namesPattern
         default:
             return false
@@ -136,7 +137,6 @@ final class ShadowLearningSignalRecorder {
             summary: "Use first principles for product and architecture judgment.",
             promptFragment: "For product or architecture judgment, start from the base constraint before comparing existing patterns.",
             triggerHint: "product architecture decision first principles",
-            keywords: ["first principles", "first-principles", "第一性原理", "底层", "本质", "从根上"],
             eventNote: "Detected first-principles wording."
         ),
         ShadowPatternDefinition(
@@ -145,7 +145,6 @@ final class ShadowLearningSignalRecorder {
             summary: "Use inversion before recommending a path.",
             promptFragment: "Before recommending, name the worst version of the decision and avoid it.",
             triggerHint: "decision recommendation inversion worst version",
-            keywords: ["反过来", "inversion", "worst version", "最坏"],
             eventNote: "Detected inversion wording."
         ),
         ShadowPatternDefinition(
@@ -154,7 +153,6 @@ final class ShadowLearningSignalRecorder {
             summary: "Use the pain test before adding product scope.",
             promptFragment: "For product scope, ask whether absence would genuinely hurt before expanding the feature.",
             triggerHint: "product scope feature pain test",
-            keywords: ["会痛", "痛不痛", "pain test", "absence"],
             eventNote: "Detected pain-test wording."
         ),
         ShadowPatternDefinition(
@@ -163,7 +161,6 @@ final class ShadowLearningSignalRecorder {
             summary: "Prefer concrete references over generic guidance.",
             promptFragment: "Prefer concrete tradeoffs, files, decisions, and examples over generic encouragement.",
             triggerHint: "concrete specific generic advice",
-            keywords: ["generic", "太泛", "具体", "concrete"],
             eventNote: "Detected concrete-over-generic feedback."
         ),
         ShadowPatternDefinition(
@@ -172,7 +169,6 @@ final class ShadowLearningSignalRecorder {
             summary: "Push back plainly when the user's framing is wrong.",
             promptFragment: "If the framing is wrong, say so plainly and name the missing distinction.",
             triggerHint: "push back disagree direct wrong framing",
-            keywords: ["push back", "直接说", "不要顺着我"],
             eventNote: "Detected direct-pushback preference."
         ),
         ShadowPatternDefinition(
@@ -181,7 +177,6 @@ final class ShadowLearningSignalRecorder {
             summary: "Organize messy thinking before giving judgment.",
             promptFragment: "When the user's thought is tangled, first organize the pieces, then give judgment.",
             triggerHint: "organize messy thought clarify before judgment",
-            keywords: ["我说不清", "帮我整理", "organize", "梳理"],
             eventNote: "Detected organize-before-judging preference."
         )
     ]
@@ -193,10 +188,5 @@ private struct ShadowPatternDefinition {
     let summary: String
     let promptFragment: String
     let triggerHint: String
-    let keywords: [String]
     let eventNote: String
-
-    func matches(_ lowercasedText: String) -> Bool {
-        keywords.contains { lowercasedText.contains($0.lowercased()) }
-    }
 }
