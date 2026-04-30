@@ -326,6 +326,23 @@ struct ContentView: View {
             dependencies.voiceController.status = .error(message)
 
         case .start(let apiKey):
+            let conversationId: UUID
+            do {
+                conversationId = try dependencies.chatVM.ensureConversationForVoice()
+            } catch {
+                print("[ContentView] ensureConversationForVoice failed: \(error)")
+                dependencies.voiceController.status = .error("Could not prepare conversation")
+                return
+            }
+
+            // CRITICAL: bind BEFORE start() runs. start() invokes markListening()
+            // which calls resetTranscript(). resetTranscript() does NOT clear
+            // boundConversationId (rev 5 fix), but the order matters: the
+            // committer's onUserUtteranceFinalized closure reads
+            // boundConversationId at fire time, so it must be set before any
+            // utterance arrives.
+            dependencies.voiceController.boundConversationId = conversationId
+
             Task {
                 try? await dependencies.voiceController.start(apiKey: apiKey)
             }
