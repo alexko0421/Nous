@@ -151,7 +151,6 @@ struct VoiceToolCall: Equatable {
 }
 
 enum VoicePendingAction: Equatable {
-    case sendMessage(text: String)
     case createNote(title: String, body: String)
 }
 
@@ -171,7 +170,6 @@ struct VoiceActionHandlers {
     var appendComposerText: (String) -> Void
     var clearComposer: () -> Void
     var startNewChat: () -> Void
-    var sendMessage: (String) -> Void
     var createNote: (String, String) -> Void
     var setAppearanceMode: (VoiceAppearanceMode) -> Void
     var openSettingsSection: (VoiceSettingsSection) -> Void
@@ -185,7 +183,6 @@ struct VoiceActionHandlers {
         appendComposerText: @escaping (String) -> Void,
         clearComposer: @escaping () -> Void,
         startNewChat: @escaping () -> Void,
-        sendMessage: @escaping (String) -> Void,
         createNote: @escaping (String, String) -> Void,
         setAppearanceMode: @escaping (VoiceAppearanceMode) -> Void = { _ in },
         openSettingsSection: @escaping (VoiceSettingsSection) -> Void = { _ in },
@@ -198,7 +195,6 @@ struct VoiceActionHandlers {
         self.appendComposerText = appendComposerText
         self.clearComposer = clearComposer
         self.startNewChat = startNewChat
-        self.sendMessage = sendMessage
         self.createNote = createNote
         self.setAppearanceMode = setAppearanceMode
         self.openSettingsSection = openSettingsSection
@@ -213,7 +209,6 @@ struct VoiceActionHandlers {
         appendComposerText: { _ in },
         clearComposer: {},
         startNewChat: {},
-        sendMessage: { _ in },
         createNote: { _, _ in },
         setAppearanceMode: { _ in },
         openSettingsSection: { _ in },
@@ -225,4 +220,28 @@ enum VoiceCapsuleSurface: Equatable {
     case none
     case inWindow
     case notch
+}
+
+enum VoiceCapsuleSurfacePolicy {
+    static func nextSurface(
+        isVoiceActive: Bool,
+        hasPendingAction: Bool,
+        currentSurface: VoiceCapsuleSurface,
+        isMainWorkspaceActive: Bool,
+        hasNotchScreen: Bool
+    ) -> VoiceCapsuleSurface {
+        if hasPendingAction {
+            return currentSurface
+        }
+
+        guard isVoiceActive else {
+            return .none
+        }
+
+        if isMainWorkspaceActive {
+            return .inWindow
+        }
+
+        return hasNotchScreen ? .notch : .inWindow
+    }
 }

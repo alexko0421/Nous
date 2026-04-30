@@ -125,7 +125,6 @@ final class VoiceCommandControllerTests: XCTestCase {
                 appendComposerText: { _ in },
                 clearComposer: {},
                 startNewChat: {},
-                sendMessage: { _ in },
                 createNote: { _, _ in }
             )
         )
@@ -189,7 +188,6 @@ final class VoiceCommandControllerTests: XCTestCase {
                 appendComposerText: { _ in },
                 clearComposer: {},
                 startNewChat: {},
-                sendMessage: { _ in },
                 createNote: { _, _ in },
                 appSnapshot: {
                     VoiceAppSnapshot(
@@ -237,7 +235,6 @@ final class VoiceCommandControllerTests: XCTestCase {
                 appendComposerText: { _ in },
                 clearComposer: {},
                 startNewChat: {},
-                sendMessage: { _ in },
                 createNote: { _, _ in },
                 appSnapshot: {
                     VoiceAppSnapshot(
@@ -347,7 +344,7 @@ final class VoiceCommandControllerTests: XCTestCase {
 
         try await controller.start(apiKey: "sk-test")
         await session.emit(.toolCall(
-            .init(name: "propose_send_message", arguments: #"{"text":"Ship it."}"#),
+            .init(name: "propose_note", arguments: #"{"title":"Decision","body":"Ship it."}"#),
             callId: "call-propose"
         ))
         await session.emit(.toolCall(
@@ -355,12 +352,12 @@ final class VoiceCommandControllerTests: XCTestCase {
             callId: "call-memory-pending"
         ))
 
-        XCTAssertEqual(controller.pendingAction, .sendMessage(text: "Ship it."))
-        XCTAssertEqual(controller.status, .needsConfirmation("Confirm send?"))
+        XCTAssertEqual(controller.pendingAction, .createNote(title: "Decision", body: "Ship it."))
+        XCTAssertEqual(controller.status, .needsConfirmation("Create note?"))
         XCTAssertEqual(
             session.functionOutputs,
             [
-                .init(callId: "call-propose", output: "Confirm send?"),
+                .init(callId: "call-propose", output: "Create note?"),
                 .init(callId: "call-memory-pending", output: "- decision: Pending action still visible.")
             ]
         )
@@ -441,11 +438,11 @@ final class VoiceCommandControllerTests: XCTestCase {
         let controller = VoiceCommandController(session: session)
 
         try await controller.start(apiKey: "sk-test")
-        await session.emit(.toolCall(.init(name: "propose_send_message", arguments: #"{"text":"Ship it."}"#), callId: "call-3"))
+        await session.emit(.toolCall(.init(name: "propose_note", arguments: #"{"title":"Decision","body":"Ship it."}"#), callId: "call-3"))
         await session.emit(.responseDone)
 
-        XCTAssertEqual(controller.pendingAction, .sendMessage(text: "Ship it."))
-        XCTAssertEqual(controller.status, .needsConfirmation("Confirm send?"))
+        XCTAssertEqual(controller.pendingAction, .createNote(title: "Decision", body: "Ship it."))
+        XCTAssertEqual(controller.status, .needsConfirmation("Create note?"))
     }
 
     func testRejectedToolCallKeepsPendingConfirmationVisible() async throws {
@@ -489,6 +486,21 @@ final class VoiceCommandControllerTests: XCTestCase {
         XCTAssertEqual(session.stopCallCount, 1)
         XCTAssertFalse(controller.isActive)
         XCTAssertEqual(controller.status, .error("OpenAI quota exceeded"))
+    }
+
+    func testCleanSessionEndHidesVoiceMode() async throws {
+        let session = FakeRealtimeVoiceSession()
+        let controller = VoiceCommandController(session: session)
+
+        try await controller.start(apiKey: "sk-test")
+        await session.emit(.inputTranscriptCompleted("Open Galaxy"))
+        await session.emit(.sessionEnded)
+
+        XCTAssertEqual(session.stopCallCount, 1)
+        XCTAssertFalse(controller.isActive)
+        XCTAssertEqual(controller.status, .idle)
+        XCTAssertEqual(controller.subtitleText, "")
+        XCTAssertEqual(controller.transcript, [])
     }
 
     func testSendFunctionOutputFailureStopsVoiceMode() async throws {
@@ -565,7 +577,6 @@ final class VoiceCommandControllerTests: XCTestCase {
                 appendComposerText: { _ in },
                 clearComposer: {},
                 startNewChat: {},
-                sendMessage: { _ in },
                 createNote: { _, _ in }
             )
         )
@@ -591,7 +602,6 @@ final class VoiceCommandControllerTests: XCTestCase {
                 appendComposerText: { _ in },
                 clearComposer: {},
                 startNewChat: {},
-                sendMessage: { _ in },
                 createNote: { _, _ in }
             )
         )
@@ -615,7 +625,6 @@ final class VoiceCommandControllerTests: XCTestCase {
                 appendComposerText: { _ in },
                 clearComposer: {},
                 startNewChat: {},
-                sendMessage: { _ in },
                 createNote: { _, _ in },
                 setAppearanceMode: { appearanceMode = $0 }
             )
@@ -641,7 +650,6 @@ final class VoiceCommandControllerTests: XCTestCase {
                 appendComposerText: { _ in },
                 clearComposer: {},
                 startNewChat: {},
-                sendMessage: { _ in },
                 createNote: { _, _ in },
                 openSettingsSection: { openedSection = $0 }
             )
@@ -672,7 +680,6 @@ final class VoiceCommandControllerTests: XCTestCase {
                 appendComposerText: { _ in },
                 clearComposer: {},
                 startNewChat: {},
-                sendMessage: { _ in },
                 createNote: { _, _ in }
             )
         )
@@ -686,63 +693,24 @@ final class VoiceCommandControllerTests: XCTestCase {
         XCTAssertEqual(controller.status, .error("Voice command rejected"))
     }
 
-    func testProposeSendCreatesPendingActionWithoutSending() async throws {
-        let controller = VoiceCommandController()
-        var sent: String?
-        controller.configure(
-            VoiceActionHandlers(
-                navigate: { _ in },
-                setSidebarVisible: { _ in },
-                setScratchPadVisible: { _ in },
-                setComposerText: { _ in },
-                appendComposerText: { _ in },
-                clearComposer: {},
-                startNewChat: {},
-                sendMessage: { sent = $0 },
-                createNote: { _, _ in }
-            )
-        )
-
-        try await controller.handleToolCall(.init(name: "propose_send_message", arguments: #"{"text":"Ship the calm version."}"#))
-
-        XCTAssertNil(sent)
-        XCTAssertEqual(controller.pendingAction, .sendMessage(text: "Ship the calm version."))
-        XCTAssertEqual(controller.status, .needsConfirmation("Confirm send?"))
-    }
-
-    func testPendingSendIsNotOverwrittenBySecondProposedSend() async throws {
+    func testPendingNoteIsNotOverwrittenBySecondProposedNote() async throws {
         let controller = VoiceCommandController()
 
-        try await controller.handleToolCall(.init(name: "propose_send_message", arguments: #"{"text":"Original."}"#))
+        try await controller.handleToolCall(.init(name: "propose_note", arguments: #"{"title":"Original","body":"First body."}"#))
 
         await XCTAssertThrowsErrorAsync(
-            try await controller.handleToolCall(.init(name: "propose_send_message", arguments: #"{"text":"Replacement."}"#))
+            try await controller.handleToolCall(.init(name: "propose_note", arguments: #"{"title":"Replacement","body":"Second body."}"#))
         ) { error in
             XCTAssertEqual(error as? VoiceToolError, .pendingActionAlreadyExists)
         }
 
-        XCTAssertEqual(controller.pendingAction, .sendMessage(text: "Original."))
-        XCTAssertEqual(controller.status, .needsConfirmation("Confirm current action first"))
-    }
-
-    func testPendingSendIsNotOverwrittenByProposedNote() async throws {
-        let controller = VoiceCommandController()
-
-        try await controller.handleToolCall(.init(name: "propose_send_message", arguments: #"{"text":"Original."}"#))
-
-        await XCTAssertThrowsErrorAsync(
-            try await controller.handleToolCall(.init(name: "propose_note", arguments: #"{"title":"Note","body":"Replacement."}"#))
-        ) { error in
-            XCTAssertEqual(error as? VoiceToolError, .pendingActionAlreadyExists)
-        }
-
-        XCTAssertEqual(controller.pendingAction, .sendMessage(text: "Original."))
+        XCTAssertEqual(controller.pendingAction, .createNote(title: "Original", body: "First body."))
         XCTAssertEqual(controller.status, .needsConfirmation("Confirm current action first"))
     }
 
     func testConfirmExecutesPendingActionOnce() async throws {
         let controller = VoiceCommandController()
-        var sentMessages: [String] = []
+        var createdNotes: [(String, String)] = []
         controller.configure(
             VoiceActionHandlers(
                 navigate: { _ in },
@@ -752,23 +720,23 @@ final class VoiceCommandControllerTests: XCTestCase {
                 appendComposerText: { _ in },
                 clearComposer: {},
                 startNewChat: {},
-                sendMessage: { sentMessages.append($0) },
-                createNote: { _, _ in }
+                createNote: { title, body in createdNotes.append((title, body)) }
             )
         )
 
-        try await controller.handleToolCall(.init(name: "propose_send_message", arguments: #"{"text":"Send once."}"#))
+        try await controller.handleToolCall(.init(name: "propose_note", arguments: #"{"title":"Decision","body":"Create once."}"#))
         controller.confirmPendingAction()
         controller.confirmPendingAction()
 
-        XCTAssertEqual(sentMessages, ["Send once."])
+        XCTAssertEqual(createdNotes.map(\.0), ["Decision"])
+        XCTAssertEqual(createdNotes.map(\.1), ["Create once."])
         XCTAssertNil(controller.pendingAction)
-        XCTAssertEqual(controller.status, .action("Sent"))
+        XCTAssertEqual(controller.status, .action("Created note"))
     }
 
     func testCancelClearsPendingActionWithoutExecuting() async throws {
         let controller = VoiceCommandController()
-        var sent = false
+        var created = false
         controller.configure(
             VoiceActionHandlers(
                 navigate: { _ in },
@@ -778,15 +746,14 @@ final class VoiceCommandControllerTests: XCTestCase {
                 appendComposerText: { _ in },
                 clearComposer: {},
                 startNewChat: {},
-                sendMessage: { _ in sent = true },
-                createNote: { _, _ in }
+                createNote: { _, _ in created = true }
             )
         )
 
-        try await controller.handleToolCall(.init(name: "propose_send_message", arguments: #"{"text":"Cancel me."}"#))
+        try await controller.handleToolCall(.init(name: "propose_note", arguments: #"{"title":"Decision","body":"Cancel me."}"#))
         controller.cancelPendingAction()
 
-        XCTAssertFalse(sent)
+        XCTAssertFalse(created)
         XCTAssertNil(controller.pendingAction)
         XCTAssertEqual(controller.status, .action("Cancelled"))
     }
@@ -892,4 +859,3 @@ private final class FakeVoiceMemory: VoiceMemorySearching {
         return output
     }
 }
-

@@ -81,6 +81,11 @@ The pill is operational feedback, not a transcript panel. It should remain calm 
 
 **Draft and Confirm Send**
 
+> **Deprecated 2026-04-29**: `propose_send_message` was removed when voice
+> mode became direct chat. See
+> `docs/superpowers/specs/2026-04-29-voice-transcript-chat-persistence-design.md`.
+> Voice user utterances now auto-record into chat history.
+
 1. Alex speaks a long thought.
 2. Realtime emits transcript deltas and maybe memory search tool calls.
 3. Nous updates `ChatViewModel.inputText` with the draft.

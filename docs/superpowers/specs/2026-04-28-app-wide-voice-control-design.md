@@ -171,6 +171,11 @@ enum VoiceActionRisk: Equatable {
 
 ### Confirmation Tools
 
+> **Deprecated 2026-04-29**: `propose_send_message` was removed when voice
+> mode became direct chat. See
+> `docs/superpowers/specs/2026-04-29-voice-transcript-chat-persistence-design.md`.
+> Voice user utterances now auto-record into chat history.
+
 | Tool | Purpose |
 |---|---|
 | `propose_send_message` | Prepare a message for sending and show confirmation. |

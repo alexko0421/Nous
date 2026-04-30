@@ -117,13 +117,6 @@ enum VoiceActionRegistry {
             risk: .direct
         ),
         Tool(
-            name: "propose_send_message",
-            description: "Propose sending a chat message. The app will ask for confirmation.",
-            properties: ["text": ["type": "string"]],
-            required: ["text"],
-            risk: .confirmationRequired
-        ),
-        Tool(
             name: "propose_note",
             description: "Propose creating a note. The app will ask for confirmation.",
             properties: ["title": ["type": "string"], "body": ["type": "string"]],

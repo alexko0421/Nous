@@ -64,6 +64,7 @@ enum RealtimeVoiceEvent: Equatable {
     case outputTranscriptDelta(String)
     case outputTranscriptCompleted(String)
     case responseDone
+    case sessionEnded
     case error(String)
 }
 
@@ -269,7 +270,12 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
         receiveTask = Task { [socket] in
             while !Task.isCancelled {
                 do {
-                    guard let raw = try await socket.receive() else { break }
+                    guard let raw = try await socket.receive() else {
+                        if !Task.isCancelled {
+                            await onEvent(.sessionEnded)
+                        }
+                        break
+                    }
                     guard let event = RealtimeVoiceEventParser.parse(raw) else { continue }
                     if case .outputAudioDelta(let base64Audio) = event {
                         audioPlayback?.enqueue(base64PCM16Audio: base64Audio)
@@ -326,7 +332,8 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
     private static let voiceInstructions = """
     You are the voice control layer for Nous. Call tools only for explicit user intent. \
     Use direct tools for navigation, settings sections, appearance, scratchpad/sidebar visibility, and composer drafting. \
-    Use propose_* tools for sending messages or creating notes. Never claim you clicked UI.
+    Use propose_note for creating notes. Voice user utterances are automatically recorded into the chat history. \
+    Never claim you clicked UI.
     """
 }
 

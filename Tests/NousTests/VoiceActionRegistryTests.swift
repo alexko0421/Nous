@@ -39,7 +39,6 @@ final class VoiceActionRegistryTests: XCTestCase {
             "append_composer_text": .direct,
             "clear_composer": .direct,
             "start_new_chat": .direct,
-            "propose_send_message": .confirmationRequired,
             "propose_note": .confirmationRequired,
             "confirm_pending_action": .confirmationRequired,
             "cancel_pending_action": .confirmationRequired
@@ -49,6 +48,8 @@ final class VoiceActionRegistryTests: XCTestCase {
             XCTAssertEqual(VoiceActionRegistry.risk(for: name), expectedRisk)
         }
         XCTAssertNil(VoiceActionRegistry.risk(for: "click_at_point"))
+        // propose_send_message was removed 2026-04-29 (voice is now direct chat).
+        XCTAssertNil(VoiceActionRegistry.risk(for: "propose_send_message"))
     }
 
     func testAppSnapshotEncodesStableJSON() throws {
@@ -103,7 +104,6 @@ final class VoiceActionRegistryTests: XCTestCase {
         "append_composer_text",
         "clear_composer",
         "start_new_chat",
-        "propose_send_message",
         "propose_note",
         "confirm_pending_action",
         "cancel_pending_action"

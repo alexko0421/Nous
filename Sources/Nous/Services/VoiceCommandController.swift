@@ -259,14 +259,6 @@ final class VoiceCommandController {
                 completeMemoryToolOutput("Memory unavailable.", fallbackStatus: .error("Memory unavailable"))
             }
 
-        case "propose_send_message":
-            try rejectIfPendingActionExists()
-            setPendingAction(
-                .sendMessage(text: try requiredString("text", in: args)),
-                prompt: "Confirm send?"
-            )
-            markAppStateChanged()
-
         case "propose_note":
             try rejectIfPendingActionExists()
             setPendingAction(
@@ -305,9 +297,6 @@ final class VoiceCommandController {
         pendingActionToken = nil
 
         switch pendingAction {
-        case .sendMessage(let text):
-            handlers.sendMessage(text)
-            status = .action("Sent")
         case .createNote(let title, let body):
             handlers.createNote(title, body)
             status = .action("Created note")
@@ -433,8 +422,6 @@ final class VoiceCommandController {
         guard let pendingAction else { return }
 
         switch pendingAction {
-        case .sendMessage:
-            status = .needsConfirmation("Confirm send?")
         case .createNote:
             status = .needsConfirmation("Create note?")
         }

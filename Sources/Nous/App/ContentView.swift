@@ -294,14 +294,6 @@ struct ContentView: View {
                     selectedTab = .chat
                     voiceAttachmentResetToken = UUID()
                 },
-                sendMessage: { text in
-                    dependencies.chatVM.inputText = text
-                    selectedTab = .chat
-                    voiceAttachmentResetToken = UUID()
-                    Task {
-                        await dependencies.chatVM.send(attachments: [])
-                    }
-                },
                 createNote: { title, body in
                     createVoiceNote(title: title, body: body, dependencies: dependencies)
                 },
