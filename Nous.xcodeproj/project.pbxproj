@@ -50,6 +50,7 @@
 		2A36809F18FC09F6476F1E1A /* SkillMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 005F660E597A4D2A248A5A2F /* SkillMatcher.swift */; };
 		2B32C13B9062515670DFE678 /* AgentTraceAccordion.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC78BB757520B4712C6C8AAC /* AgentTraceAccordion.swift */; };
 		2B8F1D178A0FD609518F73DB /* VoiceCommandControllerTranscriptTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F86B935D1EAADE74775C8652 /* VoiceCommandControllerTranscriptTests.swift */; };
+		2D186A1CDFA09945AF46F2F2 /* ConversationSessionStoreVoiceAppendTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC2C0100A13D35431FE1BBAF /* ConversationSessionStoreVoiceAppendTests.swift */; };
 		2DBF7D265FFE0C0A34AC5F5F /* SafetyGuardrails.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFCC2D10AF6C5C8999DC1127 /* SafetyGuardrails.swift */; };
 		2EE981A0F08042E56C10A017 /* BehaviorProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36615399488E000DB4500E82 /* BehaviorProfile.swift */; };
 		2FA85CB0FB6256D80D30DE6F /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A13A1040D67FB96CF59C6154 /* ContentView.swift */; };
@@ -498,6 +499,7 @@
 		E91DCF510EDAE50131BAA101 /* ContextContinuationServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextContinuationServiceTests.swift; sourceTree = "<group>"; };
 		EA7628E5E5A520E16A838AFD /* FakeRealtimeVoiceSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeRealtimeVoiceSession.swift; sourceTree = "<group>"; };
 		EB60ABA25BC0C639CCD5D469 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
+		EC2C0100A13D35431FE1BBAF /* ConversationSessionStoreVoiceAppendTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationSessionStoreVoiceAppendTests.swift; sourceTree = "<group>"; };
 		EC450BD26E0E8BC3E6C4C09D /* ReflectionValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReflectionValidator.swift; sourceTree = "<group>"; };
 		EDCA67D53C80EB489CA1D825 /* GeminiThinkingStreamTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeminiThinkingStreamTests.swift; sourceTree = "<group>"; };
 		EE4C9D3D704AE3280C3B28AE /* GalaxyEdgeEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalaxyEdgeEngine.swift; sourceTree = "<group>"; };
@@ -721,6 +723,7 @@
 		A6DB6DA835AEB4DB10E93D07 /* Voice */ = {
 			isa = PBXGroup;
 			children = (
+				EC2C0100A13D35431FE1BBAF /* ConversationSessionStoreVoiceAppendTests.swift */,
 				29448F53689F04CFF6806195 /* GhostCursorRegistryTests.swift */,
 				56E09B534B87A1CB827DDD6C /* GhostCursorTravelDurationTests.swift */,
 				C8BE66D9C58EDC6BC8B84B7C /* MessageSourcePersistenceTests.swift */,
@@ -1320,6 +1323,7 @@
 				BDCBE93D1DCD0B3B6AB32ABD /* ContextContinuationServiceTests.swift in Sources */,
 				41F9C688FE7526FC0AD43239 /* ContradictionRecallTests.swift in Sources */,
 				E00E27925A339C206B79E928 /* ConversationSessionStoreTests.swift in Sources */,
+				2D186A1CDFA09945AF46F2F2 /* ConversationSessionStoreVoiceAppendTests.swift in Sources */,
 				A95F601FA57D3172352B206C /* ConversationTitleBackfillServiceTests.swift in Sources */,
 				0C109D3ACB7BE2CFD9D91629 /* FakeRealtimeVoiceSession.swift in Sources */,
 				57200A59136EE481659FFDAD /* FilenameSlugTests.swift in Sources */,
