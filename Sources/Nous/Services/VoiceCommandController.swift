@@ -101,6 +101,7 @@ final class VoiceCommandController {
         status = .idle
         audioLevel = 0
         resetTranscript()
+        clearBoundConversation()
     }
 
     func handleRealtimeEvent(_ event: RealtimeVoiceEvent) async {
@@ -400,7 +401,7 @@ final class VoiceCommandController {
         }
     }
 
-    private func failVoiceSession(message: String) {
+    func failVoiceSession(message: String) {
         sessionGeneration += 1
         session.stop()
         isActive = false
@@ -408,6 +409,7 @@ final class VoiceCommandController {
         status = .error(message)
         audioLevel = 0
         resetTranscript()
+        clearBoundConversation()
     }
 
     private static func userFacingVoiceError(for message: String) -> String {
