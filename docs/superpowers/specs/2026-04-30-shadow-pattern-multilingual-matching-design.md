@@ -58,25 +58,27 @@ Each definition includes `keywords`, but those keywords are visible only to sign
 
 ### 1. Extract Shared Lexicon
 
-Create `ShadowPatternLexicon` as a small pure Swift unit in `Sources/Nous/Services/ShadowPatternLexicon.swift`.
-
-It owns aliases by shadow pattern label:
+`ShadowPatternLexicon` lives at `Sources/Nous/Services/ShadowPatternLexicon.swift` as a small pure Swift unit. It exposes a stateless static singleton and a designated initializer for tests.
 
 ```swift
 struct ShadowPatternLexicon {
-    func aliases(for label: String) -> ShadowPatternAliases
-    func matchesObservation(label: String, text: String) -> Bool
-    func aliasMatchScore(label: String, text: String) -> Double?
-}
+    static let shared = ShadowPatternLexicon()
+    static let aliasMatchBonus: Double = 0.45
 
-struct ShadowPatternAliases {
-    let phrases: [String]
+    init(aliasesByLabel: [String: [String]] = ShadowPatternLexicon.defaultAliases)
+
+    func aliases(for label: String) -> [String]
+    func matchesObservation(label: String, text: String) -> Bool
+    func matchingLabels(in text: String) -> [String]
+    func aliasMatchBonus(label: String, text: String) -> Double
 }
 ```
 
+Aliases are stored as a flat `[String: [String]]`. The constructor normalizes each entry through `normalized(_:)` and filters through `isAllowedAlias` before storing, so callers can never observe an alias that violates the policy.
+
 The lexicon is the single source of truth for exact phrase aliases across English, Chinese, and Cantonese.
 
-Invariant: `ShadowLearningSignalRecorder` and `ShadowPatternPromptProvider` must read aliases from the same `ShadowPatternLexicon` instance, or from the same stateless singleton if the implementation keeps the lexicon static. They cannot each maintain their own keyword list.
+Invariant: `ShadowLearningSignalRecorder` and `ShadowPatternPromptProvider` must read aliases from `ShadowPatternLexicon.shared` (or from a test-injected instance), never from a parallel keyword list. The static-singleton plus designated-init shape exists to enforce this without a protocol.
 
 ### 2. Move Existing Keywords Into Lexicon
 
@@ -99,21 +101,31 @@ This preserves current behavior where possible, while removing the private dupli
 
 ### 3. Phrase Alias Policy
 
-Aliases are exact phrase substrings, not fuzzy keywords.
+Aliases are exact phrase substrings, not fuzzy keywords. The policy is enforced at construction time by `ShadowPatternLexicon.isAllowedAlias`.
 
 Accepted aliases:
 
-- Multi-word English phrases: `pain test`, `worst version`, `push back`
-- Chinese/Cantonese phrases with at least three CJK characters: `第一性原理`, `冇呢样嘢`, `会唔会痛`, `唔好咁泛`, `帮我整理`
-- Mixed language phrases that Alex actually writes: `具体 tradeoff`, `直接 push back`
+- Pure ASCII phrases with at least two whitespace- or punctuation-separated tokens: `pain test`, `worst version`, `push back`, `concrete example`, `organize this`.
+- Pure CJK phrases with at least three CJK characters: `第一性原理`, `冇呢样嘢`, `帮我整理`, `先整理` (3 chars, accepted).
+- Mixed CJK + ASCII phrases with at least two CJK characters **and** at least one ASCII alphabetic word of four or more letters: `具体 tradeoff`, `具體 tradeoff`. The four-letter floor on the ASCII word filters fillers like `the`, `and`, `but`, `for`, `you`, `use` while admitting content words like `tradeoff`, `push`, `back`, `pain`. The ASCII portion must contain only ASCII letters (a-z, A-Z) — digits, Cyrillic, Greek, and other non-Latin alphabetic characters do **not** satisfy the rule. Examples that are rejected: `具体 2026` (digits), `具体 GPT4` (mixed letters/digits), `具体 русский` (Cyrillic).
+- Mixed phrases require whitespace or punctuation between the CJK and ASCII portions, because `isAllowedAlias` splits on `CharacterSet.alphanumerics.inverted`. `具体tradeoff` (no separator) is treated as a single alphanumeric run that contains CJK and is therefore evaluated under the pure-CJK rule, where it has only two CJK chars and is rejected. Always include a space (or punctuation) between CJK and ASCII when authoring mixed aliases.
+- Single English carve-out: `inversion`. Violates the multi-word rule but is preserved because the bare word reliably signals the inversion thinking move in Alex's writing.
 
-Rejected aliases:
+Rejected aliases (filtered silently by `isAllowedAlias`):
 
-- Single CJK characters
-- Two-character generic words such as `本质`, `最坏`, `具体`
-- Broad standalone English words such as `generic`, `concrete`, `absence`
+- Single CJK characters.
+- Two-character CJK words such as `本质`, `最坏`, `具体`.
+- Broad standalone English words such as `generic`, `concrete`, `absence`.
+- Mixed phrases with only one CJK character (e.g. `具 a tradeoff`).
+- Mixed phrases whose ASCII portion contains no word of four or more letters (e.g. `具体 a`, `具体 it`, `具体 use`).
 
-This intentionally narrows some existing detection sensitivity. The tradeoff is acceptable because short generic aliases create false positives, and false learning is worse than missed weak learning. The system can still learn from clearer repeated phrases.
+Known limitations of this policy:
+
+- Single English-word phrases other than `inversion` cannot be added without an additional carve-out. New phrases like `pushback` (one word) would need to be rephrased as `push back` to pass.
+- The `inversion` carve-out can produce false positives in software contexts such as `inversion of control` and `matrix inversion`. Tracked as accepted risk; revisit if log review shows misfires.
+- The four-letter ASCII floor for mixed phrases is heuristic. Useful three-letter content words like `use` cannot anchor a mixed alias; if such a phrase becomes important in practice, drop the threshold or list both languages separately.
+
+This policy intentionally narrows some prior detection sensitivity. False learning silently changes prompt behavior, so the spec prefers strictness over recall.
 
 ### 4. PromptProvider Scoring
 
@@ -131,11 +143,11 @@ Replace `overlapScore` with a relevance score that takes the maximum of token ov
 
 ```swift
 let tokenOverlapScore = min(0.45, Double(inputOverlap) * 0.15)
-let aliasMatchBonus = lexicon.aliasMatchScore(label: pattern.label, text: currentInput) ?? 0
+let aliasMatchBonus = lexicon.aliasMatchBonus(label: pattern.label, text: currentInput)
 let relevanceScore = max(tokenOverlapScore, aliasMatchBonus)
 ```
 
-`aliasMatchBonus` is binary:
+`aliasMatchBonus(label:text:)` is binary and returns `Double` (not optional):
 
 ```swift
 0.45 when any alias phrase matches
@@ -158,77 +170,89 @@ The gate remains: if neither token overlap, mode overlap, nor alias match fires,
 
 ### 5. Normalization
 
-Use lightweight normalization only:
+`ShadowPatternLexicon.normalized(_:)` applies one `String.folding` call followed by whitespace cleanup:
 
-- Lowercase English.
-- Trim whitespace and newlines.
-- Normalize full-width spaces to normal spaces.
-- Do not strip Chinese or Cantonese punctuation globally unless tests prove it is needed.
-- Do not transliterate or romanize.
+- `caseInsensitive`: lowercase English.
+- `widthInsensitive`: collapse full-width forms (e.g. `ＰＡＩＮ ＴＥＳＴ` becomes `pain test`).
+- `diacriticInsensitive`: strip combining diacritics. Has no effect on standalone CJK characters but is included for safety on Latin input.
+- Collapse runs of whitespace to a single space and trim leading/trailing whitespace and newlines.
 
-Exact substring matching should operate on normalized strings.
+Both alias strings (at construction time) and input text (at match time) are passed through `normalized(_:)` before substring matching. CJK punctuation is not stripped.
+
+Simplified versus traditional Chinese is **not** folded automatically; Foundation does not ship a simplified-traditional transformer. The lexicon handles this by listing both forms explicitly when an alias has a meaningful traditional spelling (for example `反过来` and `反過來`, `講到太泛` and `讲到太泛`). Authors adding aliases must include both forms when relevant.
+
+Romanization, pinyin, and jyutping are not used.
 
 ### 6. Pattern Alias Set
 
-Initial aliases cover the current six labels only.
+These are the aliases shipped in `ShadowPatternLexicon.defaultAliases`. They cover the current six labels only and reflect phrases observed in Alex's actual writing rather than a theoretical Cantonese dictionary.
 
 `first_principles_decision_frame`
 
+- `first principle`
 - `first principles`
 - `first-principles`
 - `第一性原理`
 - `从根上`
-- `由底层`
-- `底层逻辑`
+- `由底层逻辑`
+- `由底層邏輯`
 
 `inversion_before_recommendation`
 
+- `反过来`
+- `反過來`
 - `inversion`
 - `worst version`
-- `反过来睇`
-- `反过来看`
 - `最坏版本`
-- `最坏情况`
+- `最壞版本`
 
 `pain_test_for_product_scope`
 
-- `pain test`
-- `会不会痛`
-- `会唔会痛`
+- `会痛不痛`
+- `会痛唔痛`
+- `會痛唔痛`
 - `痛不痛`
 - `痛唔痛`
 - `冇呢样嘢`
-- `没有这个会`
+- `无呢样嘢`
+- `没有这个`
+- `pain test`
 
 `concrete_over_generic`
 
-- `too generic`
-- `唔好咁泛`
-- `不要太泛`
-- `讲具体`
-- `讲返具体`
+- `讲到太泛`
+- `講到太泛`
+- `太抽象`
+- `具体例子`
+- `具體例子`
+- `concrete example`
 - `具体 tradeoff`
+- `具體 tradeoff`
 
 `direct_pushback_when_wrong`
 
 - `push back`
 - `直接说`
+- `直接講`
 - `直接讲`
 - `不要顺着我`
+- `不要順著我`
 - `唔好顺住我`
-- `直接反驳`
+- `唔好順住我`
 
 `organize_before_judging`
 
-- `帮我整理`
-- `帮我梳理`
-- `整理下先`
-- `梳理下先`
 - `我说不清`
 - `我講唔清`
-- `organize my thoughts`
+- `我讲唔清`
+- `我讲到好乱`
+- `我講到好亂`
+- `帮我整理`
+- `幫我整理`
+- `先整理`
+- `organize this`
 
-If an alias violates the phrase policy during implementation, prefer dropping it over weakening the policy.
+When adding an alias, include both simplified and traditional forms if both could appear in writing. The lexicon constructor silently filters any entry that fails `isAllowedAlias`, so authors must verify additions land by reading them back via `lexicon.aliases(for:)` or by writing a test.
 
 ## Data Flow
 
@@ -249,30 +273,39 @@ Later turn
 
 ## Testing Plan
 
-Add focused tests around the shared lexicon and provider behavior.
+Tests live in `Tests/NousTests/ShadowPatternLexiconTests.swift` plus the existing recorder and provider suites. Phrases below match the actual fixtures shipped with the implementation.
 
-### Lexicon Tests
+### Lexicon Tests (`ShadowPatternLexiconTests`)
 
-- `冇呢样嘢会唔会痛` matches `pain_test_for_product_scope`.
-- `反过来睇最坏版本` matches `inversion_before_recommendation`.
-- `唔好咁泛，讲具体 tradeoff` matches `concrete_over_generic`.
-- `直接 push back，唔好顺住我` matches `direct_pushback_when_wrong`.
-- `帮我整理下先，之后再判断` matches `organize_before_judging`.
-- `今日食咩` matches no pattern.
-- Short generic aliases such as `具体` alone are not accepted as a lexicon phrase.
+- `冇呢样嘢，会痛唔痛？` matches `pain_test_for_product_scope`.
+- `先谂下最坏版本会系点` matches `inversion_before_recommendation`.
+- `唔好讲到太泛，畀个具体例子` matches `concrete_over_generic`.
+- `如果我错，直接说，唔好顺住我` matches `direct_pushback_when_wrong`.
+- `我讲到好乱，帮我整理先` matches `organize_before_judging`.
+- `用第一性原理重新睇一次` matches `first_principles_decision_frame`.
+- `今日食咩好？` matches no pattern (`matchingLabels` returns empty).
+- Single CJK words such as `具体`, `本质`, `最坏` and standalone `absence` do not match their respective labels.
+- A custom-instantiated lexicon silently drops `具体`, `本质`, `absence` while keeping `具体例子`, `pain test`, and `inversion`.
+- `aliasMatchBonus` returns exactly `0.45` on any match and stays at `0.45` even when multiple aliases co-occur in the same input (binary, not additive).
+- `PAIN　TEST 呢关过唔到` (full-width space) matches `pain_test_for_product_scope`. `请你 PUSH BACK` matches `direct_pushback_when_wrong`.
+- `唔好讲到太泛，畀啲具体 tradeoff 我睇` matches `concrete_over_generic` via the mixed-language alias.
+- A custom-instantiated lexicon drops `具体 a`, `具体 it`, `具体 use`, and `具 a tradeoff` while keeping `具体 tradeoff`.
+- A custom-instantiated lexicon drops `具体 2026`, `具体 GPT4`, and `具体 русский` because the ASCII portion must consist of ASCII letters only.
+- `这是具体方案，但 tradeoff 之后再讲` does **not** match `concrete_over_generic`. The mixed alias `具体 tradeoff` requires a contiguous substring; non-contiguous occurrences of `具体` and `tradeoff` separated by other text do not trigger.
 
-### Signal Recorder Tests
+### Signal Recorder Tests (`ShadowLearningSignalRecorderTests`)
 
-- Existing English and Chinese observation tests keep passing.
-- A Cantonese pain-test message records `pain_test_for_product_scope`.
+- Existing English and Chinese observation tests continue to pass after the keyword field is removed.
+- A Cantonese pain-test message (`呢个 feature 冇呢样嘢，会痛唔痛？`) records `pain_test_for_product_scope`.
 - A Cantonese direct-pushback message records `direct_pushback_when_wrong`.
-- Replaying the same message still does not duplicate events.
+- Replaying the same message does not duplicate events; lifecycle reinforcement still fires.
+- Negation handling in `isCorrection` continues to work for `first_principles_decision_frame`. The negation keyword list (`别用`, `不要`, `not use`, `don't use`) remains hardcoded in `ShadowLearningSignalRecorder` and is intentionally **not** unified into the lexicon in this pass.
 
-### Prompt Provider Tests
+### Prompt Provider Tests (`ShadowPatternPromptProviderTests`)
 
-- Cantonese input can inject a matching prompt hint even when token overlap is empty.
-- English input that matches both alias and token overlap does not double count; the score uses `max`.
-- Multiple aliases in one input produce one binary alias bonus.
+- Cantonese input (`呢个 feature 冇呢样嘢，会痛唔痛？`) injects the matching prompt hint even when English token overlap with `triggerHint` is empty.
+- English input that matches both alias and token overlap does not double count; the score uses `max(tokenOverlapScore, aliasMatchBonus)`.
+- Multiple aliases in one input still produce only one `0.45` bonus.
 - Unrelated Cantonese input does not inject any hint.
 - The provider still returns at most three prompt fragments.
 
@@ -295,11 +328,15 @@ xcodebuild test -project Nous.xcodeproj -scheme NousTests -destination 'platform
 
 ## Risks
 
-The main risk is false positives from broad aliases. The phrase policy deliberately rejects short generic aliases to reduce that risk.
+The main risk is false positives from broad aliases. The phrase policy deliberately rejects short generic aliases to reduce that risk. The `inversion` single-word carve-out is the most exposed case — software discussions involving `inversion of control` or `matrix inversion` will misfire. Accepted for v1; revisit if log review shows misfires.
 
-The second risk is missed detections from being stricter than the old keyword list. That is acceptable for v1 because missed weak learning is recoverable, while wrong learning silently changes prompt behavior.
+The second risk is missed detections from being stricter than the old keyword list. That is acceptable for v1 because missed weak learning is recoverable, while wrong learning silently changes prompt behavior. Mixed-language phrases like `具体 tradeoff` are now accepted via the cjk≥2 + ASCII-word≥4 rule; `直接 push back` already matched the existing `push back` ASCII alias and does not need a mixed entry. The remaining gap is mixed phrases whose ASCII portion is short (e.g. `具体 use case` matches because `case` is four letters, but `具体 use` alone does not).
 
 The third risk is future drift if another developer adds aliases in one caller only. The shared lexicon invariant and tests should catch that.
+
+The fourth risk is negation drift. Negation keywords (`别用`, `不要`, `not use`, `don't use`) live inside `ShadowLearningSignalRecorder.isCorrection`, not the lexicon. Adding multilingual negation forms (e.g. `唔好用`, `冇必要`) will silently bypass the lexicon's policy filter and is invisible to `ShadowPatternPromptProvider`. Unifying negation into the lexicon is deferred future work; keep the current footprint small until there is evidence it matters.
+
+The fifth risk is silent alias drops. `ShadowPatternLexicon.init` filters out any entry that fails `isAllowedAlias` without warning. An author who adds a two-CJK-character or single English-word alias will find it absent at runtime with no error. Mitigation: write a focused test for any newly added alias.
 
 ## Implementation Notes
 

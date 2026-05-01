@@ -62,4 +62,57 @@ final class ShadowPatternLexiconTests: XCTestCase {
         XCTAssertTrue(lexicon.matchesObservation(label: "pain_test_for_product_scope", text: "PAIN　TEST 呢关过唔到"))
         XCTAssertTrue(lexicon.matchesObservation(label: "direct_pushback_when_wrong", text: "请你 PUSH BACK"))
     }
+
+    func testMixedLanguageAliasMatchesConcreteOverGeneric() {
+        let lexicon = ShadowPatternLexicon.shared
+
+        XCTAssertTrue(
+            lexicon.matchesObservation(
+                label: "concrete_over_generic",
+                text: "唔好讲到太泛，畀啲具体 tradeoff 我睇"
+            )
+        )
+        XCTAssertEqual(
+            lexicon.aliasMatchBonus(
+                label: "concrete_over_generic",
+                text: "我想睇具体 tradeoff"
+            ),
+            0.45,
+            accuracy: 0.0001
+        )
+    }
+
+    func testInitializerFiltersMixedLanguageAliasesByContentWordLength() {
+        let lexicon = ShadowPatternLexicon(aliasesByLabel: [
+            "custom": ["具体 a", "具体 it", "具体 use", "具体 tradeoff", "具 a tradeoff"]
+        ])
+
+        XCTAssertFalse(lexicon.matchesObservation(label: "custom", text: "具体 a"))
+        XCTAssertFalse(lexicon.matchesObservation(label: "custom", text: "具体 it"))
+        XCTAssertFalse(lexicon.matchesObservation(label: "custom", text: "具体 use"))
+        XCTAssertTrue(lexicon.matchesObservation(label: "custom", text: "具体 tradeoff"))
+        XCTAssertFalse(lexicon.matchesObservation(label: "custom", text: "具 a tradeoff"))
+    }
+
+    func testInitializerFiltersMixedAliasesWithDigitsOrNonLatinASCII() {
+        let lexicon = ShadowPatternLexicon(aliasesByLabel: [
+            "custom": ["具体 2026", "具体 GPT4", "具体 русский", "具体 tradeoff"]
+        ])
+
+        XCTAssertFalse(lexicon.matchesObservation(label: "custom", text: "具体 2026"))
+        XCTAssertFalse(lexicon.matchesObservation(label: "custom", text: "具体 GPT4"))
+        XCTAssertFalse(lexicon.matchesObservation(label: "custom", text: "具体 русский"))
+        XCTAssertTrue(lexicon.matchesObservation(label: "custom", text: "具体 tradeoff"))
+    }
+
+    func testMixedAliasRequiresContiguousSubstringMatch() {
+        let lexicon = ShadowPatternLexicon.shared
+
+        XCTAssertFalse(
+            lexicon.matchesObservation(
+                label: "concrete_over_generic",
+                text: "这是具体方案，但 tradeoff 之后再讲"
+            )
+        )
+    }
 }

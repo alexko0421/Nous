@@ -50,15 +50,24 @@ struct ShadowPatternLexicon {
 
     private static func isAllowedAlias(_ alias: String) -> Bool {
         let cjkCount = alias.unicodeScalars.filter(Self.isCJK).count
-        if cjkCount > 0 {
+
+        let words = alias
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+
+        let asciiWords = words.filter { word in
+            word.allSatisfy { $0.isASCII && $0.isLetter }
+        }
+
+        if cjkCount == 0 {
+            return words.count >= 2 || alias == "inversion"
+        }
+
+        if asciiWords.isEmpty {
             return cjkCount >= 3
         }
 
-        let wordCount = alias
-            .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { !$0.isEmpty }
-            .count
-        return wordCount >= 2 || alias == "inversion"
+        return cjkCount >= 2 && asciiWords.contains { $0.count >= 4 }
     }
 
     private static func isCJK(_ scalar: Unicode.Scalar) -> Bool {
@@ -107,7 +116,9 @@ struct ShadowPatternLexicon {
             "太抽象",
             "具体例子",
             "具體例子",
-            "concrete example"
+            "concrete example",
+            "具体 tradeoff",
+            "具體 tradeoff"
         ],
         "direct_pushback_when_wrong": [
             "push back",
