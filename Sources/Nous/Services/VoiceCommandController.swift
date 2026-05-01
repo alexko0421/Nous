@@ -31,6 +31,12 @@ final class VoiceCommandController {
     private var inputTranscriptIsFinal = false
     private var outputTranscriptIsFinal = false
     private var sessionGeneration = 0
+    // Held while a voice session is active to prevent macOS App Nap from
+    // throttling the realtime WebSocket when Nous is on a different Space
+    // or otherwise not the frontmost app. Without this token, idle WebSocket
+    // sockets get suspended seconds after a reply finishes, the OpenAI server
+    // tears the connection down, and the client sees `.sessionEnded`.
+    private var activityToken: NSObjectProtocol?
 
     init(
         session: RealtimeVoiceSessioning? = nil,
@@ -78,6 +84,7 @@ final class VoiceCommandController {
         sessionGeneration += 1
         let generation = sessionGeneration
         markListening()
+        beginBackgroundActivityIfNeeded()
         do {
             try await session.start(apiKey: trimmedAPIKey) { [weak self] event in
                 guard let self else { return }
@@ -93,6 +100,7 @@ final class VoiceCommandController {
     func stop() {
         sessionGeneration += 1
         session.stop()
+        endBackgroundActivityIfNeeded()
         // Don't pre-set visibleSurface here. The notch panel controller
         // observes isActive via withObservationTracking; setting
         // visibleSurface = .none directly defeats the recompute that
@@ -408,6 +416,7 @@ final class VoiceCommandController {
     func failVoiceSession(message: String) {
         sessionGeneration += 1
         session.stop()
+        endBackgroundActivityIfNeeded()
         isActive = false
         pendingAction = nil
         status = .error(message)
@@ -505,5 +514,19 @@ final class VoiceCommandController {
             return output
         }
         return "\(output)\n\nAPP_STATE:\n\(json)"
+    }
+
+    private func beginBackgroundActivityIfNeeded() {
+        guard activityToken == nil else { return }
+        activityToken = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiated, .latencyCritical, .idleSystemSleepDisabled],
+            reason: "Realtime voice session"
+        )
+    }
+
+    private func endBackgroundActivityIfNeeded() {
+        guard let token = activityToken else { return }
+        ProcessInfo.processInfo.endActivity(token)
+        activityToken = nil
     }
 }
