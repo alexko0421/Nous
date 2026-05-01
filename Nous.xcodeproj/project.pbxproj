@@ -207,6 +207,7 @@
 		B69E12882C5D1B570369C9DA /* Accelerate.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FEADD90223D5DCBFDE74F5DE /* Accelerate.framework */; };
 		B6A4CB3E3DFEE9B909E4BC28 /* ScratchSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 747E845F5009BE1FD6085E67 /* ScratchSummary.swift */; };
 		B6E2F015E856252747EE0324 /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E88716E75C10545B684D5FD /* ChatViewModel.swift */; };
+		B7E00FF8F8A1F48CC925473D /* ThinkingTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13686E8EC9E10D5BEF9B51F4 /* ThinkingTrace.swift */; };
 		B90A2FAEB0973870A4D5DA15 /* AppColor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BBA2D70209E6211449AEADC /* AppColor.swift */; };
 		B9A1195F6858598674290B64 /* GhostCursorRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66F8769DB0D7FA9A74C4A1C0 /* GhostCursorRegistry.swift */; };
 		BAAF92AAA3B5EDDF1354D1C8 /* AgentTraceRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CF03B8B53BB9636DFFC5D45 /* AgentTraceRecord.swift */; };
@@ -326,6 +327,7 @@
 		10115CC57E8933F62B3A81F0 /* ProjectListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectListView.swift; sourceTree = "<group>"; };
 		108C7FA818D0FD59A26F5BA9 /* NoteViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteViewModel.swift; sourceTree = "<group>"; };
 		12A1B273D3D94B188C07A933 /* GalaxyViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalaxyViewModel.swift; sourceTree = "<group>"; };
+		13686E8EC9E10D5BEF9B51F4 /* ThinkingTrace.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ThinkingTrace.swift; sourceTree = "<group>"; };
 		146D5460820127BB59A49B56 /* AgentLoopExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentLoopExecutor.swift; sourceTree = "<group>"; };
 		1739F8151AC255C8CD8DFA89 /* MemoryGraphEvidenceMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryGraphEvidenceMatcher.swift; sourceTree = "<group>"; };
 		17614D93EBAC1A9897BEFCA2 /* TurnContracts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnContracts.swift; sourceTree = "<group>"; };
@@ -914,6 +916,7 @@
 				8449CEBBA6CFF148386D61AC /* VoicePreviewService.swift */,
 				91879267C0CCCFF0F3994129 /* VoiceTranscriptCommitter.swift */,
 				7A2FA2F104CB9B8CF401CE9D /* WeeklyReflectionService.swift */,
+				13686E8EC9E10D5BEF9B51F4 /* ThinkingTrace.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -1074,8 +1077,6 @@
 			dependencies = (
 			);
 			name = ReflectionFixtureRunner;
-			packageProductDependencies = (
-			);
 			productName = ReflectionFixtureRunner;
 			productReference = 33FA2C8AEFB994F087E4B701 /* ReflectionFixtureRunner */;
 			productType = "com.apple.product-type.tool";
@@ -1093,8 +1094,6 @@
 				0FAA65F8B5940C5887EE6AE2 /* PBXTargetDependency */,
 			);
 			name = NousTests;
-			packageProductDependencies = (
-			);
 			productName = NousTests;
 			productReference = 63558731B5D9A45DD29170B9 /* NousTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -1132,8 +1131,6 @@
 			dependencies = (
 			);
 			name = ProvocationFixtureRunner;
-			packageProductDependencies = (
-			);
 			productName = ProvocationFixtureRunner;
 			productReference = 890D50666528A363A7E96CF3 /* ProvocationFixtureRunner */;
 			productType = "com.apple.product-type.tool";
@@ -1403,6 +1400,7 @@
 				FCE2542CF4E2A112E7653AE2 /* WeeklyReflectionService.swift in Sources */,
 				07FFF1026087C07958572C54 /* WelcomeView.swift in Sources */,
 				3A38D50339D27DC72856B618 /* WindowConfigurator.swift in Sources */,
+				B7E00FF8F8A1F48CC925473D /* ThinkingTrace.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
