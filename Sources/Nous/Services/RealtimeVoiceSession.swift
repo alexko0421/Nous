@@ -11,6 +11,7 @@ protocol RealtimeVoiceSocketing: AnyObject {
 final class URLSessionRealtimeVoiceSocket: RealtimeVoiceSocketing {
     private let session: URLSession
     private var task: URLSessionWebSocketTask?
+    private var pingTask: Task<Void, Never>?
 
     init(session: URLSession = .shared) {
         self.session = session
@@ -20,6 +21,7 @@ final class URLSessionRealtimeVoiceSocket: RealtimeVoiceSocketing {
         let task = session.webSocketTask(with: request)
         self.task = task
         task.resume()
+        startPingLoop(task: task)
     }
 
     func send(_ data: Data) async throws {
@@ -46,8 +48,24 @@ final class URLSessionRealtimeVoiceSocket: RealtimeVoiceSocketing {
     }
 
     func close() {
+        pingTask?.cancel()
+        pingTask = nil
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
+    }
+
+    // Send a WebSocket-level ping every 10s while the socket is open. Without
+    // application traffic during quiet periods, OS network stacks and the
+    // OpenAI server can decide the socket is idle and tear it down. Pings
+    // keep the connection visibly alive end-to-end.
+    private func startPingLoop(task: URLSessionWebSocketTask) {
+        pingTask = Task { [weak task] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 10_000_000_000)
+                guard !Task.isCancelled, let task else { return }
+                task.sendPing { _ in }
+            }
+        }
     }
 }
 
@@ -132,8 +150,18 @@ enum RealtimeVoiceEventParser {
 
     private static func parseResponseDone(_ json: [String: Any]) -> RealtimeVoiceEvent {
         let response = json["response"] as? [String: Any]
-        guard let status = response?["status"] as? String,
-              status != "completed" else {
+        let status = response?["status"] as? String
+
+        // OpenAI Realtime sends `response.done` with a `status` field of
+        // "completed", "cancelled", "incomplete", or "failed". Only "failed"
+        // is a true session-fatal error. "cancelled" (e.g. barge-in / client
+        // cancel / VAD interrupt) and "incomplete" (audio truncation, max
+        // tokens) are normal turn-end states — the voice session should
+        // continue listening. Treating them as `.error` (which earlier code
+        // did) was the root cause of voice mode closing immediately after
+        // the assistant finished a reply.
+        let normalEndStatuses: Set<String> = ["completed", "cancelled", "incomplete"]
+        if status == nil || normalEndStatuses.contains(status!) {
             return .responseDone
         }
 
@@ -142,9 +170,9 @@ enum RealtimeVoiceEventParser {
         let message = error?["message"] as? String
 
         if let message, !message.isEmpty {
-            return .error("Realtime response \(status): \(message)")
+            return .error("Realtime response \(status!): \(message)")
         }
-        return .error("Realtime response \(status)")
+        return .error("Realtime response \(status!)")
     }
 }
 
