@@ -32,17 +32,17 @@ Important API facts used by this plan:
 
 Create:
 
-- `Sources/Nous/Models/Voice/VoiceModeModels.swift`  
+- `Sources/Nous/Models/Voice/VoiceModeModels.swift`
   Voice state enums, tool names, parsed tool calls, pending actions, navigation target.
-- `Sources/Nous/Services/VoiceCommandController.swift`  
+- `Sources/Nous/Services/VoiceCommandController.swift`
   Main-actor controller for direct actions, confirmation queue, and Realtime event handling.
-- `Sources/Nous/Services/RealtimeVoiceSession.swift`  
+- `Sources/Nous/Services/RealtimeVoiceSession.swift`
   OpenAI Realtime WebSocket lifecycle, event parsing, event sending, and audio session bridge.
-- `Sources/Nous/Services/VoiceAudioCapture.swift`  
+- `Sources/Nous/Services/VoiceAudioCapture.swift`
   `AVAudioEngine` capture and PCM16/24kHz/base64 conversion.
-- `Sources/Nous/Services/VoiceMemoryFacade.swift`  
+- `Sources/Nous/Services/VoiceMemoryFacade.swift`
   Small read facade for voice memory tools.
-- `Sources/Nous/Views/VoiceActionPill.swift`  
+- `Sources/Nous/Views/VoiceActionPill.swift`
   Compact action/status pill with confirm/cancel controls.
 - `Tests/NousTests/VoiceCommandControllerTests.swift`
 - `Tests/NousTests/NoteViewModelTests.swift`
@@ -52,19 +52,19 @@ Create:
 
 Modify:
 
-- `project.yml`  
+- `project.yml`
   Add `AVFoundation.framework` as an SDK dependency for the app target.
-- `Info.plist`  
+- `Info.plist`
   Add `NSMicrophoneUsageDescription`.
-- `Sources/Nous/ViewModels/SettingsViewModel.swift`  
+- `Sources/Nous/ViewModels/SettingsViewModel.swift`
   Add Voice Mode availability helpers.
-- `Tests/NousTests/SettingsViewModelTests.swift`  
+- `Tests/NousTests/SettingsViewModelTests.swift`
   Test Voice Mode availability.
-- `Sources/Nous/App/ContentView.swift`  
+- `Sources/Nous/App/ContentView.swift`
   Own the `VoiceCommandController`, configure app actions, pass it into chat.
-- `Sources/Nous/Views/ChatArea.swift`  
+- `Sources/Nous/Views/ChatArea.swift`
   Render mic button and `VoiceActionPill`, configure chat-specific handlers.
-- `Sources/Nous/ViewModels/NoteViewModel.swift`  
+- `Sources/Nous/ViewModels/NoteViewModel.swift`
   Add a narrow title/body note creation method for confirmed voice note actions.
 
 Do not modify:

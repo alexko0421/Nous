@@ -1,7 +1,7 @@
 # Quick Modes Contract Redesign
 
-**Date:** 2026-04-28  
-**Status:** Product contract approved in brainstorming. Implementation plan not started yet.  
+**Date:** 2026-04-28
+**Status:** Product contract approved in brainstorming. Implementation plan not started yet.
 **Scope:** Direction, Brainstorm, and Plan quick modes only. Default companion chat remains the core experience.
 
 ## Context

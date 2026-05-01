@@ -212,7 +212,7 @@ final class SkillMatcher: SkillMatching {
             .prefix(cap)
             .map { $0 }
     }
-    
+
     private static func skillOrdering(_ lhs: Skill, _ rhs: Skill) -> Bool {
         let lp = lhs.payload.trigger.priority
         let rp = rhs.payload.trigger.priority
