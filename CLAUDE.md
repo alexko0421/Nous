@@ -15,3 +15,7 @@ Key routing rules:
 - Design system, brand → invoke design-consultation
 - Visual audit, design polish → invoke design-review
 - Architecture review → invoke plan-eng-review
+
+## Beads engineering memory
+
+Use Beads (`bd`) for coding-agent task tracking and stable repo-specific engineering memories. Run `scripts/beads_agent_workflow.sh start` at session start. For non-trivial code/docs work, claim or create a bead before editing and finish with `scripts/beads_agent_workflow.sh finish <id> "<verification summary>"`. Keep Alex/product/thinking memory in Nous, not Beads. Full protocol: `docs/beads-agent-memory.md`.

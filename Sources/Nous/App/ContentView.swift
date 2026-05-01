@@ -195,6 +195,7 @@ struct ContentView: View {
                     telemetry: dependencies.governanceTelemetry,
                     galaxyRelationTelemetry: dependencies.galaxyRelationTelemetry,
                     shadowLearningStore: dependencies.shadowLearningStore,
+                    beadsAgentWorkVM: dependencies.beadsAgentWorkVM,
                     onBack: { selectedTab = .chat }
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -393,12 +394,13 @@ struct ContentView: View {
         }
     }
 
-    private func voiceSettingsSection(for section: SettingsSection) -> VoiceSettingsSection {
+    private func voiceSettingsSection(for section: SettingsSection) -> VoiceSettingsSection? {
         switch section {
         case .profile: return .profile
         case .general: return .general
         case .models: return .models
         case .memory: return .memory
+        case .agentWork: return nil
         }
     }
 

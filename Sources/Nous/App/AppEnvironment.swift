@@ -37,6 +37,7 @@ struct AppDependencies {
     let chatVM: ChatViewModel
     let noteVM: NoteViewModel
     let galaxyVM: GalaxyViewModel
+    let beadsAgentWorkVM: BeadsAgentWorkViewModel
     let weeklyReflectionRollover: (@Sendable () async -> Void)?
 }
 
@@ -226,6 +227,7 @@ final class AppEnvironment {
             relationRefinementQueue: relationRefinementQueue
         )
         let galaxyVM = GalaxyViewModel(nodeStore: nodeStore, graphEngine: graphEngine)
+        let beadsAgentWorkVM = BeadsAgentWorkViewModel()
 
         // WeeklyReflectionService rollover closure. Called once per app launch
         // from ContentView.onAppear; idempotent via existsReflectionRun so
@@ -284,6 +286,7 @@ final class AppEnvironment {
             chatVM: chatVM,
             noteVM: noteVM,
             galaxyVM: galaxyVM,
+            beadsAgentWorkVM: beadsAgentWorkVM,
             weeklyReflectionRollover: reflectionRollover
         )
     }

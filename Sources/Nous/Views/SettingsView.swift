@@ -6,6 +6,7 @@ enum SettingsSection: String, CaseIterable {
     case general = "General"
     case models  = "Models"
     case memory  = "Memory"
+    case agentWork = "Agent Work"
 
     var icon: String {
         switch self {
@@ -13,6 +14,7 @@ enum SettingsSection: String, CaseIterable {
         case .general: return "gearshape"
         case .models:  return "cpu"
         case .memory:  return "brain.head.profile"
+        case .agentWork: return "checklist"
         }
     }
 }
@@ -25,6 +27,7 @@ struct SettingsView: View {
     let telemetry: GovernanceTelemetryStore
     let galaxyRelationTelemetry: GalaxyRelationTelemetry
     let shadowLearningStore: ShadowLearningStore
+    let beadsAgentWorkVM: BeadsAgentWorkViewModel
     var onBack: (() -> Void)? = nil
 
     @AppStorage("nous.username")   private var username       = "ALEX"
@@ -85,6 +88,8 @@ struct SettingsView: View {
                         galaxyRelationTelemetry: galaxyRelationTelemetry,
                         shadowLearningStore: shadowLearningStore
                     )
+                case .agentWork:
+                    AgentWorkView(vm: beadsAgentWorkVM)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
