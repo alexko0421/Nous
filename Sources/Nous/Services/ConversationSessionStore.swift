@@ -229,4 +229,35 @@ extension ConversationSessionStore {
             messagesAfterAppend: messagesAfterAppend
         )
     }
+
+    /// Append a voice assistant message to the given conversation. Inserts
+    /// into `messages` (with `source: .voice`) and updates `nodes.content`
+    /// via `persistTranscript`.
+    func appendVoiceAssistantMessage(
+        nodeId: UUID,
+        text: String,
+        timestamp: Date
+    ) throws -> CommittedAssistantTurn {
+        guard let node = try nodeStore.fetchNode(id: nodeId) else {
+            throw ConversationSessionStoreError.missingNode(nodeId)
+        }
+
+        let assistantMessage = Message(
+            nodeId: node.id,
+            role: .assistant,
+            content: text,
+            timestamp: timestamp,
+            source: .voice
+        )
+        try nodeStore.insertMessage(assistantMessage)
+
+        let messagesAfterAppend = try nodeStore.fetchMessages(nodeId: node.id)
+        let updatedNode = try persistTranscript(nodeId: node.id, messages: messagesAfterAppend)
+
+        return CommittedAssistantTurn(
+            node: updatedNode,
+            assistantMessage: assistantMessage,
+            messagesAfterAssistantAppend: messagesAfterAppend
+        )
+    }
 }

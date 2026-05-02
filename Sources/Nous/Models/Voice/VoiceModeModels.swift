@@ -127,6 +127,7 @@ enum VoiceOutputVoice: String, CaseIterable, Identifiable {
 enum VoiceLanguage: String, CaseIterable, Identifiable {
     case automatic
     case cantonese
+    case mandarin
     case english
 
     var id: String { rawValue }
@@ -135,6 +136,7 @@ enum VoiceLanguage: String, CaseIterable, Identifiable {
         switch self {
         case .automatic: return "Auto"
         case .cantonese: return "粵語"
+        case .mandarin: return "普通話"
         case .english: return "English"
         }
     }
@@ -142,7 +144,7 @@ enum VoiceLanguage: String, CaseIterable, Identifiable {
     var transcriptionLanguageCode: String? {
         switch self {
         case .automatic: return nil
-        case .cantonese: return "zh"
+        case .cantonese, .mandarin: return "zh"
         case .english: return "en"
         }
     }
@@ -150,11 +152,13 @@ enum VoiceLanguage: String, CaseIterable, Identifiable {
     var realtimeInstruction: String {
         switch self {
         case .automatic:
-            return "Mirror the user's language and dialect. If Alex speaks Cantonese, respond in colloquial Cantonese, not Mandarin."
+            return "Mirror the user's language and dialect. Speak naturally, like a present thinking partner. If Alex speaks Cantonese, respond in colloquial Cantonese, not Mandarin."
         case .cantonese:
-            return "Use colloquial Cantonese by default. Preserve Cantonese wording and particles. Do not silently convert Cantonese into Mandarin."
+            return "Use colloquial Cantonese by default. Preserve Cantonese wording and particles. Keep it warm and conversational; do not silently convert Cantonese into Mandarin."
+        case .mandarin:
+            return "Use standard Mandarin Chinese by default, with Mainland 普通话 wording and phrasing. Keep it natural, warm, and conversational. Do not respond in Cantonese unless Alex switches language."
         case .english:
-            return "Use English by default unless Alex explicitly asks for another language."
+            return "Use English by default in a natural, warm, conversational voice unless Alex explicitly asks for another language."
         }
     }
 
@@ -164,6 +168,8 @@ enum VoiceLanguage: String, CaseIterable, Identifiable {
             return "Hi Alex, I am Nous. I can listen, think with you, and help you turn scattered thoughts into memory."
         case .cantonese:
             return "Alex，我係 Nous。我會聽住你講，幫你整理諗法，唔會將你嘅廣東話硬轉做普通話。"
+        case .mandarin:
+            return "Alex，我是 Nous。我会听你说，帮你整理想法，把零散的内容变成记忆。"
         case .english:
             return "Hi Alex, I am Nous. I can listen, think with you, and help you turn scattered thoughts into memory."
         }
@@ -172,11 +178,13 @@ enum VoiceLanguage: String, CaseIterable, Identifiable {
     var previewInstructions: String {
         switch self {
         case .automatic:
-            return "Sound calm, direct, and thoughtful. Match the language of the text."
+            return "Sound warm, present, and conversational. Match the language of the text. Avoid announcer or assistant-script delivery."
         case .cantonese:
-            return "Speak natural Hong Kong Cantonese. Keep the tone calm, direct, and thoughtful."
+            return "Speak natural Hong Kong Cantonese with a warm, present tone. Keep it conversational, not formal or over-polished."
+        case .mandarin:
+            return "Speak natural standard Mandarin Chinese with Mainland 普通话 pronunciation and wording. Keep it warm, present, and conversational."
         case .english:
-            return "Speak in calm, direct English with a thoughtful tone."
+            return "Speak in warm, present English. Keep it conversational, not like an announcement."
         }
     }
 }
@@ -234,6 +242,11 @@ struct VoiceAppSnapshot: Equatable {
 struct VoiceToolCall: Equatable {
     let name: String
     let arguments: String
+}
+
+struct VoiceSummaryPreview: Equatable {
+    var title: String
+    var markdown: String
 }
 
 enum VoicePendingAction: Equatable {
@@ -329,5 +342,16 @@ enum VoiceCapsuleSurfacePolicy {
         }
 
         return hasNotchScreen ? .notch : .inWindow
+    }
+}
+
+enum VoiceCapsuleVisibilityPolicy {
+    static func shouldShowCapsule(
+        isVoiceActive: Bool,
+        status: VoiceModeStatus,
+        hasPendingAction: Bool,
+        hasSummaryPreview: Bool
+    ) -> Bool {
+        isVoiceActive || status.shouldDisplayPill || hasPendingAction || hasSummaryPreview
     }
 }

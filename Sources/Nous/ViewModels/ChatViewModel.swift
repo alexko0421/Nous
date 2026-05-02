@@ -13,6 +13,7 @@ final class ChatViewModel {
     var isGenerating: Bool = false
     var currentResponse: String = ""
     var currentThinking: String = ""
+    var currentThinkingStartedAt: Date?
     var currentAgentTrace: [AgentTraceRecord] = []
     var didHitBudgetExhaustion: Bool = false
     var citations: [SearchResult] = []
@@ -72,8 +73,8 @@ final class ChatViewModel {
     private var turnOutcomeFactory: TurnOutcomeFactory {
         let projectionService = memoryProjectionService
         return TurnOutcomeFactory(
-            shouldPersistMemory: { messages, projectId in
-                projectionService.shouldPersistMemory(messages: messages, projectId: projectId)
+            memoryPersistenceDecision: { messages, projectId in
+                projectionService.memoryPersistenceDecision(messages: messages, projectId: projectId)
             }
         )
     }
@@ -110,7 +111,8 @@ final class ChatViewModel {
                         nodeStore: self.nodeStore,
                         vectorStore: self.vectorStore,
                         embeddingService: self.embeddingService,
-                        contradictionProvider: self.userMemoryService.contradictionReader
+                        contradictionProvider: self.userMemoryService.contradictionReader,
+                        skillStore: self.skillStore
                     )
                     .subset(mode.agent().toolNames)
                 return AgentLoopExecutor(
@@ -151,6 +153,17 @@ final class ChatViewModel {
             skillMatcher: skillMatcher ?? SkillMatcher(),
             skillTracker: skillTracker,
             shadowPatternPromptProvider: shadowPatternPromptProvider,
+            agentLoopProviderSupportsToolUse: { [weak self] provider in
+                guard provider == .openrouter,
+                      let llm = self?.llmServiceProvider()
+                else { return false }
+
+                if let openRouter = llm as? OpenRouterLLMService {
+                    return openRouter.supportsAgentToolUse
+                }
+
+                return (llm as? any ToolCallingLLMService)?.supportsAgentToolUse ?? false
+            },
             runJudge: { [weak self] operation in
                 guard let self else { throw CancellationError() }
                 return try await self.executeJudgeTask(operation)
@@ -334,6 +347,7 @@ final class ChatViewModel {
         citations = []
         currentResponse = ""
         currentThinking = ""
+        currentThinkingStartedAt = nil
         currentAgentTrace = []
         didHitBudgetExhaustion = false
         activeQuickActionMode = nil
@@ -352,6 +366,7 @@ final class ChatViewModel {
         citations = []
         currentResponse = ""
         currentThinking = ""
+        currentThinkingStartedAt = nil
         currentAgentTrace = []
         didHitBudgetExhaustion = false
         activeQuickActionMode = nil
@@ -395,6 +410,7 @@ final class ChatViewModel {
         isGenerating = true
         currentResponse = ""
         currentThinking = ""
+        currentThinkingStartedAt = Date()
         currentAgentTrace = []
         didHitBudgetExhaustion = false
         defer {
@@ -439,11 +455,11 @@ final class ChatViewModel {
         return node.id
     }
 
-    /// Build a TurnHousekeepingPlan for a voice-user-only turn. Reuses the
+    /// Build a TurnHousekeepingPlan for a voice turn. Reuses the
     /// embedding / Galaxy / emoji refresh paths the typed flow uses; skips
     /// Gemini cache refresh because voice does not run through the
     /// typed-flow LLM service.
-    private func voiceUserHousekeepingPlan(
+    private func voiceHousekeepingPlan(
         node: NousNode,
         messagesAfterAppend: [Message]
     ) -> TurnHousekeepingPlan {
@@ -487,9 +503,33 @@ final class ChatViewModel {
                 print("[ShadowLearning] failed to record voice signal: \(error)")
             }
         }
-        let plan = voiceUserHousekeepingPlan(
+        let plan = voiceHousekeepingPlan(
             node: result.node,
             messagesAfterAppend: result.messagesAfterAppend
+        )
+        turnHousekeepingService.run(plan)
+        scheduleShadowLearningHeartbeat()
+    }
+
+    /// Append a voice assistant message to the conversation identified by
+    /// nodeId. Mirrors `appendVoiceMessage` but does not record
+    /// Alex-specific shadow learning signals.
+    func appendVoiceAssistantMessage(
+        nodeId: UUID,
+        text: String,
+        timestamp: Date
+    ) throws {
+        let result = try conversationSessionStore.appendVoiceAssistantMessage(
+            nodeId: nodeId,
+            text: text,
+            timestamp: timestamp
+        )
+        if currentNode?.id == nodeId {
+            self.messages = result.messagesAfterAssistantAppend
+        }
+        let plan = voiceHousekeepingPlan(
+            node: result.node,
+            messagesAfterAppend: result.messagesAfterAssistantAppend
         )
         turnHousekeepingService.run(plan)
         scheduleShadowLearningHeartbeat()
@@ -574,6 +614,8 @@ final class ChatViewModel {
         inputText = ""
         isGenerating = true
         currentResponse = ""
+        currentThinking = ""
+        currentThinkingStartedAt = Date()
         currentAgentTrace = []
         defer {
             if isActiveResponseTask(responseTaskId) {
@@ -623,6 +665,7 @@ final class ChatViewModel {
         citations = []
         currentResponse = ""
         currentThinking = ""
+        currentThinkingStartedAt = nil
         currentAgentTrace = []
         didHitBudgetExhaustion = false
 
@@ -647,6 +690,7 @@ final class ChatViewModel {
         let eventSink = makeTurnEventSink(turnId: responseTaskId)
 
         isGenerating = true
+        currentThinkingStartedAt = Date()
         defer {
             if isActiveResponseTask(responseTaskId) {
                 isGenerating = false
@@ -709,10 +753,18 @@ final class ChatViewModel {
                 activeChatMode = prepared.effectiveMode
             }
             currentResponse = ""
-            currentThinking = ""
+            if currentThinkingStartedAt == nil {
+                currentThinkingStartedAt = Date()
+            }
             currentAgentTrace = []
             didHitBudgetExhaustion = false
         case .thinkingDelta(let delta):
+            if currentThinkingStartedAt == nil {
+                currentThinkingStartedAt = Date()
+            }
+            if Self.shouldSeparateThinkingSection(delta, after: currentThinking) {
+                currentThinking.append("\n\n")
+            }
             currentThinking.append(delta)
         case .agentTraceDelta(let record):
             currentAgentTrace.append(record)
@@ -724,10 +776,12 @@ final class ChatViewModel {
             activeQuickActionMode = completion.nextQuickActionMode
             currentResponse = ""
             currentThinking = ""
+            currentThinkingStartedAt = nil
             currentAgentTrace = []
             didHitBudgetExhaustion = false
         case .aborted(let reason):
             currentThinking = ""
+            currentThinkingStartedAt = nil
             currentAgentTrace = []
             didHitBudgetExhaustion = false
             if reason == .unexpectedCancellation {
@@ -737,6 +791,7 @@ final class ChatViewModel {
             }
         case .failed(let failure):
             currentThinking = ""
+            currentThinkingStartedAt = nil
             currentAgentTrace = []
             didHitBudgetExhaustion = false
             presentAssistantFailure("Error: \(failure.message)")
@@ -832,6 +887,7 @@ final class ChatViewModel {
         if clearDraft {
             currentResponse = ""
             currentThinking = ""
+            currentThinkingStartedAt = nil
             currentAgentTrace = []
             didHitBudgetExhaustion = false
         }
@@ -853,6 +909,17 @@ final class ChatViewModel {
     @MainActor
     private func scheduleShadowLearningHeartbeat() {
         heartbeatCoordinator?.scheduleShadowLearningAfterIdle()
+    }
+
+    private static func shouldSeparateThinkingSection(_ delta: String, after currentThinking: String) -> Bool {
+        guard !currentThinking.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+        return [
+            ThinkingTraceTitles.judge,
+            ThinkingTraceTitles.assistant,
+            ThinkingTraceTitles.agentLoop
+        ].contains { delta.hasPrefix($0) }
     }
 
     private static func debugEventName(_ event: TurnEvent) -> String {

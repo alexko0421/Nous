@@ -1,5 +1,8 @@
 import Foundation
 import Observation
+import os
+
+private let voiceLog = Logger(subsystem: "com.nous.app.Nous", category: "voice")
 
 enum VoiceSessionError: Error, Equatable {
     case missingOpenAIKey
@@ -15,9 +18,11 @@ final class VoiceCommandController {
     var audioLevel: Float = 0
     var visibleSurface: VoiceCapsuleSurface = .none
     var pendingActionToken: UUID?
+    var summaryPreview: VoiceSummaryPreview?
     var transcript: [VoiceTranscriptLine] = []
     var boundConversationId: UUID?
     var onUserUtteranceFinalized: ((VoiceTranscriptLine) -> Void)?
+    var onAssistantUtteranceFinalized: ((VoiceTranscriptLine) -> Void)?
     var onVoiceSessionTerminated: (() -> Void)?
 
     private var handlers: VoiceActionHandlers = .empty
@@ -30,6 +35,7 @@ final class VoiceCommandController {
     private var outputTranscriptBuffer = ""
     private var inputTranscriptIsFinal = false
     private var outputTranscriptIsFinal = false
+    private var pendingRealtimeToolCall: PendingRealtimeToolCall?
     private var sessionGeneration = 0
     // Held while a voice session is active to prevent macOS App Nap from
     // throttling the realtime WebSocket when Nous is on a different Space
@@ -67,6 +73,8 @@ final class VoiceCommandController {
         isActive = true
         status = .listening
         audioLevel = 0
+        summaryPreview = nil
+        pendingRealtimeToolCall = nil
         resetTranscript()
     }
 
@@ -110,6 +118,8 @@ final class VoiceCommandController {
         isActive = false
         pendingAction = nil
         pendingActionToken = nil
+        pendingRealtimeToolCall = nil
+        summaryPreview = nil
         status = .idle
         audioLevel = 0
         resetTranscript()
@@ -120,7 +130,46 @@ final class VoiceCommandController {
         await handleRealtimeEvent(event, generation: sessionGeneration)
     }
 
+    static func logMessage(for event: RealtimeVoiceEvent) -> String {
+        switch event {
+        case .sessionReady:
+            return "event=sessionReady"
+        case .toolCall(let call, let callId),
+             .toolCallArgumentsDone(let call, let callId),
+             .responseDoneWithToolCall(let call, let callId):
+            return "event=\(event.logName) tool=\(call.name) callId=\(callId)"
+        case .outputAudioDelta:
+            return "event=outputAudioDelta"
+        case .inputTranscriptDelta:
+            return "event=inputTranscriptDelta"
+        case .inputTranscriptCompleted:
+            return "event=inputTranscriptCompleted"
+        case .outputTranscriptDelta:
+            return "event=outputTranscriptDelta"
+        case .outputTranscriptCompleted:
+            return "event=outputTranscriptCompleted"
+        case .responseDone:
+            return "event=responseDone"
+        case .sessionEnded:
+            return "event=sessionEnded"
+        case .userSpeechStarted:
+            return "event=userSpeechStarted"
+        case .error:
+            return "event=error"
+        }
+    }
+
+    static func functionOutputLogMessage(callId: String, output: String) -> String {
+        "sendFunctionOutput callId=\(callId) output=<redacted>"
+    }
+
     private func handleRealtimeEvent(_ event: RealtimeVoiceEvent, generation: Int) async {
+        switch event {
+        case .outputAudioDelta, .outputTranscriptDelta, .inputTranscriptDelta:
+            break  // too noisy
+        default:
+            voiceLog.notice("\(Self.logMessage(for: event), privacy: .private)")
+        }
         guard generation == sessionGeneration, isActive else { return }
 
         switch event {
@@ -128,28 +177,41 @@ final class VoiceCommandController {
             status = .listening
 
         case .toolCall(let call, let callId):
-            do {
-                lastToolOutput = nil
-                lastToolShouldIncludeAppState = false
-                try await handleToolCall(call)
-                let output = functionOutput(lastToolOutput ?? status.displayText)
-                lastToolOutput = nil
-                lastToolShouldIncludeAppState = false
-                await sendFunctionOutput(callId: callId, output: output, generation: generation)
-            } catch {
-                lastToolOutput = nil
-                lastToolShouldIncludeAppState = false
-                restorePendingConfirmationStatus()
-                await sendFunctionOutput(callId: callId, output: "Voice command rejected", generation: generation)
-            }
+            await executeRealtimeToolCall(call, callId: callId, generation: generation)
+
+        case .toolCallArgumentsDone(let call, let callId):
+            pendingRealtimeToolCall = PendingRealtimeToolCall(call: call, callId: callId)
+
+        case .responseDoneWithToolCall(let call, let callId):
+            pendingRealtimeToolCall = nil
+            await executeRealtimeToolCall(call, callId: callId, generation: generation)
 
         case .responseDone:
-            if pendingAction == nil {
+            if let pendingRealtimeToolCall {
+                self.pendingRealtimeToolCall = nil
+                await executeRealtimeToolCall(
+                    pendingRealtimeToolCall.call,
+                    callId: pendingRealtimeToolCall.callId,
+                    generation: generation
+                )
+            } else if pendingAction == nil {
                 status = .listening
             }
 
         case .sessionEnded:
             stop()
+
+        case .userSpeechStarted:
+            // User started speaking mid-reply. Server has been told to cancel
+            // its response (turn_detection.interrupt_response = true) and the
+            // realtime session has already flushed queued playback. Surface
+            // the listening state so the capsule reflects that we're back to
+            // capturing the user's voice.
+            outputTranscriptBuffer = ""
+            outputTranscriptIsFinal = false
+            if pendingAction == nil {
+                status = .listening
+            }
 
         case .outputAudioDelta:
             break
@@ -239,6 +301,18 @@ final class VoiceCommandController {
             handlers.startNewChat()
             markAppStateChanged()
             status = .action("New chat")
+
+        case "show_summary_preview":
+            summaryPreview = VoiceSummaryPreview(
+                title: try requiredString("title", in: args),
+                markdown: try requiredString("markdown", in: args)
+            )
+            status = .action("Summary ready")
+            lastToolOutput = "Summary shown"
+
+        case "dismiss_summary_preview":
+            dismissSummaryPreview()
+            status = .action("Summary closed")
 
         case "search_memory":
             guard let memory else {
@@ -404,7 +478,26 @@ final class VoiceCommandController {
         }
     }
 
+    private func executeRealtimeToolCall(_ call: VoiceToolCall, callId: String, generation: Int) async {
+        voiceLog.notice("executeRealtimeToolCall name=\(call.name, privacy: .public) callId=\(callId, privacy: .public)")
+        do {
+            lastToolOutput = nil
+            lastToolShouldIncludeAppState = false
+            try await handleToolCall(call)
+            let output = functionOutput(lastToolOutput ?? status.displayText)
+            lastToolOutput = nil
+            lastToolShouldIncludeAppState = false
+            await sendFunctionOutput(callId: callId, output: output, generation: generation)
+        } catch {
+            lastToolOutput = nil
+            lastToolShouldIncludeAppState = false
+            restorePendingConfirmationStatus()
+            await sendFunctionOutput(callId: callId, output: "Voice command rejected", generation: generation)
+        }
+    }
+
     private func sendFunctionOutput(callId: String, output: String, generation: Int) async {
+        voiceLog.notice("\(Self.functionOutputLogMessage(callId: callId, output: output), privacy: .private)")
         do {
             try await session.sendFunctionOutput(callId: callId, output: output)
         } catch {
@@ -419,8 +512,13 @@ final class VoiceCommandController {
         endBackgroundActivityIfNeeded()
         isActive = false
         pendingAction = nil
+        pendingActionToken = nil
+        pendingRealtimeToolCall = nil
+        summaryPreview = nil
         status = .error(message)
         audioLevel = 0
+        // Keep subtitleText for the error display; resetTranscript clears it
+        // after the animation plays out via the notch controller path.
         resetTranscript()
         clearBoundConversation()
     }
@@ -443,6 +541,10 @@ final class VoiceCommandController {
         case .createNote:
             status = .needsConfirmation("Create note?")
         }
+    }
+
+    func dismissSummaryPreview() {
+        summaryPreview = nil
     }
 
     private func appendInputTranscript(_ delta: String) {
@@ -484,11 +586,20 @@ final class VoiceCommandController {
         outputTranscriptBuffer = text
         outputTranscriptIsFinal = true
         subtitleText = text
-        VoiceTranscriptLine.finalize(text: text, role: .assistant, into: &transcript)
+        let line = VoiceTranscriptLine.finalize(text: text, role: .assistant, into: &transcript)
+        onAssistantUtteranceFinalized?(line)
     }
 
     private func resetTranscript() {
         subtitleText = ""
+        resetTranscriptBuffers()
+    }
+
+    // Resets internal buffers only; does NOT touch subtitleText.
+    // Called from stop() so the closing animation can display the last
+    // subtitle text while the capsule shrinks. subtitleText is cleared
+    // by VoiceNotchPanelController after the animation completes.
+    private func resetTranscriptBuffers() {
         inputTranscriptBuffer = ""
         outputTranscriptBuffer = ""
         inputTranscriptIsFinal = false
@@ -529,4 +640,42 @@ final class VoiceCommandController {
         ProcessInfo.processInfo.endActivity(token)
         activityToken = nil
     }
+}
+
+private extension RealtimeVoiceEvent {
+    var logName: String {
+        switch self {
+        case .sessionReady:
+            "sessionReady"
+        case .toolCall:
+            "toolCall"
+        case .toolCallArgumentsDone:
+            "toolCallArgumentsDone"
+        case .responseDoneWithToolCall:
+            "responseDoneWithToolCall"
+        case .outputAudioDelta:
+            "outputAudioDelta"
+        case .inputTranscriptDelta:
+            "inputTranscriptDelta"
+        case .inputTranscriptCompleted:
+            "inputTranscriptCompleted"
+        case .outputTranscriptDelta:
+            "outputTranscriptDelta"
+        case .outputTranscriptCompleted:
+            "outputTranscriptCompleted"
+        case .responseDone:
+            "responseDone"
+        case .sessionEnded:
+            "sessionEnded"
+        case .userSpeechStarted:
+            "userSpeechStarted"
+        case .error:
+            "error"
+        }
+    }
+}
+
+private struct PendingRealtimeToolCall {
+    var call: VoiceToolCall
+    var callId: String
 }

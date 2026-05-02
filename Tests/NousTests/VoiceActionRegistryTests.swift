@@ -39,6 +39,8 @@ final class VoiceActionRegistryTests: XCTestCase {
             "append_composer_text": .direct,
             "clear_composer": .direct,
             "start_new_chat": .direct,
+            "show_summary_preview": .direct,
+            "dismiss_summary_preview": .direct,
             "propose_note": .confirmationRequired,
             "confirm_pending_action": .confirmationRequired,
             "cancel_pending_action": .confirmationRequired
@@ -104,6 +106,8 @@ final class VoiceActionRegistryTests: XCTestCase {
         "append_composer_text",
         "clear_composer",
         "start_new_chat",
+        "show_summary_preview",
+        "dismiss_summary_preview",
         "propose_note",
         "confirm_pending_action",
         "cancel_pending_action"

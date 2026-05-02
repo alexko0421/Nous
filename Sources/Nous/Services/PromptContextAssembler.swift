@@ -322,12 +322,16 @@ enum PromptContextAssembler {
         projectGoal: String?,
         attachments: [AttachedFileContext] = [],
         activeQuickActionMode: QuickActionMode? = nil,
+        loadedSkills: [LoadedSkill] = [],
+        matchedSkills: [Skill] = [],
         quickActionAddendum: String? = nil,
+        allowSkillIndex: Bool = true,
         allowInteractiveClarification: Bool = false,
         shadowLearningHints: [String] = [],
         now: Date = Date()
     ) -> TurnSystemSlice {
-        var stable: [String] = []
+        var anchorAndPolicies: [String] = []
+        var slowMemory: [String] = []
         var volatilePieces: [String] = []
 
         // Stable prefix: identity + policies + slow-changing memory layers. This is what
@@ -335,19 +339,19 @@ enum PromptContextAssembler {
         // would invalidate the cache hash every request and defeat the whole point.
         #if DEBUG
         if !DebugAblation.skipAnchor {
-            stable.append(anchor)
+            anchorAndPolicies.append(anchor)
         } else {
             print("[DebugAblation] anchor SKIPPED")
         }
         #else
-        stable.append(anchor)
+        anchorAndPolicies.append(anchor)
         #endif
-        stable.append(memoryInterpretationPolicy)
-        stable.append(coreSafetyPolicy)
-        stable.append(stoicGroundingPolicy)
-        stable.append(realWorldDecisionPolicy)
-        stable.append(summaryOutputPolicy)
-        stable.append(conversationTitleOutputPolicy)
+        anchorAndPolicies.append(memoryInterpretationPolicy)
+        anchorAndPolicies.append(coreSafetyPolicy)
+        anchorAndPolicies.append(stoicGroundingPolicy)
+        anchorAndPolicies.append(realWorldDecisionPolicy)
+        anchorAndPolicies.append(summaryOutputPolicy)
+        anchorAndPolicies.append(conversationTitleOutputPolicy)
 
         let memoryPacket = MemoryPromptPacket(
             globalMemory: globalMemory,
@@ -360,7 +364,7 @@ enum PromptContextAssembler {
             projectGoal: projectGoal
         )
         let promptCitations = memoryPacket.filteredCitations(citations)
-        stable.append(contentsOf: memoryPacket.stableBlocks)
+        slowMemory.append(contentsOf: memoryPacket.stableBlocks)
 
         if !memoryGraphRecall.isEmpty, activeQuickActionMode != nil {
             volatilePieces.append("---\n\nGRAPH MEMORY RECALL:")
@@ -478,10 +482,127 @@ CHAT FORMAT POLICY:
             )
         }
 
-        return TurnSystemSlice(
-            stable: stable.joined(separator: "\n\n"),
-            volatile: volatilePieces.joined(separator: "\n\n")
+        let loadedSkillIDs = Set(loadedSkills.map(\.skillID))
+        let activeSkills = renderActiveSkills(loadedSkills)
+        let skillIndex = allowSkillIndex
+            ? renderSkillIndex(
+                matched: matchedSkills,
+                loadedIDs: loadedSkillIDs,
+                activeMode: activeQuickActionMode
+            )
+            : ""
+
+        var blocks: [SystemPromptBlock] = [
+            SystemPromptBlock(
+                id: .anchorAndPolicies,
+                content: anchorAndPolicies.joined(separator: "\n\n"),
+                cacheControl: .ephemeral
+            )
+        ]
+
+        let slowMemoryContent = slowMemory.joined(separator: "\n\n")
+        if !slowMemoryContent.isEmpty {
+            blocks.append(
+                SystemPromptBlock(
+                    id: .slowMemory,
+                    content: slowMemoryContent,
+                    cacheControl: .ephemeral
+                )
+            )
+        }
+
+        if !activeSkills.isEmpty {
+            blocks.append(
+                SystemPromptBlock(
+                    id: .activeSkills,
+                    content: activeSkills,
+                    cacheControl: .ephemeral
+                )
+            )
+        }
+
+        if !skillIndex.isEmpty {
+            blocks.append(
+                SystemPromptBlock(
+                    id: .skillIndex,
+                    content: skillIndex,
+                    cacheControl: .ephemeral
+                )
+            )
+        }
+
+        blocks.append(
+            SystemPromptBlock(
+                id: .volatile,
+                content: volatilePieces.joined(separator: "\n\n"),
+                cacheControl: nil
+            )
         )
+
+        return TurnSystemSlice(blocks: blocks)
+    }
+
+    static func indexedSkillIds(
+        matchedSkills: [Skill],
+        loadedSkills: [LoadedSkill],
+        activeQuickActionMode: QuickActionMode?,
+        allowSkillIndex: Bool = true
+    ) -> Set<UUID> {
+        guard allowSkillIndex, activeQuickActionMode != nil else { return [] }
+        let loadedIDs = Set(loadedSkills.map(\.skillID))
+        return Set(
+            matchedSkills
+                .filter { $0.payload.payloadVersion >= 2 }
+                .filter { !loadedIDs.contains($0.id) }
+                .map(\.id)
+        )
+    }
+
+    private static func renderActiveSkills(_ loadedSkills: [LoadedSkill]) -> String {
+        guard !loadedSkills.isEmpty else { return "" }
+
+        var pieces = [
+            "---",
+            "",
+            "ACTIVE SKILLS:",
+            "The following skill prompt fragments are already loaded for this conversation. Apply them when relevant."
+        ]
+
+        for skill in loadedSkills {
+            pieces.append("<<skill source=user id=\(skill.skillID.uuidString) name=\(skill.nameSnapshot)>>")
+            pieces.append(skill.contentSnapshot)
+            pieces.append("<</skill>>")
+        }
+
+        return pieces.joined(separator: "\n")
+    }
+
+    private static func renderSkillIndex(
+        matched skills: [Skill],
+        loadedIDs: Set<UUID>,
+        activeMode: QuickActionMode?
+    ) -> String {
+        guard activeMode != nil else { return "" }
+
+        let candidates = skills
+            .filter { $0.payload.payloadVersion >= 2 }
+            .filter { !loadedIDs.contains($0.id) }
+        guard !candidates.isEmpty else { return "" }
+
+        var pieces = [
+            "---",
+            "",
+            "SKILL INDEX:",
+            "These skills matched the current turn but their full content is not loaded yet.",
+            "If one is needed for a better answer, call loadSkill with its id before relying on it."
+        ]
+
+        for skill in candidates {
+            let cue = skill.payload.useWhen ?? skill.payload.description ?? "Use when this skill is relevant."
+            pieces.append("- id=\(skill.id.uuidString) name=\(skill.payload.name) priority=\(skill.payload.trigger.priority): \(cue)")
+        }
+
+        return pieces.joined(separator: "\n")
     }
 
     static func governanceTrace(
@@ -553,8 +674,25 @@ CHAT FORMAT POLICY:
             evidenceAttached: !promptMemoryEvidence.isEmpty,
             safetyPolicyInvoked: highRiskQueryDetected,
             highRiskQueryDetected: highRiskQueryDetected,
-            turnSteward: turnSteward
+            turnSteward: turnSteward,
+            citationTrace: citationTrace(for: promptCitations)
         )
+    }
+
+    private static func citationTrace(for citations: [SearchResult]) -> CitationTrace? {
+        guard !citations.isEmpty else { return nil }
+
+        let similarities = citations.map { roundedSimilarity($0.similarity) }
+        return CitationTrace(
+            citationCount: citations.count,
+            longGapCount: citations.filter { $0.lane == .longGap }.count,
+            minSimilarity: similarities.min() ?? 0,
+            maxSimilarity: similarities.max() ?? 0
+        )
+    }
+
+    private static func roundedSimilarity(_ similarity: Float) -> Double {
+        (Double(similarity) * 10_000).rounded() / 10_000
     }
 
     private static func longGapConnectionGuidance(

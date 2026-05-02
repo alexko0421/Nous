@@ -21,18 +21,46 @@ struct GeminiCacheSummary: Equatable {
     }
 }
 
+struct PromptTraceEvaluationMetrics: Equatable {
+    let runCount: Int
+    let failedRunCount: Int
+    let warningRunCount: Int
+    let findingCounts: [PromptTraceEvaluationFindingCode: Int]
+
+    var passRate: Double {
+        guard runCount > 0 else { return 0 }
+        return Double(runCount - failedRunCount) / Double(runCount)
+    }
+
+    func findingCount(_ code: PromptTraceEvaluationFindingCode) -> Int {
+        findingCounts[code, default: 0]
+    }
+}
+
 final class GovernanceTelemetryStore {
     private let defaults: UserDefaults
     private let nodeStore: NodeStore?
 
     private enum Keys {
         static let lastPromptTrace = "nous.governance.lastPromptTrace"
+        static let lastPromptEvaluationSummary = "nous.governance.lastPromptEvaluationSummary"
 
         static func counter(_ counter: EvalCounter) -> String {
             "nous.governance.counter.\(counter.rawValue)"
         }
 
+        static let promptEvaluationRunCount = "nous.governance.promptEvaluation.runCount"
+        static let promptEvaluationFailedRunCount = "nous.governance.promptEvaluation.failedRunCount"
+        static let promptEvaluationWarningRunCount = "nous.governance.promptEvaluation.warningRunCount"
+        static func promptEvaluationFindingCount(_ code: PromptTraceEvaluationFindingCode) -> String {
+            "nous.governance.promptEvaluation.finding.\(code.rawValue)"
+        }
+
         static let memoryStorageSuppressedCount = "nous.governance.memoryStorageSuppressedCount"
+        static func memoryStorageSuppressedReasonCount(_ reason: MemorySuppressionReason) -> String {
+            "nous.governance.memoryStorageSuppressedReason.\(reason.rawValue)"
+        }
+
         static let lastGeminiCacheSnapshot = "nous.governance.lastGeminiCacheSnapshot"
         static let geminiCacheRequestCount = "nous.governance.geminiCacheRequestCount"
         static let geminiCachePromptTokens = "nous.governance.geminiCachePromptTokens"
@@ -49,12 +77,29 @@ final class GovernanceTelemetryStore {
         return try? JSONDecoder().decode(PromptGovernanceTrace.self, from: data)
     }
 
+    var lastPromptEvaluationSummary: PromptTraceEvaluationSummary? {
+        guard let data = defaults.data(forKey: Keys.lastPromptEvaluationSummary) else { return nil }
+        return try? JSONDecoder().decode(PromptTraceEvaluationSummary.self, from: data)
+    }
+
     func recordPromptTrace(_ trace: PromptGovernanceTrace) {
         if let data = try? JSONEncoder().encode(trace) {
             defaults.set(data, forKey: Keys.lastPromptTrace)
         }
 
-        if trace.promptLayers.contains(where: { $0 != "anchor" && $0 != "core_safety_policy" }) {
+        let evaluationSummary = PromptTraceEvaluationHarness().run([
+            PromptTraceEvaluationCase(
+                name: "last prompt trace",
+                trace: trace,
+                expectations: promptTraceEvaluationExpectations(for: trace)
+            )
+        ])
+        if let data = try? JSONEncoder().encode(evaluationSummary) {
+            defaults.set(data, forKey: Keys.lastPromptEvaluationSummary)
+        }
+        recordPromptEvaluation(evaluationSummary)
+
+        if trace.hasMemorySignal {
             increment(.memoryUsefulness)
         }
 
@@ -72,12 +117,50 @@ final class GovernanceTelemetryStore {
         defaults.integer(forKey: Keys.counter(counter))
     }
 
-    func recordMemoryStorageSuppressed() {
+    var promptEvaluationMetrics: PromptTraceEvaluationMetrics {
+        var findingCounts: [PromptTraceEvaluationFindingCode: Int] = [:]
+        for code in PromptTraceEvaluationFindingCode.allCases {
+            findingCounts[code] = defaults.integer(forKey: Keys.promptEvaluationFindingCount(code))
+        }
+
+        return PromptTraceEvaluationMetrics(
+            runCount: defaults.integer(forKey: Keys.promptEvaluationRunCount),
+            failedRunCount: defaults.integer(forKey: Keys.promptEvaluationFailedRunCount),
+            warningRunCount: defaults.integer(forKey: Keys.promptEvaluationWarningRunCount),
+            findingCounts: findingCounts
+        )
+    }
+
+    private func promptTraceEvaluationExpectations(for trace: PromptGovernanceTrace) -> PromptTraceEvaluationExpectations {
+        let citationQuality = trace.promptLayers.contains("citations")
+            ? PromptTraceCitationExpectation(minimumSimilarity: 0.62, maximumLongGapShare: 0.5)
+            : nil
+        return PromptTraceEvaluationExpectations(citationQuality: citationQuality)
+    }
+
+    private func recordPromptEvaluation(_ summary: PromptTraceEvaluationSummary) {
+        defaults.set(defaults.integer(forKey: Keys.promptEvaluationRunCount) + summary.results.count, forKey: Keys.promptEvaluationRunCount)
+        defaults.set(defaults.integer(forKey: Keys.promptEvaluationFailedRunCount) + summary.results.filter { !$0.passed }.count, forKey: Keys.promptEvaluationFailedRunCount)
+        defaults.set(defaults.integer(forKey: Keys.promptEvaluationWarningRunCount) + summary.results.filter { $0.findings.contains { $0.severity == .warning } }.count, forKey: Keys.promptEvaluationWarningRunCount)
+
+        for finding in summary.results.flatMap(\.findings) {
+            let key = Keys.promptEvaluationFindingCount(finding.code)
+            defaults.set(defaults.integer(forKey: key) + 1, forKey: key)
+        }
+    }
+
+    func recordMemoryStorageSuppressed(reason: MemorySuppressionReason = .unspecified) {
         defaults.set(defaults.integer(forKey: Keys.memoryStorageSuppressedCount) + 1, forKey: Keys.memoryStorageSuppressedCount)
+        let reasonKey = Keys.memoryStorageSuppressedReasonCount(reason)
+        defaults.set(defaults.integer(forKey: reasonKey) + 1, forKey: reasonKey)
     }
 
     func memoryStorageSuppressedCount() -> Int {
         defaults.integer(forKey: Keys.memoryStorageSuppressedCount)
+    }
+
+    func memoryStorageSuppressedCount(reason: MemorySuppressionReason) -> Int {
+        defaults.integer(forKey: Keys.memoryStorageSuppressedReasonCount(reason))
     }
 
     func recordGeminiUsage(_ usage: GeminiUsageMetadata, at date: Date = Date()) {

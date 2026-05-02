@@ -49,22 +49,30 @@ struct VoiceWaveformBars: View {
         // by sitting at a stable 10pt midline rather than animating.
         if reduceMotion { return Self.minHeight + 6 }
 
-        // Baseline pulse so the bars always breathe in listening / thinking
-        // states, even when no audio is being captured (audio level == 0).
-        // Without this, a quiet mic shows a flat line and the capsule looks
-        // dead. The baseline is a slow per-bar oscillation between minHeight
-        // and ~40% of maxHeight.
+        // Mic RMS values land in roughly 0.05 - 0.25 for normal speech, so the
+        // raw `level` is too compressed to read as motion. Apply a gain so a
+        // typical speaking voice reaches the upper portion of the bar range.
+        let amplifiedLevel = min(1.0, CGFloat(level) * Self.audioGain)
+
+        // When the user is actually speaking, the baseline should fade out so
+        // audio drives the motion instead of the sine clock. `quietness` is 1
+        // during silence and goes to 0 as speech amplitude rises — multiplied
+        // into the baseline amplitude so the breathing visibly recedes.
+        let quietness = max(0.0, 1.0 - amplifiedLevel)
         let baselineEnvelope = 0.5 + 0.5 * sin(Double(i) * Self.phase + clock)
-        let baseline = Self.minHeight + CGFloat(baselineEnvelope) * (Self.maxHeight * 0.4 - Self.minHeight)
+        let baselineAmplitude = (Self.maxHeight * Self.baselineFraction - Self.minHeight) * quietness
+        let baseline = Self.minHeight + CGFloat(baselineEnvelope) * baselineAmplitude
 
-        // Audio-driven envelope: scales the bars further when there's input.
+        // Audio-driven envelope: per-bar offset so neighboring bars don't all
+        // peak together — keeps the waveform looking like sound, not a block.
         let envelope = 0.6 + 0.4 * sin(Double(i) * Self.phase + clock)
-        let audioDriven = CGFloat(level) * CGFloat(envelope) * Self.maxHeight
+        let audioDriven = amplifiedLevel * CGFloat(envelope) * Self.maxHeight
 
-        // The visible height is whichever is taller — baseline ensures motion,
-        // audio-driven adds responsiveness when the user actually speaks.
         return min(Self.maxHeight, max(baseline, audioDriven))
     }
+
+    private static let audioGain: CGFloat = 3.0
+    private static let baselineFraction: CGFloat = 0.2
 
     private var barColor: Color {
         switch state {

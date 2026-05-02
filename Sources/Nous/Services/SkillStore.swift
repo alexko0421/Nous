@@ -4,6 +4,9 @@ protocol SkillStoring {
     func fetchAllSkills(userId: String) throws -> [Skill]
     func fetchActiveSkills(userId: String) throws -> [Skill]
     func fetchSkill(id: UUID) throws -> Skill?
+    func loadedSkills(in conversationID: UUID) throws -> [LoadedSkill]
+    func markSkillLoaded(skillID: UUID, in conversationID: UUID, at loadedAt: Date) throws -> MarkSkillLoadedResult
+    func unloadAllSkills(in conversationID: UUID) throws
     func insertSkill(_ skill: Skill) throws
     func updateSkill(_ skill: Skill) throws
     func setSkillState(id: UUID, state: SkillState) throws
@@ -61,6 +64,69 @@ final class SkillStore: SkillStoring {
 
         guard try stmt.step() else { return nil }
         return skill(from: stmt)
+    }
+
+    func loadedSkills(in conversationID: UUID) throws -> [LoadedSkill] {
+        let stmt = try database.prepare("""
+            SELECT skill_id, name_snapshot, content_snapshot, state_at_load, loaded_at
+            FROM conversation_loaded_skills
+            WHERE conversation_id = ?
+            ORDER BY loaded_at ASC, skill_id ASC;
+        """)
+        try stmt.bind(conversationID.uuidString, at: 1)
+
+        var skills: [LoadedSkill] = []
+        while try stmt.step() {
+            if let skill = loadedSkill(from: stmt) {
+                skills.append(skill)
+            }
+        }
+        return skills
+    }
+
+    func markSkillLoaded(skillID: UUID, in conversationID: UUID, at loadedAt: Date) throws -> MarkSkillLoadedResult {
+        var result: MarkSkillLoadedResult = .missingSkill
+
+        try nodeStore.inTransaction {
+            if let loaded = try loadedSkillRow(skillID: skillID, conversationID: conversationID) {
+                result = .alreadyLoaded(loaded)
+                return
+            }
+
+            guard let skill = try fetchSkill(id: skillID) else {
+                result = .missingSkill
+                return
+            }
+
+            guard skill.state == .active else {
+                result = .unavailable(skill.state)
+                return
+            }
+
+            let loaded = LoadedSkill(
+                skillID: skill.id,
+                nameSnapshot: skill.payload.name,
+                contentSnapshot: skill.payload.action.content,
+                stateAtLoad: skill.state,
+                loadedAt: loadedAt
+            )
+            try insertLoadedSkill(loaded, conversationID: conversationID)
+            try incrementFiredCountWithoutTransaction(id: skill.id, firedAt: loadedAt)
+            result = .inserted(loaded)
+        }
+
+        return result
+    }
+
+    func unloadAllSkills(in conversationID: UUID) throws {
+        try nodeStore.inTransaction {
+            let stmt = try database.prepare("""
+                DELETE FROM conversation_loaded_skills
+                WHERE conversation_id = ?;
+            """)
+            try stmt.bind(conversationID.uuidString, at: 1)
+            try stmt.step()
+        }
     }
 
     func insertSkill(_ skill: Skill) throws {
@@ -125,15 +191,7 @@ final class SkillStore: SkillStoring {
 
     func incrementFiredCount(id: UUID, firedAt: Date) throws {
         try nodeStore.inTransaction {
-            let stmt = try database.prepare("""
-                UPDATE skills
-                SET fired_count = fired_count + 1,
-                    last_fired_at = ?
-                WHERE id = ?;
-            """)
-            try stmt.bind(firedAt.timeIntervalSince1970, at: 1)
-            try stmt.bind(id.uuidString, at: 2)
-            try stmt.step()
+            try incrementFiredCountWithoutTransaction(id: id, firedAt: firedAt)
         }
     }
 
@@ -142,7 +200,7 @@ final class SkillStore: SkillStoring {
     }
 
     private func validate(_ payload: SkillPayload) throws {
-        guard payload.payloadVersion == 1 else {
+        guard (1...2).contains(payload.payloadVersion) else {
             throw SkillStoreError.invalidPayloadVersion(payload.payloadVersion)
         }
         guard !payload.trigger.modes.isEmpty else {
@@ -211,5 +269,67 @@ final class SkillStore: SkillStoring {
             print("[SkillStore] skipping skill \(id) with undecodable payload: \(error)")
             return nil
         }
+    }
+
+    private func loadedSkillRow(skillID: UUID, conversationID: UUID) throws -> LoadedSkill? {
+        let stmt = try database.prepare("""
+            SELECT skill_id, name_snapshot, content_snapshot, state_at_load, loaded_at
+            FROM conversation_loaded_skills
+            WHERE conversation_id = ? AND skill_id = ?;
+        """)
+        try stmt.bind(conversationID.uuidString, at: 1)
+        try stmt.bind(skillID.uuidString, at: 2)
+
+        guard try stmt.step() else { return nil }
+        return loadedSkill(from: stmt)
+    }
+
+    private func insertLoadedSkill(_ loaded: LoadedSkill, conversationID: UUID) throws {
+        let stmt = try database.prepare("""
+            INSERT INTO conversation_loaded_skills (
+                conversation_id, skill_id, name_snapshot, content_snapshot, state_at_load, loaded_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?);
+        """)
+        try stmt.bind(conversationID.uuidString, at: 1)
+        try stmt.bind(loaded.skillID.uuidString, at: 2)
+        try stmt.bind(loaded.nameSnapshot, at: 3)
+        try stmt.bind(loaded.contentSnapshot, at: 4)
+        try stmt.bind(loaded.stateAtLoad.rawValue, at: 5)
+        try stmt.bind(loaded.loadedAt.timeIntervalSince1970, at: 6)
+        try stmt.step()
+    }
+
+    private func incrementFiredCountWithoutTransaction(id: UUID, firedAt: Date) throws {
+        let stmt = try database.prepare("""
+            UPDATE skills
+            SET fired_count = fired_count + 1,
+                last_fired_at = ?
+            WHERE id = ?;
+        """)
+        try stmt.bind(firedAt.timeIntervalSince1970, at: 1)
+        try stmt.bind(id.uuidString, at: 2)
+        try stmt.step()
+    }
+
+    private func loadedSkill(from stmt: Statement) -> LoadedSkill? {
+        guard let idString = stmt.text(at: 0),
+              let id = UUID(uuidString: idString) else {
+            print("[SkillStore] skipping loaded skill row with invalid skill id")
+            return nil
+        }
+        guard let stateRaw = stmt.text(at: 3),
+              let state = SkillState(rawValue: stateRaw) else {
+            print("[SkillStore] skipping loaded skill \(id) with invalid state")
+            return nil
+        }
+
+        return LoadedSkill(
+            skillID: id,
+            nameSnapshot: stmt.text(at: 1) ?? "",
+            contentSnapshot: stmt.text(at: 2) ?? "",
+            stateAtLoad: state,
+            loadedAt: Date(timeIntervalSince1970: stmt.double(at: 4))
+        )
     }
 }

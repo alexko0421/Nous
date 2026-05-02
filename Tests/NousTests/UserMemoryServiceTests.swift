@@ -2328,6 +2328,10 @@ final class UserMemoryServiceTests: XCTestCase {
         ]
 
         XCTAssertFalse(service.shouldPersistMemory(messages: messages, projectId: nil))
+        XCTAssertEqual(
+            service.memoryPersistenceDecision(messages: messages, projectId: nil),
+            .suppress(.hardOptOut)
+        )
     }
 
     func testShouldPersistMemoryReturnsFalseForSensitiveContentWhenBoundaryRequiresConsent() throws {
@@ -2359,6 +2363,10 @@ final class UserMemoryServiceTests: XCTestCase {
         ]
 
         XCTAssertFalse(service.shouldPersistMemory(messages: messages, projectId: nil))
+        XCTAssertEqual(
+            service.memoryPersistenceDecision(messages: messages, projectId: nil),
+            .suppress(.sensitiveConsentRequired)
+        )
     }
 
     func testRejectedInferenceIncrementsOverInferenceCounter() async throws {

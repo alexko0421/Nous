@@ -55,6 +55,47 @@ final class ProvocationJudgeTests: XCTestCase {
         }
     }
 
+    struct FakeThinkingLLMService: LLMService, ThinkingDeltaConfigurableLLMService {
+        let output: String
+        let thinkingDelta: String
+        var onThinkingDelta: ThinkingDeltaHandler?
+
+        func withThinkingDeltaHandler(_ handler: @escaping ThinkingDeltaHandler) -> any LLMService {
+            FakeThinkingLLMService(
+                output: output,
+                thinkingDelta: thinkingDelta,
+                onThinkingDelta: handler
+            )
+        }
+
+        func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
+            let output = output
+            let thinkingDelta = thinkingDelta
+            let onThinkingDelta = onThinkingDelta
+            return AsyncThrowingStream { continuation in
+                Task {
+                    if let onThinkingDelta {
+                        await onThinkingDelta(thinkingDelta)
+                    }
+                    continuation.yield(output)
+                    continuation.finish()
+                }
+            }
+        }
+    }
+
+    actor ThinkingCapture {
+        private var values: [String] = []
+
+        func append(_ value: String) {
+            values.append(value)
+        }
+
+        func all() -> [String] {
+            values
+        }
+    }
+
     private func pool() -> [CitableEntry] {
         [CitableEntry(id: "E1", text: "Do not compete on price.", scope: .global)]
     }
@@ -77,6 +118,35 @@ final class ProvocationJudgeTests: XCTestCase {
         XCTAssertTrue(verdict.shouldProvoke)
         XCTAssertEqual(verdict.entryId, "E1")
         XCTAssertEqual(verdict.userState, .deciding)
+    }
+
+    func testForwardsVisibleJudgeThinkingDeltas() async throws {
+        let fake = FakeThinkingLLMService(
+            output: """
+            {"tension_exists":true,"user_state":"deciding","should_provoke":true,
+             "entry_id":"E1","reason":"pricing conflict","inferred_mode":"strategist"}
+            """,
+            thinkingDelta: "I compared the current price choice against entry E1."
+        )
+        let capture = ThinkingCapture()
+        let judge = ProvocationJudge(
+            llmService: fake,
+            timeout: 1.0,
+            onThinkingDelta: { delta in
+                await capture.append(delta)
+            }
+        )
+
+        _ = try await judge.judge(
+            userMessage: "I'm going with the cheapest option",
+            citablePool: pool(),
+            previousMode: .companion,
+            provider: .openrouter,
+            feedbackLoop: nil
+        )
+
+        let thinkingDeltas = await capture.all()
+        XCTAssertEqual(thinkingDeltas, ["I compared the current price choice against entry E1."])
     }
 
     func testRejectsMalformedJSON() async {

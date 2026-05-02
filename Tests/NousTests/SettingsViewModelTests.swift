@@ -252,15 +252,31 @@ final class SettingsViewModelTests: XCTestCase {
     func testVoicePreferencesPersistInUserDefaults() {
         let vm = makeViewModel()
         vm.voiceOutputVoice = .marin
-        vm.voiceLanguage = .cantonese
+        vm.voiceLanguage = .mandarin
 
         vm.savePreferences()
 
         let reloaded = makeViewModel()
         XCTAssertEqual(reloaded.voiceOutputVoice, .marin)
-        XCTAssertEqual(reloaded.voiceLanguage, .cantonese)
+        XCTAssertEqual(reloaded.voiceLanguage, .mandarin)
         XCTAssertEqual(defaults.string(forKey: "nous.voice.outputVoice"), "marin")
-        XCTAssertEqual(defaults.string(forKey: "nous.voice.language"), "cantonese")
+        XCTAssertEqual(defaults.string(forKey: "nous.voice.language"), "mandarin")
+    }
+
+    func testVoiceLanguageOptionsDoNotIncludeTaiwaneseMandarin() {
+        XCTAssertEqual(
+            VoiceLanguage.allCases.map(\.rawValue),
+            ["automatic", "cantonese", "mandarin", "english"]
+        )
+        XCTAssertFalse(VoiceLanguage.allCases.map(\.displayName).contains("台式普通話"))
+    }
+
+    func testLegacyTaiwaneseMandarinPreferenceFallsBackToAutomatic() {
+        defaults.set("taiwanese_mandarin", forKey: "nous.voice.language")
+
+        let vm = makeViewModel()
+
+        XCTAssertEqual(vm.voiceLanguage, .automatic)
     }
 
     func testPreviewVoiceUsesSelectedVoiceLanguageAndOpenAIKey() async {

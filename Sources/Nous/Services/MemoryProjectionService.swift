@@ -250,23 +250,30 @@ final class MemoryProjectionService {
         )
     }
 
-    func shouldPersistMemory(messages: [Message], projectId: UUID?) -> Bool {
+    func memoryPersistenceDecision(messages: [Message], projectId: UUID?) -> MemoryPersistenceDecision {
         guard let latestUserMessage = messages.reversed().first(where: { $0.role == .user }) else {
-            return true
+            return .persist
         }
 
         let latestContent = Self.stripQuoteBlocks(latestUserMessage.content)
         if SafetyGuardrails.containsHardMemoryOptOut(latestContent) {
-            return false
+            return .suppress(.hardOptOut)
         }
 
         let boundaries = currentMemoryBoundary(projectId: projectId)
         if SafetyGuardrails.requiresConsentForSensitiveMemory(boundaryLines: boundaries),
            SafetyGuardrails.containsSensitiveMemory(latestContent) {
-            return false
+            return .suppress(.sensitiveConsentRequired)
         }
 
-        return true
+        return .persist
+    }
+
+    func shouldPersistMemory(messages: [Message], projectId: UUID?) -> Bool {
+        memoryPersistenceDecision(
+            messages: messages,
+            projectId: projectId
+        ).shouldPersist
     }
 
     private func readActiveEntry(scope: MemoryScope, scopeRefId: UUID?) -> String {

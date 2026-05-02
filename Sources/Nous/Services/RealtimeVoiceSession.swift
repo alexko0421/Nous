@@ -54,10 +54,11 @@ final class URLSessionRealtimeVoiceSocket: RealtimeVoiceSocketing {
         task = nil
     }
 
-    // Send a WebSocket-level ping every 10s while the socket is open. Without
-    // application traffic during quiet periods, OS network stacks and the
-    // OpenAI server can decide the socket is idle and tear it down. Pings
-    // keep the connection visibly alive end-to-end.
+    // Send a WebSocket ping frame every 10s while the socket is open. Without
+    // application-level traffic during quiet periods (between user turns), the
+    // OS / OpenAI server can decide the socket is idle and tear it down,
+    // surfacing as `.sessionEnded` after the assistant finishes speaking.
+    // Pings keep the connection visibly alive end-to-end.
     private func startPingLoop(task: URLSessionWebSocketTask) {
         pingTask = Task { [weak task] in
             while !Task.isCancelled {
@@ -76,6 +77,8 @@ enum RealtimeVoiceSocketError: Error {
 enum RealtimeVoiceEvent: Equatable {
     case sessionReady
     case toolCall(VoiceToolCall, callId: String)
+    case toolCallArgumentsDone(VoiceToolCall, callId: String)
+    case responseDoneWithToolCall(VoiceToolCall, callId: String)
     case outputAudioDelta(String)
     case inputTranscriptDelta(String)
     case inputTranscriptCompleted(String)
@@ -83,6 +86,7 @@ enum RealtimeVoiceEvent: Equatable {
     case outputTranscriptCompleted(String)
     case responseDone
     case sessionEnded
+    case userSpeechStarted
     case error(String)
 }
 
@@ -112,7 +116,7 @@ enum RealtimeVoiceEventParser {
                   let callId = json["call_id"] as? String else {
                 return .error("Invalid tool call")
             }
-            return .toolCall(VoiceToolCall(name: name, arguments: arguments), callId: callId)
+            return .toolCallArgumentsDone(VoiceToolCall(name: name, arguments: arguments), callId: callId)
         case "response.output_audio.delta", "response.audio.delta":
             guard let delta = json["delta"] as? String else {
                 return .error("Invalid audio delta")
@@ -140,6 +144,8 @@ enum RealtimeVoiceEventParser {
             return .outputTranscriptCompleted(transcript)
         case "response.done":
             return parseResponseDone(json)
+        case "input_audio_buffer.speech_started":
+            return .userSpeechStarted
         case "error":
             let error = json["error"] as? [String: Any]
             return .error(error?["message"] as? String ?? "Realtime error")
@@ -162,6 +168,9 @@ enum RealtimeVoiceEventParser {
         // the assistant finished a reply.
         let normalEndStatuses: Set<String> = ["completed", "cancelled", "incomplete"]
         if status == nil || normalEndStatuses.contains(status!) {
+            if let toolCall = completedToolCall(from: response) {
+                return .responseDoneWithToolCall(toolCall.call, callId: toolCall.callId)
+            }
             return .responseDone
         }
 
@@ -173,6 +182,23 @@ enum RealtimeVoiceEventParser {
             return .error("Realtime response \(status!): \(message)")
         }
         return .error("Realtime response \(status!)")
+    }
+
+    private static func completedToolCall(from response: [String: Any]?) -> (call: VoiceToolCall, callId: String)? {
+        guard let output = response?["output"] as? [[String: Any]] else { return nil }
+
+        for item in output {
+            guard item["type"] as? String == "function_call" else { continue }
+            if let status = item["status"] as? String, status != "completed" { continue }
+            guard let name = item["name"] as? String,
+                  let arguments = item["arguments"] as? String,
+                  let callId = item["call_id"] as? String else {
+                return nil
+            }
+            return (VoiceToolCall(name: name, arguments: arguments), callId)
+        }
+
+        return nil
     }
 }
 
@@ -187,6 +213,15 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
     private var outboundQueue: RealtimeVoiceOutboundQueue?
     private let audioLevelHandlerLock = OSAllocatedUnfairLock<(@Sendable (Float) -> Void)?>(initialState: nil)
     private let configurationLock = OSAllocatedUnfairLock<RealtimeVoiceConfiguration>(initialState: .default)
+    // True from the first `outputAudioDelta` of an assistant turn until ~300ms
+    // after `responseDone`. While true, mic chunks are NOT forwarded to the
+    // server. Without this, the speaker echo of the assistant's voice gets
+    // captured by the mic, server VAD treats it as the user speaking, and the
+    // assistant ends up replying to itself in an infinite acknowledgment loop.
+    // Trade-off: barge-in (interrupting mid-reply) is disabled — the user has
+    // to wait for the assistant to finish before speaking again.
+    private let assistantSpeakingLock = OSAllocatedUnfairLock<Bool>(initialState: false)
+    private var assistantTailTask: Task<Void, Never>?
 
     init(
         socket: RealtimeVoiceSocketing = URLSessionRealtimeVoiceSocket(),
@@ -234,7 +269,10 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
                 configuration: configuration
             ))
             startReceiveLoop(onEvent: onEvent)
-            try audioCapture?.start(onAudio: { chunk in
+            try audioCapture?.start(onAudio: { [weak self] chunk in
+                guard let self else { return }
+                let speaking = self.assistantSpeakingLock.withLock { $0 }
+                if speaking { return }  // drop mic chunks while assistant is talking
                 queue.enqueueAudio(chunk)
             }, onAudioLevel: { [weak self] level in
                 guard let self else { return }
@@ -265,6 +303,9 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
         audioCapture?.stop()
         audioPlayback?.stop()
         socket.close()
+        assistantTailTask?.cancel()
+        assistantTailTask = nil
+        assistantSpeakingLock.withLock { $0 = false }
     }
 
     static func makeSessionUpdateEvent(
@@ -322,8 +363,29 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
                     }
                     guard let event = RealtimeVoiceEventParser.parse(raw) else { continue }
                     if case .outputAudioDelta(let base64Audio) = event {
+                        // First audio chunk of the assistant turn — start
+                        // muting the mic so its own playback doesn't echo
+                        // back into the input and trigger a fake user-speech
+                        // event on the server.
+                        assistantSpeakingLock.withLock { $0 = true }
+                        assistantTailTask?.cancel()
+                        assistantTailTask = nil
                         audioPlayback?.enqueue(base64PCM16Audio: base64Audio)
                         continue
+                    }
+                    if case .responseDone = event {
+                        // Keep the mic muted for ~800ms after the assistant
+                        // finishes — speaker output has a tail and we want
+                        // the input buffer the server sees to be clean
+                        // silence, not residual echo that VAD misreads as
+                        // a new user turn. Cancellable so the next turn's
+                        // outputAudioDelta resets the timer cleanly.
+                        assistantTailTask?.cancel()
+                        assistantTailTask = Task { [weak self] in
+                            try? await Task.sleep(nanoseconds: 800_000_000)
+                            guard !Task.isCancelled else { return }
+                            self?.assistantSpeakingLock.withLock { $0 = false }
+                        }
                     }
                     await onEvent(event)
                 } catch {
@@ -377,10 +439,12 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
 
     private static func voiceInstructions(configuration: RealtimeVoiceConfiguration) -> String {
         """
-        You are the voice control layer for Nous. Call tools only for explicit user intent. \
-        Use direct tools for navigation, settings sections, appearance, scratchpad/sidebar visibility, and composer drafting. \
-        Use propose_note for creating notes. Voice user utterances are automatically recorded into the chat history. \
-        Never claim you clicked UI. Language: \(configuration.language.realtimeInstruction)
+        You are the live voice layer for Nous. Sound like a calm, present thinking partner, not a command menu. \
+        Speak naturally in short conversational turns. Acknowledge what Alex said before taking action, especially before tool calls. \
+        Call tools only for explicit user intent. Use direct tools for navigation, settings sections, appearance, scratchpad/sidebar visibility, and composer drafting. \
+        When Alex asks to summarize, recap, or organize the current spoken thought, write concise markdown and call show_summary_preview so it appears as a summary paper below the floating capsule. \
+        Use propose_note for creating notes. When a tool succeeds, report the result plainly; never claim you clicked UI. \
+        Voice user utterances are automatically recorded into the chat history. Language: \(configuration.language.realtimeInstruction)
         """
     }
 }

@@ -16,6 +16,7 @@ final class PromptGovernanceTraceTests: XCTestCase {
 
         XCTAssertEqual(trace.promptLayers, ["anchor", "chat_mode"])
         XCTAssertNil(trace.turnSteward)
+        XCTAssertNil(trace.citationTrace)
     }
 
     func testEncodesAndDecodesTurnStewardTrace() throws {
@@ -42,6 +43,27 @@ final class PromptGovernanceTraceTests: XCTestCase {
         XCTAssertEqual(decoded.turnSteward, stewardTrace)
     }
 
+    func testEncodesAndDecodesCitationTrace() throws {
+        let citationTrace = CitationTrace(
+            citationCount: 2,
+            longGapCount: 1,
+            minSimilarity: 0.62,
+            maxSimilarity: 0.91
+        )
+        let trace = PromptGovernanceTrace(
+            promptLayers: ["anchor", "citations"],
+            evidenceAttached: false,
+            safetyPolicyInvoked: false,
+            highRiskQueryDetected: false,
+            citationTrace: citationTrace
+        )
+
+        let data = try JSONEncoder().encode(trace)
+        let decoded = try JSONDecoder().decode(PromptGovernanceTrace.self, from: data)
+
+        XCTAssertEqual(decoded.citationTrace, citationTrace)
+    }
+
     func testGovernanceTraceAddsTurnStewardLayer() {
         let stewardTrace = TurnStewardTrace(
             route: .direction,
@@ -65,5 +87,391 @@ final class PromptGovernanceTraceTests: XCTestCase {
 
         XCTAssertTrue(trace.promptLayers.contains("turn_steward"))
         XCTAssertEqual(trace.turnSteward, stewardTrace)
+    }
+
+    func testPromptTraceEvaluationHarnessPassesHealthyMemoryRAGCase() {
+        let trace = PromptGovernanceTrace(
+            promptLayers: ["anchor", "chat_mode", "memory_evidence", "citations", "long_gap_bridge_guidance"],
+            evidenceAttached: true,
+            safetyPolicyInvoked: false,
+            highRiskQueryDetected: false,
+            citationTrace: CitationTrace(
+                citationCount: 3,
+                longGapCount: 1,
+                minSimilarity: 0.68,
+                maxSimilarity: 0.91
+            )
+        )
+
+        let summary = PromptTraceEvaluationHarness().run([
+            PromptTraceEvaluationCase(
+                name: "healthy memory RAG",
+                trace: trace,
+                expectations: PromptTraceEvaluationExpectations(
+                    memorySignal: .required,
+                    citationQuality: PromptTraceCitationExpectation(
+                        minimumSimilarity: 0.62,
+                        maximumLongGapShare: 0.5
+                    )
+                )
+            )
+        ])
+
+        XCTAssertTrue(summary.passed)
+        XCTAssertEqual(summary.passedCount, 1)
+        XCTAssertEqual(summary.failedCount, 0)
+        XCTAssertEqual(summary.results.first?.findings ?? [], [])
+    }
+
+    func testPromptTraceEvaluationSummaryReportsVerdictAndQualityScore() {
+        let summary = PromptTraceEvaluationSummary(results: [
+            PromptTraceEvaluationResult(
+                name: "healthy",
+                findings: []
+            ),
+            PromptTraceEvaluationResult(
+                name: "long gap",
+                findings: [
+                    PromptTraceEvaluationFinding(
+                        code: .longGapDominated,
+                        severity: .warning,
+                        message: "Long-gap citations dominated the retrieved evidence for this turn."
+                    )
+                ]
+            )
+        ])
+
+        XCTAssertEqual(summary.verdict, .warning)
+        XCTAssertEqual(summary.qualityScore, 90)
+    }
+
+    func testPromptTraceEvaluationHarnessFlagsWeakCitationEvidence() {
+        let trace = PromptGovernanceTrace(
+            promptLayers: ["anchor", "chat_mode", "citations"],
+            evidenceAttached: false,
+            safetyPolicyInvoked: false,
+            highRiskQueryDetected: false,
+            citationTrace: CitationTrace(
+                citationCount: 2,
+                longGapCount: 0,
+                minSimilarity: 0.41,
+                maxSimilarity: 0.73
+            )
+        )
+
+        let result = PromptTraceEvaluationHarness().evaluate(
+            PromptTraceEvaluationCase(
+                name: "weak citation",
+                trace: trace,
+                expectations: PromptTraceEvaluationExpectations(
+                    citationQuality: PromptTraceCitationExpectation(
+                        minimumSimilarity: 0.62,
+                        maximumLongGapShare: 0.5
+                    )
+                )
+            )
+        )
+
+        XCTAssertFalse(result.passed)
+        XCTAssertEqual(result.findings.map(\.code), [.weakCitationEvidence])
+        XCTAssertEqual(result.findings.first?.severity, .failure)
+    }
+
+    func testPromptTraceEvaluationHarnessFlagsMissingCitationTrace() {
+        let trace = PromptGovernanceTrace(
+            promptLayers: ["anchor", "chat_mode", "citations"],
+            evidenceAttached: false,
+            safetyPolicyInvoked: false,
+            highRiskQueryDetected: false
+        )
+
+        let result = PromptTraceEvaluationHarness().evaluate(
+            PromptTraceEvaluationCase(
+                name: "missing citation trace",
+                trace: trace,
+                expectations: PromptTraceEvaluationExpectations(
+                    citationQuality: PromptTraceCitationExpectation(
+                        minimumSimilarity: 0.62,
+                        maximumLongGapShare: 0.5
+                    )
+                )
+            )
+        )
+
+        XCTAssertFalse(result.passed)
+        XCTAssertEqual(result.findings.map(\.code), [.missingCitationTrace])
+    }
+
+    func testPromptTraceEvaluationHarnessFlagsLongGapDominanceAsWarning() {
+        let trace = PromptGovernanceTrace(
+            promptLayers: ["anchor", "chat_mode", "citations", "long_gap_bridge_guidance"],
+            evidenceAttached: false,
+            safetyPolicyInvoked: false,
+            highRiskQueryDetected: false,
+            citationTrace: CitationTrace(
+                citationCount: 3,
+                longGapCount: 2,
+                minSimilarity: 0.72,
+                maxSimilarity: 0.88
+            )
+        )
+
+        let result = PromptTraceEvaluationHarness().evaluate(
+            PromptTraceEvaluationCase(
+                name: "long gap dominated",
+                trace: trace,
+                expectations: PromptTraceEvaluationExpectations(
+                    citationQuality: PromptTraceCitationExpectation(
+                        minimumSimilarity: 0.62,
+                        maximumLongGapShare: 0.5
+                    )
+                )
+            )
+        )
+
+        XCTAssertTrue(result.passed)
+        XCTAssertEqual(result.findings.map(\.code), [.longGapDominated])
+        XCTAssertEqual(result.findings.first?.severity, .warning)
+    }
+
+    func testPromptTraceEvaluationHarnessFlagsSafetyMiss() {
+        let trace = PromptGovernanceTrace(
+            promptLayers: ["anchor", "chat_mode"],
+            evidenceAttached: false,
+            safetyPolicyInvoked: false,
+            highRiskQueryDetected: true
+        )
+
+        let result = PromptTraceEvaluationHarness().evaluate(
+            PromptTraceEvaluationCase(name: "safety miss", trace: trace)
+        )
+
+        XCTAssertFalse(result.passed)
+        XCTAssertEqual(result.findings.map(\.code), [.safetyPolicyMissing])
+    }
+
+    func testPromptTraceEvaluationHarnessFlagsUnexpectedMemorySignal() {
+        let trace = PromptGovernanceTrace(
+            promptLayers: ["anchor", "chat_mode", "citations"],
+            evidenceAttached: false,
+            safetyPolicyInvoked: false,
+            highRiskQueryDetected: false,
+            citationTrace: CitationTrace(
+                citationCount: 1,
+                longGapCount: 0,
+                minSimilarity: 0.72,
+                maxSimilarity: 0.72
+            )
+        )
+
+        let result = PromptTraceEvaluationHarness().evaluate(
+            PromptTraceEvaluationCase(
+                name: "memory should be absent",
+                trace: trace,
+                expectations: PromptTraceEvaluationExpectations(memorySignal: .forbidden)
+            )
+        )
+
+        XCTAssertFalse(result.passed)
+        XCTAssertEqual(result.findings.map(\.code), [.unexpectedMemorySignal])
+    }
+
+    func testPromptTraceEvaluationFixtureSuiteCoversBaselineFailuresAndWarnings() {
+        let summary = PromptTraceEvaluationFixtureSuite.baseline.run()
+        let findingCodes = summary.results.flatMap { $0.findings.map(\.code) }
+
+        XCTAssertEqual(summary.results.count, 5)
+        XCTAssertEqual(summary.failedCount, 3)
+        XCTAssertEqual(summary.warningCount, 1)
+        XCTAssertTrue(findingCodes.contains(.weakCitationEvidence))
+        XCTAssertTrue(findingCodes.contains(.missingCitationTrace))
+        XCTAssertTrue(findingCodes.contains(.safetyPolicyMissing))
+        XCTAssertTrue(findingCodes.contains(.longGapDominated))
+        XCTAssertEqual(summary.verdict, .failure)
+    }
+}
+
+final class GovernanceTelemetryStoreTests: XCTestCase {
+    func testPolicyOnlyPromptTraceDoesNotIncrementMemoryUsefulness() {
+        let telemetry = makeTelemetry()
+
+        telemetry.recordPromptTrace(
+            PromptGovernanceTrace(
+                promptLayers: [
+                    "anchor",
+                    "memory_interpretation_policy",
+                    "core_safety_policy",
+                    "stoic_grounding_policy",
+                    "real_world_decision_policy",
+                    "summary_output_policy",
+                    "conversation_title_output_policy",
+                    "chat_mode",
+                    "high_risk_safety_mode"
+                ],
+                evidenceAttached: false,
+                safetyPolicyInvoked: true,
+                highRiskQueryDetected: true
+            )
+        )
+
+        XCTAssertEqual(telemetry.value(for: .memoryUsefulness), 0)
+        XCTAssertEqual(telemetry.value(for: .safetyMissRate), 0)
+    }
+
+    func testMemoryPromptTraceIncrementsMemoryUsefulness() {
+        let telemetry = makeTelemetry()
+
+        telemetry.recordPromptTrace(
+            PromptGovernanceTrace(
+                promptLayers: ["anchor", "chat_mode", "citations"],
+                evidenceAttached: false,
+                safetyPolicyInvoked: false,
+                highRiskQueryDetected: false
+            )
+        )
+
+        XCTAssertEqual(telemetry.value(for: .memoryUsefulness), 1)
+    }
+
+    func testRecordPromptTraceStoresEvaluationSummary() {
+        let telemetry = makeTelemetry()
+
+        telemetry.recordPromptTrace(
+            PromptGovernanceTrace(
+                promptLayers: ["anchor", "chat_mode", "citations"],
+                evidenceAttached: false,
+                safetyPolicyInvoked: false,
+                highRiskQueryDetected: false,
+                citationTrace: CitationTrace(
+                    citationCount: 2,
+                    longGapCount: 0,
+                    minSimilarity: 0.41,
+                    maxSimilarity: 0.72
+                )
+            )
+        )
+
+        let summary = telemetry.lastPromptEvaluationSummary
+
+        XCTAssertEqual(summary?.results.count, 1)
+        XCTAssertEqual(summary?.failedCount, 1)
+        XCTAssertEqual(summary?.results.first?.findings.map(\.code), [.weakCitationEvidence])
+    }
+
+    func testRecordPromptTraceStoresSafetyMissEvaluation() {
+        let telemetry = makeTelemetry()
+
+        telemetry.recordPromptTrace(
+            PromptGovernanceTrace(
+                promptLayers: ["anchor", "chat_mode"],
+                evidenceAttached: false,
+                safetyPolicyInvoked: false,
+                highRiskQueryDetected: true
+            )
+        )
+
+        XCTAssertEqual(
+            telemetry.lastPromptEvaluationSummary?.results.first?.findings.map(\.code),
+            [.safetyPolicyMissing]
+        )
+        XCTAssertEqual(telemetry.value(for: .safetyMissRate), 1)
+    }
+
+    func testRecordPromptTraceAggregatesEvaluationMetrics() {
+        let telemetry = makeTelemetry()
+
+        telemetry.recordPromptTrace(
+            PromptGovernanceTrace(
+                promptLayers: ["anchor", "chat_mode", "citations"],
+                evidenceAttached: false,
+                safetyPolicyInvoked: false,
+                highRiskQueryDetected: false,
+                citationTrace: CitationTrace(
+                    citationCount: 1,
+                    longGapCount: 0,
+                    minSimilarity: 0.72,
+                    maxSimilarity: 0.72
+                )
+            )
+        )
+        telemetry.recordPromptTrace(
+            PromptGovernanceTrace(
+                promptLayers: ["anchor", "chat_mode", "citations"],
+                evidenceAttached: false,
+                safetyPolicyInvoked: false,
+                highRiskQueryDetected: false,
+                citationTrace: CitationTrace(
+                    citationCount: 2,
+                    longGapCount: 0,
+                    minSimilarity: 0.41,
+                    maxSimilarity: 0.72
+                )
+            )
+        )
+        telemetry.recordPromptTrace(
+            PromptGovernanceTrace(
+                promptLayers: ["anchor", "chat_mode", "citations", "long_gap_bridge_guidance"],
+                evidenceAttached: false,
+                safetyPolicyInvoked: false,
+                highRiskQueryDetected: false,
+                citationTrace: CitationTrace(
+                    citationCount: 3,
+                    longGapCount: 2,
+                    minSimilarity: 0.72,
+                    maxSimilarity: 0.88
+                )
+            )
+        )
+
+        let metrics = telemetry.promptEvaluationMetrics
+
+        XCTAssertEqual(metrics.runCount, 3)
+        XCTAssertEqual(metrics.failedRunCount, 1)
+        XCTAssertEqual(metrics.warningRunCount, 1)
+        XCTAssertEqual(metrics.findingCount(.weakCitationEvidence), 1)
+        XCTAssertEqual(metrics.findingCount(.longGapDominated), 1)
+        XCTAssertEqual(metrics.passRate, 2.0 / 3.0, accuracy: 0.0001)
+    }
+
+    func testPromptEvaluationMetricsSurviveStoreRecreation() {
+        let suiteName = "GovernanceTelemetryStoreTests.metrics.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let first = GovernanceTelemetryStore(defaults: defaults)
+
+        first.recordPromptTrace(
+            PromptGovernanceTrace(
+                promptLayers: ["anchor", "chat_mode"],
+                evidenceAttached: false,
+                safetyPolicyInvoked: false,
+                highRiskQueryDetected: true
+            )
+        )
+
+        let second = GovernanceTelemetryStore(defaults: defaults)
+
+        XCTAssertEqual(second.promptEvaluationMetrics.runCount, 1)
+        XCTAssertEqual(second.promptEvaluationMetrics.failedRunCount, 1)
+        XCTAssertEqual(second.promptEvaluationMetrics.findingCount(.safetyPolicyMissing), 1)
+    }
+
+    func testRecordsMemorySuppressionByReason() {
+        let telemetry = makeTelemetry()
+
+        telemetry.recordMemoryStorageSuppressed(reason: .hardOptOut)
+        telemetry.recordMemoryStorageSuppressed(reason: .sensitiveConsentRequired)
+        telemetry.recordMemoryStorageSuppressed(reason: .hardOptOut)
+
+        XCTAssertEqual(telemetry.memoryStorageSuppressedCount(), 3)
+        XCTAssertEqual(telemetry.memoryStorageSuppressedCount(reason: .hardOptOut), 2)
+        XCTAssertEqual(telemetry.memoryStorageSuppressedCount(reason: .sensitiveConsentRequired), 1)
+        XCTAssertEqual(telemetry.memoryStorageSuppressedCount(reason: .unspecified), 0)
+    }
+
+    private func makeTelemetry() -> GovernanceTelemetryStore {
+        let suiteName = "GovernanceTelemetryStoreTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        return GovernanceTelemetryStore(defaults: defaults)
     }
 }

@@ -117,6 +117,23 @@ enum VoiceActionRegistry {
             risk: .direct
         ),
         Tool(
+            name: "show_summary_preview",
+            description: "Show a transient markdown summary paper below the voice capsule. Use when Alex asks to summarize, recap, or organize the current spoken thought.",
+            properties: [
+                "title": ["type": "string"],
+                "markdown": ["type": "string"]
+            ],
+            required: ["title", "markdown"],
+            risk: .direct
+        ),
+        Tool(
+            name: "dismiss_summary_preview",
+            description: "Dismiss the visible voice summary paper.",
+            properties: [:],
+            required: [],
+            risk: .direct
+        ),
+        Tool(
             name: "propose_note",
             description: "Propose creating a note. The app will ask for confirmation.",
             properties: ["title": ["type": "string"], "body": ["type": "string"]],

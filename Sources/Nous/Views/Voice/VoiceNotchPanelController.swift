@@ -13,14 +13,18 @@ import Combine
 /// observed via Combine because it is an `ObservableObject`.
 @MainActor
 final class VoiceNotchPanelController {
+    private static let collapsedPanelSize = NSSize(width: 420, height: 178)
+    private static let summaryPanelSize = NSSize(width: 624, height: 504)
+
     private weak var voiceController: VoiceCommandController?
     private let focusObserver: VoiceMainWindowFocusObserver
     private var panel: NSPanel?
-    private var hostingView: NSHostingView<NotchPanelRoot>?
     private var cancellables = Set<AnyCancellable>()
     private var appActivationObservers: [NSObjectProtocol] = []
     private var screenChangeObserver: NSObjectProtocol?
     private var spaceChangeObserver: NSObjectProtocol?
+    private var hideTask: Task<Void, Never>?
+    private var lastVoiceActive = false
 
     init(
         voiceController: VoiceCommandController,
@@ -92,6 +96,9 @@ final class VoiceNotchPanelController {
     }
 
     private func handleSpaceChange() {
+        if voiceController?.isActive == true {
+            lastVoiceActive = true
+        }
         // Force the focus observer to re-evaluate live AppKit state right
         // now — without waiting for its debounce or for window/app
         // notifications. macOS does not reliably fire didBecomeKey /
@@ -114,6 +121,7 @@ final class VoiceNotchPanelController {
             // Touch the properties we care about so the tracker registers them.
             _ = voiceController?.isActive
             _ = voiceController?.pendingAction
+            _ = voiceController?.summaryPreview
         } onChange: { [weak self] in
             // onChange fires off the main actor; hop back before mutating UI.
             Task { @MainActor [weak self] in
@@ -126,6 +134,12 @@ final class VoiceNotchPanelController {
 
     private func recomputeFromCurrentState() {
         guard let voiceController else { return }
+        if voiceController.isActive != lastVoiceActive {
+            lastVoiceActive = voiceController.isActive
+            if voiceController.isActive {
+                focusObserver.forceRecomputeNow()
+            }
+        }
         recomputeSurface(
             isActive: voiceController.isActive,
             isMainWorkspaceActive: Self.isMainWorkspaceActive(
@@ -135,7 +149,10 @@ final class VoiceNotchPanelController {
         )
     }
 
-    private func recomputeSurface(isActive: Bool, isMainWorkspaceActive: Bool) {
+    private func recomputeSurface(
+        isActive: Bool,
+        isMainWorkspaceActive: Bool
+    ) {
         guard let voiceController else { return }
         let next = VoiceCapsuleSurfacePolicy.nextSurface(
             isVoiceActive: isActive,
@@ -147,6 +164,8 @@ final class VoiceNotchPanelController {
         if voiceController.visibleSurface != next {
             voiceController.visibleSurface = next
             applySurface(next)
+        } else if next == .notch {
+            repositionPanel()
         }
     }
 
@@ -160,12 +179,54 @@ final class VoiceNotchPanelController {
         focusObserverActive
     }
 
+    static func notchPanelFrame(
+        screenFrame: NSRect,
+        safeAreaTop: CGFloat,
+        hasSummaryPreview: Bool
+    ) -> NSRect {
+        let baseSize = hasSummaryPreview ? summaryPanelSize : collapsedPanelSize
+        let width = min(baseSize.width, screenFrame.width)
+        let height = min(max(baseSize.height, safeAreaTop + 104), screenFrame.height)
+
+        return NSRect(
+            x: screenFrame.midX - width / 2,
+            y: screenFrame.maxY - height,
+            width: width,
+            height: height
+        )
+    }
+
     private func applySurface(_ surface: VoiceCapsuleSurface) {
         switch surface {
-        case .none, .inWindow:
+        case .none:
+            // Pass mouse events through so menu bar works normally
+            panel?.ignoresMouseEvents = true
+            hideTask?.cancel()
+            hideTask = Task { @MainActor [weak self] in
+                // Give the SwiftUI shrink animation time to finish before
+                // destroying the window and resetting display state.
+                // The 420ms matches the spring(response:0.38) settle time.
+                try? await Task.sleep(nanoseconds: 420_000_000)
+                guard !Task.isCancelled else { return }
+                // Reset display state NOW (after animation) so the capsule
+                // content doesn't vanish before the closing animation ends.
+                self?.voiceController?.status = .idle
+                self?.voiceController?.subtitleText = ""
+                self?.hidePanel()
+            }
+        case .inWindow:
+            // The in-window capsule in ChatArea takes over — hide the notch
+            // panel immediately (no animation delay needed; the in-window
+            // capsule is already visible). This prevents both surfaces from
+            // appearing simultaneously when the user brings the window back.
+            panel?.ignoresMouseEvents = true
+            hideTask?.cancel()
             hidePanel()
         case .notch:
+            hideTask?.cancel()
             showPanel()
+            // Capture mouse events when expanded
+            panel?.ignoresMouseEvents = false
         }
     }
 
@@ -185,23 +246,25 @@ final class VoiceNotchPanelController {
         panel?.orderOut(nil)
     }
 
+    private var hostingView: NotchHostingView?
+
     private func createPanel(voiceController: VoiceCommandController) {
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 360, height: 110),
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 400),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
-        // popUpMenu sits above .statusBar / .floating / menu bar but below
-        // Spotlight, Control Center, and modal panels — the right slot for
-        // a notch overlay that should never be obscured by ordinary app
-        // chrome but must defer to system-modal UI.
-        panel.level = .popUpMenu
+        panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.mainMenuWindow)) + 3)
         Self.configureForNotchOverlay(panel)
+        panel.ignoresMouseEvents = true
 
-        let host = NSHostingView(rootView: NotchPanelRoot(voiceController: voiceController, bezelInset: 36))
-        host.translatesAutoresizingMaskIntoConstraints = false
+        // NotchHostingView overrides safeAreaInsets → zero so SwiftUI content
+        // truly starts at y = 0 (= screen top). No extra menu-bar inset applied.
+        let host = NotchHostingView(rootView: NotchPanelRoot(voiceController: voiceController, bezelInset: 32))
+        host.autoresizingMask = [.width, .height]
         panel.contentView = host
+
         self.hostingView = host
         self.panel = panel
     }
@@ -218,28 +281,17 @@ final class VoiceNotchPanelController {
 
     private func positionPanel(on screen: NSScreen) {
         guard let panel else { return }
-        // Position the panel so its top edge is at the absolute top of the
-        // screen, extending into the bezel/notch area. The SwiftUI Spacer
-        // at the top of NotchPanelRoot uses the screen's actual
-        // safeAreaInsets.top to absorb the bezel height (~32pt on 14"
-        // M-series, ~38-40pt on 16" / Pro Display XDR, etc.) so the
-        // visible Liquid Glass capsule's top edge sits flush with the
-        // bezel boundary on every notched Mac.
         let bezel = max(screen.safeAreaInsets.top, 32)
-        let width: CGFloat = 360
-        let visibleCapsuleHeight: CGFloat = 74 // 12pt padding + content + 12pt padding (~50pt content)
-        let totalHeight = bezel + visibleCapsuleHeight
-        let frame = NSRect(
-            x: screen.frame.midX - width/2,
-            y: screen.frame.maxY - totalHeight,
-            width: width,
-            height: totalHeight
-        )
-        panel.setFrame(frame, display: true)
 
-        // Re-host with the right bezel inset so the spacer matches this screen.
-        if let voiceController {
-            hostingView?.rootView = NotchPanelRoot(voiceController: voiceController, bezelInset: bezel)
+        let windowFrame = Self.notchPanelFrame(
+            screenFrame: screen.frame,
+            safeAreaTop: bezel,
+            hasSummaryPreview: voiceController?.summaryPreview != nil
+        )
+        panel.setFrame(windowFrame, display: true)
+
+        if let vc = voiceController {
+            hostingView?.rootView = NotchPanelRoot(voiceController: vc, bezelInset: bezel)
         }
     }
 
@@ -252,102 +304,84 @@ final class VoiceNotchPanelController {
     }
 }
 
+// MARK: - NotchHostingView: zeroes safe area so SwiftUI fills to screen top
+
+private final class NotchHostingView: NSHostingView<NotchPanelRoot> {
+    // Override to report zero insets — prevents macOS from pushing SwiftUI
+    // content down by the menu-bar height inside a borderless overlay panel.
+    override var safeAreaInsets: NSEdgeInsets { .init() }
+}
+
+// MARK: - SwiftUI Notch Root
+
 private struct NotchPanelRoot: View {
     @Bindable var voiceController: VoiceCommandController
     let bezelInset: CGFloat
 
     var body: some View {
-        VStack(spacing: 0) {
-            // The top `bezelInset` sits behind the hardware notch / bezel
-            // and is physically masked. Computed from the live screen's
-            // safeAreaInsets.top so the capsule sits flush with the bezel
-            // boundary on every notched Mac.
-            Spacer().frame(height: bezelInset)
+        let isExpanded = voiceController.visibleSurface == .notch
+        let hasSummary = voiceController.summaryPreview != nil
+        // Capsule width: 380 base, 560 when summary card is visible
+        let capsuleW: CGFloat = hasSummary ? 560 : 380
 
-            VoiceCapsuleContent(
-                status: voiceController.status,
-                subtitleText: voiceController.subtitleText,
-                audioLevel: voiceController.audioLevel,
-                hasPendingConfirmation: voiceController.pendingAction != nil,
-                showsStopButton: true,
-                onConfirm: voiceController.confirmPendingAction,
-                onCancel: voiceController.cancelPendingAction,
-                onStop: voiceController.stop
-            )
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background(NotchCapsuleBackground())
-            .frame(maxWidth: 520) // Total capsule width cap (codex finding #14)
-            .contentShape(NotchCapsuleShape(cornerRadius: 24))
-            .onTapGesture {
-                Self.activateNousMainWindow()
+        ZStack(alignment: .top) {
+            VStack(spacing: 10) {
+                if isExpanded {
+                    VoiceCapsuleContent(
+                        status: voiceController.status,
+                        subtitleText: voiceController.subtitleText,
+                        audioLevel: voiceController.audioLevel,
+                        hasPendingConfirmation: voiceController.pendingAction != nil,
+                        showsStopButton: true,
+                        onConfirm: voiceController.confirmPendingAction,
+                        onCancel: voiceController.cancelPendingAction,
+                        onStop: voiceController.stop
+                    )
+                    .padding(.horizontal, 20)
+                    .padding(.top, 16)
+                    .padding(.bottom, 14)
+                    .background(
+                        NativeGlassPanel(cornerRadius: 36, tintColor: AppColor.glassTint) { EmptyView() }
+                            .shadow(color: .black.opacity(0.08), radius: 12, x: 0, y: 4)
+                    )
+                    .overlay(
+                        Capsule()
+                            .stroke(AppColor.panelStroke.opacity(0.6), lineWidth: 1)
+                    )
+
+                    if let summaryPreview = voiceController.summaryPreview {
+                        VStack(spacing: 8) {
+                            VoiceSummarySeparator()
+                            VoiceSummaryPaper(
+                                preview: summaryPreview,
+                                onDismiss: voiceController.dismissSummaryPreview
+                            )
+                        }
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                }
             }
-            .allowsHitTesting(voiceController.visibleSurface == .notch)
+            .frame(width: capsuleW)
+            // Only the pill itself responds to taps / buttons
+            .contentShape(Rectangle())
+            .onTapGesture { NotchPanelActivator.activate() }
+            .padding(.top, bezelInset)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .animation(.spring(response: 0.38, dampingFraction: 0.8), value: isExpanded)
+        .animation(.spring(response: 0.35, dampingFraction: 0.78), value: voiceController.summaryPreview)
     }
+}
 
-    /// Brings Nous's main window to the front. SwiftUI `Button { }` calls
-    /// inside `VoiceCapsuleContent` (Stop / Confirm / Cancel) consume taps
-    /// before they reach this gesture, so action regions don't activate.
-    /// If the main window was closed (app persists via NousAppDelegate),
-    /// `applicationShouldHandleReopen` will recreate it on activation.
-    @MainActor
-    static func activateNousMainWindow() {
+private enum NotchPanelActivator {
+    @MainActor static func activate() {
         NSApp.activate(ignoringOtherApps: true)
-        // Find the SwiftUI WindowGroup window and bring it forward.
         let candidate = NSApp.windows.first(where: { $0.canBecomeMain && !$0.isExcludedFromWindowsMenu })
         if let window = candidate {
             if window.isMiniaturized { window.deminiaturize(nil) }
             window.makeKeyAndOrderFront(nil)
         } else {
-            // No SwiftUI window currently exists — let AppKit's reopen path
-            // recreate it. NSApp.activate above triggers
-            // applicationShouldHandleReopen which reopens the WindowGroup.
             NSApp.unhide(nil)
         }
-    }
-}
-
-private struct NotchCapsuleBackground: View {
-    var body: some View {
-        ZStack {
-            // Liquid Glass material (mapping from spec § 1)
-            Rectangle()
-                .fill(.ultraThinMaterial)
-            Color.white.opacity(0.42)
-        }
-        .clipShape(NotchCapsuleShape(cornerRadius: 24))
-        .overlay(
-            NotchCapsuleShape(cornerRadius: 24)
-                .stroke(Color.white.opacity(0.55), lineWidth: 1)
-        )
-        .shadow(
-            color: Color(red: 120/255, green: 80/255, blue: 40/255).opacity(0.20),
-            radius: 18, x: 0, y: 16
-        )
-    }
-}
-
-/// Sharp top corners (the top is masked by the notch), 24pt rounded bottom corners.
-private struct NotchCapsuleShape: Shape {
-    let cornerRadius: CGFloat
-
-    func path(in rect: CGRect) -> Path {
-        var p = Path()
-        p.move(to: CGPoint(x: rect.minX, y: rect.minY))
-        p.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
-        p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - cornerRadius))
-        p.addArc(
-            center: CGPoint(x: rect.maxX - cornerRadius, y: rect.maxY - cornerRadius),
-            radius: cornerRadius, startAngle: .degrees(0), endAngle: .degrees(90), clockwise: false
-        )
-        p.addLine(to: CGPoint(x: rect.minX + cornerRadius, y: rect.maxY))
-        p.addArc(
-            center: CGPoint(x: rect.minX + cornerRadius, y: rect.maxY - cornerRadius),
-            radius: cornerRadius, startAngle: .degrees(90), endAngle: .degrees(180), clockwise: false
-        )
-        p.closeSubpath()
-        return p
     }
 }

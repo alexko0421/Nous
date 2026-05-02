@@ -75,11 +75,212 @@ final class SkillStoreTests: XCTestCase {
         XCTAssertEqual(fetched.lastFiredAt, Date(timeIntervalSince1970: 4_100.25))
     }
 
+    func testConversationLoadedSkillsTableExistsWithSnapshotColumns() throws {
+        let stmt = try nodeStore.rawDatabase.prepare("PRAGMA table_info(conversation_loaded_skills);")
+        var names = Set<String>()
+        while try stmt.step() {
+            if let name = stmt.text(at: 1) {
+                names.insert(name)
+            }
+        }
+
+        XCTAssertEqual(
+            names,
+            Set(["conversation_id", "skill_id", "name_snapshot", "content_snapshot", "state_at_load", "loaded_at"])
+        )
+    }
+
+    func testConversationLoadedSkillsCascadeWhenConversationDeleted() throws {
+        let conversation = NousNode(type: .conversation, title: "Thread", content: "")
+        try nodeStore.insertNode(conversation)
+        let skill = makeSkill()
+        try store.insertSkill(skill)
+        try insertLoadedSkillRow(conversationId: conversation.id, skill: skill)
+
+        try nodeStore.deleteNode(id: conversation.id)
+
+        XCTAssertEqual(try loadedSkillRowCount(conversationId: conversation.id), 0)
+    }
+
+    func testConversationLoadedSkillsPersistWhenSourceSkillDeleted() throws {
+        let conversation = NousNode(type: .conversation, title: "Thread", content: "")
+        try nodeStore.insertNode(conversation)
+        let skill = makeSkill()
+        try store.insertSkill(skill)
+        try insertLoadedSkillRow(conversationId: conversation.id, skill: skill)
+
+        let stmt = try nodeStore.rawDatabase.prepare("DELETE FROM skills WHERE id = ?;")
+        try stmt.bind(skill.id.uuidString, at: 1)
+        try stmt.step()
+
+        XCTAssertEqual(try loadedSkillRowCount(conversationId: conversation.id), 1)
+    }
+
+    func testLoadedSkillsReturnsEmptyForFreshConversation() throws {
+        let conversation = NousNode(type: .conversation, title: "Thread", content: "")
+        try nodeStore.insertNode(conversation)
+
+        XCTAssertEqual(try store.loadedSkills(in: conversation.id), [])
+    }
+
+    func testLoadedSkillsReturnsSnapshotsOrderedByLoadedAt() throws {
+        let conversation = NousNode(type: .conversation, title: "Thread", content: "")
+        try nodeStore.insertNode(conversation)
+        let first = makeSkill(
+            id: UUID(),
+            payload: Self.makePayload(name: "first", actionContent: "First snapshot.")
+        )
+        let second = makeSkill(
+            id: UUID(),
+            payload: Self.makePayload(name: "second", actionContent: "Second snapshot.")
+        )
+        try store.insertSkill(first)
+        try store.insertSkill(second)
+
+        try insertLoadedSkillRow(conversationId: conversation.id, skill: second, loadedAt: 20)
+        try insertLoadedSkillRow(conversationId: conversation.id, skill: first, loadedAt: 10)
+
+        let loaded = try store.loadedSkills(in: conversation.id)
+
+        XCTAssertEqual(loaded.map(\.skillID), [first.id, second.id])
+        XCTAssertEqual(loaded.map(\.nameSnapshot), ["first", "second"])
+        XCTAssertEqual(loaded.map(\.contentSnapshot), ["First snapshot.", "Second snapshot."])
+        XCTAssertEqual(loaded.map(\.stateAtLoad), [.active, .active])
+        XCTAssertEqual(loaded.map(\.loadedAt), [
+            Date(timeIntervalSince1970: 10),
+            Date(timeIntervalSince1970: 20)
+        ])
+    }
+
+    func testLoadedSkillsReturnsSnapshotsAfterSourceSkillDeleted() throws {
+        let conversation = NousNode(type: .conversation, title: "Thread", content: "")
+        try nodeStore.insertNode(conversation)
+        let skill = makeSkill(
+            payload: Self.makePayload(name: "stable-snapshot", actionContent: "Keep this exact text.")
+        )
+        try store.insertSkill(skill)
+        try insertLoadedSkillRow(conversationId: conversation.id, skill: skill, loadedAt: 30)
+
+        let stmt = try nodeStore.rawDatabase.prepare("DELETE FROM skills WHERE id = ?;")
+        try stmt.bind(skill.id.uuidString, at: 1)
+        try stmt.step()
+
+        let loaded = try store.loadedSkills(in: conversation.id)
+
+        XCTAssertEqual(loaded, [
+            LoadedSkill(
+                skillID: skill.id,
+                nameSnapshot: "stable-snapshot",
+                contentSnapshot: "Keep this exact text.",
+                stateAtLoad: .active,
+                loadedAt: Date(timeIntervalSince1970: 30)
+            )
+        ])
+    }
+
+    func testMarkSkillLoadedInsertsSnapshotAndIncrementsFireStats() throws {
+        let conversation = NousNode(type: .conversation, title: "Thread", content: "")
+        try nodeStore.insertNode(conversation)
+        let skill = makeSkill(
+            payload: Self.makePayload(name: "load-me", actionContent: "Load this fragment.")
+        )
+        try store.insertSkill(skill)
+        let loadedAt = Date(timeIntervalSince1970: 100)
+        let loaded = LoadedSkill(
+            skillID: skill.id,
+            nameSnapshot: "load-me",
+            contentSnapshot: "Load this fragment.",
+            stateAtLoad: .active,
+            loadedAt: loadedAt
+        )
+
+        let result = try store.markSkillLoaded(skillID: skill.id, in: conversation.id, at: loadedAt)
+
+        XCTAssertEqual(result, .inserted(loaded))
+        XCTAssertEqual(try store.loadedSkills(in: conversation.id), [loaded])
+        let fetched = try XCTUnwrap(store.fetchSkill(id: skill.id))
+        XCTAssertEqual(fetched.firedCount, 1)
+        XCTAssertEqual(fetched.lastFiredAt, loadedAt)
+    }
+
+    func testMarkSkillLoadedIsIdempotentAndDoesNotIncrementTwice() throws {
+        let conversation = NousNode(type: .conversation, title: "Thread", content: "")
+        try nodeStore.insertNode(conversation)
+        let skill = makeSkill()
+        try store.insertSkill(skill)
+        let firstLoad = Date(timeIntervalSince1970: 100)
+        let secondLoad = Date(timeIntervalSince1970: 200)
+        let expected = LoadedSkill(
+            skillID: skill.id,
+            nameSnapshot: skill.payload.name,
+            contentSnapshot: skill.payload.action.content,
+            stateAtLoad: .active,
+            loadedAt: firstLoad
+        )
+
+        XCTAssertEqual(
+            try store.markSkillLoaded(skillID: skill.id, in: conversation.id, at: firstLoad),
+            .inserted(expected)
+        )
+        XCTAssertEqual(
+            try store.markSkillLoaded(skillID: skill.id, in: conversation.id, at: secondLoad),
+            .alreadyLoaded(expected)
+        )
+
+        XCTAssertEqual(try store.loadedSkills(in: conversation.id), [expected])
+        let fetched = try XCTUnwrap(store.fetchSkill(id: skill.id))
+        XCTAssertEqual(fetched.firedCount, 1)
+        XCTAssertEqual(fetched.lastFiredAt, firstLoad)
+    }
+
+    func testMarkSkillLoadedReturnsMissingSkillWithoutSnapshot() throws {
+        let conversation = NousNode(type: .conversation, title: "Thread", content: "")
+        try nodeStore.insertNode(conversation)
+
+        let result = try store.markSkillLoaded(skillID: UUID(), in: conversation.id, at: Date())
+
+        XCTAssertEqual(result, .missingSkill)
+        XCTAssertEqual(try loadedSkillRowCount(conversationId: conversation.id), 0)
+    }
+
+    func testMarkSkillLoadedReturnsUnavailableForRetiredSkillWithoutSnapshot() throws {
+        let conversation = NousNode(type: .conversation, title: "Thread", content: "")
+        try nodeStore.insertNode(conversation)
+        let skill = makeSkill(state: .retired, firedCount: 7)
+        try store.insertSkill(skill)
+
+        let result = try store.markSkillLoaded(skillID: skill.id, in: conversation.id, at: Date())
+
+        XCTAssertEqual(result, .unavailable(.retired))
+        XCTAssertEqual(try loadedSkillRowCount(conversationId: conversation.id), 0)
+        let fetched = try XCTUnwrap(store.fetchSkill(id: skill.id))
+        XCTAssertEqual(fetched.firedCount, 7)
+        XCTAssertNil(fetched.lastFiredAt)
+    }
+
+    func testUnloadAllSkillsRemovesConversationSnapshotsOnly() throws {
+        let firstConversation = NousNode(type: .conversation, title: "First", content: "")
+        let secondConversation = NousNode(type: .conversation, title: "Second", content: "")
+        try nodeStore.insertNode(firstConversation)
+        try nodeStore.insertNode(secondConversation)
+        let firstSkill = makeSkill(id: UUID())
+        let secondSkill = makeSkill(id: UUID())
+        try store.insertSkill(firstSkill)
+        try store.insertSkill(secondSkill)
+        try insertLoadedSkillRow(conversationId: firstConversation.id, skill: firstSkill, loadedAt: 10)
+        try insertLoadedSkillRow(conversationId: secondConversation.id, skill: secondSkill, loadedAt: 20)
+
+        try store.unloadAllSkills(in: firstConversation.id)
+
+        XCTAssertEqual(try store.loadedSkills(in: firstConversation.id), [])
+        XCTAssertEqual(try store.loadedSkills(in: secondConversation.id).map(\.skillID), [secondSkill.id])
+    }
+
     func testInsertRejectsInvalidPayloadVersion() {
-        let skill = makeSkill(payload: Self.makePayload(payloadVersion: 2))
+        let skill = makeSkill(payload: Self.makePayload(payloadVersion: 3))
 
         XCTAssertThrowsError(try store.insertSkill(skill)) { error in
-            XCTAssertEqual(error as? SkillStoreError, .invalidPayloadVersion(2))
+            XCTAssertEqual(error as? SkillStoreError, .invalidPayloadVersion(3))
         }
     }
 
@@ -136,6 +337,62 @@ final class SkillStoreTests: XCTestCase {
                 state: "actve"
             )
         )
+    }
+
+    func testPayloadVersion1DecodesWithUseWhenNil() throws {
+        let payload = try JSONDecoder().decode(SkillPayload.self, from: Data(validPayloadJSON().utf8))
+
+        XCTAssertEqual(payload.payloadVersion, 1)
+        XCTAssertNil(payload.useWhen)
+    }
+
+    func testPayloadVersion2DecodesWithUseWhen() throws {
+        let json = """
+        {
+          "payloadVersion": 2,
+          "name": "lazy-load-skill",
+          "description": "A skill loaded only when relevant.",
+          "useWhen": "Use when Alex asks for concrete tradeoffs.",
+          "source": "alex",
+          "trigger": {
+            "kind": "always",
+            "modes": ["direction"],
+            "priority": 70
+          },
+          "action": {
+            "kind": "promptFragment",
+            "content": "Name the concrete tradeoff."
+          },
+          "antiPatternExamples": []
+        }
+        """
+
+        let payload = try JSONDecoder().decode(SkillPayload.self, from: Data(json.utf8))
+
+        XCTAssertEqual(payload.payloadVersion, 2)
+        XCTAssertEqual(payload.useWhen, "Use when Alex asks for concrete tradeoffs.")
+    }
+
+    func testPayloadVersion3FailsToDecode() throws {
+        let json = """
+        {
+          "payloadVersion": 3,
+          "name": "future-skill",
+          "source": "alex",
+          "trigger": {
+            "kind": "always",
+            "modes": ["direction"],
+            "priority": 70
+          },
+          "action": {
+            "kind": "promptFragment",
+            "content": "Future behavior."
+          },
+          "antiPatternExamples": []
+        }
+        """
+
+        XCTAssertThrowsError(try JSONDecoder().decode(SkillPayload.self, from: Data(json.utf8)))
     }
 
     func testConcurrentDuplicateInsertAttemptsLeaveSingleRow() throws {
@@ -199,13 +456,14 @@ final class SkillStoreTests: XCTestCase {
 
     private static func makePayload(
         payloadVersion: Int = 1,
+        name: String = "concrete-over-generic",
         modes: [QuickActionMode] = [.direction],
         priority: Int = 70,
         actionContent: String = "Use concrete language."
     ) -> SkillPayload {
         SkillPayload(
             payloadVersion: payloadVersion,
-            name: "concrete-over-generic",
+            name: name,
             description: "Keep prompt fragments specific",
             source: .alex,
             trigger: SkillTrigger(
@@ -251,5 +509,30 @@ final class SkillStoreTests: XCTestCase {
         try stmt.bind(payload, at: 2)
         try stmt.bind(state, at: 3)
         try stmt.step()
+    }
+
+    private func insertLoadedSkillRow(conversationId: UUID, skill: Skill, loadedAt: Double = 1.0) throws {
+        let stmt = try nodeStore.rawDatabase.prepare("""
+            INSERT INTO conversation_loaded_skills (
+                conversation_id, skill_id, name_snapshot, content_snapshot, state_at_load, loaded_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?);
+        """)
+        try stmt.bind(conversationId.uuidString, at: 1)
+        try stmt.bind(skill.id.uuidString, at: 2)
+        try stmt.bind(skill.payload.name, at: 3)
+        try stmt.bind(skill.payload.action.content, at: 4)
+        try stmt.bind(skill.state.rawValue, at: 5)
+        try stmt.bind(loadedAt, at: 6)
+        try stmt.step()
+    }
+
+    private func loadedSkillRowCount(conversationId: UUID) throws -> Int {
+        let stmt = try nodeStore.rawDatabase.prepare("""
+            SELECT COUNT(*) FROM conversation_loaded_skills WHERE conversation_id = ?;
+        """)
+        try stmt.bind(conversationId.uuidString, at: 1)
+        guard try stmt.step() else { return 0 }
+        return stmt.int(at: 0)
     }
 }

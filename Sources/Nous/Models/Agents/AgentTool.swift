@@ -17,13 +17,15 @@ enum AgentToolNames {
     static let findContradictions = "find_contradictions"
     static let searchConversationsByTopic = "search_conversations_by_topic"
     static let readNote = "read_note"
+    static let loadSkill = "loadSkill"
 
     static let standard = [
         searchMemory,
         recallRecentConversations,
         findContradictions,
         searchConversationsByTopic,
-        readNote
+        readNote,
+        loadSkill
     ]
 }
 
@@ -32,9 +34,33 @@ struct AgentToolContext: Equatable, Sendable {
     let projectId: UUID?
     let currentNodeId: UUID
     let currentMessage: String
+    let activeQuickActionMode: QuickActionMode?
+    let indexedSkillIds: Set<UUID>
     let excludeNodeIds: Set<UUID>
     let allowedReadNodeIds: Set<UUID>
     let maxToolResultCharacters: Int
+
+    init(
+        conversationId: UUID,
+        projectId: UUID?,
+        currentNodeId: UUID,
+        currentMessage: String,
+        activeQuickActionMode: QuickActionMode? = nil,
+        indexedSkillIds: Set<UUID> = [],
+        excludeNodeIds: Set<UUID>,
+        allowedReadNodeIds: Set<UUID>,
+        maxToolResultCharacters: Int
+    ) {
+        self.conversationId = conversationId
+        self.projectId = projectId
+        self.currentNodeId = currentNodeId
+        self.currentMessage = currentMessage
+        self.activeQuickActionMode = activeQuickActionMode
+        self.indexedSkillIds = indexedSkillIds
+        self.excludeNodeIds = excludeNodeIds
+        self.allowedReadNodeIds = allowedReadNodeIds
+        self.maxToolResultCharacters = maxToolResultCharacters
+    }
 }
 
 struct AgentToolInput {

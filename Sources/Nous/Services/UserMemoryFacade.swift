@@ -144,6 +144,10 @@ final class UserMemoryService: MemorySynthesizing, @unchecked Sendable {
         projectionService.shouldPersistMemory(messages: messages, projectId: projectId)
     }
 
+    func memoryPersistenceDecision(messages: [Message], projectId: UUID?) -> MemoryPersistenceDecision {
+        projectionService.memoryPersistenceDecision(messages: messages, projectId: projectId)
+    }
+
     func allMemoryEntries() -> [MemoryEntry] {
         core.allMemoryEntries()
     }

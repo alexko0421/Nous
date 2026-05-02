@@ -116,11 +116,13 @@ final class QuickActionOpeningRunner {
         DebugAblation.logActiveFlags(context: "quick-mode-opening:\(mode)")
         #endif
 
-        let quickActionAddendum = quickActionAddendumResolver.addendum(
+        let quickActionResolution = quickActionAddendumResolver.resolution(
             mode: mode,
             agent: agent,
-            turnIndex: 0
+            turnIndex: 0,
+            conversationID: node.id
         )
+        let quickActionAddendum = quickActionResolution.addendum
 
         let turnSlice = PromptContextAssembler.assembleContext(
             chatMode: .companion,
@@ -136,7 +138,10 @@ final class QuickActionOpeningRunner {
             citations: memoryContext.citations,
             projectGoal: memoryContext.projectGoal,
             activeQuickActionMode: mode,
+            loadedSkills: quickActionResolution.loadedSkills,
+            matchedSkills: quickActionResolution.matchedSkills,
             quickActionAddendum: quickActionAddendum,
+            allowSkillIndex: false,
             allowInteractiveClarification: false
         )
         let promptTrace = PromptContextAssembler.governanceTrace(

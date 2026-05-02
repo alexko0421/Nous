@@ -464,6 +464,24 @@ final class NodeStore {
         """)
 
         try db.exec("""
+            CREATE TABLE IF NOT EXISTS conversation_loaded_skills (
+                conversation_id  TEXT NOT NULL,
+                skill_id         TEXT NOT NULL,
+                name_snapshot    TEXT NOT NULL,
+                content_snapshot TEXT NOT NULL,
+                state_at_load    TEXT NOT NULL,
+                loaded_at        REAL NOT NULL,
+                PRIMARY KEY (conversation_id, skill_id),
+                FOREIGN KEY (conversation_id) REFERENCES nodes(id) ON DELETE CASCADE
+            );
+        """)
+
+        try db.exec("""
+            CREATE INDEX IF NOT EXISTS idx_loaded_skills_conv
+            ON conversation_loaded_skills(conversation_id);
+        """)
+
+        try db.exec("""
             CREATE TABLE IF NOT EXISTS shadow_patterns (
                 id                   TEXT PRIMARY KEY,
                 user_id              TEXT NOT NULL DEFAULT 'alex',

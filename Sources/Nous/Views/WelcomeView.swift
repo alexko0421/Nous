@@ -1,5 +1,15 @@
 import SwiftUI
 
+enum WelcomeActionMenuHitRegion {
+    static let composerHeight: CGFloat = 34
+    static let actionMenuHeight: CGFloat = 62
+    static let actionMenuGap: CGFloat = 8
+
+    static var expandedHeight: CGFloat {
+        composerHeight + actionMenuGap + actionMenuHeight
+    }
+}
+
 // MARK: - Welcome Home Screen
 struct WelcomeView: View {
     @Binding var inputText: String
@@ -69,30 +79,7 @@ struct WelcomeView: View {
                             }
                         }
 
-                        composerRow
-                            .padding(.top, 80) // Expand frame for hit-testing
-                            .overlay(alignment: .bottomLeading) {
-                                if isActionMenuExpanded {
-                                    ActionMenuCapsule(
-                                        onFile: {
-                                            onPickAttachment()
-                                            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isActionMenuExpanded = false }
-                                        },
-                                        onPhoto: {
-                                            onPickPhoto()
-                                            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isActionMenuExpanded = false }
-                                        },
-                                        onVoice: {
-                                            onVoice()
-                                            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isActionMenuExpanded = false }
-                                        },
-                                        canPickPhoto: canPickPhoto
-                                    )
-                                    .offset(y: -44)
-                                    .transition(.move(edge: .bottom).combined(with: .opacity).combined(with: .scale(scale: 0.9, anchor: .bottomLeading)))
-                                }
-                            }
-                            .padding(.top, -80) // Negate layout shift
+                        welcomeComposerControls
                         .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
                         .onDrop(
                             of: AttachmentDropSupport.acceptedTypeIdentifiers,
@@ -202,6 +189,43 @@ struct WelcomeView: View {
             )
             .disabled(!canSend)
         }
+    }
+
+    private var welcomeComposerControls: some View {
+        VStack(alignment: .leading, spacing: WelcomeActionMenuHitRegion.actionMenuGap) {
+            if isActionMenuExpanded {
+                ActionMenuCapsule(
+                    onFile: {
+                        onPickAttachment()
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isActionMenuExpanded = false }
+                    },
+                    onPhoto: {
+                        onPickPhoto()
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isActionMenuExpanded = false }
+                    },
+                    onVoice: {
+                        onVoice()
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isActionMenuExpanded = false }
+                    },
+                    canPickPhoto: canPickPhoto
+                )
+                .frame(height: WelcomeActionMenuHitRegion.actionMenuHeight)
+                .transition(
+                    .move(edge: .bottom)
+                        .combined(with: .opacity)
+                        .combined(with: .scale(scale: 0.9, anchor: .bottomLeading))
+                )
+            }
+
+            composerRow
+                .frame(minHeight: WelcomeActionMenuHitRegion.composerHeight)
+        }
+        .frame(
+            minHeight: isActionMenuExpanded
+                ? WelcomeActionMenuHitRegion.expandedHeight
+                : WelcomeActionMenuHitRegion.composerHeight,
+            alignment: .bottomLeading
+        )
     }
 
     private func circleActionButton(systemImage: String, isVoiceActive: Bool, action: @escaping () -> Void) -> some View {

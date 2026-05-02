@@ -43,6 +43,16 @@ private final class RecordingSkillStore: SkillStoring {
         nil
     }
 
+    func loadedSkills(in conversationID: UUID) throws -> [LoadedSkill] {
+        []
+    }
+
+    func markSkillLoaded(skillID: UUID, in conversationID: UUID, at loadedAt: Date) throws -> MarkSkillLoadedResult {
+        .missingSkill
+    }
+
+    func unloadAllSkills(in conversationID: UUID) throws {}
+
     func insertSkill(_ skill: Skill) throws {}
 
     func updateSkill(_ skill: Skill) throws {}

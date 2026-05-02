@@ -9,6 +9,12 @@ import Foundation
 ///
 /// Voice (anchor.md) is NOT owned by the agent; it stays in the shared stable layer
 /// of `PromptContextAssembler.assembleContext`. Agents only contribute to volatile.
+///
+/// QuickActionAgent is a context-policy struct, not a runtime agent. A turn runs as
+/// one continuous LLM call sharing anchor, transcript, and memory — no per-mode
+/// handoff. Any future change that spawns a second LLM call inside a turn must
+/// justify itself as a context boundary, never as a role split
+/// (planner / implementer / verifier) — role splits drop context at every handoff.
 protocol QuickActionAgent {
     var mode: QuickActionMode { get }
 

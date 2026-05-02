@@ -417,14 +417,21 @@ struct ContentView: View {
     private func globalVoicePill(dependencies: AppDependencies) -> some View {
         if selectedTab != .chat {
             HStack(spacing: 8) {
-                if dependencies.voiceController.status.shouldDisplayPill || dependencies.voiceController.pendingAction != nil {
+                if VoiceCapsuleVisibilityPolicy.shouldShowCapsule(
+                    isVoiceActive: dependencies.voiceController.isActive,
+                    status: dependencies.voiceController.status,
+                    hasPendingAction: dependencies.voiceController.pendingAction != nil,
+                    hasSummaryPreview: dependencies.voiceController.summaryPreview != nil
+                ) {
                     VoiceCapsuleView(
                         status: dependencies.voiceController.status,
                         subtitleText: dependencies.voiceController.subtitleText,
                         audioLevel: dependencies.voiceController.audioLevel,
                         hasPendingConfirmation: dependencies.voiceController.pendingAction != nil,
+                        summaryPreview: dependencies.voiceController.summaryPreview,
                         onConfirm: dependencies.voiceController.confirmPendingAction,
-                        onCancel: dependencies.voiceController.cancelPendingAction
+                        onCancel: dependencies.voiceController.cancelPendingAction,
+                        onDismissSummary: dependencies.voiceController.dismissSummaryPreview
                     )
                 }
 

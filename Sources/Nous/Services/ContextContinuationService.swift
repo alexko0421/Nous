@@ -26,7 +26,9 @@ final class ContextContinuationService {
         }
 
         guard let memoryRefresh = plan.memoryRefresh else {
-            governanceTelemetry.recordMemoryStorageSuppressed()
+            governanceTelemetry.recordMemoryStorageSuppressed(
+                reason: plan.memorySuppressionReason ?? .unspecified
+            )
             return
         }
 

@@ -34,8 +34,10 @@ final class TurnPlannerSkillIntegrationTests: XCTestCase {
             stewardship: stewardship
         )
 
-        XCTAssertTrue(plan.turnSlice.volatile.contains("INFERRED DIRECTION SKILL"))
-        XCTAssertTrue(plan.promptTrace.promptLayers.contains("quick_action_addendum"))
+        XCTAssertTrue(plan.turnSlice.combinedString.contains("SKILL INDEX"))
+        XCTAssertTrue(plan.turnSlice.combinedString.contains("inferred-direction-skeleton"))
+        XCTAssertTrue(plan.turnSlice.combinedString.contains("call loadSkill"))
+        XCTAssertFalse(plan.turnSlice.combinedString.contains("INFERRED DIRECTION SKILL"))
     }
 
     private func makePlanner(
@@ -49,7 +51,7 @@ final class TurnPlannerSkillIntegrationTests: XCTestCase {
             embeddingService: EmbeddingService(),
             memoryProjectionService: MemoryProjectionService(nodeStore: nodeStore),
             contradictionMemoryService: ContradictionMemoryService(core: core),
-            currentProviderProvider: { .gemini },
+            currentProviderProvider: { .openrouter },
             judgeLLMServiceFactory: { nil },
             skillStore: skillStore,
             skillMatcher: SkillMatcher(),
@@ -98,8 +100,9 @@ final class TurnPlannerSkillIntegrationTests: XCTestCase {
             id: id,
             userId: "alex",
             payload: SkillPayload(
-                payloadVersion: 1,
+                payloadVersion: 2,
                 name: name,
+                useWhen: "Use when the active mode needs this skill.",
                 source: .alex,
                 trigger: SkillTrigger(
                     kind: triggerKind,

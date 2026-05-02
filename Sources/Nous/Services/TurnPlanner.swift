@@ -16,6 +16,7 @@ final class TurnPlanner {
     private let governanceTelemetry: GovernanceTelemetryStore
     private let quickActionAddendumResolver: QuickActionAddendumResolver
     private let shadowPatternPromptProvider: (any ShadowPatternPromptProviding)?
+    private let agentLoopProviderSupportsToolUse: (LLMProvider) -> Bool
     private let runJudge: (@escaping () async throws -> JudgeVerdict) async throws -> JudgeVerdict
 
     init(
@@ -32,6 +33,7 @@ final class TurnPlanner {
         skillMatcher: any SkillMatching = SkillMatcher(),
         skillTracker: (any SkillTracking)? = nil,
         shadowPatternPromptProvider: (any ShadowPatternPromptProviding)? = nil,
+        agentLoopProviderSupportsToolUse: @escaping (LLMProvider) -> Bool = { $0 == .openrouter },
         runJudge: @escaping (@escaping () async throws -> JudgeVerdict) async throws -> JudgeVerdict = { operation in
             try await operation()
         }
@@ -53,6 +55,7 @@ final class TurnPlanner {
             skillTracker: skillTracker
         )
         self.shadowPatternPromptProvider = shadowPatternPromptProvider
+        self.agentLoopProviderSupportsToolUse = agentLoopProviderSupportsToolUse
         self.runJudge = runJudge
     }
 
@@ -60,7 +63,8 @@ final class TurnPlanner {
     func plan(
         from prepared: PreparedTurnSession,
         request: TurnRequest,
-        stewardship: TurnStewardDecision
+        stewardship: TurnStewardDecision,
+        judgeThinkingHandler: ThinkingDeltaHandler? = nil
     ) async throws -> TurnPlan {
         let promptQuery = Self.normalizedPromptQuery(
             inputText: request.inputText,
@@ -127,6 +131,10 @@ final class TurnPlanner {
         } else if provider == .local {
             fallbackReason = .providerLocal
         } else if let judgeLLM = judgeLLMServiceFactory() {
+            let judgeLLM = Self.configuredJudgeLLMService(
+                judgeLLM,
+                thinkingHandler: judgeThinkingHandler
+            )
             let judge = provocationJudgeFactory(judgeLLM)
             do {
                 let verdict = try await runJudge {
@@ -180,10 +188,28 @@ final class TurnPlanner {
             DebugAblation.logActiveFlags(context: "quick-mode-turn:\(planningAgent.map { String(describing: $0.mode) } ?? "?"):\(agentTurnIndex)")
         }
         #endif
-        let resolvedQuickActionAddendum = quickActionAddendumResolver.addendum(
+        let quickActionResolution = quickActionAddendumResolver.resolution(
             mode: planningQuickActionMode,
             agent: planningAgent,
-            turnIndex: agentTurnIndex
+            turnIndex: agentTurnIndex,
+            conversationID: prepared.node.id
+        )
+        let resolvedQuickActionAddendum = quickActionResolution.addendum
+        let quickActionModeSupportsAgentLoop = planningQuickActionMode?.agent().useAgentLoop == true
+        let canUseAgentLoop = quickActionModeSupportsAgentLoop
+            && agentLoopProviderSupportsToolUse(provider)
+        let allowSkillIndex = canUseAgentLoop
+        let indexedSkillIds = PromptContextAssembler.indexedSkillIds(
+            matchedSkills: quickActionResolution.matchedSkills,
+            loadedSkills: quickActionResolution.loadedSkills,
+            activeQuickActionMode: planningQuickActionMode,
+            allowSkillIndex: allowSkillIndex
+        )
+        let agentLoopMode = Self.agentLoopMode(
+            explicitMode: explicitQuickActionMode,
+            planningMode: planningQuickActionMode,
+            indexedSkillIds: indexedSkillIds,
+            canUseAgentLoop: canUseAgentLoop
         )
         let responseShapeBlock = Self.responseShapeBlock(for: stewardship)
         let quickActionContextBlocks = [resolvedQuickActionAddendum, responseShapeBlock]
@@ -216,7 +242,10 @@ final class TurnPlanner {
             projectGoal: projectGoal,
             attachments: request.attachments,
             activeQuickActionMode: planningQuickActionMode,
+            loadedSkills: quickActionResolution.loadedSkills,
+            matchedSkills: quickActionResolution.matchedSkills,
             quickActionAddendum: quickActionContext,
+            allowSkillIndex: allowSkillIndex,
             allowInteractiveClarification: shouldAllowInteractiveClarification,
             shadowLearningHints: shadowLearningHints,
             now: request.now
@@ -271,6 +300,7 @@ final class TurnPlanner {
                 promptTrace: promptTrace,
                 effectiveMode: effectiveMode,
                 nextQuickActionModeIfCompleted: explicitQuickActionMode,
+                agentLoopMode: agentLoopMode,
                 judgeEventDraft: makeJudgeEvent(
                     id: judgeEventId,
                     nodeId: prepared.node.id,
@@ -282,7 +312,8 @@ final class TurnPlanner {
                 turnSlice: plannedSlice,
                 transcriptMessages: transcriptMessages(from: prepared.messagesAfterUserAppend),
                 focusBlock: focusBlock,
-                provider: provider
+                provider: provider,
+                indexedSkillIds: indexedSkillIds
             )
         }
 
@@ -293,6 +324,7 @@ final class TurnPlanner {
             promptTrace: promptTrace,
             effectiveMode: effectiveMode,
             nextQuickActionModeIfCompleted: explicitQuickActionMode,
+            agentLoopMode: agentLoopMode,
             judgeEventDraft: makeJudgeEvent(
                 id: judgeEventId,
                 nodeId: prepared.node.id,
@@ -304,8 +336,21 @@ final class TurnPlanner {
             turnSlice: plannedSlice,
             transcriptMessages: transcriptMessages(from: prepared.messagesAfterUserAppend),
             focusBlock: focusBlock,
-            provider: provider
+            provider: provider,
+            indexedSkillIds: indexedSkillIds
         )
+    }
+
+    private static func agentLoopMode(
+        explicitMode: QuickActionMode?,
+        planningMode: QuickActionMode?,
+        indexedSkillIds: Set<UUID>,
+        canUseAgentLoop: Bool
+    ) -> QuickActionMode? {
+        guard canUseAgentLoop else { return nil }
+        guard let mode = explicitMode ?? (!indexedSkillIds.isEmpty ? planningMode : nil),
+              mode.agent().useAgentLoop else { return nil }
+        return mode
     }
 
     static func userMessageContent(inputText: String, attachments: [AttachedFileContext]) -> String {
@@ -314,6 +359,17 @@ final class TurnPlanner {
         let attachmentNames = limitedAttachments.map(\.name)
         guard !attachmentNames.isEmpty else { return promptQuery }
         return "\(promptQuery)\n\nFiles: \(attachmentNames.joined(separator: ", "))"
+    }
+
+    private static func configuredJudgeLLMService(
+        _ service: any LLMService,
+        thinkingHandler: ThinkingDeltaHandler?
+    ) -> any LLMService {
+        guard let thinkingHandler,
+              let configurable = service as? any ThinkingDeltaConfigurableLLMService else {
+            return service
+        }
+        return configurable.withThinkingDeltaHandler(thinkingHandler)
     }
 
     private static func agentTurnIndex(

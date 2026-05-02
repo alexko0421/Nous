@@ -68,6 +68,30 @@ final class RealtimeVoiceSessionTests: XCTestCase {
         XCTAssertTrue(instructions.contains("colloquial Cantonese"))
     }
 
+    func testSessionUpdateSupportsMandarinVoiceLanguage() throws {
+        let mandarin = try Self.sessionPayload(language: .mandarin)
+        XCTAssertEqual(mandarin.transcription["language"] as? String, "zh")
+        XCTAssertTrue(mandarin.instructions.contains("standard Mandarin"))
+        XCTAssertTrue(mandarin.instructions.contains("Mainland"))
+    }
+
+    func testSessionUpdateUsesHumanVoiceInstructions() throws {
+        let payload = try Self.sessionPayload(language: .automatic)
+
+        XCTAssertTrue(payload.instructions.contains("calm, present thinking partner"))
+        XCTAssertTrue(payload.instructions.contains("short conversational turns"))
+        XCTAssertTrue(payload.instructions.contains("not a command menu"))
+        XCTAssertTrue(payload.instructions.contains("Acknowledge what Alex said before taking action"))
+    }
+
+    func testSessionUpdateRoutesSummariesToPaperPreviewTool() throws {
+        let payload = try Self.sessionPayload(language: .automatic)
+
+        XCTAssertTrue(payload.instructions.contains("show_summary_preview"))
+        XCTAssertTrue(payload.instructions.contains("summary paper"))
+        XCTAssertTrue(payload.instructions.contains("markdown"))
+    }
+
     func testSessionUpdateIncludesGlobalControlTools() throws {
         let data = try RealtimeVoiceSession.makeSessionUpdateEvent()
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -78,7 +102,7 @@ final class RealtimeVoiceSessionTests: XCTestCase {
         XCTAssertTrue(toolNames.contains("open_settings_section"))
     }
 
-    func testParsesFunctionCallArgumentsDone() throws {
+    func testParsesFunctionCallArgumentsDoneAsPendingToolCall() throws {
         let raw = """
         {
           "type": "response.function_call_arguments.done",
@@ -90,7 +114,43 @@ final class RealtimeVoiceSessionTests: XCTestCase {
 
         let event = try XCTUnwrap(RealtimeVoiceEventParser.parse(raw))
 
-        XCTAssertEqual(event, .toolCall(.init(name: "navigate_to_tab", arguments: #"{"tab":"galaxy"}"#), callId: "call_123"))
+        XCTAssertEqual(
+            event,
+            .toolCallArgumentsDone(
+                .init(name: "navigate_to_tab", arguments: #"{"tab":"galaxy"}"#),
+                callId: "call_123"
+            )
+        )
+    }
+
+    func testParsesResponseDoneFunctionCallAsExecutableToolCall() throws {
+        let raw = """
+        {
+          "type": "response.done",
+          "response": {
+            "status": "completed",
+            "output": [
+              {
+                "type": "function_call",
+                "status": "completed",
+                "name": "navigate_to_tab",
+                "call_id": "call_123",
+                "arguments": "{\\"tab\\":\\"settings\\"}"
+              }
+            ]
+          }
+        }
+        """
+
+        let event = try XCTUnwrap(RealtimeVoiceEventParser.parse(raw))
+
+        XCTAssertEqual(
+            event,
+            .responseDoneWithToolCall(
+                .init(name: "navigate_to_tab", arguments: #"{"tab":"settings"}"#),
+                callId: "call_123"
+            )
+        )
     }
 
     func testParsesOutputAudioDelta() throws {
@@ -386,6 +446,21 @@ final class RealtimeVoiceSessionTests: XCTestCase {
         let tools = try XCTUnwrap(session["tools"] as? [[String: Any]])
         return tools.compactMap { $0["name"] as? String }
     }
+
+    private static func sessionPayload(
+        language: VoiceLanguage
+    ) throws -> (transcription: [String: Any], instructions: String) {
+        let data = try RealtimeVoiceSession.makeSessionUpdateEvent(
+            configuration: .init(voice: .cedar, language: language)
+        )
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let session = try XCTUnwrap(json["session"] as? [String: Any])
+        let audio = try XCTUnwrap(session["audio"] as? [String: Any])
+        let input = try XCTUnwrap(audio["input"] as? [String: Any])
+        let transcription = try XCTUnwrap(input["transcription"] as? [String: Any])
+        let instructions = try XCTUnwrap(session["instructions"] as? String)
+        return (transcription, instructions)
+    }
 }
 
 private final class FakeRealtimeVoiceSocket: RealtimeVoiceSocketing {
@@ -592,6 +667,14 @@ private final class FakeVoiceAudioPlayback: VoiceAudioPlaying {
     func stop() {
         locked {
             stopCount += 1
+        }
+    }
+
+    private(set) var flushCount = 0
+
+    func flushPendingBuffers() {
+        locked {
+            flushCount += 1
         }
     }
 

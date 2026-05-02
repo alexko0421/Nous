@@ -197,8 +197,12 @@ final class TurnExecutor {
 
             gemini.thinkingBudgetTokens = 2000
             gemini.onThinkingDelta = { delta in
-                await state.appendThinking(delta)
-                await sink.emit(.thinkingDelta(delta))
+                if let displayDelta = await state.appendThinking(
+                    delta,
+                    title: ThinkingTraceTitles.assistant
+                ) {
+                    await sink.emit(.thinkingDelta(displayDelta))
+                }
             }
             gemini.onBudgetExhausted = {
                 await state.markBudgetExhausted()
@@ -211,8 +215,12 @@ final class TurnExecutor {
             guard captureThinking else { return claude }
             claude.thinkingBudgetTokens = 1024
             claude.onThinkingDelta = { delta in
-                await state.appendThinking(delta)
-                await sink.emit(.thinkingDelta(delta))
+                if let displayDelta = await state.appendThinking(
+                    delta,
+                    title: ThinkingTraceTitles.assistant
+                ) {
+                    await sink.emit(.thinkingDelta(displayDelta))
+                }
             }
             return claude
         }
@@ -222,8 +230,12 @@ final class TurnExecutor {
         if var openRouter = llm as? OpenRouterLLMService {
             openRouter.reasoningBudgetTokens = 1024
             openRouter.onThinkingDelta = { delta in
-                await state.appendThinking(delta)
-                await sink.emit(.thinkingDelta(delta))
+                if let displayDelta = await state.appendThinking(
+                    delta,
+                    title: ThinkingTraceTitles.assistant
+                ) {
+                    await sink.emit(.thinkingDelta(displayDelta))
+                }
             }
             return openRouter
         }
@@ -254,10 +266,15 @@ final class TurnExecutor {
 
 actor TurnExecutionStreamState {
     private var thinking: String = ""
+    private var thinkingTrace = ThinkingTraceAccumulator()
     private(set) var didHitBudgetExhaustion: Bool = false
 
-    func appendThinking(_ delta: String) {
-        thinking.append(delta)
+    func appendThinking(_ delta: String, title: String) -> String? {
+        guard let displayDelta = thinkingTrace.append(delta, title: title) else {
+            return nil
+        }
+        thinking.append(displayDelta)
+        return displayDelta
     }
 
     func markBudgetExhausted() {

@@ -151,6 +151,11 @@ protocol VoiceAudioPlaying: AnyObject {
     func start() throws
     func enqueue(base64PCM16Audio: String)
     func stop()
+    /// Cancel all queued playback buffers immediately. Engine stays running
+    /// so the next enqueue plays without re-warmup. Used for barge-in:
+    /// when the server signals the user started speaking, any assistant
+    /// audio still sitting in the player's queue must not keep playing.
+    func flushPendingBuffers()
 }
 
 final class VoiceAudioPlayback: VoiceAudioPlaying {
@@ -207,6 +212,14 @@ final class VoiceAudioPlayback: VoiceAudioPlaying {
             engine.stop()
         }
         engine.reset()
+    }
+
+    func flushPendingBuffers() {
+        guard isConfigured, engine.isRunning else { return }
+        // player.stop() cancels everything queued. player.play() puts the
+        // node back in a state where the next scheduleBuffer plays immediately.
+        player.stop()
+        player.play()
     }
 
     private static func makeBuffer(fromPCM16LEData data: Data, format: AVAudioFormat) -> AVAudioPCMBuffer? {

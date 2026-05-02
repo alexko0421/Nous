@@ -97,10 +97,12 @@ final class SkillPayloadCodableTests: XCTestCase {
         XCTAssertThrowsError(try JSONDecoder().decode(SkillPayload.self, from: Data(json.utf8)))
     }
 
-    func testPayloadVersionTwoFails() {
+    func testPayloadVersionTwoDecodes() throws {
         let json = validPayloadJSON.replacingOccurrences(of: #""payloadVersion": 1"#, with: #""payloadVersion": 2"#)
 
-        XCTAssertThrowsError(try JSONDecoder().decode(SkillPayload.self, from: Data(json.utf8)))
+        let decoded = try JSONDecoder().decode(SkillPayload.self, from: Data(json.utf8))
+
+        XCTAssertEqual(decoded.payloadVersion, 2)
     }
 
     func testRegexTriggerKindFails() {

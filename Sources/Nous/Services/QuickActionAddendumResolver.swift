@@ -1,5 +1,11 @@
 import Foundation
 
+struct QuickActionAddendumResolution {
+    let addendum: String?
+    let loadedSkills: [LoadedSkill]
+    let matchedSkills: [Skill]
+}
+
 final class QuickActionAddendumResolver {
     private let skillStore: (any SkillStoring)?
     private let skillMatcher: any SkillMatching
@@ -23,19 +29,61 @@ final class QuickActionAddendumResolver {
         agent: (any QuickActionAgent)?,
         turnIndex: Int
     ) -> String? {
-        let agentAddendum = agent?.contextAddendum(turnIndex: turnIndex)
-        let skillAddendum = resolvedSkillAddendum(mode: mode, turnIndex: turnIndex)
-        let text = [agentAddendum, skillAddendum]
-            .compactMap { $0 }
-            .joined(separator: "\n\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return text.isEmpty ? nil : text
+        resolution(
+            mode: mode,
+            agent: agent,
+            turnIndex: turnIndex,
+            conversationID: nil
+        ).addendum
     }
 
-    private func resolvedSkillAddendum(
+    func resolution(
+        mode: QuickActionMode?,
+        agent: (any QuickActionAgent)?,
+        turnIndex: Int,
+        conversationID: UUID?
+    ) -> QuickActionAddendumResolution {
+        let agentAddendum = agent?.contextAddendum(turnIndex: turnIndex)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let matched = matchedSkills(mode: mode, turnIndex: turnIndex)
+        let loaded = loadedSkills(conversationID: conversationID)
+        let addendum = combinedAddendum(
+            agentAddendum: agentAddendum,
+            matchedSkills: matched,
+            loadedSkills: loaded
+        )
+
+        return QuickActionAddendumResolution(
+            addendum: addendum,
+            loadedSkills: loaded,
+            matchedSkills: matched
+        )
+    }
+
+    private func combinedAddendum(
+        agentAddendum: String?,
+        matchedSkills: [Skill],
+        loadedSkills: [LoadedSkill]
+    ) -> String? {
+        let loadedIDs = Set(loadedSkills.map(\.skillID))
+        let inlineFragments = matchedSkills
+            .filter { $0.payload.payloadVersion == 1 }
+            .filter { !loadedIDs.contains($0.id) }
+            .map(\.payload.action.content)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        let blocks = ([agentAddendum].compactMap { $0 } + inlineFragments)
+            .filter { !$0.isEmpty }
+
+        guard !blocks.isEmpty else { return nil }
+        return blocks.joined(separator: "\n\n")
+    }
+
+    private func matchedSkills(
         mode: QuickActionMode?,
         turnIndex: Int
-    ) -> String? {
+    ) -> [Skill] {
         #if DEBUG
         if DebugAblation.skipModeAddendum {
             SkillTraceLogger.logSkipped(
@@ -43,11 +91,11 @@ final class QuickActionAddendumResolver {
                 turnIndex: turnIndex,
                 reason: "DebugAblation.skipModeAddendum"
             )
-            return nil
+            return []
         }
         #endif
 
-        guard let skillStore else { return nil }
+        guard let skillStore else { return [] }
         let active = (try? skillStore.fetchActiveSkills(userId: userId)) ?? []
         let matched = skillMatcher.matchingSkills(
             from: active,
@@ -59,15 +107,17 @@ final class QuickActionAddendumResolver {
         SkillTraceLogger.log(matched: matched, mode: mode, turnIndex: turnIndex)
         #endif
 
-        guard !matched.isEmpty else { return nil }
+        return matched
+    }
 
-        if let skillTracker {
-            let skillIds = matched.map(\.id)
-            Task.detached {
-                try? await skillTracker.recordFire(skillIds: skillIds)
-            }
+    private func loadedSkills(conversationID: UUID?) -> [LoadedSkill] {
+        guard let skillStore, let conversationID else { return [] }
+
+        do {
+            return try skillStore.loadedSkills(in: conversationID)
+        } catch {
+            print("[QuickActionAddendumResolver] failed to load conversation skills: \(error)")
+            return []
         }
-
-        return matched.map { $0.payload.action.content }.joined(separator: "\n\n")
     }
 }

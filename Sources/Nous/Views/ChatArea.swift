@@ -76,6 +76,7 @@ struct ChatArea: View {
         StreamingAssistantPresentation(
             isGenerating: vm.isGenerating,
             currentThinking: vm.currentThinking,
+            currentThinkingStartedAt: vm.currentThinkingStartedAt,
             currentResponse: vm.currentResponse,
             currentAgentTraceIsEmpty: vm.currentAgentTrace.isEmpty
         )
@@ -113,6 +114,7 @@ struct ChatArea: View {
                                         MessageBubble(
                                             text: msg.content,
                                             thinkingContent: msg.thinkingContent,
+                                            thinkingStartedAt: nil,
                                             agentTraceRecords: msg.decodedAgentTraceRecords,
                                             isThinkingStreaming: false,
                                             isAgentTraceStreaming: false,
@@ -188,7 +190,8 @@ struct ChatArea: View {
                                     HStack {
                                         ThinkingAccordion(
                                             content: streamingPresentation.pendingThinkingContent,
-                                            isStreaming: true
+                                            isStreaming: true,
+                                            startedAt: streamingPresentation.pendingThinkingStartedAt
                                         )
                                         Spacer(minLength: 0)
                                     }
@@ -207,6 +210,7 @@ struct ChatArea: View {
                                         MessageBubble(
                                             text: vm.currentResponse,
                                             thinkingContent: streamingPresentation.draftThinkingContent,
+                                            thinkingStartedAt: streamingPresentation.draftThinkingStartedAt,
                                             agentTraceRecords: vm.currentAgentTrace,
                                             isThinkingStreaming: streamingPresentation.isDraftThinkingStreaming,
                                             isAgentTraceStreaming: streamingPresentation.isDraftAgentTraceStreaming,
@@ -287,14 +291,21 @@ struct ChatArea: View {
                         .padding(.top, 22)
 
                         if voiceController.visibleSurface == .inWindow &&
-                           (voiceController.isActive || voiceController.status.shouldDisplayPill || voiceController.pendingAction != nil) {
+                            VoiceCapsuleVisibilityPolicy.shouldShowCapsule(
+                                isVoiceActive: voiceController.isActive,
+                                status: voiceController.status,
+                                hasPendingAction: voiceController.pendingAction != nil,
+                                hasSummaryPreview: voiceController.summaryPreview != nil
+                            ) {
                             VoiceCapsuleView(
                                 status: voiceController.status,
                                 subtitleText: voiceController.subtitleText,
                                 audioLevel: voiceController.audioLevel,
                                 hasPendingConfirmation: voiceController.pendingAction != nil,
+                                summaryPreview: voiceController.summaryPreview,
                                 onConfirm: voiceController.confirmPendingAction,
-                                onCancel: voiceController.cancelPendingAction
+                                onCancel: voiceController.cancelPendingAction,
+                                onDismissSummary: voiceController.dismissSummaryPreview
                             )
                             .padding(.top, 16)
                             .transition(.move(edge: .top).combined(with: .opacity))
@@ -304,6 +315,7 @@ struct ChatArea: View {
                     .animation(.spring(response: 0.4, dampingFraction: 0.8), value: voiceController.isActive)
                     .animation(.spring(response: 0.4, dampingFraction: 0.8), value: voiceController.status.shouldDisplayPill)
                     .animation(.spring(response: 0.4, dampingFraction: 0.8), value: voiceController.pendingAction != nil)
+                    .animation(.spring(response: 0.4, dampingFraction: 0.8), value: voiceController.summaryPreview)
                     .padding(.bottom, 36)
                     .background(
                         LinearGradient(
@@ -317,7 +329,7 @@ struct ChatArea: View {
                         )
                         .allowsHitTesting(false)
                     )
-                    .allowsHitTesting(voiceController.pendingAction != nil)
+                    .allowsHitTesting(voiceController.pendingAction != nil || voiceController.summaryPreview != nil)
                     .readHeight { floatingHeaderHeight = $0 }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
@@ -689,6 +701,7 @@ struct ChatArea: View {
 struct MessageBubble: View {
     let text: String
     let thinkingContent: String?
+    let thinkingStartedAt: Date?
     let agentTraceRecords: [AgentTraceRecord]
     let isThinkingStreaming: Bool
     let isAgentTraceStreaming: Bool
@@ -713,7 +726,11 @@ struct MessageBubble: View {
                 AgentTraceAccordion(records: agentTraceRecords, isStreaming: isAgentTraceStreaming)
             }
             if let thinkingContent, !thinkingContent.isEmpty {
-                ThinkingAccordion(content: thinkingContent, isStreaming: isThinkingStreaming)
+                ThinkingAccordion(
+                    content: thinkingContent,
+                    isStreaming: isThinkingStreaming,
+                    startedAt: thinkingStartedAt
+                )
             }
             let hasContent = isUser ? !userParagraphTexts.isEmpty : !assistantDisplayText.isEmpty
             if hasContent {
@@ -857,15 +874,27 @@ struct MessageBubble: View {
 struct StreamingAssistantPresentation {
     let isGenerating: Bool
     let currentThinking: String
+    let currentThinkingStartedAt: Date?
     let currentResponse: String
     let currentAgentTraceIsEmpty: Bool
 
+    private static let placeholderThinkingContent = "Preparing context and shaping the reply."
+
+    private var displayThinkingContent: String {
+        let trimmedThinking = currentThinking.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedThinking.isEmpty ? Self.placeholderThinkingContent : currentThinking
+    }
+
     var showsPendingThinking: Bool {
-        isGenerating && currentResponse.isEmpty && currentAgentTraceIsEmpty
+        isGenerating && currentResponse.isEmpty
     }
 
     var pendingThinkingContent: String {
-        currentThinking
+        displayThinkingContent
+    }
+
+    var pendingThinkingStartedAt: Date? {
+        currentThinkingStartedAt
     }
 
     var showsPendingAgentTrace: Bool {
@@ -877,12 +906,17 @@ struct StreamingAssistantPresentation {
     }
 
     var draftThinkingContent: String? {
-        guard showsAssistantDraft, !currentThinking.isEmpty else { return nil }
-        return currentThinking
+        guard showsAssistantDraft else { return nil }
+        return displayThinkingContent
+    }
+
+    var draftThinkingStartedAt: Date? {
+        guard draftThinkingContent != nil else { return nil }
+        return currentThinkingStartedAt
     }
 
     var isDraftThinkingStreaming: Bool {
-        showsAssistantDraft && !currentThinking.isEmpty
+        showsAssistantDraft
     }
 
     var isDraftAgentTraceStreaming: Bool {

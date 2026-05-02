@@ -3,12 +3,14 @@ import SwiftUI
 struct ThinkingAccordion: View {
     let content: String
     let isStreaming: Bool
+    let startedAt: Date?
 
     @State private var isExpanded: Bool
 
-    init(content: String, isStreaming: Bool) {
+    init(content: String, isStreaming: Bool, startedAt: Date? = nil) {
         self.content = content
         self.isStreaming = isStreaming
+        self.startedAt = startedAt
         // 如果一出世就系 Streaming 状态，预设展开
         self._isExpanded = State(initialValue: isStreaming)
     }
@@ -47,9 +49,7 @@ struct ThinkingAccordion: View {
         } label: {
             HStack(spacing: 8) {
                 FrameSpinner(isAnimating: isStreaming)
-                Text(isStreaming ? "Thinking…" : "Thinking")
-                    .font(.system(size: 11))
-                    .foregroundStyle(AppColor.secondaryText)
+                title
                 Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                     .font(.system(size: 9, weight: .medium))
                     .foregroundStyle(AppColor.secondaryText)
@@ -62,6 +62,28 @@ struct ThinkingAccordion: View {
             )
         }
         .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var title: some View {
+        if isStreaming, let startedAt {
+            TimelineView(.periodic(from: startedAt, by: 1)) { context in
+                Text(Self.titleText(isStreaming: isStreaming, startedAt: startedAt, now: context.date))
+                    .font(.system(size: 11))
+                    .foregroundStyle(AppColor.secondaryText)
+            }
+        } else {
+            Text(Self.titleText(isStreaming: isStreaming, startedAt: startedAt, now: Date()))
+                .font(.system(size: 11))
+                .foregroundStyle(AppColor.secondaryText)
+        }
+    }
+
+    static func titleText(isStreaming: Bool, startedAt: Date?, now: Date) -> String {
+        guard isStreaming else { return "Thinking" }
+        guard let startedAt else { return "Thinking…" }
+        let elapsed = max(0, Int(now.timeIntervalSince(startedAt)))
+        return "Thinking for \(elapsed)s"
     }
 }
 

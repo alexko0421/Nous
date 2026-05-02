@@ -49,6 +49,7 @@ final class AgentLoopExecutor {
             var trace: [AgentTraceRecord] = []
             var toolContext = context
             var thinkingContent = ""
+            var thinkingTrace = ThinkingTraceAccumulator()
 
             for _ in 0..<Self.maxIterations {
                 try Self.checkDeadline(deadline, totalSeconds: totalTurnTimeoutSeconds)
@@ -58,7 +59,7 @@ final class AgentLoopExecutor {
                     seconds: Self.remainingSeconds(until: deadline, cap: totalTurnTimeoutSeconds)
                 ) {
                     try await self.llmService.callWithTools(
-                        system: plan.turnSlice.combined,
+                        systemBlocks: plan.turnSlice.blocks,
                         messages: messagesForCall,
                         tools: self.registry.declarations,
                         allowToolCalls: true
@@ -66,6 +67,7 @@ final class AgentLoopExecutor {
                 }
                 await Self.appendThinking(
                     response.thinkingContent,
+                    trace: &thinkingTrace,
                     to: &thinkingContent,
                     sink: sink
                 )
@@ -142,7 +144,7 @@ final class AgentLoopExecutor {
                 seconds: Self.remainingSeconds(until: deadline, cap: totalTurnTimeoutSeconds)
             ) {
                 try await self.llmService.callWithTools(
-                    system: plan.turnSlice.combined,
+                    systemBlocks: plan.turnSlice.blocks,
                     messages: messagesForFinalCall,
                     tools: self.registry.declarations,
                     allowToolCalls: false
@@ -150,6 +152,7 @@ final class AgentLoopExecutor {
                 }
             await Self.appendThinking(
                 finalResponse.thinkingContent,
+                trace: &thinkingTrace,
                 to: &thinkingContent,
                 sink: sink
             )
@@ -188,14 +191,18 @@ final class AgentLoopExecutor {
 
     private static func appendThinking(
         _ delta: String?,
+        trace: inout ThinkingTraceAccumulator,
         to thinkingContent: inout String,
         sink: TurnSequencedEventSink
     ) async {
         guard let delta, !delta.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return
         }
-        thinkingContent.append(delta)
-        await sink.emit(.thinkingDelta(delta))
+        guard let displayDelta = trace.append(delta, title: ThinkingTraceTitles.agentLoop) else {
+            return
+        }
+        thinkingContent.append(displayDelta)
+        await sink.emit(.thinkingDelta(displayDelta))
     }
 
     private static func context(_ context: AgentToolContext, adding nodeIds: Set<UUID>) -> AgentToolContext {
@@ -204,6 +211,8 @@ final class AgentLoopExecutor {
             projectId: context.projectId,
             currentNodeId: context.currentNodeId,
             currentMessage: context.currentMessage,
+            activeQuickActionMode: context.activeQuickActionMode,
+            indexedSkillIds: context.indexedSkillIds,
             excludeNodeIds: context.excludeNodeIds,
             allowedReadNodeIds: context.allowedReadNodeIds.union(nodeIds),
             maxToolResultCharacters: context.maxToolResultCharacters

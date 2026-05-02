@@ -3,6 +3,25 @@ import XCTest
 
 @MainActor
 final class VoiceCommandControllerTests: XCTestCase {
+    func testRealtimeEventLogMessageRedactsTranscriptPayloads() {
+        let message = VoiceCommandController.logMessage(
+            for: .inputTranscriptCompleted("Alex private transcript")
+        )
+
+        XCTAssertEqual(message, "event=inputTranscriptCompleted")
+        XCTAssertFalse(message.contains("Alex private transcript"))
+    }
+
+    func testFunctionOutputLogMessageRedactsOutputPayload() {
+        let message = VoiceCommandController.functionOutputLogMessage(
+            callId: "call-memory",
+            output: "- private memory result"
+        )
+
+        XCTAssertEqual(message, "sendFunctionOutput callId=call-memory output=<redacted>")
+        XCTAssertFalse(message.contains("private memory result"))
+    }
+
     func testVoiceModeToggleMissingKeyReportsUnavailableWithoutNavigationIntent() {
         XCTAssertEqual(
             VoiceModeTogglePolicy.action(isActive: false, isVoiceModeAvailable: false, apiKey: ""),
@@ -136,6 +155,40 @@ final class VoiceCommandControllerTests: XCTestCase {
         XCTAssertEqual(navigated, .galaxy)
         XCTAssertEqual(controller.status, .action("Opening Galaxy"))
         XCTAssertEqual(session.functionOutputs, [.init(callId: "call-1", output: "Opening Galaxy")])
+    }
+
+    func testRealtimeToolCallArgumentsWaitForResponseDoneBeforeRunningHandler() async throws {
+        let session = FakeRealtimeVoiceSession()
+        let controller = VoiceCommandController(session: session)
+        var navigated: VoiceNavigationTarget?
+        controller.configure(
+            VoiceActionHandlers(
+                navigate: { navigated = $0 },
+                setSidebarVisible: { _ in },
+                setScratchPadVisible: { _ in },
+                setComposerText: { _ in },
+                appendComposerText: { _ in },
+                clearComposer: {},
+                startNewChat: {},
+                createNote: { _, _ in }
+            )
+        )
+
+        try await controller.start(apiKey: "sk-test")
+        await session.emit(.toolCallArgumentsDone(
+            .init(name: "navigate_to_tab", arguments: #"{"tab":"settings"}"#),
+            callId: "call-settings"
+        ))
+
+        XCTAssertNil(navigated)
+        XCTAssertEqual(session.functionOutputs, [])
+
+        await session.emit(.responseDone)
+
+        XCTAssertEqual(navigated, .settings)
+        XCTAssertTrue(controller.isActive)
+        XCTAssertEqual(controller.status, .action("Opening Settings"))
+        XCTAssertEqual(session.functionOutputs, [.init(callId: "call-settings", output: "Opening Settings")])
     }
 
     func testRealtimeUserTranscriptStreamsIntoSubtitle() async throws {
@@ -666,6 +719,37 @@ final class VoiceCommandControllerTests: XCTestCase {
         XCTAssertEqual(session.stopCallCount, 0)
         XCTAssertEqual(controller.status, .action("Opening Model Settings"))
         XCTAssertEqual(session.functionOutputs, [.init(callId: "call-settings", output: "Opening Model Settings")])
+    }
+
+    func testShowSummaryPreviewToolSetsMarkdownPaperPreview() async throws {
+        let controller = VoiceCommandController()
+
+        try await controller.handleToolCall(.init(
+            name: "show_summary_preview",
+            arguments: ##"{"title":"Conversation Summary","markdown":"# Summary\n- Ship voice paper."}"##
+        ))
+
+        XCTAssertEqual(controller.status, .action("Summary ready"))
+        XCTAssertEqual(
+            controller.summaryPreview,
+            VoiceSummaryPreview(
+                title: "Conversation Summary",
+                markdown: "# Summary\n- Ship voice paper."
+            )
+        )
+    }
+
+    func testDismissSummaryPreviewToolClearsPaperPreview() async throws {
+        let controller = VoiceCommandController()
+        try await controller.handleToolCall(.init(
+            name: "show_summary_preview",
+            arguments: #"{"title":"Summary","markdown":"- Keep this brief."}"#
+        ))
+
+        try await controller.handleToolCall(.init(name: "dismiss_summary_preview", arguments: #"{}"#))
+
+        XCTAssertNil(controller.summaryPreview)
+        XCTAssertEqual(controller.status, .action("Summary closed"))
     }
 
     func testUnknownToolIsRejectedWithoutMutation() async {

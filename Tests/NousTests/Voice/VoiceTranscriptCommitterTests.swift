@@ -118,6 +118,28 @@ final class VoiceTranscriptCommitterTests: XCTestCase {
         XCTAssertEqual(messages.count, 0)
     }
 
+    func testCommitsFinalizedAssistantOutputToBoundConversation() async throws {
+        let conversation = try sessionStore.startConversation(title: "Test")
+        let viewModel = makeChatViewModel(currentNode: conversation)
+        let session = FakeRealtimeVoiceSession()
+        let controller = VoiceCommandController(session: session)
+        let committer = VoiceTranscriptCommitter(
+            voiceController: controller,
+            chatViewModel: viewModel
+        )
+        _ = committer
+
+        controller.boundConversationId = conversation.id
+        try await controller.start(apiKey: "sk-test")
+        await session.emit(.outputTranscriptCompleted("I heard you."))
+
+        let messages = try nodeStore.fetchMessages(nodeId: conversation.id)
+        XCTAssertEqual(messages.count, 1)
+        XCTAssertEqual(messages.first?.source, .voice)
+        XCTAssertEqual(messages.first?.content, "I heard you.")
+        XCTAssertEqual(messages.first?.role, .assistant)
+    }
+
     func testDeduplicatesSameLineId() throws {
         let conversation = try sessionStore.startConversation(title: "Test")
         let viewModel = makeChatViewModel(currentNode: conversation)

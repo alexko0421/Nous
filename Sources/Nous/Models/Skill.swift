@@ -11,6 +11,21 @@ struct Skill: Identifiable, Equatable {
     var lastFiredAt: Date?
 }
 
+struct LoadedSkill: Equatable {
+    let skillID: UUID
+    let nameSnapshot: String
+    let contentSnapshot: String
+    let stateAtLoad: SkillState
+    let loadedAt: Date
+}
+
+enum MarkSkillLoadedResult: Equatable {
+    case inserted(LoadedSkill)
+    case alreadyLoaded(LoadedSkill)
+    case missingSkill
+    case unavailable(SkillState)
+}
+
 enum SkillState: String, Codable {
     case active
     case retired
@@ -26,6 +41,7 @@ struct SkillPayload: Codable, Equatable {
     let payloadVersion: Int
     let name: String
     let description: String?
+    let useWhen: String?
     let source: SkillSource
     let trigger: SkillTrigger
     let action: SkillAction
@@ -36,6 +52,7 @@ struct SkillPayload: Codable, Equatable {
         payloadVersion: Int,
         name: String,
         description: String? = nil,
+        useWhen: String? = nil,
         source: SkillSource,
         trigger: SkillTrigger,
         action: SkillAction,
@@ -45,6 +62,7 @@ struct SkillPayload: Codable, Equatable {
         self.payloadVersion = payloadVersion
         self.name = name
         self.description = description
+        self.useWhen = useWhen
         self.source = source
         self.trigger = trigger
         self.action = action
@@ -56,17 +74,18 @@ struct SkillPayload: Codable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let version = try container.decode(Int.self, forKey: .payloadVersion)
 
-        guard version == 1 else {
+        guard (1...2).contains(version) else {
             throw DecodingError.dataCorruptedError(
                 forKey: .payloadVersion,
                 in: container,
-                debugDescription: "SkillStore accepts payloadVersion=1 only"
+                debugDescription: "SkillStore accepts payloadVersion in 1...2"
             )
         }
 
         payloadVersion = version
         name = try container.decode(String.self, forKey: .name)
         description = try container.decodeIfPresent(String.self, forKey: .description)
+        useWhen = try container.decodeIfPresent(String.self, forKey: .useWhen)
         source = try container.decode(SkillSource.self, forKey: .source)
         trigger = try container.decode(SkillTrigger.self, forKey: .trigger)
         action = try container.decode(SkillAction.self, forKey: .action)

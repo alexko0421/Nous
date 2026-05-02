@@ -24,14 +24,15 @@ struct VoiceCapsuleContent: View {
     }
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(alignment: .top, spacing: 12) {
             VoiceWaveformBars(level: audioLevel, state: barState)
                 .frame(width: 27, height: 22)
+                .alignmentGuide(.top) { d in d[.top] - 2 } // Optically center with 15pt title
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(status.displayText)
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
                     .foregroundStyle(AppColor.colaDarkText)
                     .lineLimit(1)
                     .contentTransition(.interpolate)
@@ -39,9 +40,9 @@ struct VoiceCapsuleContent: View {
 
                 if !subtitleText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Text(subtitleText)
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
                         .foregroundStyle(AppColor.secondaryText)
-                        .lineLimit(2)
+                        .lineLimit(5)
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
                         .contentTransition(.interpolate)
@@ -63,10 +64,12 @@ struct VoiceCapsuleContent: View {
                         .foregroundStyle(AppColor.secondaryText)
                 }
                 .padding(.leading, 4)
+                .padding(.top, 4)
                 .transition(.opacity.combined(with: .scale(scale: 0.95)))
             } else if showsStopButton && shouldShowStopForStatus {
                 StopButton(onTap: onStop)
                     .padding(.leading, 4)
+                    .alignmentGuide(.top) { d in d[.top] + 7.5 } // Center 35pt button with 15pt title text
                     .transition(.opacity.combined(with: .scale(scale: 0.9)))
             }
         }

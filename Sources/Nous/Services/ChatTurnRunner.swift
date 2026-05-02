@@ -99,12 +99,21 @@ final class ChatTurnRunner {
         }
 
         let plan: TurnPlan
+        let judgeThinkingTrace = ThinkingTraceStore()
         do {
             Self.debugLog("planning start turn=\(request.turnId)")
             plan = try await turnPlanner.plan(
                 from: prepared,
                 request: request,
-                stewardship: stewardship
+                stewardship: stewardship,
+                judgeThinkingHandler: { delta in
+                    if let displayDelta = await judgeThinkingTrace.append(
+                        delta,
+                        title: ThinkingTraceTitles.judge
+                    ) {
+                        await sink.emit(.thinkingDelta(displayDelta))
+                    }
+                }
             )
             Self.debugLog("planning ready turn=\(request.turnId) provider=\(plan.provider) fallback=\(plan.judgeEventDraft?.fallbackReason.rawValue ?? "none")")
         } catch is CancellationError {
@@ -135,23 +144,34 @@ final class ChatTurnRunner {
             return nil
         }
 
-        let executionResult: TurnExecutionResult
+        var executionResult: TurnExecutionResult
         do {
             Self.debugLog("execute start turn=\(request.turnId)")
-            if let mode = request.snapshot.activeQuickActionMode,
-               mode.agent().useAgentLoop,
-               let agentLoopExecutor = agentLoopExecutorFactory?(mode, plan, request) {
-                guard let result = try await agentLoopExecutor.execute(
-                    plan: plan,
-                    request: request,
-                    sink: sink,
-                    context: Self.makeAgentToolContext(plan: plan, request: request)
-                ) else {
-                    Self.debugLog("agent execute nil turn=\(request.turnId) abort=\(abortReason())")
-                    await sink.emit(.aborted(abortReason()))
-                    return nil
+            if let mode = plan.agentLoopMode {
+                if let agentLoopExecutor = agentLoopExecutorFactory?(mode, plan, request) {
+                    guard let result = try await agentLoopExecutor.execute(
+                        plan: plan,
+                        request: request,
+                        sink: sink,
+                        context: Self.makeAgentToolContext(plan: plan, request: request)
+                    ) else {
+                        Self.debugLog("agent execute nil turn=\(request.turnId) abort=\(abortReason())")
+                        await sink.emit(.aborted(abortReason()))
+                        return nil
+                    }
+                    executionResult = result
+                } else if !plan.indexedSkillIds.isEmpty {
+                    throw TurnExecutionFailure.infrastructure(
+                        "Agent tool loop is unavailable for a turn that rendered lazy skills."
+                    )
+                } else {
+                    guard let result = try await turnExecutor.execute(plan: plan, sink: sink) else {
+                        Self.debugLog("execute nil turn=\(request.turnId) abort=\(abortReason())")
+                        await sink.emit(.aborted(abortReason()))
+                        return nil
+                    }
+                    executionResult = result
                 }
-                executionResult = result
             } else {
                 guard let result = try await turnExecutor.execute(plan: plan, sink: sink) else {
                     Self.debugLog("execute nil turn=\(request.turnId) abort=\(abortReason())")
@@ -172,6 +192,9 @@ final class ChatTurnRunner {
             )
             return nil
         }
+        executionResult = executionResult.withPersistedThinkingPrefix(
+            await judgeThinkingTrace.persistedThinking
+        )
 
         do {
             try Task.checkCancellation()
@@ -239,6 +262,8 @@ final class ChatTurnRunner {
             projectId: plan.prepared.node.projectId,
             currentNodeId: plan.prepared.node.id,
             currentMessage: plan.prepared.userMessage.content,
+            activeQuickActionMode: plan.agentLoopMode ?? request.snapshot.activeQuickActionMode,
+            indexedSkillIds: plan.indexedSkillIds,
             excludeNodeIds: [plan.prepared.node.id],
             allowedReadNodeIds: [plan.prepared.node.id],
             maxToolResultCharacters: 1200
@@ -257,9 +282,36 @@ final class ChatTurnRunner {
             projectId: baseContext.projectId,
             currentNodeId: baseContext.currentNodeId,
             currentMessage: request.inputText.isEmpty ? baseContext.currentMessage : request.inputText,
+            activeQuickActionMode: baseContext.activeQuickActionMode,
+            indexedSkillIds: baseContext.indexedSkillIds,
             excludeNodeIds: baseContext.excludeNodeIds,
             allowedReadNodeIds: baseContext.allowedReadNodeIds.union(citationIds),
             maxToolResultCharacters: baseContext.maxToolResultCharacters
+        )
+    }
+}
+
+private extension TurnExecutionResult {
+    func withPersistedThinkingPrefix(_ prefix: String?) -> TurnExecutionResult {
+        let hasPrefix = prefix?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        let combinedThinking: String?
+        if hasPrefix, let persistedThinking {
+            combinedThinking = [prefix, persistedThinking]
+                .compactMap { $0 }
+                .joined(separator: "\n\n")
+        } else if hasPrefix {
+            combinedThinking = prefix
+        } else {
+            combinedThinking = persistedThinking
+        }
+
+        return TurnExecutionResult(
+            rawAssistantContent: rawAssistantContent,
+            assistantContent: assistantContent,
+            persistedThinking: combinedThinking,
+            conversationTitle: conversationTitle,
+            didHitBudgetExhaustion: didHitBudgetExhaustion,
+            agentTraceJson: agentTraceJson
         )
     }
 }

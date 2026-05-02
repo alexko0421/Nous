@@ -39,6 +39,219 @@ final class AgentTraceCodecTests: XCTestCase {
     }
 }
 
+final class LoadSkillToolTests: XCTestCase {
+    private var nodeStore: NodeStore!
+    private var skillStore: SkillStore!
+    private var conversation: NousNode!
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        nodeStore = try NodeStore(path: ":memory:")
+        skillStore = SkillStore(nodeStore: nodeStore)
+        conversation = NousNode(type: .conversation, title: "Current")
+        try nodeStore.insertNode(conversation)
+    }
+
+    override func tearDownWithError() throws {
+        conversation = nil
+        skillStore = nil
+        nodeStore = nil
+        try super.tearDownWithError()
+    }
+
+    func testRegistryIncludesLoadSkillWhenSkillStoreIsProvided() {
+        let registry = AgentToolRegistry.standard(
+            nodeStore: nodeStore,
+            vectorStore: VectorStore(nodeStore: nodeStore),
+            embeddingService: EmbeddingService(),
+            contradictionProvider: FakeContradictionProvider(facts: []),
+            skillStore: skillStore
+        )
+
+        XCTAssertNotNil(registry.tool(named: AgentToolNames.loadSkill))
+        XCTAssertTrue(registry.declarations.map(\.function.name).contains(AgentToolNames.loadSkill))
+    }
+
+    func testLoadSkillRequiresActiveQuickActionMode() async throws {
+        let skill = makeSkill(modes: [.direction])
+        try skillStore.insertSkill(skill)
+
+        await XCTAssertThrowsErrorAsync(
+            try await tool().execute(
+                input: AgentToolInput(raw: ["skill_id": skill.id.uuidString]),
+                context: context(activeMode: nil)
+            )
+        ) { error in
+            XCTAssertEqual(error as? AgentToolError, .unavailable("loadSkill is only available inside an active quick mode."))
+        }
+    }
+
+    func testLoadSkillRejectsSkillOutsideActiveMode() async throws {
+        let skill = makeSkill(modes: [.plan])
+        try skillStore.insertSkill(skill)
+
+        await XCTAssertThrowsErrorAsync(
+            try await tool().execute(
+                input: AgentToolInput(raw: ["skill_id": skill.id.uuidString]),
+                context: context(activeMode: .direction, indexedSkillIds: [skill.id])
+            )
+        ) { error in
+            XCTAssertEqual(error as? AgentToolError, .unauthorized("Skill"))
+        }
+    }
+
+    func testLoadSkillRejectsUnavailableIndexedSkillWithoutSnapshot() async throws {
+        let skill = makeSkill(modes: [.direction], state: .retired)
+        try skillStore.insertSkill(skill)
+
+        await XCTAssertThrowsErrorAsync(
+            try await tool().execute(
+                input: AgentToolInput(raw: ["skill_id": skill.id.uuidString]),
+                context: context(activeMode: .direction, indexedSkillIds: [skill.id])
+            )
+        ) { error in
+            XCTAssertEqual(error as? AgentToolError, .unavailable("Skill is retired."))
+        }
+        XCTAssertEqual(try skillStore.loadedSkills(in: conversation.id), [])
+    }
+
+    func testLoadSkillSnapshotsContentAndReturnsIt() async throws {
+        let skill = makeSkill(
+            name: "direction-skeleton",
+            modes: [.direction],
+            content: "Loaded direction content."
+        )
+        try skillStore.insertSkill(skill)
+
+        let result = try await tool().execute(
+            input: AgentToolInput(raw: ["skill_id": skill.id.uuidString]),
+            context: context(activeMode: .direction, indexedSkillIds: [skill.id])
+        )
+
+        XCTAssertTrue(result.summary.contains("Loaded skill: direction-skeleton"))
+        XCTAssertTrue(result.summary.contains("Loaded direction content."))
+        XCTAssertEqual(try skillStore.loadedSkills(in: conversation.id).map(\.skillID), [skill.id])
+        XCTAssertEqual(try XCTUnwrap(skillStore.fetchSkill(id: skill.id)).firedCount, 1)
+    }
+
+    func testLoadSkillIsIdempotentAndReturnsExistingSnapshot() async throws {
+        let skill = makeSkill(
+            name: "stable-snapshot",
+            modes: [.direction],
+            content: "Original content."
+        )
+        try skillStore.insertSkill(skill)
+
+        _ = try await tool().execute(
+            input: AgentToolInput(raw: ["skill_id": skill.id.uuidString]),
+            context: context(activeMode: .direction, indexedSkillIds: [skill.id])
+        )
+        try skillStore.updateSkill(makeSkill(
+            id: skill.id,
+            name: "stable-snapshot",
+            modes: [.direction],
+            content: "Mutated content."
+        ))
+
+        let result = try await tool().execute(
+            input: AgentToolInput(raw: ["skill_id": skill.id.uuidString]),
+            context: context(activeMode: .direction)
+        )
+
+        XCTAssertTrue(result.summary.contains("Original content."))
+        XCTAssertFalse(result.summary.contains("Mutated content."))
+        XCTAssertEqual(try skillStore.loadedSkills(in: conversation.id).count, 1)
+    }
+
+    func testLoadSkillRejectsActiveSameModeSkillMissingFromRenderedIndex() async throws {
+        let skill = makeSkill(
+            name: "not-rendered",
+            modes: [.direction],
+            content: "Should not be reachable."
+        )
+        try skillStore.insertSkill(skill)
+
+        await XCTAssertThrowsErrorAsync(
+            try await tool().execute(
+                input: AgentToolInput(raw: ["skill_id": skill.id.uuidString]),
+                context: context(activeMode: .direction)
+            )
+        ) { error in
+            XCTAssertEqual(error as? AgentToolError, .unauthorized("Skill"))
+        }
+        XCTAssertEqual(try skillStore.loadedSkills(in: conversation.id), [])
+    }
+
+    func testLoadSkillReturnsAlreadyLoadedSnapshotEvenWhenMissingFromRenderedIndex() async throws {
+        let skill = makeSkill(
+            name: "already-loaded",
+            modes: [.direction],
+            content: "Original loaded content."
+        )
+        try skillStore.insertSkill(skill)
+        _ = try await tool().execute(
+            input: AgentToolInput(raw: ["skill_id": skill.id.uuidString]),
+            context: context(activeMode: .direction, indexedSkillIds: [skill.id])
+        )
+        try skillStore.setSkillState(id: skill.id, state: .retired)
+
+        let result = try await tool().execute(
+            input: AgentToolInput(raw: ["skill_id": skill.id.uuidString]),
+            context: context(activeMode: .direction)
+        )
+
+        XCTAssertTrue(result.summary.contains("Original loaded content."))
+        XCTAssertEqual(try skillStore.loadedSkills(in: conversation.id).map(\.skillID), [skill.id])
+    }
+
+    private func tool() -> LoadSkillTool {
+        LoadSkillTool(skillStore: skillStore)
+    }
+
+    private func context(
+        activeMode: QuickActionMode?,
+        indexedSkillIds: Set<UUID> = []
+    ) -> AgentToolContext {
+        AgentToolContext(
+            conversationId: conversation.id,
+            projectId: nil,
+            currentNodeId: conversation.id,
+            currentMessage: "load skill",
+            activeQuickActionMode: activeMode,
+            indexedSkillIds: indexedSkillIds,
+            excludeNodeIds: [conversation.id],
+            allowedReadNodeIds: [conversation.id],
+            maxToolResultCharacters: 1200
+        )
+    }
+
+    private func makeSkill(
+        id: UUID = UUID(),
+        name: String = "skill",
+        modes: [QuickActionMode],
+        content: String = "Skill content.",
+        state: SkillState = .active
+    ) -> Skill {
+        Skill(
+            id: id,
+            userId: "alex",
+            payload: SkillPayload(
+                payloadVersion: 2,
+                name: name,
+                useWhen: "Use when the active mode needs this skill.",
+                source: .alex,
+                trigger: SkillTrigger(kind: .mode, modes: modes, priority: 70),
+                action: SkillAction(kind: .promptFragment, content: content)
+            ),
+            state: state,
+            firedCount: 0,
+            createdAt: Date(timeIntervalSince1970: 1_000),
+            lastModifiedAt: Date(timeIntervalSince1970: 1_000),
+            lastFiredAt: nil
+        )
+    }
+}
+
 final class ReadNoteToolTests: XCTestCase {
     private var store: NodeStore!
 
@@ -404,6 +617,67 @@ final class OpenRouterToolEncodingTests: XCTestCase {
         XCTAssertEqual(response.thinkingContent, "I checked the notes first.")
     }
 
+    func testToolResponsePreservesReasoningDetailsForFollowUpToolCall() throws {
+        let data = """
+        {
+          "choices": [
+            {
+              "message": {
+                "role": "assistant",
+                "content": "",
+                "reasoning_details": [
+                  {
+                    "type": "reasoning.text",
+                    "text": "I need memory before answering.",
+                    "format": "anthropic-claude-v1",
+                    "index": 0
+                  }
+                ],
+                "tool_calls": [
+                  {
+                    "id": "call_memory",
+                    "type": "function",
+                    "function": {
+                      "name": "search_memory",
+                      "arguments": "{\\"query\\":\\"visa\\"}"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let response = try OpenRouterLLMService.parseToolResponse(data)
+
+        guard case .assistantToolCalls(_, let toolCalls, _, let reasoningDetailsJSON) = response.assistantMessage else {
+            return XCTFail("Expected assistant tool-call message to carry reasoning details.")
+        }
+        XCTAssertEqual(toolCalls.map(\.id), ["call_memory"])
+        XCTAssertNotNil(reasoningDetailsJSON)
+
+        let body = try OpenRouterLLMService.buildToolRequestBody(
+            model: "anthropic/claude-sonnet-4.6",
+            system: "system",
+            messages: [
+                response.assistantMessage,
+                .toolResult(
+                    toolCallId: "call_memory",
+                    name: "search_memory",
+                    content: "memory result",
+                    isError: false
+                )
+            ],
+            tools: [],
+            allowToolCalls: false
+        )
+        let messages = try XCTUnwrap(body["messages"] as? [[String: Any]])
+        let assistant = try XCTUnwrap(messages.first { $0["role"] as? String == "assistant" })
+        let reasoningDetails = try XCTUnwrap(assistant["reasoning_details"] as? [[String: Any]])
+        XCTAssertEqual(reasoningDetails.first?["text"] as? String, "I need memory before answering.")
+    }
+
     func testToolRequestBodySerializesTranscriptAndToolChoice() throws {
         let declaration = AgentToolDeclaration(
             function: AgentToolFunctionDeclaration(
@@ -471,9 +745,97 @@ final class OpenRouterToolEncodingTests: XCTestCase {
         let encodedFunction = try XCTUnwrap(tools.first?["function"] as? [String: Any])
         XCTAssertEqual(encodedFunction["name"] as? String, AgentToolNames.searchMemory)
     }
+
+    func testToolRequestBodyCanSerializeSystemPromptBlocksWithCacheControl() throws {
+        let body = try OpenRouterLLMService.buildToolRequestBody(
+            model: "anthropic/claude-sonnet-4.6",
+            systemBlocks: [
+                SystemPromptBlock(id: .anchorAndPolicies, content: "anchor", cacheControl: .ephemeral),
+                SystemPromptBlock(id: .slowMemory, content: "memory", cacheControl: .ephemeral),
+                SystemPromptBlock(id: .volatile, content: "turn", cacheControl: nil)
+            ],
+            messages: [.text(role: "user", content: "Use context")],
+            tools: [],
+            allowToolCalls: true
+        )
+
+        let messages = try XCTUnwrap(body["messages"] as? [[String: Any]])
+        let system = try XCTUnwrap(messages.first)
+        XCTAssertEqual(system["role"] as? String, "system")
+        let content = try XCTUnwrap(system["content"] as? [[String: Any]])
+        XCTAssertEqual(content.count, 3)
+        XCTAssertEqual(content[0]["text"] as? String, "anchor")
+        XCTAssertEqual(content[0]["cache_control"] as? [String: String], ["type": "ephemeral"])
+        XCTAssertEqual(content[1]["text"] as? String, "memory")
+        XCTAssertEqual(content[1]["cache_control"] as? [String: String], ["type": "ephemeral"])
+        XCTAssertEqual(content[2]["text"] as? String, "turn")
+        XCTAssertNil(content[2]["cache_control"])
+    }
 }
 
 final class AgentLoopExecutorTests: XCTestCase {
+    func testAgentLoopCanLoadSkillAndPersistConversationSnapshot() async throws {
+        let store = try NodeStore(path: ":memory:")
+        let skillStore = SkillStore(nodeStore: store)
+        let node = NousNode(type: .conversation, title: "Current")
+        try store.insertNode(node)
+        let skill = makeLoopSkill(
+            name: "direction-skeleton",
+            mode: .direction,
+            content: "Loaded direction tool content."
+        )
+        try skillStore.insertSkill(skill)
+
+        let turnId = UUID()
+        let userMessage = Message(nodeId: node.id, role: .user, content: "Use the skill")
+        let toolCall = AgentToolCall(
+            id: "call_load_skill",
+            name: AgentToolNames.loadSkill,
+            argumentsJSON: #"{"skill_id":"\#(skill.id.uuidString)"}"#
+        )
+        let llm = ScriptedToolCallingLLM(responses: [
+            AgentToolLLMResponse(
+                text: "",
+                assistantMessage: .assistantToolCalls(content: nil, toolCalls: [toolCall]),
+                toolCalls: [toolCall]
+            ),
+            AgentToolLLMResponse(
+                text: "Final answer",
+                assistantMessage: .text(role: "assistant", content: "Final answer"),
+                toolCalls: []
+            )
+        ])
+        let executor = AgentLoopExecutor(
+            llmService: llm,
+            registry: AgentToolRegistry(tools: [LoadSkillTool(skillStore: skillStore)]),
+            perToolTimeoutSeconds: 1,
+            totalTurnTimeoutSeconds: 5
+        )
+        let capture = CapturingTurnEventSink()
+        let sink = TurnSequencedEventSink(turnId: turnId, sink: capture)
+
+        let result = try await executor.execute(
+            plan: makeAgentLoopPlan(turnId: turnId, node: node, userMessage: userMessage),
+            request: makeAgentLoopRequest(turnId: turnId, node: node, userMessage: userMessage),
+            sink: sink,
+            context: makeAgentToolContext(
+                node: node,
+                userMessage: userMessage,
+                activeMode: .direction,
+                indexedSkillIds: [skill.id]
+            )
+        )
+
+        XCTAssertEqual(result?.assistantContent, "Final answer")
+        XCTAssertEqual(try skillStore.loadedSkills(in: node.id).map(\.skillID), [skill.id])
+        let calls = await llm.capturedCalls()
+        guard case .toolResult(_, let name, let content, false) = calls[1].messages[2] else {
+            return XCTFail("Expected loadSkill tool result in follow-up transcript.")
+        }
+        XCTAssertEqual(name, AgentToolNames.loadSkill)
+        XCTAssertTrue(content.contains("Loaded direction tool content."))
+    }
+
     func testEmitsThinkingDeltaFromToolCallingResponse() async throws {
         let turnId = UUID()
         let node = NousNode(type: .conversation, title: "Current")
@@ -502,13 +864,15 @@ final class AgentLoopExecutorTests: XCTestCase {
             context: makeAgentToolContext(node: node, userMessage: userMessage)
         )
 
-        XCTAssertEqual(result?.persistedThinking, "I checked memory before answering.")
+        XCTAssertTrue(result?.persistedThinking?.contains("Sonnet tool-loop reasoning") == true)
+        XCTAssertTrue(result?.persistedThinking?.contains("I checked memory before answering.") == true)
         let events = await capture.events()
         XCTAssertTrue(events.contains { envelope in
-            guard case .thinkingDelta("I checked memory before answering.") = envelope.event else {
+            guard case .thinkingDelta(let delta) = envelope.event else {
                 return false
             }
-            return true
+            return delta.contains("Sonnet tool-loop reasoning")
+                && delta.contains("I checked memory before answering.")
         })
     }
 
@@ -553,7 +917,7 @@ final class AgentLoopExecutorTests: XCTestCase {
         let calls = await llm.capturedCalls()
         XCTAssertEqual(calls.count, 2)
         XCTAssertEqual(calls[1].messages.count, 3)
-        guard case .assistantToolCalls(_, let toolCalls) = calls[1].messages[1] else {
+        guard case .assistantToolCalls(_, let toolCalls, _, _) = calls[1].messages[1] else {
             return XCTFail("Expected assistant tool-call message in follow-up transcript.")
         }
         XCTAssertEqual(toolCalls, [unknownCall])
@@ -572,6 +936,61 @@ final class AgentLoopExecutorTests: XCTestCase {
             return XCTFail("Expected a tool-error trace event.")
         }
         XCTAssertEqual(errorTrace.kind, .toolError)
+    }
+
+    func testPassesReasoningDetailsBackAfterToolCall() async throws {
+        let turnId = UUID()
+        let node = NousNode(type: .conversation, title: "Current")
+        let userMessage = Message(nodeId: node.id, role: .user, content: "Find context")
+        let toolCall = AgentToolCall(
+            id: "call_1",
+            name: NoopTool.toolName,
+            argumentsJSON: "{}"
+        )
+        let reasoningDetailsJSON = """
+        [{"format":"anthropic-claude-v1","index":0,"text":"I should inspect memory before answering.","type":"reasoning.text"}]
+        """
+        let llm = ScriptedToolCallingLLM(responses: [
+            AgentToolLLMResponse(
+                text: "",
+                assistantMessage: .assistantToolCalls(
+                    content: nil,
+                    toolCalls: [toolCall],
+                    reasoningContent: nil,
+                    reasoningDetailsJSON: reasoningDetailsJSON
+                ),
+                toolCalls: [toolCall],
+                thinkingContent: "I should inspect memory before answering.",
+                reasoningDetailsJSON: reasoningDetailsJSON
+            ),
+            AgentToolLLMResponse(
+                text: "Final answer",
+                assistantMessage: .text(role: "assistant", content: "Final answer"),
+                toolCalls: []
+            )
+        ])
+        let executor = AgentLoopExecutor(
+            llmService: llm,
+            registry: AgentToolRegistry(tools: [NoopTool()]),
+            perToolTimeoutSeconds: 1,
+            totalTurnTimeoutSeconds: 5
+        )
+        let capture = CapturingTurnEventSink()
+        let sink = TurnSequencedEventSink(turnId: turnId, sink: capture)
+
+        _ = try await executor.execute(
+            plan: makeAgentLoopPlan(turnId: turnId, node: node, userMessage: userMessage),
+            request: makeAgentLoopRequest(turnId: turnId, node: node, userMessage: userMessage),
+            sink: sink,
+            context: makeAgentToolContext(node: node, userMessage: userMessage)
+        )
+
+        let calls = await llm.capturedCalls()
+        XCTAssertEqual(calls.count, 2)
+        guard case .assistantToolCalls(_, _, _, let capturedReasoningDetailsJSON) = calls[1].messages[1] else {
+            return XCTFail("Expected follow-up transcript to include assistant tool-call message.")
+        }
+        XCTAssertEqual(capturedReasoningDetailsJSON, reasoningDetailsJSON)
     }
 
     func testCancellationReturnsNil() async throws {
@@ -717,6 +1136,31 @@ final class AgentLoopExecutorTests: XCTestCase {
     }
 }
 
+private func makeLoopSkill(
+    id: UUID = UUID(),
+    name: String,
+    mode: QuickActionMode,
+    content: String
+) -> Skill {
+    Skill(
+        id: id,
+        userId: "alex",
+        payload: SkillPayload(
+            payloadVersion: 2,
+            name: name,
+            useWhen: "Use when the active mode needs this skill.",
+            source: .alex,
+            trigger: SkillTrigger(kind: .mode, modes: [mode], priority: 70),
+            action: SkillAction(kind: .promptFragment, content: content)
+        ),
+        state: .active,
+        firedCount: 0,
+        createdAt: Date(timeIntervalSince1970: 1_000),
+        lastModifiedAt: Date(timeIntervalSince1970: 1_000),
+        lastFiredAt: nil
+    )
+}
+
 final class ChatTurnRunnerAgentRoutingTests: XCTestCase {
     func testDirectionUsesAgentLoopWhenFactoryProvidesExecutor() async throws {
         let store = try NodeStore(path: ":memory:")
@@ -773,6 +1217,132 @@ final class ChatTurnRunnerAgentRoutingTests: XCTestCase {
         )
 
         XCTAssertEqual(completion?.assistantMessage.content, "Single shot answer")
+    }
+
+    func testInferredDirectionWithSkillIndexUsesAgentLoopWhenFactoryProvidesExecutor() async throws {
+        let store = try NodeStore(path: ":memory:")
+        let skillStore = SkillStore(nodeStore: store)
+        let skill = makeLoopSkill(
+            name: "inferred-direction-skill",
+            mode: .direction,
+            content: "Loaded inferred direction content."
+        )
+        try skillStore.insertSkill(skill)
+        let agentLLM = ScriptedToolCallingLLM(responses: [
+            AgentToolLLMResponse(
+                text: "Inferred agent answer",
+                assistantMessage: .text(role: "assistant", content: "Inferred agent answer"),
+                toolCalls: []
+            )
+        ])
+        var factoryModes: [QuickActionMode] = []
+        var factoryPlans: [TurnPlan] = []
+        let runner = makeChatTurnRunner(
+            nodeStore: store,
+            provider: .openrouter,
+            singleShotText: "Single shot answer",
+            skillStore: skillStore
+        ) { mode, plan, _ in
+            factoryModes.append(mode)
+            factoryPlans.append(plan)
+            return AgentLoopExecutor(
+                llmService: agentLLM,
+                registry: AgentToolRegistry(tools: []),
+                perToolTimeoutSeconds: 1,
+                totalTurnTimeoutSeconds: 5
+            )
+        }
+        let sinkStore = CapturingTurnEventSink()
+        let sink = TurnSequencedEventSink(turnId: UUID(), sink: sinkStore)
+
+        let completion = await runner.run(
+            request: makeRunnerRequest(mode: nil, inputText: "Need a next step"),
+            sink: sink,
+            abortReason: { .cancelledByUser }
+        )
+
+        XCTAssertEqual(completion?.assistantMessage.content, "Inferred agent answer")
+        XCTAssertEqual(factoryModes, [.direction])
+        XCTAssertTrue(factoryPlans.first?.turnSlice.combinedString.contains("SKILL INDEX") == true)
+        XCTAssertEqual(factoryPlans.first?.indexedSkillIds, Set([skill.id]))
+    }
+
+    func testInferredDirectionSkipsSkillIndexWhenProviderCannotUseAgentLoop() async throws {
+        let store = try NodeStore(path: ":memory:")
+        let skillStore = SkillStore(nodeStore: store)
+        let skill = makeLoopSkill(
+            name: "gemini-direction-skill",
+            mode: .direction,
+            content: "Gemini should not see a lazy load instruction."
+        )
+        try skillStore.insertSkill(skill)
+        var capturedPlan: TurnPlan?
+        var factoryCallCount = 0
+        let runner = makeChatTurnRunner(
+            nodeStore: store,
+            provider: .gemini,
+            singleShotText: "Gemini single shot",
+            skillStore: skillStore,
+            onPlanReady: { capturedPlan = $0 }
+        ) { _, _, _ in
+            factoryCallCount += 1
+            return nil
+        }
+        let sinkStore = CapturingTurnEventSink()
+        let sink = TurnSequencedEventSink(turnId: UUID(), sink: sinkStore)
+
+        let completion = await runner.run(
+            request: makeRunnerRequest(mode: nil, inputText: "Need a next step"),
+            sink: sink,
+            abortReason: { .cancelledByUser }
+        )
+
+        XCTAssertEqual(completion?.assistantMessage.content, "Gemini single shot")
+        XCTAssertEqual(factoryCallCount, 0)
+        XCTAssertFalse(capturedPlan?.turnSlice.combinedString.contains("SKILL INDEX") == true)
+        XCTAssertEqual(capturedPlan?.indexedSkillIds, [])
+        XCTAssertNil(capturedPlan?.agentLoopMode)
+    }
+
+    func testLazySkillIndexFailsInsteadOfSingleShotWhenAgentLoopExecutorUnavailable() async throws {
+        let store = try NodeStore(path: ":memory:")
+        let skillStore = SkillStore(nodeStore: store)
+        let skill = makeLoopSkill(
+            name: "openrouter-direction-skill",
+            mode: .direction,
+            content: "This requires a tool loop to load."
+        )
+        try skillStore.insertSkill(skill)
+        var capturedPlan: TurnPlan?
+        let runner = makeChatTurnRunner(
+            nodeStore: store,
+            provider: .openrouter,
+            singleShotText: "Should not be used",
+            skillStore: skillStore,
+            onPlanReady: { capturedPlan = $0 }
+        ) { _, _, _ in
+            nil
+        }
+        let sinkStore = CapturingTurnEventSink()
+        let sink = TurnSequencedEventSink(turnId: UUID(), sink: sinkStore)
+
+        let completion = await runner.run(
+            request: makeRunnerRequest(mode: nil, inputText: "Need a next step"),
+            sink: sink,
+            abortReason: { .cancelledByUser }
+        )
+
+        XCTAssertNil(completion)
+        XCTAssertTrue(capturedPlan?.turnSlice.combinedString.contains("SKILL INDEX") == true)
+        let failed = await sinkStore.events().compactMap { envelope -> TurnFailure? in
+            guard case .failed(let failure) = envelope.event else { return nil }
+            return failure
+        }
+        XCTAssertEqual(failed.first?.stage, .execution)
+        XCTAssertEqual(
+            failed.first?.message,
+            "Agent tool loop is unavailable for a turn that rendered lazy skills."
+        )
     }
 
     func testBrainstormDoesNotRequestAgentLoopFactory() async throws {
@@ -952,6 +1522,8 @@ private func makeChatTurnRunner(
     nodeStore: NodeStore,
     provider: LLMProvider,
     singleShotText: String,
+    skillStore: (any SkillStoring)? = nil,
+    onPlanReady: @escaping (TurnPlan) -> Void = { _ in },
     agentLoopExecutorFactory: AgentLoopExecutorFactory?
 ) -> ChatTurnRunner {
     let core = UserMemoryCore(nodeStore: nodeStore, llmServiceProvider: { nil })
@@ -964,7 +1536,8 @@ private func makeChatTurnRunner(
         memoryProjectionService: memoryProjection,
         contradictionMemoryService: contradiction,
         currentProviderProvider: { provider },
-        judgeLLMServiceFactory: { nil }
+        judgeLLMServiceFactory: { nil },
+        skillStore: skillStore
     )
     return ChatTurnRunner(
         conversationSessionStore: ConversationSessionStore(nodeStore: nodeStore),
@@ -975,11 +1548,15 @@ private func makeChatTurnRunner(
             shouldPersistAssistantThinking: { true }
         ),
         agentLoopExecutorFactory: agentLoopExecutorFactory,
-        outcomeFactory: TurnOutcomeFactory(shouldPersistMemory: { _, _ in false })
+        outcomeFactory: TurnOutcomeFactory(shouldPersistMemory: { _, _ in false }),
+        onPlanReady: onPlanReady
     )
 }
 
-private func makeRunnerRequest(mode: QuickActionMode) -> TurnRequest {
+private func makeRunnerRequest(
+    mode: QuickActionMode?,
+    inputText: String = "Need help choosing next step"
+) -> TurnRequest {
     TurnRequest(
         turnId: UUID(),
         snapshot: TurnSessionSnapshot(
@@ -989,7 +1566,7 @@ private func makeRunnerRequest(mode: QuickActionMode) -> TurnRequest {
             activeChatMode: nil,
             activeQuickActionMode: mode
         ),
-        inputText: "Need help choosing next step",
+        inputText: inputText,
         attachments: [],
         now: Date()
     )
@@ -1048,13 +1625,17 @@ private func makeAgentLoopRequest(
 
 private func makeAgentToolContext(
     node: NousNode,
-    userMessage: Message
+    userMessage: Message,
+    activeMode: QuickActionMode? = nil,
+    indexedSkillIds: Set<UUID> = []
 ) -> AgentToolContext {
     AgentToolContext(
         conversationId: node.id,
         projectId: node.projectId,
         currentNodeId: node.id,
         currentMessage: userMessage.content,
+        activeQuickActionMode: activeMode,
+        indexedSkillIds: indexedSkillIds,
         excludeNodeIds: [node.id],
         allowedReadNodeIds: [node.id],
         maxToolResultCharacters: 1200

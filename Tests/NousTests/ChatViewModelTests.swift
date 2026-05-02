@@ -31,15 +31,58 @@ final class SlowStreamingLLMService: LLMService {
 
 final class ChatStreamingPresentationTests: XCTestCase {
     func testKeepsThinkingExpandedWhileAnswerTextStreams() {
+        let startedAt = Date(timeIntervalSince1970: 100)
         let presentation = StreamingAssistantPresentation(
             isGenerating: true,
             currentThinking: "First, identify the actual constraint.",
+            currentThinkingStartedAt: startedAt,
             currentResponse: "The short answer is",
             currentAgentTraceIsEmpty: true
         )
 
         XCTAssertTrue(presentation.showsAssistantDraft)
         XCTAssertEqual(presentation.draftThinkingContent, "First, identify the actual constraint.")
+        XCTAssertEqual(presentation.draftThinkingStartedAt, startedAt)
+        XCTAssertTrue(presentation.isDraftThinkingStreaming)
+    }
+
+    func testThinkingAccordionTitleShowsElapsedSecondsWhileStreaming() {
+        let startedAt = Date(timeIntervalSince1970: 100)
+        let now = startedAt.addingTimeInterval(7.4)
+
+        let title = ThinkingAccordion.titleText(
+            isStreaming: true,
+            startedAt: startedAt,
+            now: now
+        )
+
+        XCTAssertEqual(title, "Thinking for 7s")
+    }
+
+    func testShowsThinkingPillWhenAgentTraceArrivesBeforeAnswerText() {
+        let presentation = StreamingAssistantPresentation(
+            isGenerating: true,
+            currentThinking: "",
+            currentThinkingStartedAt: Date(timeIntervalSince1970: 100),
+            currentResponse: "",
+            currentAgentTraceIsEmpty: false
+        )
+
+        XCTAssertTrue(presentation.showsPendingThinking)
+        XCTAssertFalse(presentation.pendingThinkingContent.isEmpty)
+    }
+
+    func testShowsThinkingPillWhileAnswerStreamsWithoutVisibleReasoning() {
+        let presentation = StreamingAssistantPresentation(
+            isGenerating: true,
+            currentThinking: "",
+            currentThinkingStartedAt: Date(timeIntervalSince1970: 100),
+            currentResponse: "Here is the answer",
+            currentAgentTraceIsEmpty: true
+        )
+
+        XCTAssertTrue(presentation.showsAssistantDraft)
+        XCTAssertFalse(presentation.draftThinkingContent?.isEmpty ?? true)
         XCTAssertTrue(presentation.isDraftThinkingStreaming)
     }
 }
@@ -63,6 +106,7 @@ final class SingleReplyLLMService: LLMService {
 final class CapturingSingleReplyLLMService: LLMService {
     private let lock = NSLock()
     private let output: String
+    private var didCapturePrompt = false
     private var storedReceivedSystem: String?
     private var storedReceivedMessages: [LLMMessage] = []
 
@@ -83,8 +127,11 @@ final class CapturingSingleReplyLLMService: LLMService {
 
     func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
         lock.withLock {
-            storedReceivedSystem = system
-            storedReceivedMessages = messages
+            if !didCapturePrompt {
+                didCapturePrompt = true
+                storedReceivedSystem = system
+                storedReceivedMessages = messages
+            }
         }
         let output = self.output
         return AsyncThrowingStream { continuation in

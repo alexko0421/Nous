@@ -21,9 +21,36 @@ protocol ToolCallingLLMService {
         tools: [AgentToolDeclaration],
         allowToolCalls: Bool
     ) async throws -> AgentToolLLMResponse
+
+    func callWithTools(
+        systemBlocks: [SystemPromptBlock],
+        messages: [AgentLoopMessage],
+        tools: [AgentToolDeclaration],
+        allowToolCalls: Bool
+    ) async throws -> AgentToolLLMResponse
+}
+
+extension ToolCallingLLMService {
+    func callWithTools(
+        systemBlocks: [SystemPromptBlock],
+        messages: [AgentLoopMessage],
+        tools: [AgentToolDeclaration],
+        allowToolCalls: Bool
+    ) async throws -> AgentToolLLMResponse {
+        try await callWithTools(
+            system: TurnSystemSlice(blocks: systemBlocks).combinedString,
+            messages: messages,
+            tools: tools,
+            allowToolCalls: allowToolCalls
+        )
+    }
 }
 
 typealias ThinkingDeltaHandler = @MainActor (String) async -> Void
+
+protocol ThinkingDeltaConfigurableLLMService: LLMService {
+    func withThinkingDeltaHandler(_ handler: @escaping ThinkingDeltaHandler) -> any LLMService
+}
 
 struct LLMMessage {
     let role: String // "user" or "assistant"
@@ -289,6 +316,15 @@ struct ClaudeLLMService: LLMService {
     }
 }
 
+extension ClaudeLLMService: ThinkingDeltaConfigurableLLMService {
+    func withThinkingDeltaHandler(_ handler: @escaping ThinkingDeltaHandler) -> any LLMService {
+        var copy = self
+        copy.thinkingBudgetTokens = copy.thinkingBudgetTokens ?? 1024
+        copy.onThinkingDelta = handler
+        return copy
+    }
+}
+
 // MARK: - OpenAI API
 
 struct OpenAILLMService: LLMService {
@@ -426,6 +462,15 @@ struct OpenRouterLLMService: LLMService {
     }
 }
 
+extension OpenRouterLLMService: ThinkingDeltaConfigurableLLMService {
+    func withThinkingDeltaHandler(_ handler: @escaping ThinkingDeltaHandler) -> any LLMService {
+        var copy = self
+        copy.reasoningBudgetTokens = copy.reasoningBudgetTokens ?? 1024
+        copy.onThinkingDelta = handler
+        return copy
+    }
+}
+
 extension OpenRouterLLMService: ToolCallingLLMService {
     var supportsAgentToolUse: Bool {
         model == "anthropic/claude-sonnet-4.6"
@@ -466,6 +511,41 @@ extension OpenRouterLLMService: ToolCallingLLMService {
         return try Self.parseToolResponse(data)
     }
 
+    func callWithTools(
+        systemBlocks: [SystemPromptBlock],
+        messages: [AgentLoopMessage],
+        tools: [AgentToolDeclaration],
+        allowToolCalls: Bool
+    ) async throws -> AgentToolLLMResponse {
+        let url = URL(string: "https://openrouter.ai/api/v1/chat/completions")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("https://nous.app", forHTTPHeaderField: "HTTP-Referer")
+        request.setValue("Nous", forHTTPHeaderField: "X-Title")
+
+        let requestBody = try Self.buildToolRequestBody(
+            model: model,
+            systemBlocks: systemBlocks,
+            messages: messages,
+            tools: tools,
+            allowToolCalls: allowToolCalls,
+            includeWebSearch: webSearchEnabled,
+            reasoningBudgetTokens: reasoningBudgetTokens
+        )
+        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw LLMError.invalidResponse
+        }
+        guard httpResponse.statusCode == 200 else {
+            throw LLMError.httpError(httpResponse.statusCode)
+        }
+        return try Self.parseToolResponse(data)
+    }
+
     static func buildToolRequestBody(
         model: String,
         system: String,
@@ -484,6 +564,33 @@ extension OpenRouterLLMService: ToolCallingLLMService {
             "model": model,
             "stream": false,
             "messages": Self.serializeAgentMessages(system: system, messages: messages),
+            "tools": serializedTools,
+            "tool_choice": allowToolCalls ? "auto" : "none"
+        ]
+        if let reasoningBudgetTokens {
+            requestBody["reasoning"] = Self.reasoningRequestBody(maxTokens: reasoningBudgetTokens)
+        }
+        return requestBody
+    }
+
+    static func buildToolRequestBody(
+        model: String,
+        systemBlocks: [SystemPromptBlock],
+        messages: [AgentLoopMessage],
+        tools: [AgentToolDeclaration],
+        allowToolCalls: Bool,
+        includeWebSearch: Bool = false,
+        reasoningBudgetTokens: Int? = nil
+    ) throws -> [String: Any] {
+        var serializedTools = try Self.serializeToolDeclarations(tools)
+        if includeWebSearch {
+            serializedTools.append(Self.webSearchServerTool())
+        }
+
+        var requestBody: [String: Any] = [
+            "model": model,
+            "stream": false,
+            "messages": Self.serializeAgentMessages(systemBlocks: systemBlocks, messages: messages),
             "tools": serializedTools,
             "tool_choice": allowToolCalls ? "auto" : "none"
         ]
@@ -552,16 +659,50 @@ extension OpenRouterLLMService: ToolCallingLLMService {
         return serialized
     }
 
+    static func serializeAgentMessages(
+        systemBlocks: [SystemPromptBlock],
+        messages: [AgentLoopMessage]
+    ) -> [[String: Any]] {
+        var serialized: [[String: Any]] = []
+        let systemContent = serializeSystemPromptBlocks(systemBlocks)
+        if !systemContent.isEmpty {
+            serialized.append(["role": "system", "content": systemContent])
+        }
+        serialized.append(contentsOf: messages.map(serializeAgentMessage))
+        return serialized
+    }
+
+    static func serializeSystemPromptBlocks(_ blocks: [SystemPromptBlock]) -> [[String: Any]] {
+        blocks.compactMap { block in
+            guard !block.content.isEmpty else { return nil }
+            var payload: [String: Any] = [
+                "type": "text",
+                "text": block.content
+            ]
+            if block.cacheControl == .ephemeral {
+                payload["cache_control"] = ["type": "ephemeral"]
+            }
+            return payload
+        }
+    }
+
     static func serializeAgentMessage(_ message: AgentLoopMessage) -> [String: Any] {
         switch message {
         case .text(let role, let content):
             return ["role": role, "content": content]
-        case .assistantToolCalls(let content, let toolCalls):
+        case .assistantToolCalls(let content, let toolCalls, let reasoningContent, let reasoningDetailsJSON):
             var payload: [String: Any] = [
                 "role": "assistant",
                 "tool_calls": toolCalls.map(serializeToolCall)
             ]
             payload["content"] = content ?? ""
+            if let reasoningContent = nonEmptyString(reasoningContent) {
+                payload["reasoning"] = reasoningContent
+            }
+            if let reasoningDetailsJSON,
+               let reasoningDetails = jsonObject(fromJSONString: reasoningDetailsJSON) {
+                payload["reasoning_details"] = reasoningDetails
+            }
             return payload
         case .toolResult(let toolCallId, let name, let content, _):
             return [
@@ -601,19 +742,26 @@ extension OpenRouterLLMService: ToolCallingLLMService {
         }
 
         let text = message["content"] as? String ?? ""
+        let reasoningContent = nonEmptyString(message["reasoning"])
+            ?? nonEmptyString(message["reasoning_content"])
+        let reasoningDetailsJSON = jsonString(fromJSONObject: message["reasoning_details"])
         let thinkingContent = OpenRouterReasoningExtractor.visibleThinking(in: message)
         let toolCalls = (message["tool_calls"] as? [[String: Any]] ?? []).compactMap(parseToolCall)
         let assistantMessage: AgentLoopMessage = toolCalls.isEmpty
             ? .text(role: "assistant", content: text)
             : .assistantToolCalls(
                 content: text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : text,
-                toolCalls: toolCalls
+                toolCalls: toolCalls,
+                reasoningContent: reasoningContent,
+                reasoningDetailsJSON: reasoningDetailsJSON
             )
         return AgentToolLLMResponse(
             text: text,
             assistantMessage: assistantMessage,
             toolCalls: toolCalls,
-            thinkingContent: thinkingContent.isEmpty ? nil : thinkingContent
+            thinkingContent: thinkingContent.isEmpty ? nil : thinkingContent,
+            reasoningContent: reasoningContent,
+            reasoningDetailsJSON: reasoningDetailsJSON
         )
     }
 
@@ -625,6 +773,27 @@ extension OpenRouterLLMService: ToolCallingLLMService {
         }
         let arguments = function["arguments"] as? String ?? "{}"
         return AgentToolCall(id: id, name: name, argumentsJSON: arguments)
+    }
+
+    private static func jsonString(fromJSONObject value: Any?) -> String? {
+        guard let value, JSONSerialization.isValidJSONObject(value),
+              let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) else {
+            return nil
+        }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private static func jsonObject(fromJSONString string: String) -> Any? {
+        guard let data = string.data(using: .utf8) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data)
+    }
+
+    private static func nonEmptyString(_ value: Any?) -> String? {
+        guard let string = value as? String,
+              !string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return string
     }
 }
 
@@ -984,6 +1153,15 @@ struct GeminiLLMService: LLMService {
         formatter.formatOptions = [.withInternetDateTime]
         return formatter
     }()
+}
+
+extension GeminiLLMService: ThinkingDeltaConfigurableLLMService {
+    func withThinkingDeltaHandler(_ handler: @escaping ThinkingDeltaHandler) -> any LLMService {
+        var copy = self
+        copy.thinkingBudgetTokens = copy.thinkingBudgetTokens ?? 1024
+        copy.onThinkingDelta = handler
+        return copy
+    }
 }
 
 // MARK: - Errors

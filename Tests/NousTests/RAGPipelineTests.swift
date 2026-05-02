@@ -11,6 +11,167 @@ final class RAGPipelineTests: XCTestCase {
         vectorStore = VectorStore(nodeStore: nodeStore)
     }
 
+    func testTurnSystemSliceCombinedStringConcatenatesNonEmptyBlocks() {
+        let blocks = [
+            SystemPromptBlock(id: .anchorAndPolicies, content: "anchor", cacheControl: .ephemeral),
+            SystemPromptBlock(id: .slowMemory, content: "", cacheControl: .ephemeral),
+            SystemPromptBlock(id: .activeSkills, content: "active", cacheControl: .ephemeral),
+            SystemPromptBlock(id: .skillIndex, content: "", cacheControl: .ephemeral),
+            SystemPromptBlock(id: .volatile, content: "vol", cacheControl: nil)
+        ]
+        let slice = TurnSystemSlice(blocks: blocks)
+
+        XCTAssertEqual(slice.combinedString, "anchor\n\nactive\n\nvol")
+    }
+
+    func testTurnSystemSliceStableAndVolatileAccessorsStayBackwardCompatible() {
+        let slice = TurnSystemSlice(blocks: [
+            SystemPromptBlock(id: .anchorAndPolicies, content: "anchor", cacheControl: .ephemeral),
+            SystemPromptBlock(id: .slowMemory, content: "memory", cacheControl: .ephemeral),
+            SystemPromptBlock(id: .volatile, content: "turn", cacheControl: nil)
+        ])
+
+        XCTAssertEqual(slice.stable, "anchor\n\nmemory")
+        XCTAssertEqual(slice.volatile, "turn")
+        XCTAssertEqual(slice.combined, "anchor\n\nmemory\n\nturn")
+    }
+
+    func testTurnSystemSliceLegacyInitializerCreatesBlockBackedSlice() {
+        let slice = TurnSystemSlice(stable: "stable", volatile: "volatile")
+
+        XCTAssertEqual(slice.blocks.map(\.id), [.anchorAndPolicies, .volatile])
+        XCTAssertEqual(slice.combinedString, "stable\n\nvolatile")
+    }
+
+    func testPromptContextAssemblerSkipsActiveSkillSectionWhenNoLoadedSkills() {
+        let slice = assembleLazyLoadSlice(loadedSkills: [], matchedSkills: [], activeMode: .direction)
+
+        XCTAssertFalse(slice.combinedString.contains("ACTIVE SKILLS"))
+        XCTAssertFalse(slice.blocks.map(\.id).contains(.activeSkills))
+    }
+
+    func testPromptContextAssemblerRendersActiveSkillSnapshots() {
+        let skillID = UUID()
+        let loaded = [
+            LoadedSkill(
+                skillID: skillID,
+                nameSnapshot: "direction-skeleton",
+                contentSnapshot: "Direction skeleton content.",
+                stateAtLoad: .active,
+                loadedAt: Date(timeIntervalSince1970: 10)
+            )
+        ]
+
+        let slice = assembleLazyLoadSlice(loadedSkills: loaded, matchedSkills: [], activeMode: .direction)
+
+        XCTAssertTrue(slice.combinedString.contains("ACTIVE SKILLS"))
+        XCTAssertTrue(slice.combinedString.contains("Direction skeleton content."))
+        XCTAssertTrue(slice.combinedString.contains("<<skill source=user id=\(skillID.uuidString) name=direction-skeleton>>"))
+        XCTAssertTrue(slice.blocks.map(\.id).contains(.activeSkills))
+    }
+
+    func testPromptContextAssemblerSkipsSkillIndexWhenQuickModeIsNil() {
+        let slice = assembleLazyLoadSlice(
+            loadedSkills: [],
+            matchedSkills: [makePromptSkill(name: "direction-skeleton")],
+            activeMode: nil
+        )
+
+        XCTAssertFalse(slice.combinedString.contains("SKILL INDEX"))
+        XCTAssertFalse(slice.blocks.map(\.id).contains(.skillIndex))
+    }
+
+    func testPromptContextAssemblerRendersSkillIndexWhenModeIsPresent() {
+        let skill = makePromptSkill(
+            name: "direction-skeleton",
+            useWhen: "Use when Alex asks for tradeoffs."
+        )
+
+        let slice = assembleLazyLoadSlice(loadedSkills: [], matchedSkills: [skill], activeMode: .direction)
+
+        XCTAssertTrue(slice.combinedString.contains("SKILL INDEX"))
+        XCTAssertTrue(slice.combinedString.contains("Use when Alex asks for tradeoffs."))
+        XCTAssertTrue(slice.combinedString.contains("call loadSkill"))
+        XCTAssertTrue(slice.blocks.map(\.id).contains(.skillIndex))
+    }
+
+    func testPromptContextAssemblerSkillIndexExcludesAlreadyLoadedSkills() {
+        let loadedID = UUID()
+        let otherID = UUID()
+        let loaded = [
+            LoadedSkill(
+                skillID: loadedID,
+                nameSnapshot: "already-loaded",
+                contentSnapshot: "Loaded content.",
+                stateAtLoad: .active,
+                loadedAt: Date()
+            )
+        ]
+        let matched = [
+            makePromptSkill(id: loadedID, name: "already-loaded"),
+            makePromptSkill(id: otherID, name: "still-visible")
+        ]
+
+        let slice = assembleLazyLoadSlice(loadedSkills: loaded, matchedSkills: matched, activeMode: .direction)
+        let index = sliceSection(slice.combinedString, header: "SKILL INDEX")
+
+        XCTAssertFalse(index.contains("already-loaded"))
+        XCTAssertTrue(index.contains("still-visible"))
+    }
+
+    func testPromptContextAssemblerSkillIndexFallsBackToDescriptionWhenUseWhenIsNil() {
+        let skill = makePromptSkill(
+            name: "description-skill",
+            description: "Use this description.",
+            useWhen: nil
+        )
+
+        let slice = assembleLazyLoadSlice(loadedSkills: [], matchedSkills: [skill], activeMode: .direction)
+
+        XCTAssertTrue(slice.combinedString.contains("Use this description."))
+    }
+
+    func testPromptContextAssemblerBlockOrderPutsActiveBeforeIndex() throws {
+        let loaded = [
+            LoadedSkill(
+                skillID: UUID(),
+                nameSnapshot: "loaded",
+                contentSnapshot: "Loaded content.",
+                stateAtLoad: .active,
+                loadedAt: Date()
+            )
+        ]
+        let matched = [makePromptSkill(name: "matched")]
+
+        let slice = assembleLazyLoadSlice(loadedSkills: loaded, matchedSkills: matched, activeMode: .direction)
+        let ids = slice.blocks.map(\.id)
+
+        XCTAssertLessThan(
+            try XCTUnwrap(ids.firstIndex(of: .activeSkills)),
+            try XCTUnwrap(ids.firstIndex(of: .skillIndex))
+        )
+    }
+
+    func testPromptContextAssemblerCacheMarkedBlockSequenceWhenAllPresent() {
+        let loaded = [
+            LoadedSkill(
+                skillID: UUID(),
+                nameSnapshot: "loaded",
+                contentSnapshot: "Loaded content.",
+                stateAtLoad: .active,
+                loadedAt: Date()
+            )
+        ]
+        let matched = [makePromptSkill(name: "matched")]
+
+        let slice = assembleLazyLoadSlice(loadedSkills: loaded, matchedSkills: matched, activeMode: .direction)
+
+        XCTAssertEqual(
+            slice.blocks.filter { $0.cacheControl != nil }.map(\.id),
+            [.anchorAndPolicies, .slowMemory, .activeSkills, .skillIndex]
+        )
+    }
+
     // MARK: - Test 1: RAG search returns the most relevant node
 
     func testPromptContextAssemblerOwnsContextAssemblyWithoutChatViewModel() {
@@ -710,6 +871,10 @@ final class RAGPipelineTests: XCTestCase {
 
         XCTAssertTrue(trace.promptLayers.contains("citations"))
         XCTAssertTrue(trace.promptLayers.contains("long_gap_bridge_guidance"))
+        XCTAssertEqual(
+            trace.citationTrace,
+            CitationTrace(citationCount: 1, longGapCount: 1, minSimilarity: 0.72, maxSimilarity: 0.72)
+        )
     }
 
     func testGovernanceTraceUsesFilteredCitationsAfterMemoryEvidenceCoversSource() {
@@ -744,6 +909,60 @@ final class RAGPipelineTests: XCTestCase {
         XCTAssertTrue(trace.promptLayers.contains("memory_evidence"))
         XCTAssertFalse(trace.promptLayers.contains("citations"))
         XCTAssertFalse(trace.promptLayers.contains("long_gap_bridge_guidance"))
+        XCTAssertNil(trace.citationTrace)
+    }
+
+    func testGovernanceTraceSummarizesFilteredCitationQuality() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let coveredNode = NousNode(
+            type: .note,
+            title: "Covered source",
+            content: "This source is already carried by memory evidence.",
+            createdAt: now.addingTimeInterval(-80 * 86_400),
+            updatedAt: now.addingTimeInterval(-80 * 86_400)
+        )
+        let semanticNode = NousNode(
+            type: .note,
+            title: "Current YC plan",
+            content: "Alex is weighing whether to apply to YC this batch.",
+            createdAt: now.addingTimeInterval(-10 * 86_400),
+            updatedAt: now.addingTimeInterval(-10 * 86_400)
+        )
+        let longGapNode = NousNode(
+            type: .note,
+            title: "Old fear pattern",
+            content: "Alex hesitated before because public failure felt expensive.",
+            createdAt: now.addingTimeInterval(-90 * 86_400),
+            updatedAt: now.addingTimeInterval(-90 * 86_400)
+        )
+
+        let trace = PromptContextAssembler.governanceTrace(
+            currentUserInput: "Should I apply now?",
+            globalMemory: nil,
+            memoryEvidence: [
+                MemoryEvidenceSnippet(
+                    label: "Project context",
+                    sourceNodeId: coveredNode.id,
+                    sourceTitle: coveredNode.title,
+                    snippet: "The covered source is already represented."
+                )
+            ],
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [
+                SearchResult(node: coveredNode, similarity: 0.95, lane: .semantic),
+                SearchResult(node: semanticNode, similarity: 0.64, lane: .semantic),
+                SearchResult(node: longGapNode, similarity: 0.81, lane: .longGap)
+            ],
+            projectGoal: nil,
+            now: now
+        )
+
+        XCTAssertEqual(
+            trace.citationTrace,
+            CitationTrace(citationCount: 2, longGapCount: 1, minSimilarity: 0.64, maxSimilarity: 0.81)
+        )
     }
 
     func testGovernanceTraceOmitsUserModelLayerWhenOnlyPromptUserModelGoalDuplicatesProjectGoal() {
@@ -985,5 +1204,62 @@ final class RAGPipelineTests: XCTestCase {
         ).combined
         XCTAssertFalse(context.contains("CHAT FORMAT POLICY"),
                        "normal chat (no activeQuickActionMode) must let anchor drive prose register")
+    }
+
+    private func assembleLazyLoadSlice(
+        loadedSkills: [LoadedSkill],
+        matchedSkills: [Skill],
+        activeMode: QuickActionMode?
+    ) -> TurnSystemSlice {
+        PromptContextAssembler.assembleContext(
+            globalMemory: "- Alex owns the data layer.",
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil,
+            activeQuickActionMode: activeMode,
+            loadedSkills: loadedSkills,
+            matchedSkills: matchedSkills
+        )
+    }
+
+    private func makePromptSkill(
+        id: UUID = UUID(),
+        name: String,
+        description: String? = "Use this skill when relevant.",
+        useWhen: String? = "Use when this skill is relevant.",
+        priority: Int = 70
+    ) -> Skill {
+        Skill(
+            id: id,
+            userId: "alex",
+            payload: SkillPayload(
+                payloadVersion: 2,
+                name: name,
+                description: description,
+                useWhen: useWhen,
+                source: .alex,
+                trigger: SkillTrigger(
+                    kind: .always,
+                    modes: [.direction],
+                    priority: priority
+                ),
+                action: SkillAction(
+                    kind: .promptFragment,
+                    content: "Full content should only appear after loading."
+                )
+            ),
+            state: .active,
+            firedCount: 0,
+            createdAt: Date(timeIntervalSince1970: 1_000),
+            lastModifiedAt: Date(timeIntervalSince1970: 2_000),
+            lastFiredAt: nil
+        )
+    }
+
+    private func sliceSection(_ text: String, header: String) -> String {
+        guard let start = text.range(of: header)?.lowerBound else { return "" }
+        return String(text[start...])
     }
 }

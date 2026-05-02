@@ -1636,6 +1636,9 @@ struct JudgeEventsTab: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if let evaluation = telemetry.lastPromptEvaluationSummary {
+                promptEvaluationCard(evaluation, metrics: telemetry.promptEvaluationMetrics)
+            }
             if let summary = telemetry.geminiCacheSummary {
                 geminiCacheSummaryCard(summary)
             }
@@ -1686,6 +1689,52 @@ struct JudgeEventsTab: View {
         .onChange(of: filter) { _, _ in reload() }
     }
 
+    private func promptEvaluationCard(
+        _ summary: PromptTraceEvaluationSummary,
+        metrics: PromptTraceEvaluationMetrics
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Prompt Evaluation")
+                    .font(.headline)
+                Spacer()
+                Text(summary.verdict.rawValue.capitalized)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(verdictColor(summary.verdict))
+            }
+
+            HStack(spacing: 12) {
+                cacheStat(title: "Score", value: "\(summary.qualityScore)")
+                cacheStat(title: "Pass Rate", value: percentage(metrics.passRate))
+                cacheStat(title: "Runs", value: "\(metrics.runCount)")
+            }
+
+            let findings = summary.results.flatMap(\.findings)
+            if findings.isEmpty {
+                Text("Last trace passed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(findings.prefix(3).enumerated()), id: \.offset) { _, finding in
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Circle()
+                                .fill(findingColor(finding.severity))
+                                .frame(width: 6, height: 6)
+                            Text("\(finding.code.rawValue.replacingOccurrences(of: "_", with: " ")): \(finding.message)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                    }
+                }
+            }
+        }
+        .padding()
+        .background(Color.secondary.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
     private func geminiCacheSummaryCard(_ summary: GeminiCacheSummary) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Gemini Cache")
@@ -1728,6 +1777,26 @@ struct JudgeEventsTab: View {
     private func percentage(_ value: Double?) -> String {
         guard let value else { return "n/a" }
         return "\(Int((value * 100).rounded()))%"
+    }
+
+    private func verdictColor(_ verdict: PromptTraceEvaluationVerdict) -> Color {
+        switch verdict {
+        case .pass:
+            return .green
+        case .warning:
+            return AppColor.colaOrange
+        case .failure:
+            return .red
+        }
+    }
+
+    private func findingColor(_ severity: PromptTraceEvaluationSeverity) -> Color {
+        switch severity {
+        case .warning:
+            return AppColor.colaOrange
+        case .failure:
+            return .red
+        }
     }
 
     private static func relative(_ date: Date) -> String {
