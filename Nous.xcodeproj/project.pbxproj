@@ -86,6 +86,7 @@
 		403DC6836D7E2AA502E8534D /* TurnMemoryContextBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 998ECCA254AFBAD30DB298CB /* TurnMemoryContextBuilder.swift */; };
 		410AF7748A165D45FB5BCFCB /* JudgeVerdictProvocationKindTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8F6220FBD068D395863141E /* JudgeVerdictProvocationKindTests.swift */; };
 		4116C4885DF5E1CB2FE62225 /* NodeStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 840F091AC2ADF85B26F1884A /* NodeStoreTests.swift */; };
+		411B9F650831D55CB8B6009A /* BackgroundAIJob.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BEF80F8B46D15A8493414D9 /* BackgroundAIJob.swift */; };
 		41D0B1623E823F8601314C62 /* MemoryAtomEmbeddingBackfillService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79998481586F95FE0D0AAA2D /* MemoryAtomEmbeddingBackfillService.swift */; };
 		41F9C688FE7526FC0AD43239 /* ContradictionRecallTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49868B5B3F579875A70F507A /* ContradictionRecallTests.swift */; };
 		42015586AB02DBCB895C3064 /* VoiceTranscriptLine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A6D27C2BAB07520726AA007 /* VoiceTranscriptLine.swift */; };
@@ -225,7 +226,9 @@
 		C2506A07B517F28A8E099172 /* SafetyGuardrailsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F84855652854F04A2D74C37 /* SafetyGuardrailsTests.swift */; };
 		C2E60C8C4F6D3A8BCA559EC3 /* ProvocationJudge.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5E8453730FD807288584740 /* ProvocationJudge.swift */; };
 		C3B66790ADAC5624E9ACC319 /* Nunito-Variable.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 4EDBF5703D7FA7CDEA64FCC8 /* Nunito-Variable.ttf */; };
+		C53E38480B3213F56F5ADCB2 /* BackgroundAIJobGovernanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EA0CA95E581874960F17A16 /* BackgroundAIJobGovernanceTests.swift */; };
 		C55905AD05E74E6E32F864D0 /* LLMService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F839455BCBC5668612A6A606 /* LLMService.swift */; };
+		C5A1B7AA53C9A9E25930AA6F /* BackgroundAIJobTelemetryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BF8BF27F99DC60E3A1F5EB7 /* BackgroundAIJobTelemetryStore.swift */; };
 		C5D362F89A6F0EBF721667ED /* PromptContextAssembler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69A16176517033741C601125 /* PromptContextAssembler.swift */; };
 		C7EB96C3AFE8F67879B139E3 /* TopicEmojiResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B2D97D9D7ACB3B0FAA8B275 /* TopicEmojiResolverTests.swift */; };
 		C8D75DD55197FCC0FF7792F3 /* TurnSteward.swift in Sources */ = {isa = PBXBuildFile; fileRef = C56F89842E01C0E5CBAA7C18 /* TurnSteward.swift */; };
@@ -317,6 +320,7 @@
 		08F9F1F71CFCDC24C78B9092 /* ScratchPadStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchPadStoreTests.swift; sourceTree = "<group>"; };
 		0A62E1E65A06772C484CDB01 /* TurnStewardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnStewardTests.swift; sourceTree = "<group>"; };
 		0B8F67BA86F51C23EFAD0713 /* MemoryDebugInspectorShadowLearningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryDebugInspectorShadowLearningTests.swift; sourceTree = "<group>"; };
+		0BEF80F8B46D15A8493414D9 /* BackgroundAIJob.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundAIJob.swift; sourceTree = "<group>"; };
 		0C7A581337FC89A20EF90737 /* ShadowPatternLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShadowPatternLifecycleTests.swift; sourceTree = "<group>"; };
 		0CA1498BB2382E71760BE25A /* ChatMarkdownRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMarkdownRenderer.swift; sourceTree = "<group>"; };
 		0CC992F6DB4148B19D31F08E /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
@@ -444,6 +448,7 @@
 		7C808ADD130141DEC430B6D3 /* MemoryGraphStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryGraphStoreTests.swift; sourceTree = "<group>"; };
 		7C87EB183E21C8980EDB4369 /* BeadsAgentWork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BeadsAgentWork.swift; sourceTree = "<group>"; };
 		7DECCD1373F970E6B6A9F5A0 /* StructuredLLMClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StructuredLLMClient.swift; sourceTree = "<group>"; };
+		7EA0CA95E581874960F17A16 /* BackgroundAIJobGovernanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundAIJobGovernanceTests.swift; sourceTree = "<group>"; };
 		840F091AC2ADF85B26F1884A /* NodeStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NodeStoreTests.swift; sourceTree = "<group>"; };
 		8449CEBBA6CFF148386D61AC /* VoicePreviewService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoicePreviewService.swift; sourceTree = "<group>"; };
 		84AC99FE1331146CEC54C75D /* NousApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NousApp.swift; sourceTree = "<group>"; };
@@ -480,6 +485,7 @@
 		99A974153DB5C96A52796407 /* NoteListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteListView.swift; sourceTree = "<group>"; };
 		9AB8C6C71AC65652DAD1E73A /* TurnPlanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnPlanner.swift; sourceTree = "<group>"; };
 		9B9F11A8A57B59E6B6F05D5D /* SkillPayloadCodableTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillPayloadCodableTests.swift; sourceTree = "<group>"; };
+		9BF8BF27F99DC60E3A1F5EB7 /* BackgroundAIJobTelemetryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundAIJobTelemetryStore.swift; sourceTree = "<group>"; };
 		9C8F06707B9B68AB857865B6 /* ShadowPatternPromptProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShadowPatternPromptProvider.swift; sourceTree = "<group>"; };
 		9DD84D03A98439A9E9851AF7 /* BeadsAgentWorkService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BeadsAgentWorkService.swift; sourceTree = "<group>"; };
 		A026B58B79F1E74CE18DF3F0 /* ChatTurnRunnerShadowLearningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatTurnRunnerShadowLearningTests.swift; sourceTree = "<group>"; };
@@ -741,6 +747,7 @@
 			isa = PBXGroup;
 			children = (
 				404B6377A2EDDF0C97784FD2 /* AttachedFileContext.swift */,
+				0BEF80F8B46D15A8493414D9 /* BackgroundAIJob.swift */,
 				7C87EB183E21C8980EDB4369 /* BeadsAgentWork.swift */,
 				36615399488E000DB4500E82 /* BehaviorProfile.swift */,
 				C2521A241BB593FF07230FE0 /* ChatMode.swift */,
@@ -838,6 +845,7 @@
 				6BE2A39121FEE2767376F9B1 /* AgentToolRegistry.swift */,
 				4D2768AC5F4574993074B116 /* AssistantTurnNormalizer.swift */,
 				425ACBC47E70877CFBF7B93F /* AttachmentExtractor.swift */,
+				9BF8BF27F99DC60E3A1F5EB7 /* BackgroundAIJobTelemetryStore.swift */,
 				9DD84D03A98439A9E9851AF7 /* BeadsAgentWorkService.swift */,
 				E7AF1E92835F058CCE712DAE /* ChatTurnRunner.swift */,
 				038E40893C80F43772E1FD12 /* ClarificationCardParser.swift */,
@@ -945,6 +953,7 @@
 			isa = PBXGroup;
 			children = (
 				21D608580A0735186848E5BD /* AgentToolTests.swift */,
+				7EA0CA95E581874960F17A16 /* BackgroundAIJobGovernanceTests.swift */,
 				D7D57C320AF6E55949050677 /* BeadsAgentWorkServiceTests.swift */,
 				8527F4DD4708305BB3DDD83B /* ChatMarkdownRendererTests.swift */,
 				A026B58B79F1E74CE18DF3F0 /* ChatTurnRunnerShadowLearningTests.swift */,
@@ -1249,6 +1258,8 @@
 				9A03484B71E35A61F4B79465 /* AttachedFileContext.swift in Sources */,
 				C0CE3E7E7BEBBFF45A49A23F /* AttachmentChip.swift in Sources */,
 				23CA175571B33B5F4EEB508C /* AttachmentExtractor.swift in Sources */,
+				411B9F650831D55CB8B6009A /* BackgroundAIJob.swift in Sources */,
+				C5A1B7AA53C9A9E25930AA6F /* BackgroundAIJobTelemetryStore.swift in Sources */,
 				20FB5EB9D8466AB8896CD665 /* BeadsAgentWork.swift in Sources */,
 				823CFD42D4AF672A355D4B9E /* BeadsAgentWorkService.swift in Sources */,
 				2CBCC8A2DA9D5B452DDB38B1 /* BeadsAgentWorkViewModel.swift in Sources */,
@@ -1411,6 +1422,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B0F06858A6805A16C8CF64B4 /* AgentToolTests.swift in Sources */,
+				C53E38480B3213F56F5ADCB2 /* BackgroundAIJobGovernanceTests.swift in Sources */,
 				78A4745F80FC66D29BE4203A /* BeadsAgentWorkServiceTests.swift in Sources */,
 				36D57F787B888B987A4D3E9C /* ChatMarkdownRendererTests.swift in Sources */,
 				06BE03A1B50A0BDC7B80B7F9 /* ChatTurnRunnerShadowLearningTests.swift in Sources */,

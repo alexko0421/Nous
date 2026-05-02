@@ -36,14 +36,17 @@ final class GalaxyRelationJudge {
     private let minimumTopicSimilarity: Float
     private let llmServiceProvider: (() -> (any LLMService)?)?
     private let telemetry: GalaxyRelationTelemetry?
+    private let backgroundTelemetry: (any BackgroundAIJobTelemetryRecording)?
 
     init(
         minimumTopicSimilarity: Float = GalaxyRelationTuning.semanticThreshold,
         telemetry: GalaxyRelationTelemetry? = nil,
+        backgroundTelemetry: (any BackgroundAIJobTelemetryRecording)? = nil,
         llmServiceProvider: (() -> (any LLMService)?)? = nil
     ) {
         self.minimumTopicSimilarity = minimumTopicSimilarity
         self.telemetry = telemetry
+        self.backgroundTelemetry = backgroundTelemetry
         self.llmServiceProvider = llmServiceProvider
     }
 
@@ -97,6 +100,7 @@ final class GalaxyRelationJudge {
             return localVerdict
         }
 
+        let startedAt = Date()
         do {
             let verdict = try await llmVerdict(
                 llm: llm,
@@ -107,11 +111,42 @@ final class GalaxyRelationJudge {
                 targetAtoms: targetAtoms
             )
             telemetry?.record(verdict == nil ? .llmNil : .llmVerdict)
+            recordBackgroundRun(
+                status: .completed,
+                startedAt: startedAt,
+                outputCount: verdict == nil ? 0 : 1,
+                detail: verdict.map { "relation=\($0.relationKind.rawValue)" } ?? "relation=none"
+            )
             return verdict
         } catch {
             telemetry?.record(.llmFallback)
+            recordBackgroundRun(
+                status: .failed,
+                startedAt: startedAt,
+                outputCount: 0,
+                detail: "llm_fallback"
+            )
             return localVerdict
         }
+    }
+
+    private func recordBackgroundRun(
+        status: BackgroundAIJobStatus,
+        startedAt: Date,
+        outputCount: Int,
+        detail: String
+    ) {
+        backgroundTelemetry?.record(BackgroundAIJobRunRecord(
+            id: UUID(),
+            jobId: .galaxyRelationRefinement,
+            status: status,
+            startedAt: startedAt,
+            endedAt: Date(),
+            inputCount: 2,
+            outputCount: outputCount,
+            detail: detail,
+            costCents: nil
+        ))
     }
 
     private func judgeAtomRelationship(

@@ -16,20 +16,40 @@ struct MemoryGraphMessageBackfillReport: Equatable {
 final class MemoryGraphMessageBackfillService {
     private let nodeStore: NodeStore
     private let llmServiceProvider: () -> LLMService?
+    private let backgroundTelemetry: (any BackgroundAIJobTelemetryRecording)?
 
     init(
         nodeStore: NodeStore,
-        llmServiceProvider: @escaping () -> LLMService?
+        llmServiceProvider: @escaping () -> LLMService?,
+        backgroundTelemetry: (any BackgroundAIJobTelemetryRecording)? = nil
     ) {
         self.nodeStore = nodeStore
         self.llmServiceProvider = llmServiceProvider
+        self.backgroundTelemetry = backgroundTelemetry
     }
 
     @discardableResult
     func runIfNeeded(maxConversations: Int = 4) async -> MemoryGraphMessageBackfillReport {
+        let startedAt = Date()
         var report = MemoryGraphMessageBackfillReport()
-        guard maxConversations > 0 else { return report }
-        guard let llm = llmServiceProvider() else { return report }
+        guard maxConversations > 0 else {
+            recordBackgroundRun(
+                status: .skipped,
+                startedAt: startedAt,
+                report: report,
+                detail: "max_conversations_zero"
+            )
+            return report
+        }
+        guard let llm = llmServiceProvider() else {
+            recordBackgroundRun(
+                status: .skipped,
+                startedAt: startedAt,
+                report: report,
+                detail: "llm_unavailable"
+            )
+            return report
+        }
 
         let processedMarkers = Set(((try? nodeStore.fetchMemoryObservations()) ?? [])
             .map(\.rawText)
@@ -87,7 +107,32 @@ final class MemoryGraphMessageBackfillService {
             }
         }
 
+        recordBackgroundRun(
+            status: .completed,
+            startedAt: startedAt,
+            report: report,
+            detail: "processed=\(report.processedConversations),atoms=\(report.insertedAtoms + report.updatedAtoms),edges=\(report.insertedEdges),failed=\(report.failedConversations)"
+        )
         return report
+    }
+
+    private func recordBackgroundRun(
+        status: BackgroundAIJobStatus,
+        startedAt: Date,
+        report: MemoryGraphMessageBackfillReport,
+        detail: String
+    ) {
+        backgroundTelemetry?.record(BackgroundAIJobRunRecord(
+            id: UUID(),
+            jobId: .memoryGraphMessageBackfill,
+            status: status,
+            startedAt: startedAt,
+            endedAt: Date(),
+            inputCount: report.scannedConversations,
+            outputCount: report.insertedAtoms + report.updatedAtoms + report.insertedEdges,
+            detail: detail,
+            costCents: nil
+        ))
     }
 
     private func extractDecisionChains(

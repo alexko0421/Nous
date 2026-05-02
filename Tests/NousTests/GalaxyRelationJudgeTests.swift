@@ -34,8 +34,13 @@ final class GalaxyRelationJudgeTests: XCTestCase {
 
     func testTelemetryTracksLLMNone() async {
         let telemetry = GalaxyRelationTelemetry()
+        let suiteName = "GalaxyRelationJudgeTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let backgroundTelemetry = BackgroundAIJobTelemetryStore(defaults: defaults)
         let judge = GalaxyRelationJudge(
             telemetry: telemetry,
+            backgroundTelemetry: backgroundTelemetry,
             llmServiceProvider: {
                 StaticRelationLLMService(output: """
                 {
@@ -61,12 +66,19 @@ final class GalaxyRelationJudgeTests: XCTestCase {
         let snapshot = telemetry.snapshot()
         XCTAssertEqual(snapshot.localVerdictCount, 1)
         XCTAssertEqual(snapshot.llmNilCount, 1)
+        XCTAssertEqual(backgroundTelemetry.lastRun(for: .galaxyRelationRefinement)?.status, .completed)
+        XCTAssertEqual(backgroundTelemetry.lastRun(for: .galaxyRelationRefinement)?.outputCount, 0)
     }
 
     func testTelemetryTracksLLMFallback() async {
         let telemetry = GalaxyRelationTelemetry()
+        let suiteName = "GalaxyRelationJudgeTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let backgroundTelemetry = BackgroundAIJobTelemetryStore(defaults: defaults)
         let judge = GalaxyRelationJudge(
             telemetry: telemetry,
+            backgroundTelemetry: backgroundTelemetry,
             llmServiceProvider: { FailingRelationLLMService() }
         )
 
@@ -78,6 +90,8 @@ final class GalaxyRelationJudgeTests: XCTestCase {
 
         XCTAssertEqual(verdict?.relationKind, .topicSimilarity)
         XCTAssertEqual(telemetry.snapshot().llmFallbackCount, 1)
+        XCTAssertEqual(backgroundTelemetry.lastRun(for: .galaxyRelationRefinement)?.status, .failed)
+        XCTAssertEqual(backgroundTelemetry.lastRun(for: .galaxyRelationRefinement)?.detail, "llm_fallback")
     }
 }
 

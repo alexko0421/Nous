@@ -29,6 +29,7 @@ struct AppDependencies {
     let memoryAtomEmbeddingBackfill: MemoryAtomEmbeddingBackfillService
     let userMemoryService: UserMemoryService
     let governanceTelemetry: GovernanceTelemetryStore
+    let backgroundAITelemetry: BackgroundAIJobTelemetryStore
     let galaxyRelationTelemetry: GalaxyRelationTelemetry
     let scratchPadStore: ScratchPadStore
     let voiceController: VoiceCommandController
@@ -138,11 +139,13 @@ final class AppEnvironment {
             isEnabled: { settingsVM.backgroundAnalysisEnabled }
         )
         let galaxyRelationTelemetry = GalaxyRelationTelemetry()
+        let backgroundAITelemetry = BackgroundAIJobTelemetryStore()
         let graphEngine = GraphEngine(
             nodeStore: nodeStore,
             vectorStore: vectorStore,
             relationJudge: GalaxyRelationJudge(
                 telemetry: galaxyRelationTelemetry,
+                backgroundTelemetry: backgroundAITelemetry,
                 llmServiceProvider: {
                     guard settingsVM.backgroundAnalysisEnabled else { return nil }
                     return settingsVM.makeJudgeLLMService()
@@ -164,11 +167,13 @@ final class AppEnvironment {
         )
         let conversationTitleBackfill = ConversationTitleBackfillService(
             nodeStore: nodeStore,
-            llmServiceProvider: { settingsVM.makeLLMService(openRouterWebSearchEnabled: false) }
+            llmServiceProvider: { settingsVM.makeLLMService(openRouterWebSearchEnabled: false) },
+            backgroundTelemetry: backgroundAITelemetry
         )
         let memoryGraphMessageBackfill = MemoryGraphMessageBackfillService(
             nodeStore: nodeStore,
-            llmServiceProvider: { settingsVM.makeLLMService(openRouterWebSearchEnabled: false) }
+            llmServiceProvider: { settingsVM.makeLLMService(openRouterWebSearchEnabled: false) },
+            backgroundTelemetry: backgroundAITelemetry
         )
         let memoryAtomEmbeddingBackfill = MemoryAtomEmbeddingBackfillService(
             nodeStore: nodeStore,
@@ -242,7 +247,11 @@ final class AppEnvironment {
             guard let (weekStart, weekEnd) = WeeklyReflectionService.previousCompletedWeek(now: Date())
             else { return }
             let llm = GeminiLLMService(apiKey: key)
-            let service = WeeklyReflectionService(nodeStore: nodeStore, llm: llm)
+            let service = WeeklyReflectionService(
+                nodeStore: nodeStore,
+                llm: llm,
+                backgroundTelemetry: backgroundAITelemetry
+            )
             do {
                 _ = try await service.runForWeek(
                     projectId: nil,
@@ -278,6 +287,7 @@ final class AppEnvironment {
             memoryAtomEmbeddingBackfill: memoryAtomEmbeddingBackfill,
             userMemoryService: userMemoryService,
             governanceTelemetry: governanceTelemetry,
+            backgroundAITelemetry: backgroundAITelemetry,
             galaxyRelationTelemetry: galaxyRelationTelemetry,
             scratchPadStore: scratchPadStore,
             voiceController: voiceController,
