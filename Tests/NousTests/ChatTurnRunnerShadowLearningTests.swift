@@ -151,6 +151,84 @@ final class ChatTurnRunnerShadowLearningTests: XCTestCase {
         XCTAssertEqual(artifacts.first?.trace.sourceJobId, "silent_post_turn_review")
     }
 
+    func testRunnerRecordsTurnCognitionSnapshotAfterSuccessfulCommit() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let reviewer = RecordingCognitionReviewer()
+        let snapshotCapture = TurnCognitionSnapshotCapture()
+        let slowArtifact = CognitionArtifact(
+            organ: .patternAnalyst,
+            title: "Long-term mind system",
+            summary: "Alex is designing Nous as a long-term mind system.",
+            confidence: 0.82,
+            jurisdiction: .selfReflection,
+            evidenceRefs: [
+                CognitionEvidenceRef(
+                    source: .reflectionClaim,
+                    id: UUID().uuidString,
+                    quote: "long-term mind system"
+                )
+            ],
+            suggestedSurfacing: "Use when Alex asks about long-term Nous direction.",
+            trace: CognitionTrace(
+                producer: .patternAnalyst,
+                sourceJobId: BackgroundAIJobID.weeklyReflection.rawValue
+            )
+        )
+        let runner = ChatTurnRunner(
+            conversationSessionStore: ConversationSessionStore(nodeStore: nodeStore),
+            turnPlanner: makePlanner(
+                nodeStore: nodeStore,
+                slowCognitionArtifactProvider: FixedSlowCognitionArtifactProvider(artifacts: [slowArtifact])
+            ),
+            turnExecutor: TurnExecutor(
+                llmServiceProvider: {
+                    FixedLLMService(output: "Plan ready\n<chat_title>Runtime snapshot</chat_title>")
+                },
+                shouldUseGeminiHistoryCache: { false },
+                shouldPersistAssistantThinking: { false }
+            ),
+            outcomeFactory: TurnOutcomeFactory(shouldPersistMemory: { _, _ in false }),
+            cognitionReviewer: reviewer,
+            onTurnCognitionSnapshot: { snapshotCapture.append($0) }
+        )
+        let request = TurnRequest(
+            turnId: UUID(),
+            snapshot: TurnSessionSnapshot(
+                currentNode: nil,
+                messages: [],
+                defaultProjectId: nil,
+                activeChatMode: nil,
+                activeQuickActionMode: .plan
+            ),
+            inputText: "How should we build the long-term mind system?",
+            attachments: [],
+            now: Date(timeIntervalSince1970: 5_000)
+        )
+        let sink = TurnSequencedEventSink(turnId: request.turnId, sink: NoOpTurnEventSink())
+
+        let maybeCompletion = await runner.run(
+            request: request,
+            sink: sink,
+            abortReason: { .unexpectedCancellation }
+        )
+        let completion = try XCTUnwrap(maybeCompletion)
+
+        let snapshot = try XCTUnwrap(snapshotCapture.values().first)
+        XCTAssertEqual(snapshotCapture.values().count, 1)
+        XCTAssertEqual(snapshot.turnId, request.turnId)
+        XCTAssertEqual(snapshot.conversationId, completion.node.id)
+        XCTAssertEqual(snapshot.assistantMessageId, completion.assistantMessage.id)
+        XCTAssertTrue(snapshot.slowCognitionAttached)
+        XCTAssertTrue(snapshot.promptLayers.contains("slow_cognition"))
+        XCTAssertNotNil(snapshot.reviewArtifactId)
+        XCTAssertEqual(snapshot.reviewRiskFlags, [])
+        XCTAssertEqual(snapshot.conversationRecoveryRebasedMessageCount, 0)
+
+        let encoded = String(data: try JSONEncoder().encode(snapshot), encoding: .utf8) ?? ""
+        XCTAssertFalse(encoded.contains(request.inputText))
+        XCTAssertFalse(encoded.contains("Plan ready"))
+    }
+
     func testSilentReviewerSkipsOrdinaryCompanionTurns() throws {
         let plan = makeReviewPlan(route: .ordinaryChat)
         let artifact = try CognitionReviewer().review(
@@ -265,6 +343,7 @@ final class ChatTurnRunnerShadowLearningTests: XCTestCase {
         let nodeStore = try NodeStore(path: ":memory:")
         let reviewer = RecordingCognitionReviewer()
         let capture = ReviewArtifactCapture()
+        let snapshotCapture = TurnCognitionSnapshotCapture()
         let runner = ChatTurnRunner(
             conversationSessionStore: ConversationSessionStore(nodeStore: nodeStore),
             turnPlanner: makePlanner(nodeStore: nodeStore),
@@ -280,7 +359,8 @@ final class ChatTurnRunnerShadowLearningTests: XCTestCase {
             ),
             outcomeFactory: TurnOutcomeFactory(shouldPersistMemory: { _, _ in false }),
             cognitionReviewer: reviewer,
-            onReviewArtifact: { capture.append($0) }
+            onReviewArtifact: { capture.append($0) },
+            onTurnCognitionSnapshot: { snapshotCapture.append($0) }
         )
         let request = TurnRequest(
             turnId: UUID(),
@@ -306,11 +386,13 @@ final class ChatTurnRunnerShadowLearningTests: XCTestCase {
         XCTAssertNil(completion)
         XCTAssertTrue(reviewer.reviewedTurnIds.isEmpty)
         XCTAssertTrue(capture.values().isEmpty)
+        XCTAssertTrue(snapshotCapture.values().isEmpty)
     }
 
     private func makePlanner(
         nodeStore: NodeStore,
-        judgeLLMServiceFactory: @escaping () -> (any LLMService)? = { nil }
+        judgeLLMServiceFactory: @escaping () -> (any LLMService)? = { nil },
+        slowCognitionArtifactProvider: (any SlowCognitionArtifactProviding)? = nil
     ) -> TurnPlanner {
         let core = UserMemoryCore(nodeStore: nodeStore, llmServiceProvider: { nil })
         return TurnPlanner(
@@ -320,7 +402,8 @@ final class ChatTurnRunnerShadowLearningTests: XCTestCase {
             memoryProjectionService: MemoryProjectionService(nodeStore: nodeStore),
             contradictionMemoryService: ContradictionMemoryService(core: core),
             currentProviderProvider: { .gemini },
-            judgeLLMServiceFactory: judgeLLMServiceFactory
+            judgeLLMServiceFactory: judgeLLMServiceFactory,
+            slowCognitionArtifactProvider: slowCognitionArtifactProvider
         )
     }
 
@@ -407,6 +490,36 @@ private final class ReviewArtifactCapture {
 
     func values() -> [CognitionArtifact] {
         artifacts
+    }
+}
+
+private final class TurnCognitionSnapshotCapture {
+    private var snapshots: [TurnCognitionSnapshot] = []
+
+    func append(_ snapshot: TurnCognitionSnapshot) {
+        snapshots.append(snapshot)
+    }
+
+    func values() -> [TurnCognitionSnapshot] {
+        snapshots
+    }
+}
+
+private struct FixedSlowCognitionArtifactProvider: SlowCognitionArtifactProviding {
+    let fixedArtifacts: [CognitionArtifact]
+
+    init(artifacts: [CognitionArtifact]) {
+        self.fixedArtifacts = artifacts
+    }
+
+    func artifacts(
+        userId: String,
+        currentInput: String,
+        currentNode: NousNode,
+        projectId: UUID?,
+        now: Date
+    ) throws -> [CognitionArtifact] {
+        fixedArtifacts
     }
 }
 

@@ -4,6 +4,19 @@ struct PreparedConversationTurn {
     let node: NousNode
     let userMessage: Message
     let messagesAfterUserAppend: [Message]
+    let recoveryEvent: ConversationRecoveryTelemetryEvent?
+
+    init(
+        node: NousNode,
+        userMessage: Message,
+        messagesAfterUserAppend: [Message],
+        recoveryEvent: ConversationRecoveryTelemetryEvent? = nil
+    ) {
+        self.node = node
+        self.userMessage = userMessage
+        self.messagesAfterUserAppend = messagesAfterUserAppend
+        self.recoveryEvent = recoveryEvent
+    }
 }
 
 struct CommittedAssistantTurn {
@@ -102,7 +115,8 @@ final class ConversationSessionStore {
         return PreparedConversationTurn(
             node: updatedNode,
             userMessage: userMessage,
-            messagesAfterUserAppend: messagesAfterUserAppend
+            messagesAfterUserAppend: messagesAfterUserAppend,
+            recoveryEvent: recovered.recoveryEvent
         )
     }
 
@@ -239,14 +253,14 @@ final class ConversationSessionStore {
         currentMessages: [Message],
         defaultProjectId: UUID?,
         newConversationTitle: String
-    ) throws -> (node: NousNode, currentMessages: [Message]) {
+    ) throws -> (node: NousNode, currentMessages: [Message], recoveryEvent: ConversationRecoveryTelemetryEvent?) {
         guard let currentNode else {
             let node = try startConversation(title: newConversationTitle, projectId: defaultProjectId)
-            return (node, [])
+            return (node, [], nil)
         }
 
         if let storedNode = try nodeStore.fetchNode(id: currentNode.id) {
-            return (storedNode, currentMessages)
+            return (storedNode, currentMessages, nil)
         }
 
         let recoveredTitle = currentNode.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -273,14 +287,15 @@ final class ConversationSessionStore {
             try nodeStore.insertMessage(message)
         }
 
-        telemetry?.recordConversationRecovery(ConversationRecoveryTelemetryEvent(
+        let recoveryEvent = ConversationRecoveryTelemetryEvent(
             reason: .missingCurrentNode,
             originalNodeId: currentNode.id,
             recoveredNodeId: recoveredNode.id,
             rebasedMessageCount: recoveredMessages.count
-        ))
+        )
+        telemetry?.recordConversationRecovery(recoveryEvent)
 
-        return (recoveredNode, recoveredMessages)
+        return (recoveredNode, recoveredMessages, recoveryEvent)
     }
 
     private func recoverableProjectId(_ projectId: UUID?) throws -> UUID? {

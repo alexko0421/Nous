@@ -47,6 +47,8 @@ final class GovernanceTelemetryStore {
         static let lastCognitionArtifact = "nous.governance.lastCognitionArtifact"
         static let lastConversationRecovery = "nous.governance.lastConversationRecovery"
         static let conversationRecoveryCount = "nous.governance.conversationRecoveryCount"
+        static let lastTurnCognitionSnapshot = "nous.governance.lastTurnCognitionSnapshot"
+        static let turnCognitionSnapshotCount = "nous.governance.turnCognitionSnapshotCount"
 
         static func counter(_ counter: EvalCounter) -> String {
             "nous.governance.counter.\(counter.rawValue)"
@@ -95,6 +97,11 @@ final class GovernanceTelemetryStore {
         return try? JSONDecoder().decode(ConversationRecoveryTelemetryEvent.self, from: data)
     }
 
+    var lastTurnCognitionSnapshot: TurnCognitionSnapshot? {
+        guard let data = defaults.data(forKey: Keys.lastTurnCognitionSnapshot) else { return nil }
+        return try? JSONDecoder().decode(TurnCognitionSnapshot.self, from: data)
+    }
+
     func recordPromptTrace(_ trace: PromptGovernanceTrace) {
         if let data = try? JSONEncoder().encode(trace) {
             defaults.set(data, forKey: Keys.lastPromptTrace)
@@ -135,6 +142,17 @@ final class GovernanceTelemetryStore {
 
     func conversationRecoveryCount() -> Int {
         defaults.integer(forKey: Keys.conversationRecoveryCount)
+    }
+
+    func recordTurnCognitionSnapshot(_ snapshot: TurnCognitionSnapshot) {
+        if let data = try? JSONEncoder().encode(snapshot) {
+            defaults.set(data, forKey: Keys.lastTurnCognitionSnapshot)
+        }
+        defaults.set(defaults.integer(forKey: Keys.turnCognitionSnapshotCount) + 1, forKey: Keys.turnCognitionSnapshotCount)
+    }
+
+    func turnCognitionSnapshotCount() -> Int {
+        defaults.integer(forKey: Keys.turnCognitionSnapshotCount)
     }
 
     func increment(_ counter: EvalCounter, by amount: Int = 1) {

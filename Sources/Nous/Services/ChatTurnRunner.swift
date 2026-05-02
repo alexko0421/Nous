@@ -17,6 +17,7 @@ final class ChatTurnRunner {
     private let cognitionReviewer: (any CognitionReviewing)?
     private let onPlanReady: (TurnPlan) -> Void
     private let onReviewArtifact: (CognitionArtifact) -> Void
+    private let onTurnCognitionSnapshot: (TurnCognitionSnapshot) -> Void
 
     init(
         conversationSessionStore: ConversationSessionStore,
@@ -28,7 +29,8 @@ final class ChatTurnRunner {
         shadowLearningSignalRecorder: ShadowLearningSignalRecorder? = nil,
         cognitionReviewer: (any CognitionReviewing)? = nil,
         onPlanReady: @escaping (TurnPlan) -> Void = { _ in },
-        onReviewArtifact: @escaping (CognitionArtifact) -> Void = { _ in }
+        onReviewArtifact: @escaping (CognitionArtifact) -> Void = { _ in },
+        onTurnCognitionSnapshot: @escaping (TurnCognitionSnapshot) -> Void = { _ in }
     ) {
         self.conversationSessionStore = conversationSessionStore
         self.turnSteward = turnSteward
@@ -40,6 +42,7 @@ final class ChatTurnRunner {
         self.cognitionReviewer = cognitionReviewer
         self.onPlanReady = onPlanReady
         self.onReviewArtifact = onReviewArtifact
+        self.onTurnCognitionSnapshot = onTurnCognitionSnapshot
     }
 
     func run(
@@ -243,7 +246,13 @@ final class ChatTurnRunner {
             return nil
         }
 
-        runSilentReviewIfNeeded(plan: plan, executionResult: executionResult)
+        let reviewArtifact = runSilentReviewIfNeeded(plan: plan, executionResult: executionResult)
+        onTurnCognitionSnapshot(makeTurnCognitionSnapshot(
+            request: request,
+            plan: plan,
+            committed: committed,
+            reviewArtifact: reviewArtifact
+        ))
 
         let completion = outcomeFactory.makeCompletion(
             turnId: request.turnId,
@@ -275,8 +284,8 @@ final class ChatTurnRunner {
     private func runSilentReviewIfNeeded(
         plan: TurnPlan,
         executionResult: TurnExecutionResult
-    ) {
-        guard let cognitionReviewer else { return }
+    ) -> CognitionArtifact? {
+        guard let cognitionReviewer else { return nil }
 
         do {
             if let artifact = try cognitionReviewer.review(
@@ -284,10 +293,35 @@ final class ChatTurnRunner {
                 executionResult: executionResult
             ) {
                 onReviewArtifact(artifact)
+                return artifact
             }
         } catch {
             Self.debugLog("silent reviewer failed turn=\(plan.turnId) error=\(error.localizedDescription)")
         }
+        return nil
+    }
+
+    private func makeTurnCognitionSnapshot(
+        request: TurnRequest,
+        plan: TurnPlan,
+        committed: CommittedAssistantTurn,
+        reviewArtifact: CognitionArtifact?
+    ) -> TurnCognitionSnapshot {
+        let recoveryEvent = plan.prepared.recoveryEvent
+        return TurnCognitionSnapshot(
+            turnId: request.turnId,
+            conversationId: committed.node.id,
+            assistantMessageId: committed.assistantMessage.id,
+            promptLayers: plan.promptTrace.promptLayers,
+            slowCognitionAttached: plan.promptTrace.promptLayers.contains("slow_cognition"),
+            reviewArtifactId: reviewArtifact?.id,
+            reviewRiskFlags: reviewArtifact?.riskFlags ?? [],
+            reviewConfidence: reviewArtifact?.confidence,
+            conversationRecoveryReason: recoveryEvent?.reason.rawValue,
+            conversationRecoveryOriginalNodeId: recoveryEvent?.originalNodeId,
+            conversationRecoveryRecoveredNodeId: recoveryEvent?.recoveredNodeId,
+            conversationRecoveryRebasedMessageCount: recoveryEvent?.rebasedMessageCount ?? 0
+        )
     }
 
     private static func makeAgentToolContext(plan: TurnPlan, request: TurnRequest) -> AgentToolContext {

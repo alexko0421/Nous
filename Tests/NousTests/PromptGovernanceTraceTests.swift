@@ -613,6 +613,33 @@ final class GovernanceTelemetryStoreTests: XCTestCase {
         XCTAssertEqual(telemetry.lastConversationRecovery, event)
     }
 
+    func testRecordTurnCognitionSnapshotStoresLatestAndCountsWithoutPromptText() throws {
+        let telemetry = makeTelemetry()
+        let snapshot = TurnCognitionSnapshot(
+            turnId: UUID(uuidString: "00000000-0000-0000-0000-000000000901")!,
+            conversationId: UUID(uuidString: "00000000-0000-0000-0000-000000000902")!,
+            assistantMessageId: UUID(uuidString: "00000000-0000-0000-0000-000000000903")!,
+            promptLayers: ["anchor", "chat_mode", "slow_cognition"],
+            slowCognitionAttached: true,
+            reviewArtifactId: UUID(uuidString: "00000000-0000-0000-0000-000000000904")!,
+            reviewRiskFlags: ["unsupported_memory_reference"],
+            reviewConfidence: 0.62,
+            conversationRecoveryReason: "missing_current_node",
+            conversationRecoveryOriginalNodeId: UUID(uuidString: "00000000-0000-0000-0000-000000000905")!,
+            conversationRecoveryRecoveredNodeId: UUID(uuidString: "00000000-0000-0000-0000-000000000906")!,
+            conversationRecoveryRebasedMessageCount: 2,
+            recordedAt: Date(timeIntervalSince1970: 456)
+        )
+
+        telemetry.recordTurnCognitionSnapshot(snapshot)
+
+        XCTAssertEqual(telemetry.turnCognitionSnapshotCount(), 1)
+        XCTAssertEqual(telemetry.lastTurnCognitionSnapshot, snapshot)
+        let encoded = String(data: try JSONEncoder().encode(snapshot), encoding: .utf8) ?? ""
+        XCTAssertFalse(encoded.contains("Help me plan"))
+        XCTAssertFalse(encoded.contains("Assistant draft"))
+    }
+
     private func makeTelemetry() -> GovernanceTelemetryStore {
         let suiteName = "GovernanceTelemetryStoreTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!

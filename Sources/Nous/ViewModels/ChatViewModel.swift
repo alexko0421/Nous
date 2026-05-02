@@ -138,6 +138,9 @@ final class ChatViewModel {
             },
             onReviewArtifact: { [governanceTelemetry] artifact in
                 governanceTelemetry.recordCognitionArtifact(artifact)
+            },
+            onTurnCognitionSnapshot: { [governanceTelemetry] snapshot in
+                governanceTelemetry.recordTurnCognitionSnapshot(snapshot)
             }
         )
     }

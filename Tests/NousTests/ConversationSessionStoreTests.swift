@@ -118,6 +118,7 @@ final class ConversationSessionStoreTests: XCTestCase {
         XCTAssertEqual(event.originalNodeId, missingNode.id)
         XCTAssertEqual(event.recoveredNodeId, prepared.node.id)
         XCTAssertEqual(event.rebasedMessageCount, 1)
+        XCTAssertEqual(prepared.recoveryEvent, event)
     }
 
     func testPrepareUserTurnDoesNotRecordRecoveryTelemetryWhenCurrentNodeStillExists() throws {
@@ -125,7 +126,7 @@ final class ConversationSessionStoreTests: XCTestCase {
         sessionStore = ConversationSessionStore(nodeStore: store, telemetry: telemetry)
         let node = try sessionStore.startConversation(title: "Existing")
 
-        _ = try sessionStore.prepareUserTurn(
+        let prepared = try sessionStore.prepareUserTurn(
             currentNode: node,
             currentMessages: [],
             defaultProjectId: nil,
@@ -133,6 +134,7 @@ final class ConversationSessionStoreTests: XCTestCase {
         )
 
         XCTAssertTrue(telemetry.events.isEmpty)
+        XCTAssertNil(prepared.recoveryEvent)
     }
 
     func testCommitAssistantTurnRenamesPlaceholderTitleAndPatchesJudgeEvent() throws {

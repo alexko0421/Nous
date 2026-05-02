@@ -89,6 +89,52 @@ struct CognitionTrace: Codable, Equatable, Sendable {
     }
 }
 
+struct TurnCognitionSnapshot: Codable, Equatable, Sendable {
+    let turnId: UUID
+    let conversationId: UUID
+    let assistantMessageId: UUID
+    let promptLayers: [String]
+    let slowCognitionAttached: Bool
+    let reviewArtifactId: UUID?
+    let reviewRiskFlags: [String]
+    let reviewConfidence: Double?
+    let conversationRecoveryReason: String?
+    let conversationRecoveryOriginalNodeId: UUID?
+    let conversationRecoveryRecoveredNodeId: UUID?
+    let conversationRecoveryRebasedMessageCount: Int
+    let recordedAt: Date
+
+    init(
+        turnId: UUID,
+        conversationId: UUID,
+        assistantMessageId: UUID,
+        promptLayers: [String],
+        slowCognitionAttached: Bool,
+        reviewArtifactId: UUID?,
+        reviewRiskFlags: [String],
+        reviewConfidence: Double?,
+        conversationRecoveryReason: String? = nil,
+        conversationRecoveryOriginalNodeId: UUID? = nil,
+        conversationRecoveryRecoveredNodeId: UUID? = nil,
+        conversationRecoveryRebasedMessageCount: Int = 0,
+        recordedAt: Date = Date()
+    ) {
+        self.turnId = turnId
+        self.conversationId = conversationId
+        self.assistantMessageId = assistantMessageId
+        self.promptLayers = promptLayers
+        self.slowCognitionAttached = slowCognitionAttached
+        self.reviewArtifactId = reviewArtifactId
+        self.reviewRiskFlags = reviewRiskFlags
+        self.reviewConfidence = reviewConfidence
+        self.conversationRecoveryReason = conversationRecoveryReason
+        self.conversationRecoveryOriginalNodeId = conversationRecoveryOriginalNodeId
+        self.conversationRecoveryRecoveredNodeId = conversationRecoveryRecoveredNodeId
+        self.conversationRecoveryRebasedMessageCount = conversationRecoveryRebasedMessageCount
+        self.recordedAt = recordedAt
+    }
+}
+
 struct CognitionContextPacket: Codable, Equatable, Sendable {
     let id: UUID
     let organ: CognitionOrgan
