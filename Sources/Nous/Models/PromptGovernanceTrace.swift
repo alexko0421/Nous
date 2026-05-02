@@ -14,6 +14,28 @@ struct CitationTrace: Equatable, Codable {
     let maxSimilarity: Double
 }
 
+enum AgentExecutionMode: String, Codable, Equatable {
+    case singleShot
+    case toolLoop
+}
+
+enum AgentCoordinationReason: String, Codable, Equatable {
+    case ordinaryChatSingleShot
+    case modeSingleShotByContract
+    case providerCannotUseToolLoop
+    case inferredModeNoToolNeed
+    case explicitQuickActionToolLoop
+    case inferredQuickActionLazySkill
+}
+
+struct AgentCoordinationTrace: Equatable, Codable {
+    let executionMode: AgentExecutionMode
+    let quickActionMode: QuickActionMode?
+    let provider: LLMProvider
+    let reason: AgentCoordinationReason
+    let indexedSkillCount: Int
+}
+
 struct PromptGovernanceTrace: Equatable, Codable {
     private static let memorySignalLayers: Set<String> = [
         "global_memory",
@@ -26,7 +48,8 @@ struct PromptGovernanceTrace: Equatable, Codable {
         "project_goal",
         "recent_conversations",
         "citations",
-        "long_gap_bridge_guidance"
+        "long_gap_bridge_guidance",
+        "slow_cognition"
     ]
 
     let promptLayers: [String]
@@ -34,6 +57,7 @@ struct PromptGovernanceTrace: Equatable, Codable {
     let safetyPolicyInvoked: Bool
     let highRiskQueryDetected: Bool
     let turnSteward: TurnStewardTrace?
+    let agentCoordination: AgentCoordinationTrace?
     let citationTrace: CitationTrace?
 
     var hasMemorySignal: Bool {
@@ -46,6 +70,7 @@ struct PromptGovernanceTrace: Equatable, Codable {
         safetyPolicyInvoked: Bool,
         highRiskQueryDetected: Bool,
         turnSteward: TurnStewardTrace? = nil,
+        agentCoordination: AgentCoordinationTrace? = nil,
         citationTrace: CitationTrace? = nil
     ) {
         self.promptLayers = promptLayers
@@ -53,6 +78,7 @@ struct PromptGovernanceTrace: Equatable, Codable {
         self.safetyPolicyInvoked = safetyPolicyInvoked
         self.highRiskQueryDetected = highRiskQueryDetected
         self.turnSteward = turnSteward
+        self.agentCoordination = agentCoordination
         self.citationTrace = citationTrace
     }
 
@@ -62,6 +88,7 @@ struct PromptGovernanceTrace: Equatable, Codable {
         case safetyPolicyInvoked
         case highRiskQueryDetected
         case turnSteward
+        case agentCoordination
         case citationTrace
     }
 
@@ -72,6 +99,7 @@ struct PromptGovernanceTrace: Equatable, Codable {
         safetyPolicyInvoked = try container.decode(Bool.self, forKey: .safetyPolicyInvoked)
         highRiskQueryDetected = try container.decode(Bool.self, forKey: .highRiskQueryDetected)
         turnSteward = try container.decodeIfPresent(TurnStewardTrace.self, forKey: .turnSteward)
+        agentCoordination = try container.decodeIfPresent(AgentCoordinationTrace.self, forKey: .agentCoordination)
         citationTrace = try container.decodeIfPresent(CitationTrace.self, forKey: .citationTrace)
     }
 }

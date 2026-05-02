@@ -119,6 +119,10 @@ final class AppEnvironment {
         let shadowLearningStore = ShadowLearningStore(nodeStore: nodeStore)
         let shadowLearningSignalRecorder = ShadowLearningSignalRecorder(store: shadowLearningStore)
         let shadowPatternPromptProvider = ShadowPatternPromptProvider(store: shadowLearningStore)
+        let slowCognitionArtifactProvider = SlowCognitionArtifactProvider(
+            nodeStore: nodeStore,
+            shadowLearningStore: shadowLearningStore
+        )
         let shadowLearningSteward = ShadowLearningSteward(store: shadowLearningStore)
         do {
             try seedSkillImporter.importSeeds()
@@ -196,7 +200,10 @@ final class AppEnvironment {
         let voiceMemoryFacade = VoiceMemoryFacade(nodeStore: nodeStore)
         let voiceController = VoiceCommandController(memory: voiceMemoryFacade)
         let scheduler = UserMemoryScheduler(service: userMemoryService.synthesizer)
-        let conversationSessionStore = ConversationSessionStore(nodeStore: nodeStore)
+        let conversationSessionStore = ConversationSessionStore(
+            nodeStore: nodeStore,
+            telemetry: governanceTelemetry
+        )
         let chatVM = ChatViewModel(
             nodeStore: nodeStore,
             vectorStore: vectorStore,
@@ -216,6 +223,7 @@ final class AppEnvironment {
             scratchPadStore: scratchPadStore,
             shadowLearningSignalRecorder: shadowLearningSignalRecorder,
             shadowPatternPromptProvider: shadowPatternPromptProvider,
+            slowCognitionArtifactProvider: slowCognitionArtifactProvider,
             heartbeatCoordinator: heartbeatCoordinator,
             shouldUseGeminiHistoryCache: { settingsVM.geminiHistoryCacheEnabled },
             shouldPersistAssistantThinking: { settingsVM.assistantThinkingEnabled }

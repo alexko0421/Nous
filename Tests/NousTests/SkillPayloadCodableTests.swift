@@ -105,6 +105,39 @@ final class SkillPayloadCodableTests: XCTestCase {
         XCTAssertEqual(decoded.payloadVersion, 2)
     }
 
+    func testAnalysisGateTriggerDecodesCuesAndEmptyModes() throws {
+        let json = """
+        {
+          "payloadVersion": 2,
+          "name": "analysis-judge-gate",
+          "source": "alex",
+          "trigger": {
+            "kind": "analysisGate",
+            "modes": [],
+            "priority": 80,
+            "cues": ["分析", "blind spot"]
+          },
+          "action": {
+            "kind": "promptFragment",
+            "content": "Enable judge focus for explicit analysis intent."
+          },
+          "antiPatternExamples": []
+        }
+        """
+
+        let decoded = try JSONDecoder().decode(SkillPayload.self, from: Data(json.utf8))
+
+        XCTAssertEqual(decoded.trigger.kind, .analysisGate)
+        XCTAssertEqual(decoded.trigger.modes, [])
+        XCTAssertEqual(decoded.trigger.cues, ["分析", "blind spot"])
+    }
+
+    func testLegacyTriggerDecodesWithEmptyCues() throws {
+        let decoded = try JSONDecoder().decode(SkillPayload.self, from: Data(validPayloadJSON.utf8))
+
+        XCTAssertEqual(decoded.trigger.cues, [])
+    }
+
     func testRegexTriggerKindFails() {
         let json = validPayloadJSON.replacingOccurrences(of: #""kind": "always""#, with: #""kind": "regex""#)
 

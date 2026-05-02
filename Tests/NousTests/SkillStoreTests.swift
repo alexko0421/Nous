@@ -292,6 +292,25 @@ final class SkillStoreTests: XCTestCase {
         }
     }
 
+    func testInsertAcceptsAnalysisGateWithoutModesWhenCuesArePresent() throws {
+        let skill = makeSkill(payload: Self.makeAnalysisGatePayload(cues: ["分析", "blind spot"]))
+
+        try store.insertSkill(skill)
+
+        let fetched = try XCTUnwrap(store.fetchSkill(id: skill.id))
+        XCTAssertEqual(fetched.payload.trigger.kind, .analysisGate)
+        XCTAssertEqual(fetched.payload.trigger.modes, [])
+        XCTAssertEqual(fetched.payload.trigger.cues, ["分析", "blind spot"])
+    }
+
+    func testInsertRejectsAnalysisGateWithoutCues() {
+        let skill = makeSkill(payload: Self.makeAnalysisGatePayload(cues: []))
+
+        XCTAssertThrowsError(try store.insertSkill(skill)) { error in
+            XCTAssertEqual(error as? SkillStoreError, .emptyCues)
+        }
+    }
+
     func testInsertRejectsPriorityOutOfRange() {
         let skill = makeSkill(payload: Self.makePayload(priority: 101))
 
@@ -476,6 +495,28 @@ final class SkillStoreTests: XCTestCase {
                 content: actionContent
             ),
             rationale: "Specific guidance is more useful.",
+            antiPatternExamples: []
+        )
+    }
+
+    private static func makeAnalysisGatePayload(cues: [String]) -> SkillPayload {
+        SkillPayload(
+            payloadVersion: 2,
+            name: "analysis-judge-gate",
+            description: "Open judge only when explicit analysis intent is present.",
+            useWhen: "Use when Alex asks to analyze, find blind spots, or test whether he is wrong.",
+            source: .alex,
+            trigger: SkillTrigger(
+                kind: .analysisGate,
+                modes: [],
+                priority: 80,
+                cues: cues
+            ),
+            action: SkillAction(
+                kind: .promptFragment,
+                content: "Enable judge focus without changing ordinary chat shape."
+            ),
+            rationale: "Keep casual chat light.",
             antiPatternExamples: []
         )
     }

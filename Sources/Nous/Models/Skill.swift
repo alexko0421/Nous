@@ -97,12 +97,34 @@ struct SkillPayload: Codable, Equatable {
 struct SkillTrigger: Codable, Equatable {
     enum Kind: String, Codable {
         case always
+        case analysisGate
         case mode
     }
 
     let kind: Kind
     let modes: [QuickActionMode]
     let priority: Int
+    let cues: [String]
+
+    init(
+        kind: Kind,
+        modes: [QuickActionMode],
+        priority: Int,
+        cues: [String] = []
+    ) {
+        self.kind = kind
+        self.modes = modes
+        self.priority = priority
+        self.cues = cues
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try container.decode(Kind.self, forKey: .kind)
+        modes = try container.decode([QuickActionMode].self, forKey: .modes)
+        priority = try container.decode(Int.self, forKey: .priority)
+        cues = try container.decodeIfPresent([String].self, forKey: .cues) ?? []
+    }
 }
 
 struct SkillAction: Codable, Equatable {

@@ -16,6 +16,7 @@ final class TurnPlanner {
     private let governanceTelemetry: GovernanceTelemetryStore
     private let quickActionAddendumResolver: QuickActionAddendumResolver
     private let shadowPatternPromptProvider: (any ShadowPatternPromptProviding)?
+    private let slowCognitionArtifactProvider: (any SlowCognitionArtifactProviding)?
     private let agentLoopProviderSupportsToolUse: (LLMProvider) -> Bool
     private let runJudge: (@escaping () async throws -> JudgeVerdict) async throws -> JudgeVerdict
 
@@ -33,6 +34,7 @@ final class TurnPlanner {
         skillMatcher: any SkillMatching = SkillMatcher(),
         skillTracker: (any SkillTracking)? = nil,
         shadowPatternPromptProvider: (any ShadowPatternPromptProviding)? = nil,
+        slowCognitionArtifactProvider: (any SlowCognitionArtifactProviding)? = nil,
         agentLoopProviderSupportsToolUse: @escaping (LLMProvider) -> Bool = { $0 == .openrouter },
         runJudge: @escaping (@escaping () async throws -> JudgeVerdict) async throws -> JudgeVerdict = { operation in
             try await operation()
@@ -55,6 +57,7 @@ final class TurnPlanner {
             skillTracker: skillTracker
         )
         self.shadowPatternPromptProvider = shadowPatternPromptProvider
+        self.slowCognitionArtifactProvider = slowCognitionArtifactProvider
         self.agentLoopProviderSupportsToolUse = agentLoopProviderSupportsToolUse
         self.runJudge = runJudge
     }
@@ -90,7 +93,9 @@ final class TurnPlanner {
         } else {
             QuickActionMemoryPolicy.fromStewardPreset(stewardship.memoryPolicy)
         }
-        let policy = basePolicy.applyingChallengeStance(stewardship.challengeStance)
+        let policy = basePolicy
+            .applyingChallengeStance(stewardship.challengeStance)
+            .applyingJudgePolicy(stewardship.judgePolicy)
 
         let memoryContext = try memoryContextBuilder.build(
             retrievalQuery: retrievalQuery,
@@ -114,6 +119,7 @@ final class TurnPlanner {
         let citablePool = memoryContext.citablePool
 
         let provider = currentProviderProvider()
+        let isSilentJudgeFraming = stewardship.judgePolicy == .silentFraming
         let feedbackLoop = policy.includeJudgeFocus ? buildJudgeFeedbackLoop(now: request.now) : nil
         let judgeEventId = UUID()
         var verdictForLog: JudgeVerdict?
@@ -133,7 +139,7 @@ final class TurnPlanner {
         } else if let judgeLLM = judgeLLMServiceFactory() {
             let judgeLLM = Self.configuredJudgeLLMService(
                 judgeLLM,
-                thinkingHandler: judgeThinkingHandler
+                thinkingHandler: isSilentJudgeFraming ? nil : judgeThinkingHandler
             )
             let judge = provocationJudgeFactory(judgeLLM)
             do {
@@ -152,9 +158,13 @@ final class TurnPlanner {
                 if verdict.shouldProvoke, let entryId = verdict.entryId {
                     if let matched = citablePool.first(where: { $0.id == entryId }),
                        !matched.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        profile = .provocative
+                        if !isSilentJudgeFraming {
+                            profile = .provocative
+                        }
                         focusMemoryText = matched.text
-                        focusBlock = Self.buildFocusBlock(entryId: matched.id, rawText: matched.text)
+                        focusBlock = isSilentJudgeFraming
+                            ? Self.buildSilentFramingBlock(entryId: matched.id, rawText: matched.text)
+                            : Self.buildFocusBlock(entryId: matched.id, rawText: matched.text)
                     } else {
                         fallbackReason = .unknownEntryId
                     }
@@ -211,8 +221,18 @@ final class TurnPlanner {
             indexedSkillIds: indexedSkillIds,
             canUseAgentLoop: canUseAgentLoop
         )
+        let agentCoordinationTrace = Self.agentCoordinationTrace(
+            explicitMode: explicitQuickActionMode,
+            planningMode: planningQuickActionMode,
+            quickActionModeSupportsAgentLoop: quickActionModeSupportsAgentLoop,
+            canUseAgentLoop: canUseAgentLoop,
+            agentLoopMode: agentLoopMode,
+            indexedSkillCount: indexedSkillIds.count,
+            provider: provider
+        )
         let responseShapeBlock = Self.responseShapeBlock(for: stewardship)
-        let quickActionContextBlocks = [resolvedQuickActionAddendum, responseShapeBlock]
+        let responseStanceBlock = Self.responseStanceBlock(for: stewardship)
+        let quickActionContextBlocks = [resolvedQuickActionAddendum, responseShapeBlock, responseStanceBlock]
             .compactMap { block -> String? in
                 guard let block,
                       !block.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -226,6 +246,13 @@ final class TurnPlanner {
             memoryGraphRecall,
             removingDuplicateFocusText: focusMemoryText
         )
+        let slowCognitionArtifacts = (try? slowCognitionArtifactProvider?.artifacts(
+            userId: "alex",
+            currentInput: promptQuery,
+            currentNode: prepared.node,
+            projectId: prepared.node.projectId,
+            now: request.now
+        )) ?? []
 
         let turnSlice = PromptContextAssembler.assembleContext(
             chatMode: effectiveMode,
@@ -248,6 +275,7 @@ final class TurnPlanner {
             allowSkillIndex: allowSkillIndex,
             allowInteractiveClarification: shouldAllowInteractiveClarification,
             shadowLearningHints: shadowLearningHints,
+            slowCognitionArtifacts: slowCognitionArtifacts,
             now: request.now
         )
         let promptTrace = PromptContextAssembler.governanceTrace(
@@ -268,7 +296,9 @@ final class TurnPlanner {
             quickActionAddendum: quickActionContext,
             allowInteractiveClarification: shouldAllowInteractiveClarification,
             turnSteward: stewardship.trace,
+            agentCoordination: agentCoordinationTrace,
             shadowLearningHints: shadowLearningHints,
+            slowCognitionArtifacts: slowCognitionArtifacts,
             now: request.now
         )
 
@@ -353,6 +383,48 @@ final class TurnPlanner {
         return mode
     }
 
+    private static func agentCoordinationTrace(
+        explicitMode: QuickActionMode?,
+        planningMode: QuickActionMode?,
+        quickActionModeSupportsAgentLoop: Bool,
+        canUseAgentLoop: Bool,
+        agentLoopMode: QuickActionMode?,
+        indexedSkillCount: Int,
+        provider: LLMProvider
+    ) -> AgentCoordinationTrace {
+        if let agentLoopMode {
+            let reason: AgentCoordinationReason = explicitMode != nil
+                ? .explicitQuickActionToolLoop
+                : .inferredQuickActionLazySkill
+            return AgentCoordinationTrace(
+                executionMode: .toolLoop,
+                quickActionMode: agentLoopMode,
+                provider: provider,
+                reason: reason,
+                indexedSkillCount: indexedSkillCount
+            )
+        }
+
+        let reason: AgentCoordinationReason
+        if planningMode == nil {
+            reason = .ordinaryChatSingleShot
+        } else if !quickActionModeSupportsAgentLoop {
+            reason = .modeSingleShotByContract
+        } else if !canUseAgentLoop {
+            reason = .providerCannotUseToolLoop
+        } else {
+            reason = .inferredModeNoToolNeed
+        }
+
+        return AgentCoordinationTrace(
+            executionMode: .singleShot,
+            quickActionMode: planningMode,
+            provider: provider,
+            reason: reason,
+            indexedSkillCount: indexedSkillCount
+        )
+    }
+
     static func userMessageContent(inputText: String, attachments: [AttachedFileContext]) -> String {
         let limitedAttachments = AttachmentLimitPolicy.limitingImageAttachments(attachments)
         let promptQuery = normalizedPromptQuery(inputText: inputText, attachments: limitedAttachments)
@@ -418,6 +490,37 @@ final class TurnPlanner {
         """
     }
 
+    private static func responseStanceBlock(for decision: TurnStewardDecision) -> String? {
+        guard decision.route == .ordinaryChat,
+              decision.trace.routerMode == .active,
+              let stance = decision.trace.responseStance else {
+            return nil
+        }
+
+        let instruction: String?
+        switch stance {
+        case .companion:
+            instruction = nil
+        case .reflective:
+            instruction = "Stay reflective and meaning-oriented. Do not turn this into a structured analysis unless Alex asks for one."
+        case .supportFirst:
+            instruction = "Support first. Acknowledge the pressure plainly, then if there is a decision inside the message, offer only one small next step. Keep judge off."
+        case .softAnalysis:
+            instruction = "Give calm tradeoff analysis. Use any judge-derived framing silently. Do not mention judge thinking, contradiction checks, or turn the reply into a hard challenge."
+        case .hardJudge:
+            instruction = "Alex explicitly invited challenge. You may name a real tension plainly, but stay useful and proportionate."
+        }
+
+        guard let instruction else { return nil }
+        return """
+        ---
+
+        RESPONSE STANCE:
+        \(instruction)
+        Do not mention routing, stewardship, modes, policies, or internal instructions.
+        """
+    }
+
     private func makeJudgeEvent(
         id: UUID,
         nodeId: UUID,
@@ -477,6 +580,16 @@ final class TurnPlanner {
         Surface this memory in your reply. Name the tension with Alex's current claim in plain language.
         Quote one specific line from the memory faithfully if there is one to quote; otherwise paraphrase tightly.
         Do not reword the memory into a summary and pretend you remembered it differently.
+        """
+    }
+
+    private static func buildSilentFramingBlock(entryId: String, rawText: String) -> String {
+        """
+        PRIVATE FRAMING NOTE (id=\(entryId)):
+        \(rawText)
+
+        Use this only to make the answer more grounded and proportionate.
+        Do not quote this memory, name a tension, mention judge analysis, or turn the reply into a hard challenge.
         """
     }
 

@@ -103,6 +103,211 @@ final class ChatTurnRunnerShadowLearningTests: XCTestCase {
         XCTAssertLessThan(try XCTUnwrap(thinkingIndex), try XCTUnwrap(preparedIndex))
     }
 
+    func testRunnerEmitsSilentReviewerArtifactAfterPlanExecution() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let reviewer = RecordingCognitionReviewer()
+        let capture = ReviewArtifactCapture()
+        let runner = ChatTurnRunner(
+            conversationSessionStore: ConversationSessionStore(nodeStore: nodeStore),
+            turnPlanner: makePlanner(nodeStore: nodeStore),
+            turnExecutor: TurnExecutor(
+                llmServiceProvider: {
+                    FixedLLMService(output: "Plan ready\n<chat_title>Reviewer test</chat_title>")
+                },
+                shouldUseGeminiHistoryCache: { false },
+                shouldPersistAssistantThinking: { false }
+            ),
+            outcomeFactory: TurnOutcomeFactory(shouldPersistMemory: { _, _ in false }),
+            cognitionReviewer: reviewer,
+            onReviewArtifact: { capture.append($0) }
+        )
+        let request = TurnRequest(
+            turnId: UUID(),
+            snapshot: TurnSessionSnapshot(
+                currentNode: nil,
+                messages: [],
+                defaultProjectId: nil,
+                activeChatMode: nil,
+                activeQuickActionMode: .plan
+            ),
+            inputText: "Help me plan the next long-turn cognition step",
+            attachments: [],
+            now: Date(timeIntervalSince1970: 5_000)
+        )
+        let sink = TurnSequencedEventSink(turnId: request.turnId, sink: NoOpTurnEventSink())
+
+        let completion = await runner.run(
+            request: request,
+            sink: sink,
+            abortReason: { .unexpectedCancellation }
+        )
+
+        XCTAssertNotNil(completion)
+        XCTAssertEqual(reviewer.reviewedTurnIds, [request.turnId])
+        XCTAssertEqual(reviewer.reviewedAssistantContents, ["Plan ready"])
+        let artifacts = capture.values()
+        XCTAssertEqual(artifacts.count, 1)
+        XCTAssertEqual(artifacts.first?.organ, .reviewer)
+        XCTAssertEqual(artifacts.first?.trace.sourceJobId, "silent_post_turn_review")
+    }
+
+    func testSilentReviewerSkipsOrdinaryCompanionTurns() throws {
+        let plan = makeReviewPlan(route: .ordinaryChat)
+        let artifact = try CognitionReviewer().review(
+            plan: plan,
+            executionResult: makeExecutionResult(content: "普通倾偈")
+        )
+
+        XCTAssertNil(artifact)
+    }
+
+    func testSilentReviewerCreatesSourcedArtifactForDirectionTurns() throws {
+        let plan = makeReviewPlan(route: .direction)
+        let artifact = try XCTUnwrap(
+            try CognitionReviewer().review(
+                plan: plan,
+                executionResult: makeExecutionResult(
+                    content: "Three options exist. Based on your notes, choose the quieter path. Then review it tomorrow."
+                )
+            )
+        )
+
+        XCTAssertEqual(artifact.organ, .reviewer)
+        XCTAssertEqual(artifact.jurisdiction, .turnContext)
+        XCTAssertEqual(artifact.trace.producer, .reviewer)
+        XCTAssertEqual(artifact.trace.sourceJobId, "silent_post_turn_review")
+        XCTAssertTrue(artifact.evidenceRefs.contains {
+            $0.source == .message && $0.id == plan.prepared.userMessage.id.uuidString
+        })
+        XCTAssertTrue(artifact.riskFlags.contains("unsupported_memory_reference"))
+        let assistantDraftRef = artifact.evidenceRefs.first {
+            $0.id == "\(plan.turnId.uuidString):assistant_draft"
+        }
+        XCTAssertEqual(assistantDraftRef?.source.rawValue, "assistant_draft")
+        XCTAssertEqual(assistantDraftRef?.quote, "Based on your notes, choose the quieter path.")
+        XCTAssertNoThrow(try artifact.validated())
+    }
+
+    func testSilentReviewerAssistantDraftQuoteCentersLongFlaggedPhrase() throws {
+        let plan = makeReviewPlan(route: .direction)
+        let longLeadIn = String(repeating: "context ", count: 40)
+        let artifact = try XCTUnwrap(
+            try CognitionReviewer().review(
+                plan: plan,
+                executionResult: makeExecutionResult(
+                    content: "\(longLeadIn)Based on your notes, choose the quieter path after checking the tradeoffs carefully."
+                )
+            )
+        )
+
+        let assistantDraftRef = try XCTUnwrap(artifact.evidenceRefs.first {
+            $0.id == "\(plan.turnId.uuidString):assistant_draft"
+        })
+        let quote = try XCTUnwrap(assistantDraftRef.quote)
+
+        XCTAssertTrue(quote.contains("Based on your notes"))
+        XCTAssertLessThanOrEqual(quote.count, 220)
+    }
+
+    func testSilentReviewerDoesNotFlagMemoryReferenceWhenSlowCognitionWasAttached() throws {
+        let plan = makeReviewPlan(route: .direction, promptLayers: ["slow_cognition"])
+        let artifact = try XCTUnwrap(
+            try CognitionReviewer().review(
+                plan: plan,
+                executionResult: makeExecutionResult(content: "Based on your notes, choose the quieter path.")
+            )
+        )
+
+        XCTAssertFalse(artifact.riskFlags.contains("unsupported_memory_reference"))
+        XCTAssertNoThrow(try artifact.validated())
+    }
+
+    func testRunnerSwallowsSilentReviewerFailures() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let runner = ChatTurnRunner(
+            conversationSessionStore: ConversationSessionStore(nodeStore: nodeStore),
+            turnPlanner: makePlanner(nodeStore: nodeStore),
+            turnExecutor: TurnExecutor(
+                llmServiceProvider: {
+                    FixedLLMService(output: "Still done\n<chat_title>Reviewer failure</chat_title>")
+                },
+                shouldUseGeminiHistoryCache: { false },
+                shouldPersistAssistantThinking: { false }
+            ),
+            outcomeFactory: TurnOutcomeFactory(shouldPersistMemory: { _, _ in false }),
+            cognitionReviewer: ThrowingCognitionReviewer()
+        )
+        let request = TurnRequest(
+            turnId: UUID(),
+            snapshot: TurnSessionSnapshot(
+                currentNode: nil,
+                messages: [],
+                defaultProjectId: nil,
+                activeChatMode: nil,
+                activeQuickActionMode: .direction
+            ),
+            inputText: "Help me choose the next direction",
+            attachments: [],
+            now: Date(timeIntervalSince1970: 5_000)
+        )
+        let sink = TurnSequencedEventSink(turnId: request.turnId, sink: NoOpTurnEventSink())
+
+        let completion = await runner.run(
+            request: request,
+            sink: sink,
+            abortReason: { .unexpectedCancellation }
+        )
+
+        XCTAssertNotNil(completion)
+    }
+
+    func testRunnerDoesNotRecordSilentReviewArtifactWhenCommitFails() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let reviewer = RecordingCognitionReviewer()
+        let capture = ReviewArtifactCapture()
+        let runner = ChatTurnRunner(
+            conversationSessionStore: ConversationSessionStore(nodeStore: nodeStore),
+            turnPlanner: makePlanner(nodeStore: nodeStore),
+            turnExecutor: TurnExecutor(
+                llmServiceProvider: {
+                    NodeDeletingLLMService(
+                        nodeStore: nodeStore,
+                        output: "Plan ready\n<chat_title>Commit failure</chat_title>"
+                    )
+                },
+                shouldUseGeminiHistoryCache: { false },
+                shouldPersistAssistantThinking: { false }
+            ),
+            outcomeFactory: TurnOutcomeFactory(shouldPersistMemory: { _, _ in false }),
+            cognitionReviewer: reviewer,
+            onReviewArtifact: { capture.append($0) }
+        )
+        let request = TurnRequest(
+            turnId: UUID(),
+            snapshot: TurnSessionSnapshot(
+                currentNode: nil,
+                messages: [],
+                defaultProjectId: nil,
+                activeChatMode: nil,
+                activeQuickActionMode: .plan
+            ),
+            inputText: "Help me plan the next long-turn cognition step",
+            attachments: [],
+            now: Date(timeIntervalSince1970: 5_000)
+        )
+        let sink = TurnSequencedEventSink(turnId: request.turnId, sink: NoOpTurnEventSink())
+
+        let completion = await runner.run(
+            request: request,
+            sink: sink,
+            abortReason: { .unexpectedCancellation }
+        )
+
+        XCTAssertNil(completion)
+        XCTAssertTrue(reviewer.reviewedTurnIds.isEmpty)
+        XCTAssertTrue(capture.values().isEmpty)
+    }
+
     private func makePlanner(
         nodeStore: NodeStore,
         judgeLLMServiceFactory: @escaping () -> (any LLMService)? = { nil }
@@ -116,6 +321,63 @@ final class ChatTurnRunnerShadowLearningTests: XCTestCase {
             contradictionMemoryService: ContradictionMemoryService(core: core),
             currentProviderProvider: { .gemini },
             judgeLLMServiceFactory: judgeLLMServiceFactory
+        )
+    }
+
+    private func makeReviewPlan(
+        route: TurnRoute,
+        promptLayers: [String] = []
+    ) -> TurnPlan {
+        let node = NousNode(type: .conversation, title: "Review test")
+        let message = Message(
+            nodeId: node.id,
+            role: .user,
+            content: "Help me decide the next step for Nous."
+        )
+        let prepared = PreparedConversationTurn(
+            node: node,
+            userMessage: message,
+            messagesAfterUserAppend: [message]
+        )
+        let stewardTrace = TurnStewardTrace(
+            route: route,
+            memoryPolicy: .lean,
+            challengeStance: .surfaceTension,
+            responseShape: route == .direction ? .listDirections : .answerNow,
+            projectSignalKind: nil,
+            source: .deterministic,
+            reason: "test"
+        )
+        return TurnPlan(
+            turnId: UUID(),
+            prepared: prepared,
+            citations: [],
+            promptTrace: PromptGovernanceTrace(
+                promptLayers: promptLayers,
+                evidenceAttached: false,
+                safetyPolicyInvoked: false,
+                highRiskQueryDetected: false,
+                turnSteward: stewardTrace
+            ),
+            effectiveMode: .companion,
+            nextQuickActionModeIfCompleted: route.quickActionMode,
+            judgeEventDraft: nil,
+            turnSlice: TurnSystemSlice(stable: "Anchor", volatile: ""),
+            transcriptMessages: [
+                LLMMessage(role: "user", content: message.content)
+            ],
+            focusBlock: nil,
+            provider: .gemini
+        )
+    }
+
+    private func makeExecutionResult(content: String) -> TurnExecutionResult {
+        TurnExecutionResult(
+            rawAssistantContent: content,
+            assistantContent: content,
+            persistedThinking: nil,
+            conversationTitle: nil,
+            didHitBudgetExhaustion: false
         )
     }
 }
@@ -136,6 +398,56 @@ private actor RecordingTurnEventSink: TurnEventSink {
     }
 }
 
+private final class ReviewArtifactCapture {
+    private var artifacts: [CognitionArtifact] = []
+
+    func append(_ artifact: CognitionArtifact) {
+        artifacts.append(artifact)
+    }
+
+    func values() -> [CognitionArtifact] {
+        artifacts
+    }
+}
+
+private final class RecordingCognitionReviewer: CognitionReviewing {
+    private(set) var reviewedTurnIds: [UUID] = []
+    private(set) var reviewedAssistantContents: [String] = []
+
+    func review(plan: TurnPlan, executionResult: TurnExecutionResult) throws -> CognitionArtifact? {
+        reviewedTurnIds.append(plan.turnId)
+        reviewedAssistantContents.append(executionResult.assistantContent)
+        return CognitionArtifact(
+            organ: .reviewer,
+            title: "Silent review",
+            summary: "The reviewer checked this high-stakes turn.",
+            confidence: 0.8,
+            jurisdiction: .turnContext,
+            evidenceRefs: [
+                CognitionEvidenceRef(
+                    source: .message,
+                    id: plan.prepared.userMessage.id.uuidString,
+                    quote: plan.prepared.userMessage.content
+                )
+            ],
+            trace: CognitionTrace(
+                producer: .reviewer,
+                sourceJobId: "silent_post_turn_review"
+            )
+        )
+    }
+}
+
+private final class ThrowingCognitionReviewer: CognitionReviewing {
+    func review(plan: TurnPlan, executionResult: TurnExecutionResult) throws -> CognitionArtifact? {
+        throw ReviewerTestError.boom
+    }
+}
+
+private enum ReviewerTestError: Error {
+    case boom
+}
+
 private final class FixedLLMService: LLMService {
     let output: String
 
@@ -147,6 +459,32 @@ private final class FixedLLMService: LLMService {
         AsyncThrowingStream { continuation in
             continuation.yield(output)
             continuation.finish()
+        }
+    }
+}
+
+private final class NodeDeletingLLMService: LLMService {
+    private let nodeStore: NodeStore
+    private let output: String
+
+    init(nodeStore: NodeStore, output: String) {
+        self.nodeStore = nodeStore
+        self.output = output
+    }
+
+    func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
+        let nodeStore = nodeStore
+        let output = output
+        return AsyncThrowingStream { continuation in
+            do {
+                for node in try nodeStore.fetchAllNodes() {
+                    try nodeStore.deleteNode(id: node.id)
+                }
+                continuation.yield(output)
+                continuation.finish()
+            } catch {
+                continuation.finish(throwing: error)
+            }
         }
     }
 }

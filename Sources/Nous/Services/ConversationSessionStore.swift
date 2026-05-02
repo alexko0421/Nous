@@ -23,11 +23,46 @@ enum ConversationSessionStoreError: Error {
     case invalidRegenerationTarget
 }
 
+enum ConversationRecoveryReason: String, Codable, Equatable {
+    case missingCurrentNode = "missing_current_node"
+}
+
+struct ConversationRecoveryTelemetryEvent: Codable, Equatable {
+    let reason: ConversationRecoveryReason
+    let originalNodeId: UUID
+    let recoveredNodeId: UUID
+    let rebasedMessageCount: Int
+    let recordedAt: Date
+
+    init(
+        reason: ConversationRecoveryReason,
+        originalNodeId: UUID,
+        recoveredNodeId: UUID,
+        rebasedMessageCount: Int,
+        recordedAt: Date = Date()
+    ) {
+        self.reason = reason
+        self.originalNodeId = originalNodeId
+        self.recoveredNodeId = recoveredNodeId
+        self.rebasedMessageCount = rebasedMessageCount
+        self.recordedAt = recordedAt
+    }
+}
+
+protocol ConversationRecoveryTelemetryRecording: AnyObject {
+    func recordConversationRecovery(_ event: ConversationRecoveryTelemetryEvent)
+}
+
 final class ConversationSessionStore {
     private let nodeStore: NodeStore
+    private let telemetry: (any ConversationRecoveryTelemetryRecording)?
 
-    init(nodeStore: NodeStore) {
+    init(
+        nodeStore: NodeStore,
+        telemetry: (any ConversationRecoveryTelemetryRecording)? = nil
+    ) {
         self.nodeStore = nodeStore
+        self.telemetry = telemetry
     }
 
     func startConversation(
@@ -50,16 +85,19 @@ final class ConversationSessionStore {
         userMessageContent: String,
         newConversationTitle: String = "New Conversation"
     ) throws -> PreparedConversationTurn {
-        let node = if let currentNode {
-            currentNode
-        } else {
-            try startConversation(title: newConversationTitle, projectId: defaultProjectId)
-        }
+        let recovered = try recoverCurrentConversationIfNeeded(
+            currentNode: currentNode,
+            currentMessages: currentMessages,
+            defaultProjectId: defaultProjectId,
+            newConversationTitle: newConversationTitle
+        )
+        let node = recovered.node
+        let rebasedCurrentMessages = recovered.currentMessages
 
         let userMessage = Message(nodeId: node.id, role: .user, content: userMessageContent)
         try nodeStore.insertMessage(userMessage)
 
-        let messagesAfterUserAppend = currentMessages + [userMessage]
+        let messagesAfterUserAppend = rebasedCurrentMessages + [userMessage]
         let updatedNode = try persistTranscript(nodeId: node.id, messages: messagesAfterUserAppend)
         return PreparedConversationTurn(
             node: updatedNode,
@@ -194,6 +232,60 @@ final class ConversationSessionStore {
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? firstUser
         guard !queryOnly.isEmpty else { return nil }
         return String(queryOnly.prefix(40)).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func recoverCurrentConversationIfNeeded(
+        currentNode: NousNode?,
+        currentMessages: [Message],
+        defaultProjectId: UUID?,
+        newConversationTitle: String
+    ) throws -> (node: NousNode, currentMessages: [Message]) {
+        guard let currentNode else {
+            let node = try startConversation(title: newConversationTitle, projectId: defaultProjectId)
+            return (node, [])
+        }
+
+        if let storedNode = try nodeStore.fetchNode(id: currentNode.id) {
+            return (storedNode, currentMessages)
+        }
+
+        let recoveredTitle = currentNode.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? newConversationTitle
+            : currentNode.title
+        let recoveredNode = try startConversation(
+            title: recoveredTitle,
+            projectId: try recoverableProjectId(currentNode.projectId ?? defaultProjectId)
+        )
+        let recoveredMessages = currentMessages.map { message in
+            Message(
+                id: message.id,
+                nodeId: recoveredNode.id,
+                role: message.role,
+                content: message.content,
+                timestamp: message.timestamp,
+                thinkingContent: message.thinkingContent,
+                agentTraceJson: message.agentTraceJson,
+                source: message.source
+            )
+        }
+
+        for message in recoveredMessages {
+            try nodeStore.insertMessage(message)
+        }
+
+        telemetry?.recordConversationRecovery(ConversationRecoveryTelemetryEvent(
+            reason: .missingCurrentNode,
+            originalNodeId: currentNode.id,
+            recoveredNodeId: recoveredNode.id,
+            rebasedMessageCount: recoveredMessages.count
+        ))
+
+        return (recoveredNode, recoveredMessages)
+    }
+
+    private func recoverableProjectId(_ projectId: UUID?) throws -> UUID? {
+        guard let projectId else { return nil }
+        return try nodeStore.fetchProject(id: projectId) == nil ? nil : projectId
     }
 }
 

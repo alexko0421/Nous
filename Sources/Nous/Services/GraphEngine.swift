@@ -28,10 +28,10 @@ final class GraphEngine: GalaxyRelationRefining {
     }
 
     func computeLayout(
-        iterations: Int = 180,
-        repulsion: Float = 12000,
-        attraction: Float = 0.004,
-        damping: Float = 0.86
+        iterations: Int = 280,
+        repulsion: Float = 64000,
+        attraction: Float = 0.010,
+        damping: Float = 0.78
     ) throws -> [UUID: GraphPosition] {
         try layoutEngine.computeLayout(
             nodes: nodeStore.fetchAllNodes(),

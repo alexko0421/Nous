@@ -16,6 +16,7 @@ final class PromptGovernanceTraceTests: XCTestCase {
 
         XCTAssertEqual(trace.promptLayers, ["anchor", "chat_mode"])
         XCTAssertNil(trace.turnSteward)
+        XCTAssertNil(trace.agentCoordination)
         XCTAssertNil(trace.citationTrace)
     }
 
@@ -27,7 +28,14 @@ final class PromptGovernanceTraceTests: XCTestCase {
             responseShape: .listDirections,
             projectSignalKind: nil,
             source: .deterministic,
-            reason: "explicit brainstorm cue"
+            reason: "explicit brainstorm cue",
+            responseStance: .companion,
+            judgePolicy: .off,
+            routerMode: .shadow,
+            routerSource: .deterministic,
+            confidence: nil,
+            softerFallback: nil,
+            fallbackUsed: false
         )
         let trace = PromptGovernanceTrace(
             promptLayers: ["anchor", "turn_steward"],
@@ -41,6 +49,31 @@ final class PromptGovernanceTraceTests: XCTestCase {
         let decoded = try JSONDecoder().decode(PromptGovernanceTrace.self, from: data)
 
         XCTAssertEqual(decoded.turnSteward, stewardTrace)
+    }
+
+    func testDecodesLegacyTurnStewardTraceWithoutResponseStanceFields() throws {
+        let json = """
+        {
+          "route": "ordinaryChat",
+          "memoryPolicy": "full",
+          "challengeStance": "useSilently",
+          "responseShape": "answerNow",
+          "source": "deterministic",
+          "reason": "ordinary chat default"
+        }
+        """.data(using: .utf8)!
+
+        let decoded = try JSONDecoder().decode(TurnStewardTrace.self, from: json)
+
+        XCTAssertEqual(decoded.route, .ordinaryChat)
+        XCTAssertEqual(decoded.challengeStance, .useSilently)
+        XCTAssertNil(decoded.responseStance)
+        XCTAssertNil(decoded.judgePolicy)
+        XCTAssertNil(decoded.routerMode)
+        XCTAssertNil(decoded.routerSource)
+        XCTAssertNil(decoded.confidence)
+        XCTAssertNil(decoded.softerFallback)
+        XCTAssertNil(decoded.fallbackUsed)
     }
 
     func testEncodesAndDecodesCitationTrace() throws {
@@ -62,6 +95,39 @@ final class PromptGovernanceTraceTests: XCTestCase {
         let decoded = try JSONDecoder().decode(PromptGovernanceTrace.self, from: data)
 
         XCTAssertEqual(decoded.citationTrace, citationTrace)
+    }
+
+    func testSlowCognitionLayerCountsAsMemorySignal() {
+        let trace = PromptGovernanceTrace(
+            promptLayers: ["anchor", "chat_mode", "slow_cognition"],
+            evidenceAttached: false,
+            safetyPolicyInvoked: false,
+            highRiskQueryDetected: false
+        )
+
+        XCTAssertTrue(trace.hasMemorySignal)
+    }
+
+    func testEncodesAndDecodesAgentCoordinationTrace() throws {
+        let coordination = AgentCoordinationTrace(
+            executionMode: .toolLoop,
+            quickActionMode: .direction,
+            provider: .openrouter,
+            reason: .explicitQuickActionToolLoop,
+            indexedSkillCount: 2
+        )
+        let trace = PromptGovernanceTrace(
+            promptLayers: ["anchor", "agent_coordination"],
+            evidenceAttached: false,
+            safetyPolicyInvoked: false,
+            highRiskQueryDetected: false,
+            agentCoordination: coordination
+        )
+
+        let data = try JSONEncoder().encode(trace)
+        let decoded = try JSONDecoder().decode(PromptGovernanceTrace.self, from: data)
+
+        XCTAssertEqual(decoded.agentCoordination, coordination)
     }
 
     func testGovernanceTraceAddsTurnStewardLayer() {
@@ -87,6 +153,29 @@ final class PromptGovernanceTraceTests: XCTestCase {
 
         XCTAssertTrue(trace.promptLayers.contains("turn_steward"))
         XCTAssertEqual(trace.turnSteward, stewardTrace)
+    }
+
+    func testGovernanceTraceAddsAgentCoordinationLayer() {
+        let coordination = AgentCoordinationTrace(
+            executionMode: .singleShot,
+            quickActionMode: .brainstorm,
+            provider: .openrouter,
+            reason: .modeSingleShotByContract,
+            indexedSkillCount: 0
+        )
+
+        let trace = PromptContextAssembler.governanceTrace(
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil,
+            agentCoordination: coordination
+        )
+
+        XCTAssertTrue(trace.promptLayers.contains("agent_coordination"))
+        XCTAssertEqual(trace.agentCoordination, coordination)
     }
 
     func testPromptTraceEvaluationHarnessPassesHealthyMemoryRAGCase() {
@@ -466,6 +555,62 @@ final class GovernanceTelemetryStoreTests: XCTestCase {
         XCTAssertEqual(telemetry.memoryStorageSuppressedCount(reason: .hardOptOut), 2)
         XCTAssertEqual(telemetry.memoryStorageSuppressedCount(reason: .sensitiveConsentRequired), 1)
         XCTAssertEqual(telemetry.memoryStorageSuppressedCount(reason: .unspecified), 0)
+    }
+
+    func testRecordCognitionArtifactStoresLatestAndCountsUnsupportedMemoryReference() {
+        let telemetry = makeTelemetry()
+        let artifact = CognitionArtifact(
+            organ: .reviewer,
+            title: "Silent reviewer audit",
+            summary: "Reviewer flagged a possible memory-boundary issue.",
+            confidence: 0.62,
+            jurisdiction: .turnContext,
+            evidenceRefs: [
+                CognitionEvidenceRef(source: .message, id: UUID().uuidString, quote: "plan")
+            ],
+            riskFlags: ["unsupported_memory_reference"],
+            trace: CognitionTrace(producer: .reviewer, sourceJobId: "silent_post_turn_review")
+        )
+
+        telemetry.recordCognitionArtifact(artifact)
+
+        XCTAssertEqual(telemetry.lastCognitionArtifact?.id, artifact.id)
+        XCTAssertEqual(telemetry.lastCognitionArtifact?.organ, .reviewer)
+        XCTAssertEqual(telemetry.value(for: .overInferenceRate), 1)
+    }
+
+    func testRecordCognitionArtifactIgnoresInvalidArtifacts() {
+        let telemetry = makeTelemetry()
+        let artifact = CognitionArtifact(
+            organ: .reviewer,
+            title: "Invalid reviewer audit",
+            summary: "This should not be stored.",
+            confidence: 1.2,
+            jurisdiction: .turnContext,
+            evidenceRefs: [],
+            trace: CognitionTrace(producer: .reviewer, sourceJobId: "silent_post_turn_review")
+        )
+
+        telemetry.recordCognitionArtifact(artifact)
+
+        XCTAssertNil(telemetry.lastCognitionArtifact)
+        XCTAssertEqual(telemetry.value(for: .overInferenceRate), 0)
+    }
+
+    func testRecordConversationRecoveryStoresLatestAndCounts() {
+        let telemetry = makeTelemetry()
+        let event = ConversationRecoveryTelemetryEvent(
+            reason: .missingCurrentNode,
+            originalNodeId: UUID(uuidString: "00000000-0000-0000-0000-000000000801")!,
+            recoveredNodeId: UUID(uuidString: "00000000-0000-0000-0000-000000000802")!,
+            rebasedMessageCount: 2,
+            recordedAt: Date(timeIntervalSince1970: 123)
+        )
+
+        telemetry.recordConversationRecovery(event)
+
+        XCTAssertEqual(telemetry.conversationRecoveryCount(), 1)
+        XCTAssertEqual(telemetry.lastConversationRecovery, event)
     }
 
     private func makeTelemetry() -> GovernanceTelemetryStore {

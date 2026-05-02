@@ -358,7 +358,7 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertTrue(storedNode.content.contains("second answer"))
     }
 
-    func testSendSurfacesPlanningFailureAsVisibleAssistantMessage() async throws {
+    func testSendRecoversRestoredConversationWhenCurrentNodeMissingFromStore() async throws {
         let nodeStore = try NodeStore(path: ":memory:")
         let vectorStore = VectorStore(nodeStore: nodeStore)
         let embeddingService = EmbeddingService()
@@ -380,14 +380,29 @@ final class ChatViewModelTests: XCTestCase {
             scratchPadStore: scratchPadStore
         )
 
-        vm.currentNode = NousNode(type: .conversation, title: "Ghost Chat")
+        let missingNode = NousNode(type: .conversation, title: "Ghost Chat")
+        vm.currentNode = missingNode
+        vm.messages = [
+            Message(nodeId: missingNode.id, role: .assistant, content: "Restored but not stored")
+        ]
+        scratchPadStore.activate(conversationId: missingNode.id)
         vm.inputText = "Why no reply?"
 
         await vm.send()
 
+        let nodeId = try XCTUnwrap(vm.currentNode?.id)
         let assistantMessage = try XCTUnwrap(vm.messages.last)
+        let storedMessages = try nodeStore.fetchMessages(nodeId: nodeId)
+        let storedNode = try XCTUnwrap(nodeStore.fetchNode(id: nodeId))
+
+        XCTAssertNotEqual(nodeId, missingNode.id)
+        XCTAssertEqual(vm.currentNode?.title, "Ghost Chat")
         XCTAssertEqual(assistantMessage.role, .assistant)
-        XCTAssertTrue(assistantMessage.content.hasPrefix("Error:"))
+        XCTAssertEqual(assistantMessage.content, "unused")
+        XCTAssertEqual(storedMessages.map(\.content), ["Restored but not stored", "Why no reply?", "unused"])
+        XCTAssertTrue(storedMessages.allSatisfy { $0.nodeId == nodeId })
+        XCTAssertTrue(storedNode.content.contains("Restored but not stored"))
+        XCTAssertEqual(scratchPadStore.activeConversationId, nodeId)
         XCTAssertTrue(vm.currentResponse.isEmpty)
         XCTAssertFalse(vm.isGenerating)
     }

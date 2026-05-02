@@ -3,6 +3,7 @@ import Foundation
 enum SkillStoreError: LocalizedError, Equatable {
     case invalidPayloadVersion(Int)
     case emptyModes
+    case emptyCues
     case priorityOutOfRange(Int)
     case emptyActionContent
     case payloadEncodingFailed
@@ -12,9 +13,11 @@ enum SkillStoreError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .invalidPayloadVersion(let version):
-            return "Skill payloadVersion must be 1, got \(version)."
+            return "Skill payloadVersion must be 1...2, got \(version)."
         case .emptyModes:
             return "Skill trigger modes must not be empty."
+        case .emptyCues:
+            return "Skill analysis gate cues must not be empty."
         case .priorityOutOfRange(let priority):
             return "Skill trigger priority must be between 0 and 100, got \(priority)."
         case .emptyActionContent:

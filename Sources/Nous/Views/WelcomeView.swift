@@ -6,7 +6,10 @@ enum WelcomeActionMenuHitRegion {
     static let actionMenuGap: CGFloat = 8
 
     static var expandedHeight: CGFloat {
-        composerHeight + actionMenuGap + actionMenuHeight
+        composerHeight + max(
+            ActionMenuPopoutMetrics.reservedTopPadding,
+            actionMenuGap + actionMenuHeight
+        )
     }
 }
 
@@ -27,6 +30,7 @@ struct WelcomeView: View {
     @AppStorage("nous.username") private var userName: String = "ALEX"
     @State private var isImageDropTargeted = false
     @State private var isActionMenuExpanded = false
+    @FocusState private var isComposerFocused: Bool
     
     private var greeting: String {
         let hour = Calendar.current.component(.hour, from: Date())
@@ -139,20 +143,29 @@ struct WelcomeView: View {
             .frame(width: 34, height: 34)
 
             HStack(spacing: 6) {
-                TextField("What are we thinking about tonight?", text: $inputText, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
-                    .foregroundColor(AppColor.colaDarkText)
-                    .lineLimit(1...6)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .onSubmit { onSend() }
-                    .onChange(of: inputText) { _, _ in
-                        if isActionMenuExpanded {
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                                isActionMenuExpanded = false
+                ZStack(alignment: .leading) {
+                    RotatingComposerPromptLabel(
+                        inputText: inputText,
+                        isFocused: isComposerFocused
+                    )
+
+                    TextField("", text: $inputText, axis: .vertical)
+                        .focused($isComposerFocused)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundColor(AppColor.colaDarkText)
+                        .lineLimit(1...6)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .onSubmit { onSend() }
+                        .onChange(of: inputText) { _, _ in
+                            if isActionMenuExpanded {
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                    isActionMenuExpanded = false
+                                }
                             }
                         }
-                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
@@ -192,9 +205,11 @@ struct WelcomeView: View {
     }
 
     private var welcomeComposerControls: some View {
-        VStack(alignment: .leading, spacing: WelcomeActionMenuHitRegion.actionMenuGap) {
-            if isActionMenuExpanded {
+        composerRow
+            .frame(minHeight: WelcomeActionMenuHitRegion.composerHeight)
+            .overlay(alignment: .bottomLeading) {
                 ActionMenuCapsule(
+                    isExpanded: isActionMenuExpanded,
                     onFile: {
                         onPickAttachment()
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isActionMenuExpanded = false }
@@ -209,23 +224,16 @@ struct WelcomeView: View {
                     },
                     canPickPhoto: canPickPhoto
                 )
-                .frame(height: WelcomeActionMenuHitRegion.actionMenuHeight)
-                .transition(
-                    .move(edge: .bottom)
-                        .combined(with: .opacity)
-                        .combined(with: .scale(scale: 0.9, anchor: .bottomLeading))
-                )
+                .offset(y: -ActionMenuPopoutMetrics.sourceOffsetFromRowBottom)
             }
-
-            composerRow
-                .frame(minHeight: WelcomeActionMenuHitRegion.composerHeight)
-        }
+        .padding(.top, isActionMenuExpanded ? ActionMenuPopoutMetrics.reservedTopPadding : 0)
         .frame(
             minHeight: isActionMenuExpanded
                 ? WelcomeActionMenuHitRegion.expandedHeight
                 : WelcomeActionMenuHitRegion.composerHeight,
             alignment: .bottomLeading
         )
+        .animation(.spring(response: 0.38, dampingFraction: 0.82), value: isActionMenuExpanded)
     }
 
     private func circleActionButton(systemImage: String, isVoiceActive: Bool, action: @escaping () -> Void) -> some View {

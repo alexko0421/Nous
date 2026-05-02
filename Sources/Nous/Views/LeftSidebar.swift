@@ -385,7 +385,12 @@ struct LeftSidebar: View {
                 .padding(.bottom, 16)
             }
         }
-        .frame(width: 154)
+        .frame(width: GalaxySidebarLayout.width)
+        .overlay(
+            RoundedRectangle(cornerRadius: 32, style: .continuous)
+                .stroke(AppColor.panelStroke.opacity(0.78), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.12), radius: 18, x: 0, y: 8)
         .onAppear { loadData() }
         .onReceive(
             NotificationCenter.default.publisher(

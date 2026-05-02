@@ -123,6 +123,14 @@ final class QuickActionOpeningRunner {
             conversationID: node.id
         )
         let quickActionAddendum = quickActionResolution.addendum
+        let provider = currentProviderProvider()
+        let agentCoordination = AgentCoordinationTrace(
+            executionMode: .singleShot,
+            quickActionMode: mode,
+            provider: provider,
+            reason: .modeSingleShotByContract,
+            indexedSkillCount: 0
+        )
 
         let turnSlice = PromptContextAssembler.assembleContext(
             chatMode: .companion,
@@ -160,7 +168,8 @@ final class QuickActionOpeningRunner {
             attachments: [],
             activeQuickActionMode: mode,
             quickActionAddendum: quickActionAddendum,
-            allowInteractiveClarification: false
+            allowInteractiveClarification: false,
+            agentCoordination: agentCoordination
         )
         let syntheticUserMessage = Message(nodeId: node.id, role: .user, content: openingText)
         let prepared = PreparedConversationTurn(
@@ -180,7 +189,7 @@ final class QuickActionOpeningRunner {
             turnSlice: turnSlice,
             transcriptMessages: [LLMMessage(role: "user", content: openingText)],
             focusBlock: nil,
-            provider: currentProviderProvider()
+            provider: provider
         )
     }
 

@@ -5,6 +5,7 @@ struct AgentTraceAccordion: View {
     let isStreaming: Bool
 
     @State private var isExpanded: Bool
+    private let motion = DisclosurePillMotion()
 
     init(records: [AgentTraceRecord], isStreaming: Bool) {
         self.records = records
@@ -14,16 +15,17 @@ struct AgentTraceAccordion: View {
 
     var body: some View {
         if !records.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: motion.contentSpacing(isExpanded: isExpanded)) {
                 pill
-                if isExpanded {
+                    .zIndex(1)
+
+                DisclosurePillContent(isExpanded: isExpanded, motion: motion) {
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(records) { record in
                             AgentTraceRow(record: record)
                         }
                     }
                     .padding(.leading, 8)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
             .onChange(of: isStreaming) { _, newValue in

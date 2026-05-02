@@ -524,6 +524,33 @@ final class RAGPipelineTests: XCTestCase {
         XCTAssertFalse(context.contains("Alex explicitly wants deeper reasoning"))
     }
 
+    func testCompanionModePrioritizesLivedConversationBeforeAnalysisRegister() {
+        let companionContext = PromptContextAssembler.assembleContext(
+            chatMode: .companion,
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        ).combined
+        let strategistContext = PromptContextAssembler.assembleContext(
+            chatMode: .strategist,
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        ).combined
+
+        XCTAssertTrue(companionContext.contains("Lead with lived texture before interpretation"))
+        XCTAssertTrue(companionContext.contains("For ordinary life, taste, music, status, and chitchat"))
+        XCTAssertTrue(companionContext.contains("friend noticing something"))
+        XCTAssertFalse(companionContext.contains("push-back triggers"))
+        XCTAssertFalse(strategistContext.contains("Lead with lived texture before interpretation"))
+    }
+
     func testAssembleContextIncludesGraphMemoryRecall() {
         let recall = """
         - Rejected proposal: Build Nous around solving emotions.

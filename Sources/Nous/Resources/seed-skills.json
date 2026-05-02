@@ -152,5 +152,50 @@
       "antiPatternExamples": ["Can you tell me more?", "What would you like help with?"]
     },
     "state": "active"
+  },
+  {
+    "id": "00000000-0000-0000-0000-000000000008",
+    "userId": "alex",
+    "payload": {
+      "payloadVersion": 2,
+      "name": "analysis-judge-gate",
+      "description": "Open judge focus only for explicit analysis intent",
+      "useWhen": "Use when Alex asks Nous to analyze a situation, test whether his framing is wrong, find blind spots, challenge him, or make a judgment.",
+      "source": "alex",
+      "trigger": {
+        "kind": "analysisGate",
+        "modes": [],
+        "priority": 80,
+        "cues": [
+          "分析",
+          "深度分析",
+          "analysis",
+          "analyze",
+          "盲点",
+          "盲點",
+          "blind spot",
+          "blind spots",
+          "am i wrong",
+          "判断",
+          "判斷",
+          "judge",
+          "challenge me",
+          "push back",
+          "call me out",
+          "反驳",
+          "反駁"
+        ]
+      },
+      "action": {
+        "kind": "promptFragment",
+        "content": "Enable judge focus for this ordinary-chat turn without switching into a quick-action mode or changing the answer shape."
+      },
+      "rationale": "Normal chat should preserve conversational lightness; judge should appear when Alex explicitly wants analysis.",
+      "antiPatternExamples": [
+        "Casual emotional check-ins that need support, not challenge.",
+        "Ordinary thinking-out-loud turns without a request for judgment."
+      ]
+    },
+    "state": "active"
   }
 ]

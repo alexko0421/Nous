@@ -44,6 +44,9 @@ final class GovernanceTelemetryStore {
     private enum Keys {
         static let lastPromptTrace = "nous.governance.lastPromptTrace"
         static let lastPromptEvaluationSummary = "nous.governance.lastPromptEvaluationSummary"
+        static let lastCognitionArtifact = "nous.governance.lastCognitionArtifact"
+        static let lastConversationRecovery = "nous.governance.lastConversationRecovery"
+        static let conversationRecoveryCount = "nous.governance.conversationRecoveryCount"
 
         static func counter(_ counter: EvalCounter) -> String {
             "nous.governance.counter.\(counter.rawValue)"
@@ -82,6 +85,16 @@ final class GovernanceTelemetryStore {
         return try? JSONDecoder().decode(PromptTraceEvaluationSummary.self, from: data)
     }
 
+    var lastCognitionArtifact: CognitionArtifact? {
+        guard let data = defaults.data(forKey: Keys.lastCognitionArtifact) else { return nil }
+        return try? JSONDecoder().decode(CognitionArtifact.self, from: data)
+    }
+
+    var lastConversationRecovery: ConversationRecoveryTelemetryEvent? {
+        guard let data = defaults.data(forKey: Keys.lastConversationRecovery) else { return nil }
+        return try? JSONDecoder().decode(ConversationRecoveryTelemetryEvent.self, from: data)
+    }
+
     func recordPromptTrace(_ trace: PromptGovernanceTrace) {
         if let data = try? JSONEncoder().encode(trace) {
             defaults.set(data, forKey: Keys.lastPromptTrace)
@@ -106,6 +119,22 @@ final class GovernanceTelemetryStore {
         if trace.highRiskQueryDetected && !trace.safetyPolicyInvoked {
             increment(.safetyMissRate)
         }
+    }
+
+    func recordCognitionArtifact(_ artifact: CognitionArtifact) {
+        guard (try? artifact.validated()) != nil,
+              let data = try? JSONEncoder().encode(artifact) else {
+            return
+        }
+
+        defaults.set(data, forKey: Keys.lastCognitionArtifact)
+        if artifact.riskFlags.contains("unsupported_memory_reference") {
+            increment(.overInferenceRate)
+        }
+    }
+
+    func conversationRecoveryCount() -> Int {
+        defaults.integer(forKey: Keys.conversationRecoveryCount)
     }
 
     func increment(_ counter: EvalCounter, by amount: Int = 1) {
@@ -240,5 +269,14 @@ final class GovernanceTelemetryStore {
     func recentJudgeEvents(limit: Int, filter: JudgeEventFilter) -> [JudgeEvent] {
         guard let nodeStore else { return [] }
         return (try? nodeStore.recentJudgeEvents(limit: limit, filter: filter)) ?? []
+    }
+}
+
+extension GovernanceTelemetryStore: ConversationRecoveryTelemetryRecording {
+    func recordConversationRecovery(_ event: ConversationRecoveryTelemetryEvent) {
+        if let data = try? JSONEncoder().encode(event) {
+            defaults.set(data, forKey: Keys.lastConversationRecovery)
+        }
+        defaults.set(defaults.integer(forKey: Keys.conversationRecoveryCount) + 1, forKey: Keys.conversationRecoveryCount)
     }
 }

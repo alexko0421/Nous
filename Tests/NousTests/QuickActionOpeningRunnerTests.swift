@@ -88,6 +88,53 @@ final class QuickActionOpeningRunnerTests: XCTestCase {
         XCTAssertFalse(llm.receivedPromptText.contains("RECENT CONVERSATIONS WITH ALEX"))
     }
 
+    func testOpeningRunnerTracesSingleShotAgentCoordination() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let conversationStore = ConversationSessionStore(nodeStore: nodeStore)
+        let node = try conversationStore.startConversation()
+        let llm = OpeningPromptCapturingLLM(output: "先定一个方向。")
+        var capturedPlan: TurnPlan?
+        let runner = QuickActionOpeningRunner(
+            conversationSessionStore: conversationStore,
+            memoryContextBuilder: makeMemoryContextBuilder(nodeStore: nodeStore),
+            turnExecutor: TurnExecutor(
+                llmServiceProvider: { llm },
+                shouldUseGeminiHistoryCache: { false },
+                shouldPersistAssistantThinking: { false }
+            ),
+            outcomeFactory: TurnOutcomeFactory(shouldPersistMemory: { _, _ in false }),
+            currentProviderProvider: { .openrouter },
+            onPlanReady: { capturedPlan = $0 }
+        )
+        let turnId = UUID()
+        let capture = OpeningTurnEventCapture()
+        let sink = TurnSequencedEventSink(turnId: turnId, sink: capture)
+
+        _ = await runner.run(
+            mode: .direction,
+            node: node,
+            turnId: turnId,
+            sink: sink,
+            abortReason: { .unexpectedCancellation }
+        )
+
+        let expected = AgentCoordinationTrace(
+            executionMode: .singleShot,
+            quickActionMode: .direction,
+            provider: .openrouter,
+            reason: .modeSingleShotByContract,
+            indexedSkillCount: 0
+        )
+        XCTAssertEqual(capturedPlan?.promptTrace.agentCoordination, expected)
+        XCTAssertTrue(capturedPlan?.promptTrace.promptLayers.contains("agent_coordination") == true)
+
+        let events = await capture.events()
+        guard case .prepared(let prepared)? = events.first?.event else {
+            return XCTFail("opening runner should emit a prepared event")
+        }
+        XCTAssertEqual(prepared.promptTrace.agentCoordination, expected)
+    }
+
     private func makeMemoryContextBuilder(nodeStore: NodeStore) -> TurnMemoryContextBuilder {
         let core = UserMemoryCore(nodeStore: nodeStore, llmServiceProvider: { nil })
         return TurnMemoryContextBuilder(

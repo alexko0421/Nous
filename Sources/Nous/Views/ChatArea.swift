@@ -24,6 +24,7 @@ struct ChatArea: View {
     @State private var activeDownvotePopoverMessageId: UUID?
     @State private var downvoteFeedbackReason: JudgeFeedbackReason?
     @State private var downvoteFeedbackNote: String = ""
+    @FocusState private var isComposerFocused: Bool
 
     private let bottomScrollAnchor = "chat-bottom-anchor"
     private let bottomVisibleSpacing: CGFloat = 53
@@ -353,8 +354,92 @@ struct ChatArea: View {
                             }
                         }
 
-                        if isActionMenuExpanded {
+                        HStack(spacing: 12) {
+                                Button(action: {
+                                    if voiceController.isActive {
+                                        onToggleVoiceMode()
+                                    } else {
+                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                            isActionMenuExpanded.toggle()
+                                        }
+                                    }
+                                }) {
+                                    NativeGlassPanel(
+                                        cornerRadius: 18,
+                                        tintColor: voiceController.isActive
+                                            ? NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.22)
+                                            : AppColor.glassTint
+                                    ) { EmptyView() }
+                                        .frame(width: 36, height: 36)
+                                        .overlay(
+                                            Image(systemName: voiceController.isActive ? "mic.fill" : (isActionMenuExpanded ? "xmark" : "plus"))
+                                                .font(.system(size: 13, weight: .semibold))
+                                                .foregroundColor(voiceController.isActive ? AppColor.colaOrange : AppColor.secondaryText)
+                                                .rotationEffect(.degrees(isActionMenuExpanded && !voiceController.isActive ? 90 : 0))
+                                        )
+                                        .overlay(
+                                            Circle()
+                                                .stroke(AppColor.panelStroke, lineWidth: 1)
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                                .help(voiceController.isActive ? "Stop Voice Mode" : "Actions")
+
+                                ZStack(alignment: .leading) {
+                                    RotatingComposerPromptLabel(
+                                        inputText: vm.inputText,
+                                        isFocused: isComposerFocused,
+                                        horizontalPadding: 18
+                                    )
+
+                                    TextField("", text: $vm.inputText, axis: .vertical)
+                                        .focused($isComposerFocused)
+                                        .textFieldStyle(.plain)
+                                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                                        .foregroundColor(AppColor.colaDarkText)
+                                        .lineLimit(1...6)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .padding(.horizontal, 18)
+                                        .padding(.vertical, 10)
+                                        .frame(minHeight: 36)
+                                        .onSubmit(sendCurrentInput)
+                                }
+                                .background(
+                                    NativeGlassPanel(
+                                        cornerRadius: 18,
+                                        tintColor: AppColor.glassTint
+                                    ) { EmptyView() }
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                        .stroke(AppColor.panelStroke, lineWidth: 1)
+                                )
+                                .shadow(color: .black.opacity(0.04), radius: 6, x: 0, y: 2)
+
+                                Button(action: handlePrimaryAction) {
+                                    Image(systemName: vm.isGenerating ? "stop.fill" : "arrow.up")
+                                        .font(.system(size: 13, weight: .bold))
+                                        .foregroundColor(.white)
+                                }
+                                .buttonStyle(.plain)
+                                .frame(width: 36, height: 36)
+                                .background(
+                                    NativeGlassPanel(
+                                        cornerRadius: 18,
+                                        tintColor: canPrimaryAction
+                                            ? NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.88)
+                                            : NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.18)
+                                    ) { EmptyView() }
+                                )
+                                .overlay(
+                                    Circle()
+                                        .stroke(canPrimaryAction ? Color.white.opacity(0.18) : AppColor.panelStroke, lineWidth: 1)
+                                )
+                                .disabled(!canPrimaryAction)
+                        }
+                        .overlay(alignment: .bottomLeading) {
                             ActionMenuCapsule(
+                                isExpanded: isActionMenuExpanded,
                                 onFile: {
                                     isFileImporterPresented = true
                                     withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isActionMenuExpanded = false }
@@ -369,83 +454,10 @@ struct ChatArea: View {
                                 },
                                 canPickPhoto: canPickPhotoAttachment
                             )
-                            .transition(.move(edge: .bottom).combined(with: .opacity).combined(with: .scale(scale: 0.9, anchor: .bottomLeading)))
+                            .offset(y: -ActionMenuPopoutMetrics.sourceOffsetFromRowBottom)
                         }
-
-                        HStack(spacing: 12) {
-                            Button(action: {
-                                if voiceController.isActive {
-                                    onToggleVoiceMode()
-                                } else {
-                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                                        isActionMenuExpanded.toggle()
-                                    }
-                                }
-                            }) {
-                                NativeGlassPanel(
-                                    cornerRadius: 18,
-                                    tintColor: voiceController.isActive
-                                        ? NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.22)
-                                        : AppColor.glassTint
-                                ) { EmptyView() }
-                                    .frame(width: 36, height: 36)
-                                    .overlay(
-                                        Image(systemName: voiceController.isActive ? "mic.fill" : (isActionMenuExpanded ? "xmark" : "plus"))
-                                            .font(.system(size: 13, weight: .semibold))
-                                            .foregroundColor(voiceController.isActive ? AppColor.colaOrange : AppColor.secondaryText)
-                                            .rotationEffect(.degrees(isActionMenuExpanded && !voiceController.isActive ? 90 : 0))
-                                    )
-                                    .overlay(
-                                        Circle()
-                                            .stroke(AppColor.panelStroke, lineWidth: 1)
-                                    )
-                            }
-                            .buttonStyle(.plain)
-                            .help(voiceController.isActive ? "Stop Voice Mode" : "Actions")
-
-                            TextField("", text: $vm.inputText, axis: .vertical)
-                                .textFieldStyle(.plain)
-                                .font(.system(size: 13, weight: .medium, design: .rounded))
-                                .foregroundColor(AppColor.colaDarkText)
-                                .lineLimit(1...6)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .padding(.horizontal, 18)
-                                .padding(.vertical, 10)
-                                .frame(minHeight: 36)
-                                .background(
-                                    NativeGlassPanel(
-                                        cornerRadius: 18,
-                                        tintColor: AppColor.glassTint
-                                    ) { EmptyView() }
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                        .stroke(AppColor.panelStroke, lineWidth: 1)
-                                )
-                                .shadow(color: .black.opacity(0.04), radius: 6, x: 0, y: 2)
-                                .onSubmit(sendCurrentInput)
-
-                            Button(action: handlePrimaryAction) {
-                                Image(systemName: vm.isGenerating ? "stop.fill" : "arrow.up")
-                                    .font(.system(size: 13, weight: .bold))
-                                    .foregroundColor(.white)
-                            }
-                            .buttonStyle(.plain)
-                            .frame(width: 36, height: 36)
-                            .background(
-                                NativeGlassPanel(
-                                    cornerRadius: 18,
-                                    tintColor: canPrimaryAction
-                                        ? NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.88)
-                                        : NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.18)
-                                ) { EmptyView() }
-                            )
-                            .overlay(
-                                Circle()
-                                    .stroke(canPrimaryAction ? Color.white.opacity(0.18) : AppColor.panelStroke, lineWidth: 1)
-                            )
-                            .disabled(!canPrimaryAction)
-                        }
+                        .padding(.top, isActionMenuExpanded ? ActionMenuPopoutMetrics.reservedTopPadding : 0)
+                        .animation(.spring(response: 0.38, dampingFraction: 0.82), value: isActionMenuExpanded)
                     }
                     .frame(maxWidth: composerMaxWidth)
                     .padding(.horizontal, 36)
@@ -475,7 +487,7 @@ struct ChatArea: View {
         }
         .overlay(alignment: .topLeading) {
             Button(action: {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                withAnimation(AppMotion.sidebarPanelSpring.animation) {
                     isSidebarVisible.toggle()
                 }
             }) {
@@ -498,7 +510,7 @@ struct ChatArea: View {
         .overlay(alignment: .topTrailing) {
             if !isWelcomeState {
                 Button(action: {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                    withAnimation(AppMotion.markdownPanelSpring.animation) {
                         isScratchPadVisible.toggle()
                     }
                 }) {
@@ -988,66 +1000,146 @@ struct AssistantFeedbackButton: View {
     }
 }
 
+enum ActionMenuPopoutMetrics {
+    static let reservedTopPadding: CGFloat = 68
+    static let sourceOffsetFromRowBottom: CGFloat = 44
+    static let itemHeight: CGFloat = 52
+    static let itemWidth: CGFloat = 52
+    static let capsuleCornerRadius: CGFloat = 18
+}
+
 struct ActionMenuCapsule: View {
+    let isExpanded: Bool
     let onFile: () -> Void
     let onPhoto: () -> Void
     let onVoice: () -> Void
     let canPickPhoto: Bool
 
+    private let motion = ActionMenuSeparationMotion()
+
+    private var capsuleScale: CGSize {
+        motion.capsuleScale(isExpanded: isExpanded)
+    }
+
     var body: some View {
-        HStack(spacing: 2) {
-            ActionMenuButton(icon: "doc", title: "File", action: onFile)
+        HStack(spacing: 0) {
+            ActionMenuButton(
+                icon: "doc",
+                title: "File",
+                isExpanded: isExpanded,
+                separationIndex: 0,
+                action: onFile
+            )
 
-            ActionMenuButton(icon: "photo", title: "Photo", action: onPhoto)
-                .disabled(!canPickPhoto)
-                .opacity(canPickPhoto ? 1.0 : 0.5)
+            ActionMenuDivider(isExpanded: isExpanded)
 
-            ActionMenuButton(icon: "mic", title: "Voice", action: onVoice)
+            ActionMenuButton(
+                icon: "photo",
+                title: "Photo",
+                isExpanded: isExpanded,
+                separationIndex: 1,
+                isEnabled: canPickPhoto,
+                action: onPhoto
+            )
+
+            ActionMenuDivider(isExpanded: isExpanded)
+
+            ActionMenuButton(
+                icon: "mic",
+                title: "Voice",
+                isExpanded: isExpanded,
+                separationIndex: 2,
+                action: onVoice
+            )
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 6)
         .background(
-            NativeGlassPanel(cornerRadius: 16, tintColor: AppColor.glassTint) { EmptyView() }
-                .shadow(color: .black.opacity(0.12), radius: 12, x: 0, y: 6)
+            NativeGlassPanel(
+                cornerRadius: ActionMenuPopoutMetrics.capsuleCornerRadius,
+                tintColor: AppColor.glassTint
+            ) { EmptyView() }
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: ActionMenuPopoutMetrics.capsuleCornerRadius, style: .continuous)
                 .stroke(AppColor.panelStroke, lineWidth: 1)
         )
+        .scaleEffect(x: capsuleScale.width, y: capsuleScale.height, anchor: .bottomLeading)
+        .offset(
+            x: motion.capsuleOffset(isExpanded: isExpanded).width,
+            y: motion.capsuleOffset(isExpanded: isExpanded).height
+        )
+        .opacity(motion.capsuleOpacity(isExpanded: isExpanded))
+        .blur(radius: motion.capsuleBlur(isExpanded: isExpanded))
+        .shadow(color: .black.opacity(isExpanded ? 0.12 : 0), radius: 12, x: 0, y: 6)
+        .frame(height: ActionMenuPopoutMetrics.reservedTopPadding, alignment: .bottomLeading)
+        .allowsHitTesting(isExpanded)
+        .accessibilityHidden(!isExpanded)
+        .animation(.spring(response: 0.38, dampingFraction: 0.82), value: isExpanded)
+    }
+}
+
+struct ActionMenuDivider: View {
+    let isExpanded: Bool
+
+    var body: some View {
+        Rectangle()
+            .fill(AppColor.panelStroke.opacity(isExpanded ? 0.62 : 0))
+            .frame(width: 1, height: 30)
+            .animation(.easeInOut(duration: 0.18), value: isExpanded)
     }
 }
 
 struct ActionMenuButton: View {
     let icon: String
     let title: String
+    let isExpanded: Bool
+    let separationIndex: Int
+    var isEnabled: Bool = true
     let action: () -> Void
+
     @State private var isHovered = false
+    private let motion = ActionMenuSeparationMotion()
+
+    private var emergenceAnimation: Animation {
+        .easeOut(duration: 0.2)
+            .delay(motion.delay(for: separationIndex, isExpanded: isExpanded))
+    }
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 6) {
+            VStack(spacing: 5) {
                 Image(systemName: icon)
-                    .font(.system(size: 16, weight: .medium))
+                    .font(.system(size: 15, weight: .medium))
                 Text(title)
                     .font(.system(size: 10, weight: .medium, design: .rounded))
             }
-            .foregroundColor(AppColor.colaDarkText)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .background(
+            .foregroundColor(isEnabled ? AppColor.colaDarkText : AppColor.secondaryText.opacity(0.72))
+            .frame(width: ActionMenuPopoutMetrics.itemWidth, height: ActionMenuPopoutMetrics.itemHeight)
+            .overlay(
                 ZStack {
-                    if isHovered {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    if isHovered && isEnabled {
+                        RoundedRectangle(cornerRadius: 13, style: .continuous)
                             .fill(AppColor.colaDarkText.opacity(0.04))
+                            .padding(2)
                     }
                 }
             )
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .scaleEffect(isHovered ? 1.05 : 1.0)
+        .disabled(!isExpanded || !isEnabled)
+        .opacity(motion.itemOpacity(isExpanded: isExpanded, isEnabled: isEnabled))
+        .scaleEffect(isExpanded ? (isHovered && isEnabled ? 1.035 : 1.0) : 0.96)
+        .offset(
+            x: motion.itemOffset(for: separationIndex, isExpanded: isExpanded).width,
+            y: motion.itemOffset(for: separationIndex, isExpanded: isExpanded).height
+        )
+        .blur(radius: isExpanded ? 0 : 3)
+        .animation(emergenceAnimation, value: isExpanded)
         .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isHovered)
         .onHover { isHovered = $0 }
+        .accessibilityHidden(!isExpanded)
     }
 }
 

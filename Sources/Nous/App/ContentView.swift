@@ -14,6 +14,7 @@ struct ContentView: View {
     @State private var selectedTab: MainTab = .chat
     @State private var selectedSettingsSection: SettingsSection = .profile
     @State private var selectedProjectId: UUID?
+    @State private var selectedGalaxyLens: GalaxyLensFilter = .meaningful
     @State private var voiceAttachmentResetToken = UUID()
     @State private var isSetupComplete = UserDefaults.standard.bool(forKey: "nous.setup.complete")
     @State private var voiceFocusObserver = VoiceMainWindowFocusObserver()
@@ -57,7 +58,10 @@ struct ContentView: View {
     @ViewBuilder
     private func mainContent(dependencies: AppDependencies) -> some View {
         mainLayout(dependencies: dependencies)
-            .frame(minWidth: 800, minHeight: 600)
+            .frame(
+                minWidth: NousMainWindowController.minimumSize.width,
+                minHeight: NousMainWindowController.minimumSize.height
+            )
             .padding(12)
             .background(
                 RoundedRectangle(cornerRadius: 36, style: .continuous)
@@ -68,7 +72,8 @@ struct ContentView: View {
             .overlay(alignment: .bottom) {
                 globalVoicePill(dependencies: dependencies)
             }
-            .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isSidebarVisible)
+            .animation(AppMotion.sidebarPanelSpring.animation, value: isSidebarVisible)
+            .animation(AppMotion.markdownPanelSpring.animation, value: isScratchPadVisible)
             .onAppear {
                 if voiceNotchPanelController == nil {
                     voiceNotchPanelController = VoiceNotchPanelController(
@@ -184,6 +189,7 @@ struct ContentView: View {
             case .galaxy:
                 GalaxyView(
                     vm: dependencies.galaxyVM,
+                    selectedLens: $selectedGalaxyLens,
                     onNodeSelected: { node in navigateToNode(node, dependencies: dependencies) }
                 )
             case .settings:
@@ -203,6 +209,11 @@ struct ContentView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
             }
         }
+        .overlay(
+            RoundedRectangle(cornerRadius: 36, style: .continuous)
+                .stroke(AppColor.panelStroke.opacity(0.52), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.10), radius: 18, x: 0, y: 8)
     }
 
     private func scratchPad(dependencies: AppDependencies) -> some View {
@@ -262,11 +273,17 @@ struct ContentView: View {
                 navigate: { target in
                     navigateWithVoice(to: target)
                 },
-                setSidebarVisible: { isSidebarVisible = $0 },
+                setSidebarVisible: { visible in
+                    withAnimation(AppMotion.sidebarPanelSpring.animation) {
+                        isSidebarVisible = visible
+                    }
+                },
                 setScratchPadVisible: { visible in
-                    isScratchPadVisible = visible
-                    if visible {
-                        selectedTab = .chat
+                    withAnimation(AppMotion.markdownPanelSpring.animation) {
+                        isScratchPadVisible = visible
+                        if visible {
+                            selectedTab = .chat
+                        }
                     }
                 },
                 setComposerText: { text in
@@ -292,7 +309,9 @@ struct ContentView: View {
                     dependencies.chatVM.currentResponse = ""
                     dependencies.chatVM.inputText = ""
                     dependencies.scratchPadStore.activate(conversationId: nil)
-                    isScratchPadVisible = false
+                    withAnimation(AppMotion.markdownPanelSpring.animation) {
+                        isScratchPadVisible = false
+                    }
                     selectedTab = .chat
                     voiceAttachmentResetToken = UUID()
                 },
@@ -415,7 +434,7 @@ struct ContentView: View {
 
     @ViewBuilder
     private func globalVoicePill(dependencies: AppDependencies) -> some View {
-        if selectedTab != .chat {
+        if selectedTab != .chat && selectedTab != .galaxy {
             HStack(spacing: 8) {
                 if VoiceCapsuleVisibilityPolicy.shouldShowCapsule(
                     isVoiceActive: dependencies.voiceController.isActive,

@@ -14,7 +14,9 @@ final class ChatTurnRunner {
     private let agentLoopExecutorFactory: AgentLoopExecutorFactory?
     private let outcomeFactory: TurnOutcomeFactory
     private let shadowLearningSignalRecorder: ShadowLearningSignalRecorder?
+    private let cognitionReviewer: (any CognitionReviewing)?
     private let onPlanReady: (TurnPlan) -> Void
+    private let onReviewArtifact: (CognitionArtifact) -> Void
 
     init(
         conversationSessionStore: ConversationSessionStore,
@@ -24,7 +26,9 @@ final class ChatTurnRunner {
         agentLoopExecutorFactory: AgentLoopExecutorFactory? = nil,
         outcomeFactory: TurnOutcomeFactory,
         shadowLearningSignalRecorder: ShadowLearningSignalRecorder? = nil,
-        onPlanReady: @escaping (TurnPlan) -> Void = { _ in }
+        cognitionReviewer: (any CognitionReviewing)? = nil,
+        onPlanReady: @escaping (TurnPlan) -> Void = { _ in },
+        onReviewArtifact: @escaping (CognitionArtifact) -> Void = { _ in }
     ) {
         self.conversationSessionStore = conversationSessionStore
         self.turnSteward = turnSteward
@@ -33,7 +37,9 @@ final class ChatTurnRunner {
         self.agentLoopExecutorFactory = agentLoopExecutorFactory
         self.outcomeFactory = outcomeFactory
         self.shadowLearningSignalRecorder = shadowLearningSignalRecorder
+        self.cognitionReviewer = cognitionReviewer
         self.onPlanReady = onPlanReady
+        self.onReviewArtifact = onReviewArtifact
     }
 
     func run(
@@ -89,7 +95,7 @@ final class ChatTurnRunner {
         sink: TurnSequencedEventSink,
         abortReason: () -> TurnAbortReason
     ) async -> TurnCompletion? {
-        let stewardship = turnSteward.steer(prepared: prepared, request: request)
+        let stewardship = await turnSteward.steerForTurn(prepared: prepared, request: request)
         if let shadowLearningSignalRecorder {
             do {
                 try shadowLearningSignalRecorder.recordSignals(from: prepared.userMessage)
@@ -98,7 +104,7 @@ final class ChatTurnRunner {
             }
         }
 
-        let plan: TurnPlan
+        var plan: TurnPlan
         let judgeThinkingTrace = ThinkingTraceStore()
         do {
             Self.debugLog("planning start turn=\(request.turnId)")
@@ -128,6 +134,14 @@ final class ChatTurnRunner {
             return nil
         }
 
+        var resolvedAgentLoopExecutor: AgentLoopExecutor?
+        if let mode = plan.agentLoopMode {
+            resolvedAgentLoopExecutor = agentLoopExecutorFactory?(mode, plan, request)
+            if resolvedAgentLoopExecutor == nil, plan.indexedSkillIds.isEmpty {
+                plan = plan.withSingleShotAgentFallbackTrace()
+            }
+        }
+
         onPlanReady(plan)
         await sink.emit(.prepared(outcomeFactory.makePrepared(from: plan)))
         Self.debugLog("prepared emitted turn=\(request.turnId)")
@@ -147,8 +161,8 @@ final class ChatTurnRunner {
         var executionResult: TurnExecutionResult
         do {
             Self.debugLog("execute start turn=\(request.turnId)")
-            if let mode = plan.agentLoopMode {
-                if let agentLoopExecutor = agentLoopExecutorFactory?(mode, plan, request) {
+            if plan.agentLoopMode != nil {
+                if let agentLoopExecutor = resolvedAgentLoopExecutor {
                     guard let result = try await agentLoopExecutor.execute(
                         plan: plan,
                         request: request,
@@ -229,6 +243,8 @@ final class ChatTurnRunner {
             return nil
         }
 
+        runSilentReviewIfNeeded(plan: plan, executionResult: executionResult)
+
         let completion = outcomeFactory.makeCompletion(
             turnId: request.turnId,
             nextQuickActionModeIfCompleted: plan.nextQuickActionModeIfCompleted,
@@ -253,6 +269,24 @@ final class ChatTurnRunner {
             return TurnFailure(stage: .planning, message: message)
         case .infrastructure(let message):
             return TurnFailure(stage: .execution, message: message)
+        }
+    }
+
+    private func runSilentReviewIfNeeded(
+        plan: TurnPlan,
+        executionResult: TurnExecutionResult
+    ) {
+        guard let cognitionReviewer else { return }
+
+        do {
+            if let artifact = try cognitionReviewer.review(
+                plan: plan,
+                executionResult: executionResult
+            ) {
+                onReviewArtifact(artifact)
+            }
+        } catch {
+            Self.debugLog("silent reviewer failed turn=\(plan.turnId) error=\(error.localizedDescription)")
         }
     }
 
@@ -312,6 +346,42 @@ private extension TurnExecutionResult {
             conversationTitle: conversationTitle,
             didHitBudgetExhaustion: didHitBudgetExhaustion,
             agentTraceJson: agentTraceJson
+        )
+    }
+}
+
+private extension TurnPlan {
+    func withSingleShotAgentFallbackTrace() -> TurnPlan {
+        let coordination = AgentCoordinationTrace(
+            executionMode: .singleShot,
+            quickActionMode: promptTrace.agentCoordination?.quickActionMode ?? agentLoopMode,
+            provider: provider,
+            reason: .providerCannotUseToolLoop,
+            indexedSkillCount: indexedSkillIds.count
+        )
+        let trace = PromptGovernanceTrace(
+            promptLayers: promptTrace.promptLayers,
+            evidenceAttached: promptTrace.evidenceAttached,
+            safetyPolicyInvoked: promptTrace.safetyPolicyInvoked,
+            highRiskQueryDetected: promptTrace.highRiskQueryDetected,
+            turnSteward: promptTrace.turnSteward,
+            agentCoordination: coordination,
+            citationTrace: promptTrace.citationTrace
+        )
+        return TurnPlan(
+            turnId: turnId,
+            prepared: prepared,
+            citations: citations,
+            promptTrace: trace,
+            effectiveMode: effectiveMode,
+            nextQuickActionModeIfCompleted: nextQuickActionModeIfCompleted,
+            agentLoopMode: nil,
+            judgeEventDraft: judgeEventDraft,
+            turnSlice: turnSlice,
+            transcriptMessages: transcriptMessages,
+            focusBlock: focusBlock,
+            provider: provider,
+            indexedSkillIds: indexedSkillIds
         )
     }
 }

@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nous 5-Line Premium Preview</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: #1A1A1E;
+            height: 100vh; overflow: hidden;
+            display: flex; justify-content: center;
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+        }
+
+        .menubar {
+            position: fixed; top: 0; left: 0; width: 100%; height: 32px;
+            background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(20px);
+            z-index: 10; display: flex; align-items: center; padding: 0 20px;
+            color: #fff; font-size: 13px; font-weight: 500;
+        }
+
+        .notch {
+            position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+            width: 160px; height: 32px; background: #000;
+            border-bottom-left-radius: 10px; border-bottom-right-radius: 10px;
+            z-index: 101;
+        }
+
+        .island-wrap {
+            position: absolute; top: 0; left: 0; width: 100%;
+            display: flex; justify-content: center;
+            z-index: 100;
+        }
+
+        .island {
+            width: 160px; height: 32px;
+            background: rgba(34, 34, 37, 0.65);
+            backdrop-filter: blur(40px) saturate(180%);
+            -webkit-backdrop-filter: blur(40px) saturate(180%);
+            border-radius: 0 0 14px 14px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-top: none;
+            transition: all 0.45s cubic-bezier(0.19, 1, 0.22, 1);
+            overflow: hidden;
+            display: flex; flex-direction: column;
+        }
+
+        /* Taller to support 5 lines comfortably */
+        .island.expanded {
+            width: 520px; height: 180px;
+            border-radius: 0 0 24px 24px;
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.2);
+        }
+
+        .menubar-zone { height: 32px; flex-shrink: 0; }
+
+        .content {
+            padding: 16px 24px;
+            display: flex;
+            /* FIXED: Top alignment to prevent floating components */
+            align-items: flex-start;
+            gap: 12px;
+            opacity: 0; transform: translateY(-10px);
+            transition: opacity 0.3s 0.15s, transform 0.3s 0.15s;
+        }
+        .island.expanded .content { opacity: 1; transform: translateY(0); }
+
+        /* WAVEFORM: Anchored to top row */
+        .waveform {
+            display: flex; gap: 4px;
+            margin-top: 2px; /* Fine-tuned alignment with 15pt title */
+        }
+        .bar { width: 3px; height: 14px; background: #F38335; border-radius: 2px; animation: b 0.7s infinite alternate ease-in-out; }
+        .bar:nth-child(2) { animation-delay: 0.1s; height: 22px; }
+        .bar:nth-child(3) { animation-delay: 0.3s; height: 12px; }
+        @keyframes b { to { transform: scaleY(0.4); } }
+
+        .text-area { flex: 1; display: flex; flex-direction: column; }
+        /* INCREASED FONT SIZES */
+        .title { color: #F4F0E8; font-weight: 600; font-size: 15px; letter-spacing: -0.2px; margin-bottom: 2px; height: 20px; line-height: 20px; }
+        .subtitle { color: rgba(244, 240, 232, 0.62); font-size: 13px; line-height: 1.45; }
+
+        /* STOP BUTTON: Anchored to top row */
+        .stop-btn {
+            width: 35px; height: 35px; border-radius: 50%;
+            background: rgba(225, 40, 35, 0.72);
+            backdrop-filter: blur(25px);
+            -webkit-backdrop-filter: blur(25px);
+            border: 1px solid rgba(255, 110, 100, 0.55);
+            display: flex; align-items: center; justify-content: center;
+            transition: transform 0.2s, background 0.2s, border-color 0.2s;
+            cursor: pointer;
+            /* Fine-tuned alignment to center with 20px line-height title */
+            margin-top: -7.5px;
+        }
+        .stop-btn:hover {
+            background: rgba(235, 50, 45, 0.82);
+            border-color: rgba(255, 130, 120, 0.65);
+        }
+        .stop-square {
+            width: 13px; height: 13px;
+            background: rgba(255, 225, 220, 0.95);
+            border-radius: 2.5px;
+        }
+
+        .toggle-btn {
+            position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%);
+            padding: 14px 32px; background: #F38335; color: #fff; border: none;
+            border-radius: 30px; cursor: pointer; font-weight: bold; font-size: 15px;
+            box-shadow: 0 8px 20px rgba(243, 131, 53, 0.3);
+            z-index: 200;
+        }
+    </style>
+</head>
+<body>
+    <div class="menubar">🍎 Nous File Edit View History Window Help</div>
+
+    <div class="notch"></div>
+
+    <div class="island-wrap">
+        <div class="island" id="isl">
+            <div class="menubar-zone"></div>
+            <div class="content">
+                <div class="waveform"><div class="bar"></div><div class="bar"></div><div class="bar"></div></div>
+                <div class="text-area">
+                    <div class="title">Listening...</div>
+                    <div class="subtitle">Look at the alignment now! Even with multiple lines of subtitles extending downwards, the waveform bars and the stop button stay perfectly anchored to the first line. This prevents the "clumsy" floating look and feels much more intentional and premium.</div>
+                </div>
+                <div class="stop-btn"><div class="stop-square"></div></div>
+            </div>
+        </div>
+    </div>
+
+    <button class="toggle-btn" onclick="document.getElementById('isl').classList.toggle('expanded')">
+        Toggle Premium Alignment Match
+    </button>
+    <script>
+        setTimeout(() => document.getElementById('isl').classList.add('expanded'), 600);
+    </script>
+</body>
+</html>

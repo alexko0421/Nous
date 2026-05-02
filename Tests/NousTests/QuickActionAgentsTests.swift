@@ -369,11 +369,24 @@ final class QuickActionMemoryPolicyTests: XCTestCase {
         XCTAssertFalse(p.includeJudgeFocus)
     }
 
-    func testNonSupportChallengeStancesKeepPolicyUnchanged() {
-        XCTAssertEqual(
-            QuickActionMemoryPolicy.full.applyingChallengeStance(.useSilently),
-            .full
-        )
+    func testUseSilentlyKeepsMemoryButSkipsContradictionAndJudgeFocus() {
+        let p = QuickActionMemoryPolicy.full.applyingChallengeStance(.useSilently)
+
+        XCTAssertTrue(p.includeGlobalMemory)
+        XCTAssertTrue(p.includeEssentialStory)
+        XCTAssertTrue(p.includeUserModel)
+        XCTAssertTrue(p.includeMemoryEvidence)
+        XCTAssertTrue(p.includeProjectMemory)
+        XCTAssertTrue(p.includeConversationMemory)
+        XCTAssertTrue(p.includeRecentConversations)
+        XCTAssertTrue(p.includeProjectGoal)
+        XCTAssertTrue(p.includeCitations)
+        XCTAssertTrue(p.includeBehaviorProfile)
+        XCTAssertFalse(p.includeContradictionRecall)
+        XCTAssertFalse(p.includeJudgeFocus)
+    }
+
+    func testSurfaceTensionKeepsPolicyUnchanged() {
         XCTAssertEqual(
             QuickActionMemoryPolicy.full.applyingChallengeStance(.surfaceTension),
             .full

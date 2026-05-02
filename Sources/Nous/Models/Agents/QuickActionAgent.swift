@@ -206,12 +206,29 @@ struct QuickActionMemoryPolicy: Equatable {
 
     func applyingChallengeStance(_ stance: ChallengeStance) -> QuickActionMemoryPolicy {
         switch stance {
-        case .supportFirst:
+        case .supportFirst, .useSilently:
             return with(
                 includeContradictionRecall: false,
                 includeJudgeFocus: false
             )
-        case .useSilently, .surfaceTension:
+        case .surfaceTension:
+            return self
+        }
+    }
+
+    func applyingJudgePolicy(_ judgePolicy: JudgePolicy) -> QuickActionMemoryPolicy {
+        switch judgePolicy {
+        case .off:
+            return with(
+                includeContradictionRecall: false,
+                includeJudgeFocus: false
+            )
+        case .silentFraming:
+            return with(
+                includeContradictionRecall: true,
+                includeJudgeFocus: true
+            )
+        case .visibleTension:
             return self
         }
     }

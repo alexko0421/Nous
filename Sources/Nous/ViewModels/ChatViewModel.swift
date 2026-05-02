@@ -59,6 +59,7 @@ final class ChatViewModel {
     private let scratchPadStore: ScratchPadStore
     private let shadowLearningSignalRecorder: ShadowLearningSignalRecorder?
     private let shadowPatternPromptProvider: (any ShadowPatternPromptProviding)?
+    private let slowCognitionArtifactProvider: (any SlowCognitionArtifactProviding)?
     private let heartbeatCoordinator: HeartbeatCoordinator?
     private let shouldUseGeminiHistoryCache: () -> Bool
     private let shouldPersistAssistantThinking: () -> Bool
@@ -85,6 +86,11 @@ final class ChatViewModel {
 
         return ChatTurnRunner(
             conversationSessionStore: conversationSessionStore,
+            turnSteward: TurnSteward(
+                skillStore: skillStore,
+                currentProviderProvider: currentProviderProvider,
+                llmServiceProvider: llmServiceProvider
+            ),
             turnPlanner: turnPlanner,
             turnExecutor: turnExecutor,
             agentLoopExecutorFactory: { [weak self] mode, _, _ in
@@ -123,11 +129,15 @@ final class ChatViewModel {
             },
             outcomeFactory: turnOutcomeFactory,
             shadowLearningSignalRecorder: shadowLearningSignalRecorder,
+            cognitionReviewer: CognitionReviewer(),
             onPlanReady: { [governanceTelemetry] plan in
                 governanceTelemetry.recordPromptTrace(plan.promptTrace)
                 if let event = plan.judgeEventDraft {
                     governanceTelemetry.appendJudgeEvent(event)
                 }
+            },
+            onReviewArtifact: { [governanceTelemetry] artifact in
+                governanceTelemetry.recordCognitionArtifact(artifact)
             }
         )
     }
@@ -153,6 +163,7 @@ final class ChatViewModel {
             skillMatcher: skillMatcher ?? SkillMatcher(),
             skillTracker: skillTracker,
             shadowPatternPromptProvider: shadowPatternPromptProvider,
+            slowCognitionArtifactProvider: slowCognitionArtifactProvider,
             agentLoopProviderSupportsToolUse: { [weak self] provider in
                 guard provider == .openrouter,
                       let llm = self?.llmServiceProvider()
@@ -289,6 +300,7 @@ final class ChatViewModel {
         scratchPadStore: ScratchPadStore,
         shadowLearningSignalRecorder: ShadowLearningSignalRecorder? = nil,
         shadowPatternPromptProvider: (any ShadowPatternPromptProviding)? = nil,
+        slowCognitionArtifactProvider: (any SlowCognitionArtifactProviding)? = nil,
         heartbeatCoordinator: HeartbeatCoordinator? = nil,
         shouldUseGeminiHistoryCache: @escaping () -> Bool = { true },
         shouldPersistAssistantThinking: @escaping () -> Bool = { true },
@@ -301,7 +313,10 @@ final class ChatViewModel {
         self.relationRefinementQueue = relationRefinementQueue
         self.userMemoryService = userMemoryService
         self.userMemoryScheduler = userMemoryScheduler
-        self.conversationSessionStore = conversationSessionStore ?? ConversationSessionStore(nodeStore: nodeStore)
+        self.conversationSessionStore = conversationSessionStore ?? ConversationSessionStore(
+            nodeStore: nodeStore,
+            telemetry: governanceTelemetry
+        )
         self.llmServiceProvider = llmServiceProvider
         self.currentProviderProvider = currentProviderProvider
         self.judgeLLMServiceFactory = judgeLLMServiceFactory
@@ -314,6 +329,7 @@ final class ChatViewModel {
         self.scratchPadStore = scratchPadStore
         self.shadowLearningSignalRecorder = shadowLearningSignalRecorder
         self.shadowPatternPromptProvider = shadowPatternPromptProvider
+        self.slowCognitionArtifactProvider = slowCognitionArtifactProvider
         self.heartbeatCoordinator = heartbeatCoordinator
         self.shouldUseGeminiHistoryCache = shouldUseGeminiHistoryCache
         self.shouldPersistAssistantThinking = shouldPersistAssistantThinking
@@ -743,6 +759,9 @@ final class ChatViewModel {
         switch envelope.event {
         case .userMessageAppended(let appended):
             currentNode = appended.node
+            if scratchPadStore.activeConversationId != appended.node.id {
+                scratchPadStore.activate(conversationId: appended.node.id)
+            }
             messages = appended.messagesAfterUserAppend
         case .prepared(let prepared):
             currentNode = prepared.node

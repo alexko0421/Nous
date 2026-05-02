@@ -241,7 +241,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
             reason: "pricing conflict", inferredMode: .companion
         )
 
-        viewModel.inputText = "I'm going with the cheapest option on purpose"
+        viewModel.inputText = "what is my next step if I'm going with the cheapest option on purpose"
         await viewModel.send()
 
         let system = llm.receivedSystem ?? ""
@@ -264,13 +264,79 @@ final class ProvocationOrchestrationTests: XCTestCase {
             shouldProvoke: false, entryId: nil, reason: "no tension", inferredMode: .companion
         )
 
-        viewModel.inputText = "just thinking out loud"
+        viewModel.inputText = "what is my next step if there is no tension here"
         await viewModel.send()
 
         let system = llm.receivedSystem ?? ""
         XCTAssertTrue(system.contains("BEHAVIOR: SUPPORTIVE"))
         XCTAssertFalse(system.contains("RELEVANT PRIOR MEMORY"),
                        "no focus block when should_provoke is false")
+    }
+
+    @MainActor
+    func testOrdinaryChatSkipsJudgeFocusEvenWhenJudgeWouldProvoke() async throws {
+        let entry = MemoryEntry(
+            scope: .global,
+            kind: .preference,
+            stability: .stable,
+            content: "Alex refuses to compete on price.",
+            sourceNodeIds: []
+        )
+        try store.insertMemoryEntry(entry)
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: true,
+            userState: .deciding,
+            shouldProvoke: true,
+            entryId: entry.id.uuidString,
+            reason: "ordinary chat should not be intercepted",
+            inferredMode: .strategist
+        )
+
+        viewModel.inputText = "just thinking out loud about going cheaper"
+        await viewModel.send()
+
+        let system = llm.receivedSystem ?? ""
+        XCTAssertTrue(system.contains("BEHAVIOR: SUPPORTIVE"))
+        XCTAssertFalse(system.contains("RELEVANT PRIOR MEMORY"))
+        XCTAssertEqual(judge.previousModeHistory.count, 0,
+                       "ordinary chat should use memory quietly without running provocation judge focus")
+        XCTAssertEqual(viewModel.lastPromptGovernanceTrace?.turnSteward?.route, .ordinaryChat)
+        XCTAssertEqual(viewModel.lastPromptGovernanceTrace?.turnSteward?.challengeStance, .useSilently)
+    }
+
+    @MainActor
+    func testAnalysisGateSkillRunsJudgeFocusWithoutEnteringQuickMode() async throws {
+        let entry = MemoryEntry(
+            scope: .global,
+            kind: .preference,
+            stability: .stable,
+            content: "Alex refuses to compete on price.",
+            sourceNodeIds: []
+        )
+        try store.insertMemoryEntry(entry)
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: true,
+            userState: .deciding,
+            shouldProvoke: true,
+            entryId: entry.id.uuidString,
+            reason: "analysis requested",
+            inferredMode: .strategist
+        )
+
+        viewModel.inputText = "帮我分析下，我系咪错咗，可能有咩 blind spot？"
+        await viewModel.send()
+
+        let system = llm.receivedSystem ?? ""
+        XCTAssertTrue(system.contains("BEHAVIOR: PROVOCATIVE"))
+        XCTAssertTrue(system.contains("RELEVANT PRIOR MEMORY"))
+        XCTAssertTrue(system.contains("compete on price"))
+        XCTAssertFalse(system.contains("ACTIVE QUICK MODE:"),
+                       "analysis gate should open judge without switching into a quick-action mode")
+        XCTAssertEqual(judge.previousModeHistory.count, 1)
+        XCTAssertNil(viewModel.activeQuickActionMode)
+        XCTAssertEqual(viewModel.lastPromptGovernanceTrace?.turnSteward?.route, .ordinaryChat)
+        XCTAssertEqual(viewModel.lastPromptGovernanceTrace?.turnSteward?.challengeStance, .surfaceTension)
+        XCTAssertEqual(viewModel.lastPromptGovernanceTrace?.turnSteward?.reason, "analysis skill cue")
     }
 
     @MainActor
@@ -343,7 +409,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
             inferredMode: .companion
         )
 
-        viewModel.inputText = "Maybe we should compete on price this time."
+        viewModel.inputText = "what is my next step if maybe we should compete on price this time?"
         await viewModel.send()
 
         let system = llm.receivedSystem ?? ""
@@ -412,7 +478,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
             reason: "ghost", inferredMode: .companion
         )
 
-        viewModel.inputText = "anything"
+        viewModel.inputText = "what is my next step here?"
         await viewModel.send()
 
         let system = llm.receivedSystem ?? ""
@@ -427,7 +493,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
     func testJudgeTimeoutFallsBackToSupportive() async throws {
         judge.nextError = .timeout
 
-        viewModel.inputText = "anything"
+        viewModel.inputText = "what is my next step here?"
         await viewModel.send()
 
         let system = llm.receivedSystem ?? ""
@@ -461,7 +527,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
             scratchPadStore: makeScratchPadStore()
         )
 
-        viewModel.inputText = "anything"
+        viewModel.inputText = "what is my next step here?"
         await viewModel.send()
 
         let system = llm.receivedSystem ?? ""
@@ -494,7 +560,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
             scratchPadStore: makeScratchPadStore()
         )
 
-        viewModel.inputText = "anything"
+        viewModel.inputText = "what is my next step here?"
         await viewModel.send()
 
         let system = llm.receivedSystem ?? ""
@@ -664,7 +730,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
             scratchPadStore: makeScratchPadStore()
         )
 
-        viewModel.inputText = "test"
+        viewModel.inputText = "what is my next step?"
         // Fire send() without awaiting; cancel shortly after so the judge is interrupted.
         let sendTask = Task { await self.viewModel.send() }
         try await Task.sleep(nanoseconds: 100_000_000)  // 100ms — judge is now sleeping inside
@@ -715,7 +781,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
             scratchPadStore: makeScratchPadStore()
         )
 
-        viewModel.inputText = "first"
+        viewModel.inputText = "what is my next step first?"
         let sendTask = Task { await self.viewModel.send() }
         try await Task.sleep(nanoseconds: 100_000_000)  // let the judge enter its sleep
 
@@ -765,7 +831,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
             scratchPadStore: makeScratchPadStore()
         )
 
-        viewModel.inputText = "first"
+        viewModel.inputText = "what is my next step first?"
         let sendTask = Task { await self.viewModel.send() }
         try await Task.sleep(nanoseconds: 100_000_000)
 
@@ -788,7 +854,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
             tensionExists: true, userState: .deciding,
             shouldProvoke: true, entryId: entryId.uuidString, reason: "conflict", inferredMode: .companion
         )
-        viewModel.inputText = "going cheap"
+        viewModel.inputText = "what is my next step if I am going cheap?"
         await viewModel.send()
 
         guard let assistantMessage = viewModel.messages.last(where: { $0.role == .assistant }),
@@ -838,7 +904,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
             reason: "conflict",
             inferredMode: .companion
         )
-        viewModel.inputText = "i should undercut everyone"
+        viewModel.inputText = "what is my next step if i should undercut everyone?"
         await viewModel.send()
 
         let assistantMessage = try XCTUnwrap(viewModel.messages.last(where: { $0.role == .assistant }))
@@ -857,7 +923,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
             reason: "back off",
             inferredMode: .companion
         )
-        viewModel.inputText = "i am still thinking about it"
+        viewModel.inputText = "what is my next step if i am still thinking about it?"
         await viewModel.send()
 
         let feedbackLoop = try XCTUnwrap(judge.feedbackLoopHistory.last ?? nil)
@@ -921,7 +987,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
             tensionExists: false, userState: .exploring, shouldProvoke: false,
             entryId: nil, reason: "first turn", inferredMode: .companion
         )
-        viewModel.inputText = "hello"
+        viewModel.inputText = "what is my next step hello"
         await viewModel.send()
 
         XCTAssertEqual(judge.previousModeHistory.count, 1)
@@ -935,14 +1001,14 @@ final class ProvocationOrchestrationTests: XCTestCase {
             tensionExists: false, userState: .exploring, shouldProvoke: false,
             entryId: nil, reason: "t1", inferredMode: .strategist
         )
-        viewModel.inputText = "help me think this through"
+        viewModel.inputText = "what is my next step to think this through?"
         await viewModel.send()
 
         judge.nextVerdict = JudgeVerdict(
             tensionExists: false, userState: .exploring, shouldProvoke: false,
             entryId: nil, reason: "t2", inferredMode: .strategist
         )
-        viewModel.inputText = "continue"
+        viewModel.inputText = "what is my next step to continue?"
         await viewModel.send()
 
         XCTAssertEqual(judge.previousModeHistory.count, 2)
@@ -958,7 +1024,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
             tensionExists: false, userState: .deciding, shouldProvoke: false,
             entryId: nil, reason: "register shift", inferredMode: .strategist
         )
-        viewModel.inputText = "break this down for me"
+        viewModel.inputText = "what is my next step to break this down?"
         await viewModel.send()
 
         let system = llm.receivedSystem ?? ""
@@ -993,7 +1059,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
         localVM.currentNode = convo
         localVM.activeChatMode = .strategist
 
-        localVM.inputText = "hi"
+        localVM.inputText = "what is my next step?"
         await localVM.send()
 
         XCTAssertEqual(localVM.activeChatMode, .strategist)
@@ -1012,7 +1078,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
         viewModel.activeChatMode = .strategist
         judge.nextError = .timeout
 
-        viewModel.inputText = "hi"
+        viewModel.inputText = "what is my next step?"
         await viewModel.send()
 
         XCTAssertEqual(viewModel.activeChatMode, .strategist)
@@ -1030,7 +1096,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
         )
         llm.nextError = NSError(domain: "test", code: 1)
 
-        viewModel.inputText = "hi"
+        viewModel.inputText = "what is my next step?"
         await viewModel.send()
 
         XCTAssertEqual(viewModel.activeChatMode, .strategist,
@@ -1045,7 +1111,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
         )
         llm.nextError = NSError(domain: "test", code: 1)
 
-        viewModel.inputText = "hi"
+        viewModel.inputText = "what is my next step?"
         await viewModel.send()
 
         let events = telemetry.recentJudgeEvents(limit: 5, filter: .none)
@@ -1126,7 +1192,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
 
         // ACT: send a message that shares tokens with the fact so Jaccard > 0.
         // tokenJaccard requires >= 3 tokens in BOTH strings; both inputs satisfy this.
-        viewModel.inputText = "Maybe we should compete on price this time."
+        viewModel.inputText = "what is my next step if maybe we should compete on price this time?"
         await viewModel.send()
 
         // ASSERT: the persisted verdictJSON must contain the derived provocation_kind.

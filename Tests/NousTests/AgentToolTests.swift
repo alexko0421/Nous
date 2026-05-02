@@ -1171,10 +1171,12 @@ final class ChatTurnRunnerAgentRoutingTests: XCTestCase {
                 toolCalls: []
             )
         ])
+        var capturedPlan: TurnPlan?
         let runner = makeChatTurnRunner(
             nodeStore: store,
             provider: .openrouter,
-            singleShotText: "Single shot answer"
+            singleShotText: "Single shot answer",
+            onPlanReady: { capturedPlan = $0 }
         ) { _, _, _ in
             AgentLoopExecutor(
                 llmService: agentLLM,
@@ -1195,14 +1197,26 @@ final class ChatTurnRunnerAgentRoutingTests: XCTestCase {
         XCTAssertEqual(completion?.assistantMessage.content, "Agent loop answer")
         let calls = await agentLLM.capturedCalls()
         XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(
+            capturedPlan?.promptTrace.agentCoordination,
+            AgentCoordinationTrace(
+                executionMode: .toolLoop,
+                quickActionMode: .direction,
+                provider: .openrouter,
+                reason: .explicitQuickActionToolLoop,
+                indexedSkillCount: 0
+            )
+        )
     }
 
     func testDirectionFallsBackToSingleShotWhenFactoryReturnsNil() async throws {
         let store = try NodeStore(path: ":memory:")
+        var capturedPlan: TurnPlan?
         let runner = makeChatTurnRunner(
             nodeStore: store,
             provider: .gemini,
-            singleShotText: "Single shot answer"
+            singleShotText: "Single shot answer",
+            onPlanReady: { capturedPlan = $0 }
         ) { _, plan, _ in
             XCTAssertEqual(plan.provider, .gemini)
             return nil
@@ -1217,6 +1231,52 @@ final class ChatTurnRunnerAgentRoutingTests: XCTestCase {
         )
 
         XCTAssertEqual(completion?.assistantMessage.content, "Single shot answer")
+        XCTAssertEqual(
+            capturedPlan?.promptTrace.agentCoordination,
+            AgentCoordinationTrace(
+                executionMode: .singleShot,
+                quickActionMode: .direction,
+                provider: .gemini,
+                reason: .providerCannotUseToolLoop,
+                indexedSkillCount: 0
+            )
+        )
+    }
+
+    func testOpenRouterDirectionFactoryNilWithoutLazySkillsTracesActualSingleShot() async throws {
+        let store = try NodeStore(path: ":memory:")
+        var capturedPlan: TurnPlan?
+        var factoryCallCount = 0
+        let runner = makeChatTurnRunner(
+            nodeStore: store,
+            provider: .openrouter,
+            singleShotText: "OpenRouter fallback answer",
+            onPlanReady: { capturedPlan = $0 }
+        ) { _, _, _ in
+            factoryCallCount += 1
+            return nil
+        }
+        let sinkStore = CapturingTurnEventSink()
+        let sink = TurnSequencedEventSink(turnId: UUID(), sink: sinkStore)
+
+        let completion = await runner.run(
+            request: makeRunnerRequest(mode: .direction),
+            sink: sink,
+            abortReason: { .cancelledByUser }
+        )
+
+        XCTAssertEqual(completion?.assistantMessage.content, "OpenRouter fallback answer")
+        XCTAssertEqual(factoryCallCount, 1)
+        XCTAssertEqual(
+            capturedPlan?.promptTrace.agentCoordination,
+            AgentCoordinationTrace(
+                executionMode: .singleShot,
+                quickActionMode: .direction,
+                provider: .openrouter,
+                reason: .providerCannotUseToolLoop,
+                indexedSkillCount: 0
+            )
+        )
     }
 
     func testInferredDirectionWithSkillIndexUsesAgentLoopWhenFactoryProvidesExecutor() async throws {
@@ -1265,6 +1325,16 @@ final class ChatTurnRunnerAgentRoutingTests: XCTestCase {
         XCTAssertEqual(factoryModes, [.direction])
         XCTAssertTrue(factoryPlans.first?.turnSlice.combinedString.contains("SKILL INDEX") == true)
         XCTAssertEqual(factoryPlans.first?.indexedSkillIds, Set([skill.id]))
+        XCTAssertEqual(
+            factoryPlans.first?.promptTrace.agentCoordination,
+            AgentCoordinationTrace(
+                executionMode: .toolLoop,
+                quickActionMode: .direction,
+                provider: .openrouter,
+                reason: .inferredQuickActionLazySkill,
+                indexedSkillCount: 1
+            )
+        )
     }
 
     func testInferredDirectionSkipsSkillIndexWhenProviderCannotUseAgentLoop() async throws {
@@ -1302,6 +1372,44 @@ final class ChatTurnRunnerAgentRoutingTests: XCTestCase {
         XCTAssertFalse(capturedPlan?.turnSlice.combinedString.contains("SKILL INDEX") == true)
         XCTAssertEqual(capturedPlan?.indexedSkillIds, [])
         XCTAssertNil(capturedPlan?.agentLoopMode)
+    }
+
+    func testInferredDirectionWithoutSkillIndexTracesSingleShotNoToolNeed() async throws {
+        let store = try NodeStore(path: ":memory:")
+        var capturedPlan: TurnPlan?
+        var factoryCallCount = 0
+        let runner = makeChatTurnRunner(
+            nodeStore: store,
+            provider: .openrouter,
+            singleShotText: "OpenRouter single shot",
+            onPlanReady: { capturedPlan = $0 }
+        ) { _, _, _ in
+            factoryCallCount += 1
+            return nil
+        }
+        let sinkStore = CapturingTurnEventSink()
+        let sink = TurnSequencedEventSink(turnId: UUID(), sink: sinkStore)
+
+        let completion = await runner.run(
+            request: makeRunnerRequest(mode: nil, inputText: "Need a next step"),
+            sink: sink,
+            abortReason: { .cancelledByUser }
+        )
+
+        XCTAssertEqual(completion?.assistantMessage.content, "OpenRouter single shot")
+        XCTAssertEqual(factoryCallCount, 0)
+        XCTAssertEqual(capturedPlan?.indexedSkillIds, [])
+        XCTAssertNil(capturedPlan?.agentLoopMode)
+        XCTAssertEqual(
+            capturedPlan?.promptTrace.agentCoordination,
+            AgentCoordinationTrace(
+                executionMode: .singleShot,
+                quickActionMode: .direction,
+                provider: .openrouter,
+                reason: .inferredModeNoToolNeed,
+                indexedSkillCount: 0
+            )
+        )
     }
 
     func testLazySkillIndexFailsInsteadOfSingleShotWhenAgentLoopExecutorUnavailable() async throws {
@@ -1348,10 +1456,12 @@ final class ChatTurnRunnerAgentRoutingTests: XCTestCase {
     func testBrainstormDoesNotRequestAgentLoopFactory() async throws {
         let store = try NodeStore(path: ":memory:")
         var factoryCallCount = 0
+        var capturedPlan: TurnPlan?
         let runner = makeChatTurnRunner(
             nodeStore: store,
             provider: .openrouter,
-            singleShotText: "Brainstorm single shot"
+            singleShotText: "Brainstorm single shot",
+            onPlanReady: { capturedPlan = $0 }
         ) { _, _, _ in
             factoryCallCount += 1
             return nil
@@ -1367,6 +1477,16 @@ final class ChatTurnRunnerAgentRoutingTests: XCTestCase {
 
         XCTAssertEqual(completion?.assistantMessage.content, "Brainstorm single shot")
         XCTAssertEqual(factoryCallCount, 0)
+        XCTAssertEqual(
+            capturedPlan?.promptTrace.agentCoordination,
+            AgentCoordinationTrace(
+                executionMode: .singleShot,
+                quickActionMode: .brainstorm,
+                provider: .openrouter,
+                reason: .modeSingleShotByContract,
+                indexedSkillCount: 0
+            )
+        )
     }
 }
 

@@ -203,9 +203,21 @@ final class SkillStore: SkillStoring {
         guard (1...2).contains(payload.payloadVersion) else {
             throw SkillStoreError.invalidPayloadVersion(payload.payloadVersion)
         }
-        guard !payload.trigger.modes.isEmpty else {
-            throw SkillStoreError.emptyModes
+
+        switch payload.trigger.kind {
+        case .analysisGate:
+            let nonEmptyCues = payload.trigger.cues.filter {
+                !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            guard !nonEmptyCues.isEmpty else {
+                throw SkillStoreError.emptyCues
+            }
+        case .always, .mode:
+            guard !payload.trigger.modes.isEmpty else {
+                throw SkillStoreError.emptyModes
+            }
         }
+
         guard 0...100 ~= payload.trigger.priority else {
             throw SkillStoreError.priorityOutOfRange(payload.trigger.priority)
         }

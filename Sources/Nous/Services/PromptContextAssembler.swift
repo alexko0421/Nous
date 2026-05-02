@@ -328,6 +328,7 @@ enum PromptContextAssembler {
         allowSkillIndex: Bool = true,
         allowInteractiveClarification: Bool = false,
         shadowLearningHints: [String] = [],
+        slowCognitionArtifacts: [CognitionArtifact] = [],
         now: Date = Date()
     ) -> TurnSystemSlice {
         var anchorAndPolicies: [String] = []
@@ -428,6 +429,13 @@ CHAT FORMAT POLICY:
             now: now
         ) {
             volatilePieces.append(longGapGuidance)
+        }
+
+        if let slowCognitionArtifact = CognitionArtifactSelector.selectForChat(
+            currentInput: currentUserInput,
+            artifacts: slowCognitionArtifacts
+        ) {
+            volatilePieces.append(CognitionPromptFormatter.volatileBlock(for: slowCognitionArtifact))
         }
 
         if !shadowLearningHints.isEmpty {
@@ -623,7 +631,9 @@ CHAT FORMAT POLICY:
         quickActionAddendum: String? = nil,
         allowInteractiveClarification: Bool = false,
         turnSteward: TurnStewardTrace? = nil,
+        agentCoordination: AgentCoordinationTrace? = nil,
         shadowLearningHints: [String] = [],
+        slowCognitionArtifacts: [CognitionArtifact] = [],
         now: Date = Date()
     ) -> PromptGovernanceTrace {
         var layers = ["anchor", "memory_interpretation_policy", "core_safety_policy", "stoic_grounding_policy", "real_world_decision_policy", "summary_output_policy", "conversation_title_output_policy", "chat_mode"]
@@ -665,6 +675,13 @@ CHAT FORMAT POLICY:
         if let quickActionAddendum, !quickActionAddendum.isEmpty { layers.append("quick_action_addendum") }
         if allowInteractiveClarification { layers.append("interactive_clarification") }
         if turnSteward != nil { layers.append("turn_steward") }
+        if agentCoordination != nil { layers.append("agent_coordination") }
+        if CognitionArtifactSelector.selectForChat(
+            currentInput: currentUserInput,
+            artifacts: slowCognitionArtifacts
+        ) != nil {
+            layers.append("slow_cognition")
+        }
         if !shadowLearningHints.isEmpty { layers.append("shadow_learning") }
         if chatMode == .strategist { layers.append("strategist_mode") }
         if highRiskQueryDetected { layers.append("high_risk_safety_mode") }
@@ -675,6 +692,7 @@ CHAT FORMAT POLICY:
             safetyPolicyInvoked: highRiskQueryDetected,
             highRiskQueryDetected: highRiskQueryDetected,
             turnSteward: turnSteward,
+            agentCoordination: agentCoordination,
             citationTrace: citationTrace(for: promptCitations)
         )
     }

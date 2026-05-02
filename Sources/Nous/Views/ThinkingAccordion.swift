@@ -6,6 +6,7 @@ struct ThinkingAccordion: View {
     let startedAt: Date?
 
     @State private var isExpanded: Bool
+    private let motion = DisclosurePillMotion()
 
     init(content: String, isStreaming: Bool, startedAt: Date? = nil) {
         self.content = content
@@ -16,17 +17,12 @@ struct ThinkingAccordion: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: motion.contentSpacing(isExpanded: isExpanded)) {
             pill
-            if isExpanded {
-                Text(content)
-                    .font(.system(size: 12))
-                    .foregroundStyle(AppColor.secondaryText)
-                    .lineSpacing(3)
-                    .textSelection(.enabled)
-                    .padding(.leading, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                .zIndex(1)
+
+            DisclosurePillContent(isExpanded: isExpanded, motion: motion) {
+                contentText
             }
         }
         .onChange(of: isStreaming) { _, newValue in
@@ -39,6 +35,16 @@ struct ThinkingAccordion: View {
         }
         // 当文字内容增加导致高度变动时，平滑撑开而唔系突然跳动
         .animation(.easeOut(duration: 0.15), value: content)
+    }
+
+    private var contentText: some View {
+        Text(content)
+            .font(.system(size: 12))
+            .foregroundStyle(AppColor.secondaryText)
+            .lineSpacing(3)
+            .textSelection(.enabled)
+            .padding(.leading, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var pill: some View {

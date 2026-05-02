@@ -2678,6 +2678,31 @@ extension NodeStore {
         return results
     }
 
+    func fetchReflectionEvidence(reflectionIds: [UUID]) throws -> [ReflectionEvidence] {
+        let ids = Array(Set(reflectionIds))
+        guard !ids.isEmpty else { return [] }
+
+        let placeholders = Array(repeating: "?", count: ids.count).joined(separator: ", ")
+        let stmt = try db.prepare("""
+            SELECT reflection_id, message_id
+            FROM reflection_evidence
+            WHERE reflection_id IN (\(placeholders));
+        """)
+        for (index, id) in ids.enumerated() {
+            try stmt.bind(id.uuidString, at: Int32(index + 1))
+        }
+
+        var results: [ReflectionEvidence] = []
+        while try stmt.step() {
+            guard let reflectionId = UUID(uuidString: stmt.text(at: 0) ?? ""),
+                  let messageId = UUID(uuidString: stmt.text(at: 1) ?? "") else {
+                continue
+            }
+            results.append(ReflectionEvidence(reflectionId: reflectionId, messageId: messageId))
+        }
+        return results
+    }
+
     /// Flip a single claim to `.orphaned`. Used by the MemoryDebugInspector
     /// manual-orphan button and by `reconcileOrphanedReflectionClaims`.
     /// No-op if the claim is already orphaned/superseded.
