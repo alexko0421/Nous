@@ -247,8 +247,7 @@ final class ChatTurnRunner {
         }
 
         let reviewArtifact = runSilentReviewIfNeeded(plan: plan, executionResult: executionResult)
-        onTurnCognitionSnapshot(makeTurnCognitionSnapshot(
-            request: request,
+        onTurnCognitionSnapshot(TurnCognitionSnapshotFactory.make(
             plan: plan,
             committed: committed,
             reviewArtifact: reviewArtifact
@@ -301,29 +300,6 @@ final class ChatTurnRunner {
         return nil
     }
 
-    private func makeTurnCognitionSnapshot(
-        request: TurnRequest,
-        plan: TurnPlan,
-        committed: CommittedAssistantTurn,
-        reviewArtifact: CognitionArtifact?
-    ) -> TurnCognitionSnapshot {
-        let recoveryEvent = plan.prepared.recoveryEvent
-        return TurnCognitionSnapshot(
-            turnId: request.turnId,
-            conversationId: committed.node.id,
-            assistantMessageId: committed.assistantMessage.id,
-            promptLayers: plan.promptTrace.promptLayers,
-            slowCognitionAttached: plan.promptTrace.promptLayers.contains("slow_cognition"),
-            reviewArtifactId: reviewArtifact?.id,
-            reviewRiskFlags: reviewArtifact?.riskFlags ?? [],
-            reviewConfidence: reviewArtifact?.confidence,
-            conversationRecoveryReason: recoveryEvent?.reason.rawValue,
-            conversationRecoveryOriginalNodeId: recoveryEvent?.originalNodeId,
-            conversationRecoveryRecoveredNodeId: recoveryEvent?.recoveredNodeId,
-            conversationRecoveryRebasedMessageCount: recoveryEvent?.rebasedMessageCount ?? 0
-        )
-    }
-
     private static func makeAgentToolContext(plan: TurnPlan, request: TurnRequest) -> AgentToolContext {
         let baseContext = AgentToolContext(
             conversationId: plan.prepared.node.id,
@@ -355,6 +331,34 @@ final class ChatTurnRunner {
             excludeNodeIds: baseContext.excludeNodeIds,
             allowedReadNodeIds: baseContext.allowedReadNodeIds.union(citationIds),
             maxToolResultCharacters: baseContext.maxToolResultCharacters
+        )
+    }
+}
+
+enum TurnCognitionSnapshotFactory {
+    static func make(
+        plan: TurnPlan,
+        committed: CommittedAssistantTurn,
+        reviewArtifact: CognitionArtifact?
+    ) -> TurnCognitionSnapshot {
+        let recoveryEvent = plan.prepared.recoveryEvent
+        let slowTrace = plan.promptTrace.slowCognitionTrace
+        return TurnCognitionSnapshot(
+            turnId: plan.turnId,
+            conversationId: committed.node.id,
+            assistantMessageId: committed.assistantMessage.id,
+            promptLayers: plan.promptTrace.promptLayers,
+            slowCognitionAttached: slowTrace != nil || plan.promptTrace.promptLayers.contains("slow_cognition"),
+            slowCognitionArtifactId: slowTrace?.artifactId,
+            slowCognitionEvidenceRefIds: slowTrace?.evidenceRefIds ?? [],
+            slowCognitionEvidenceRefCount: slowTrace?.evidenceRefCount ?? 0,
+            reviewArtifactId: reviewArtifact?.id,
+            reviewRiskFlags: reviewArtifact?.riskFlags ?? [],
+            reviewConfidence: reviewArtifact?.confidence,
+            conversationRecoveryReason: recoveryEvent?.reason.rawValue,
+            conversationRecoveryOriginalNodeId: recoveryEvent?.originalNodeId,
+            conversationRecoveryRecoveredNodeId: recoveryEvent?.recoveredNodeId,
+            conversationRecoveryRebasedMessageCount: recoveryEvent?.rebasedMessageCount ?? 0
         )
     }
 }
@@ -400,7 +404,8 @@ private extension TurnPlan {
             highRiskQueryDetected: promptTrace.highRiskQueryDetected,
             turnSteward: promptTrace.turnSteward,
             agentCoordination: coordination,
-            citationTrace: promptTrace.citationTrace
+            citationTrace: promptTrace.citationTrace,
+            slowCognitionTrace: promptTrace.slowCognitionTrace
         )
         return TurnPlan(
             turnId: turnId,

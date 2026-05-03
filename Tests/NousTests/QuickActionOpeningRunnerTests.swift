@@ -135,6 +135,100 @@ final class QuickActionOpeningRunnerTests: XCTestCase {
         XCTAssertEqual(prepared.promptTrace.agentCoordination, expected)
     }
 
+    func testOpeningRunnerRecordsReviewAndRuntimeSnapshotAfterSuccessfulCommit() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let conversationStore = ConversationSessionStore(nodeStore: nodeStore)
+        let node = try conversationStore.startConversation()
+        let reviewer = OpeningRecordingCognitionReviewer()
+        let reviewCapture = OpeningReviewArtifactCapture()
+        let snapshotCapture = OpeningTurnCognitionSnapshotCapture()
+        let runner = QuickActionOpeningRunner(
+            conversationSessionStore: conversationStore,
+            memoryContextBuilder: makeMemoryContextBuilder(nodeStore: nodeStore),
+            turnExecutor: TurnExecutor(
+                llmServiceProvider: { OpeningPromptCapturingLLM(output: "先定一个方向。") },
+                shouldUseGeminiHistoryCache: { false },
+                shouldPersistAssistantThinking: { false }
+            ),
+            outcomeFactory: TurnOutcomeFactory(shouldPersistMemory: { _, _ in false }),
+            cognitionReviewer: reviewer,
+            onReviewArtifact: { reviewCapture.append($0) },
+            onTurnCognitionSnapshot: { snapshotCapture.append($0) }
+        )
+        let turnId = UUID()
+        let sink = TurnSequencedEventSink(turnId: turnId, sink: OpeningTurnEventCapture())
+
+        let maybeCompletion = await runner.run(
+            mode: .direction,
+            node: node,
+            turnId: turnId,
+            sink: sink,
+            abortReason: { .unexpectedCancellation }
+        )
+        let completion = try XCTUnwrap(maybeCompletion)
+
+        let snapshot = try XCTUnwrap(snapshotCapture.values().first)
+        XCTAssertEqual(snapshotCapture.values().count, 1)
+        XCTAssertEqual(snapshot.turnId, turnId)
+        XCTAssertEqual(snapshot.conversationId, completion.node.id)
+        XCTAssertEqual(snapshot.assistantMessageId, completion.assistantMessage.id)
+        XCTAssertEqual(snapshot.promptLayers.contains("agent_coordination"), true)
+        XCTAssertFalse(snapshot.slowCognitionAttached)
+        XCTAssertEqual(snapshot.slowCognitionEvidenceRefIds, [])
+        XCTAssertNotNil(snapshot.reviewArtifactId)
+        XCTAssertEqual(reviewer.reviewedTurnIds, [turnId])
+        let reviewArtifact = try XCTUnwrap(reviewCapture.values().first)
+        XCTAssertEqual(reviewArtifact.id, snapshot.reviewArtifactId)
+        XCTAssertEqual(reviewArtifact.evidenceRefs.first?.source, .message)
+        XCTAssertEqual(reviewArtifact.evidenceRefs.first?.id, completion.assistantMessage.id.uuidString)
+        XCTAssertEqual(reviewArtifact.evidenceRefs.first?.quote, completion.assistantMessage.content)
+        XCTAssertFalse(reviewArtifact.evidenceRefs.contains { ref in
+            ref.source == .message && ref.id == reviewer.reviewedUserMessageIds.first?.uuidString
+        })
+    }
+
+    func testOpeningRunnerDoesNotRecordReviewOrSnapshotWhenCommitFails() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let conversationStore = ConversationSessionStore(nodeStore: nodeStore)
+        let node = try conversationStore.startConversation()
+        let reviewer = OpeningRecordingCognitionReviewer()
+        let reviewCapture = OpeningReviewArtifactCapture()
+        let snapshotCapture = OpeningTurnCognitionSnapshotCapture()
+        let runner = QuickActionOpeningRunner(
+            conversationSessionStore: conversationStore,
+            memoryContextBuilder: makeMemoryContextBuilder(nodeStore: nodeStore),
+            turnExecutor: TurnExecutor(
+                llmServiceProvider: {
+                    OpeningNodeDeletingLLMService(
+                        nodeStore: nodeStore,
+                        output: "This commit will fail."
+                    )
+                },
+                shouldUseGeminiHistoryCache: { false },
+                shouldPersistAssistantThinking: { false }
+            ),
+            outcomeFactory: TurnOutcomeFactory(shouldPersistMemory: { _, _ in false }),
+            cognitionReviewer: reviewer,
+            onReviewArtifact: { reviewCapture.append($0) },
+            onTurnCognitionSnapshot: { snapshotCapture.append($0) }
+        )
+        let turnId = UUID()
+        let sink = TurnSequencedEventSink(turnId: turnId, sink: OpeningTurnEventCapture())
+
+        let completion = await runner.run(
+            mode: .direction,
+            node: node,
+            turnId: turnId,
+            sink: sink,
+            abortReason: { .unexpectedCancellation }
+        )
+
+        XCTAssertNil(completion)
+        XCTAssertTrue(reviewer.reviewedTurnIds.isEmpty)
+        XCTAssertTrue(reviewCapture.values().isEmpty)
+        XCTAssertTrue(snapshotCapture.values().isEmpty)
+    }
+
     private func makeMemoryContextBuilder(nodeStore: NodeStore) -> TurnMemoryContextBuilder {
         let core = UserMemoryCore(nodeStore: nodeStore, llmServiceProvider: { nil })
         return TurnMemoryContextBuilder(
@@ -203,5 +297,83 @@ private actor OpeningTurnEventCapture: TurnEventSink {
 
     func events() -> [TurnEventEnvelope] {
         capturedEvents
+    }
+}
+
+private final class OpeningRecordingCognitionReviewer: CognitionReviewing {
+    private(set) var reviewedTurnIds: [UUID] = []
+    private(set) var reviewedUserMessageIds: [UUID] = []
+
+    func review(plan: TurnPlan, executionResult: TurnExecutionResult) throws -> CognitionArtifact? {
+        reviewedTurnIds.append(plan.turnId)
+        reviewedUserMessageIds.append(plan.prepared.userMessage.id)
+        return CognitionArtifact(
+            organ: .reviewer,
+            title: "Opening review",
+            summary: "The reviewer checked the quick-action opening turn.",
+            confidence: 0.8,
+            jurisdiction: .turnContext,
+            evidenceRefs: [
+                CognitionEvidenceRef(
+                    source: .message,
+                    id: plan.prepared.userMessage.id.uuidString,
+                    quote: plan.prepared.userMessage.content
+                )
+            ],
+            trace: CognitionTrace(
+                producer: .reviewer,
+                sourceJobId: "opening_post_turn_review"
+            )
+        )
+    }
+}
+
+private final class OpeningReviewArtifactCapture {
+    private var artifacts: [CognitionArtifact] = []
+
+    func append(_ artifact: CognitionArtifact) {
+        artifacts.append(artifact)
+    }
+
+    func values() -> [CognitionArtifact] {
+        artifacts
+    }
+}
+
+private final class OpeningTurnCognitionSnapshotCapture {
+    private var snapshots: [TurnCognitionSnapshot] = []
+
+    func append(_ snapshot: TurnCognitionSnapshot) {
+        snapshots.append(snapshot)
+    }
+
+    func values() -> [TurnCognitionSnapshot] {
+        snapshots
+    }
+}
+
+private final class OpeningNodeDeletingLLMService: LLMService {
+    private let nodeStore: NodeStore
+    private let output: String
+
+    init(nodeStore: NodeStore, output: String) {
+        self.nodeStore = nodeStore
+        self.output = output
+    }
+
+    func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
+        let nodeStore = nodeStore
+        let output = output
+        return AsyncThrowingStream { continuation in
+            do {
+                for node in try nodeStore.fetchAllNodes() {
+                    try nodeStore.deleteNode(id: node.id)
+                }
+                continuation.yield(output)
+                continuation.finish()
+            } catch {
+                continuation.finish(throwing: error)
+            }
+        }
     }
 }

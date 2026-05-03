@@ -1,0 +1,7 @@
+{
+  "name": "08_meta_apology_repaired",
+  "domain": "tone",
+  "user_turn": "That answer was too harsh and not helpful.",
+  "assistant_draft": "You're right that the tone was too sharp. That said, the core tension remains: the plan still needs one concrete next action.",
+  "expected_risk_flags": []
+}

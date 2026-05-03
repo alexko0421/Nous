@@ -76,6 +76,46 @@ final class GalaxyEdgeEngine {
         )
     }
 
+    func refineSemanticEdge(sourceId: UUID, targetId: UUID) async throws -> NodeEdge? {
+        guard let existingEdge = try semanticEdgeBetween(sourceId: sourceId, targetId: targetId) else {
+            return nil
+        }
+        guard
+            let source = try nodeStore.fetchNode(id: existingEdge.sourceId),
+            let target = try nodeStore.fetchNode(id: existingEdge.targetId)
+        else {
+            return nil
+        }
+
+        let atomsByNodeId = try memoryAtomsBySourceNodeId(
+            sourceNodeIds: [source.id, target.id]
+        )
+        guard let verdict = await relationJudge.judgeRefined(
+            source: source,
+            target: target,
+            similarity: existingEdge.strength,
+            sourceAtoms: atomsByNodeId[source.id, default: []],
+            targetAtoms: atomsByNodeId[target.id, default: []]
+        ) else {
+            try nodeStore.deleteEdgeBetween(
+                sourceId: existingEdge.sourceId,
+                targetId: existingEdge.targetId,
+                type: .semantic
+            )
+            return nil
+        }
+
+        let edge = semanticEdge(
+            id: existingEdge.id,
+            source: source,
+            target: target,
+            similarity: existingEdge.strength,
+            verdict: verdict
+        )
+        try nodeStore.upsertEdge(edge)
+        return edge
+    }
+
     func refineSemanticEdges(
         for node: NousNode,
         threshold: Float = GalaxyRelationTuning.semanticThreshold,
@@ -144,12 +184,14 @@ final class GalaxyEdgeEngine {
     }
 
     private func semanticEdge(
+        id: UUID = UUID(),
         source: NousNode,
         target: NousNode,
         similarity: Float,
         verdict: GalaxyRelationVerdict
     ) -> NodeEdge {
         NodeEdge(
+            id: id,
             sourceId: source.id,
             targetId: target.id,
             strength: similarity,
@@ -162,6 +204,16 @@ final class GalaxyEdgeEngine {
             sourceAtomId: verdict.sourceAtomId,
             targetAtomId: verdict.targetAtomId
         )
+    }
+
+    private func semanticEdgeBetween(sourceId: UUID, targetId: UUID) throws -> NodeEdge? {
+        try nodeStore.fetchEdges(nodeId: sourceId).first { edge in
+            edge.type == .semantic &&
+            (
+                (edge.sourceId == sourceId && edge.targetId == targetId) ||
+                (edge.sourceId == targetId && edge.targetId == sourceId)
+            )
+        }
     }
 
     private func memoryAtomsBySourceNodeId(sourceNodeIds: [UUID]) throws -> [UUID: [MemoryAtom]] {

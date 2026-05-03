@@ -66,6 +66,10 @@ final class GraphEngine: GalaxyRelationRefining {
         try await edgeEngine.refineRelations(forNodeId: nodeId)
     }
 
+    func refineSemanticEdge(sourceId: UUID, targetId: UUID) async throws -> NodeEdge? {
+        try await edgeEngine.refineSemanticEdge(sourceId: sourceId, targetId: targetId)
+    }
+
     func refineSemanticEdges(
         for node: NousNode,
         threshold: Float = GalaxyRelationTuning.semanticThreshold,

@@ -13,6 +13,51 @@ final class WindowConfigurationCoordinator {
     }
 }
 
+enum AppAppearanceMode {
+    static func preferredColorScheme(for rawValue: String) -> ColorScheme? {
+        switch rawValue {
+        case "light": return .light
+        case "dark": return .dark
+        default: return nil
+        }
+    }
+
+    static func nsAppearanceName(for rawValue: String) -> NSAppearance.Name? {
+        switch rawValue {
+        case "light": return .aqua
+        case "dark": return .darkAqua
+        default: return nil
+        }
+    }
+
+    @MainActor
+    static func apply(_ rawValue: String, to window: NSWindow) {
+        window.appearance = nsAppearanceName(for: rawValue).flatMap(NSAppearance.init(named:))
+    }
+}
+
+struct WindowAppearanceBridge: NSViewRepresentable {
+    let appearanceMode: String
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        applyAppearance(from: view)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        applyAppearance(from: nsView)
+    }
+
+    private func applyAppearance(from view: NSView) {
+        let appearanceMode = appearanceMode
+        DispatchQueue.main.async {
+            guard let window = view.window else { return }
+            AppAppearanceMode.apply(appearanceMode, to: window)
+        }
+    }
+}
+
 struct WindowConfigurator: NSViewRepresentable {
     func makeCoordinator() -> WindowConfigurationCoordinator {
         WindowConfigurationCoordinator()

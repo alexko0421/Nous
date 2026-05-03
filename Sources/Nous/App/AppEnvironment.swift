@@ -119,10 +119,6 @@ final class AppEnvironment {
         let shadowLearningStore = ShadowLearningStore(nodeStore: nodeStore)
         let shadowLearningSignalRecorder = ShadowLearningSignalRecorder(store: shadowLearningStore)
         let shadowPatternPromptProvider = ShadowPatternPromptProvider(store: shadowLearningStore)
-        let slowCognitionArtifactProvider = SlowCognitionArtifactProvider(
-            nodeStore: nodeStore,
-            shadowLearningStore: shadowLearningStore
-        )
         let shadowLearningSteward = ShadowLearningSteward(store: shadowLearningStore)
         do {
             try seedSkillImporter.importSeeds()
@@ -137,6 +133,11 @@ final class AppEnvironment {
             embeddingService: embeddingService,
             localLLM: localLLM,
             nodeStore: nodeStore
+        )
+        let slowCognitionArtifactProvider = SlowCognitionArtifactProvider(
+            nodeStore: nodeStore,
+            shadowLearningStore: shadowLearningStore,
+            isEnabled: { settingsVM.backgroundAnalysisEnabled }
         )
         let heartbeatCoordinator = HeartbeatCoordinator(
             shadowLearningSteward: shadowLearningSteward,

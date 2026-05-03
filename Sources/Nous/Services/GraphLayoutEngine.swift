@@ -105,19 +105,114 @@ final class GraphLayoutEngine {
         let deltaY = newPosition.y - previousPosition.y
         guard abs(deltaX) > 0.001 || abs(deltaY) > 0.001 else { return relaxed }
 
-        for (neighborId, strength) in connectedNeighbors(to: draggedNodeId, edges: edges) {
+        let influences = propagatedDragInfluences(
+            from: draggedNodeId,
+            edges: edges,
+            initialPull: neighborPull
+        )
+
+        for (neighborId, pull) in influences {
             guard var neighborPosition = relaxed[neighborId] else { continue }
-            let pull = neighborPull * strength.clamped(to: 0.25...1.0)
             neighborPosition.x += deltaX * pull
             neighborPosition.y += deltaY * pull
-            relaxed[neighborId] = positionBySeparating(
+            relaxed[neighborId] = positionByPreservingRelativeSide(
                 neighborPosition,
                 from: newPosition,
+                previousAnchor: previousPosition,
+                previousPosition: positions[neighborId],
                 minimumDistance: minimumDistance
             )
         }
 
+        return relaxConnectedSpringsWhileDragging(
+            relaxed,
+            draggedNodeId: draggedNodeId,
+            pinnedPosition: newPosition,
+            edges: edges
+        )
+    }
+
+    private func relaxConnectedSpringsWhileDragging(
+        _ positions: [UUID: GraphPosition],
+        draggedNodeId: UUID,
+        pinnedPosition: GraphPosition,
+        edges: [NodeEdge],
+        iterations: Int = 7,
+        spring: Float = 0.072,
+        damping: Float = 0.74
+    ) -> [UUID: GraphPosition] {
+        var relaxed = positions
+        relaxed[draggedNodeId] = pinnedPosition
+        // Keep drag relaxation local: the grabbed component breathes, unrelated clusters stay still.
+        let connectedIds = connectedIdsReachableFromDraggedNode(draggedNodeId, edges: edges)
+        let draggedComponentEdges = edges.filter { edge in
+            connectedIds.contains(edge.sourceId) && connectedIds.contains(edge.targetId)
+        }
+        guard !draggedComponentEdges.isEmpty else { return relaxed }
+
+        for _ in 0..<iterations {
+            var offsets: [UUID: GraphPosition] = [:]
+
+            for edge in draggedComponentEdges {
+                guard
+                    let source = relaxed[edge.sourceId],
+                    let target = relaxed[edge.targetId]
+                else { continue }
+
+                let dx = target.x - source.x
+                let dy = target.y - source.y
+                let distance = max(sqrt(dx * dx + dy * dy), 1)
+                let targetDistance = preferredEdgeDistance(for: edge.strength)
+                let displacement = distance - targetDistance
+                let force = displacement * spring * edge.strength.clamped(to: 0.25...1)
+                let forceX = (dx / distance) * force
+                let forceY = (dy / distance) * force
+
+                let sourcePinned = edge.sourceId == draggedNodeId
+                let targetPinned = edge.targetId == draggedNodeId
+                let pinnedMultiplier: Float = 1.35
+
+                if !sourcePinned {
+                    let multiplier = targetPinned ? pinnedMultiplier : 1
+                    offsets[edge.sourceId, default: GraphPosition(x: 0, y: 0)].x += forceX * multiplier
+                    offsets[edge.sourceId, default: GraphPosition(x: 0, y: 0)].y += forceY * multiplier
+                }
+                if !targetPinned {
+                    let multiplier = sourcePinned ? pinnedMultiplier : 1
+                    offsets[edge.targetId, default: GraphPosition(x: 0, y: 0)].x -= forceX * multiplier
+                    offsets[edge.targetId, default: GraphPosition(x: 0, y: 0)].y -= forceY * multiplier
+                }
+            }
+
+            for (id, offset) in offsets where id != draggedNodeId {
+                guard var position = relaxed[id] else { continue }
+                position.x += offset.x * damping
+                position.y += offset.y * damping
+                relaxed[id] = position
+            }
+
+            relaxed[draggedNodeId] = pinnedPosition
+        }
+
         return relaxed
+    }
+
+    private func connectedIdsReachableFromDraggedNode(_ draggedNodeId: UUID, edges: [NodeEdge]) -> Set<UUID> {
+        let adjacency = adjacencyMap(for: edges)
+        var connectedIds: Set<UUID> = [draggedNodeId]
+        var queue = adjacency[draggedNodeId, default: []].map(\.id)
+
+        while let id = queue.first {
+            queue.removeFirst()
+            guard !connectedIds.contains(id) else { continue }
+            connectedIds.insert(id)
+
+            for neighbor in adjacency[id, default: []] where !connectedIds.contains(neighbor.id) {
+                queue.append(neighbor.id)
+            }
+        }
+
+        return connectedIds
     }
 
     private func initialPosition(for node: NousNode, index: Int, count: Int) -> GraphPosition {
@@ -144,24 +239,49 @@ final class GraphLayoutEngine {
         270 - strength.clamped(to: 0...1) * 38
     }
 
-    private func connectedNeighbors(to nodeId: UUID, edges: [NodeEdge]) -> [(UUID, Float)] {
-        var strengthsByNodeId: [UUID: Float] = [:]
+    private func propagatedDragInfluences(
+        from draggedNodeId: UUID,
+        edges: [NodeEdge],
+        initialPull: Float
+    ) -> [UUID: Float] {
+        let adjacency = adjacencyMap(for: edges)
+        var influences: [UUID: Float] = [:]
+        var queue: [(id: UUID, pull: Float, depth: Int)] = adjacency[draggedNodeId, default: []].map { neighbor in
+            (
+                id: neighbor.id,
+                pull: initialPull * neighbor.strength.clamped(to: 0.25...1.0),
+                depth: 1
+            )
+        }
+        var visited: Set<UUID> = [draggedNodeId]
 
-        for edge in edges {
-            let neighborId: UUID?
-            if edge.sourceId == nodeId {
-                neighborId = edge.targetId
-            } else if edge.targetId == nodeId {
-                neighborId = edge.sourceId
-            } else {
-                neighborId = nil
+        while !queue.isEmpty {
+            let current = queue.removeFirst()
+            guard !visited.contains(current.id), current.pull >= 0.035, current.depth <= 3 else { continue }
+            visited.insert(current.id)
+            influences[current.id] = max(influences[current.id, default: 0], current.pull)
+
+            for neighbor in adjacency[current.id, default: []] where !visited.contains(neighbor.id) {
+                queue.append((
+                    id: neighbor.id,
+                    pull: current.pull * 0.42 * neighbor.strength.clamped(to: 0.25...1.0),
+                    depth: current.depth + 1
+                ))
             }
-
-            guard let neighborId else { continue }
-            strengthsByNodeId[neighborId] = max(strengthsByNodeId[neighborId, default: 0], edge.strength)
         }
 
-        return strengthsByNodeId.map { ($0.key, $0.value) }
+        return influences
+    }
+
+    private func adjacencyMap(for edges: [NodeEdge]) -> [UUID: [(id: UUID, strength: Float)]] {
+        var adjacency: [UUID: [(id: UUID, strength: Float)]] = [:]
+
+        for edge in edges {
+            adjacency[edge.sourceId, default: []].append((edge.targetId, edge.strength))
+            adjacency[edge.targetId, default: []].append((edge.sourceId, edge.strength))
+        }
+
+        return adjacency
     }
 
     private func positionBySeparating(
@@ -179,6 +299,33 @@ final class GraphLayoutEngine {
             x: position.x + (dx / distance) * push,
             y: position.y + (dy / distance) * push
         )
+    }
+
+    private func positionByPreservingRelativeSide(
+        _ position: GraphPosition,
+        from anchor: GraphPosition,
+        previousAnchor: GraphPosition,
+        previousPosition: GraphPosition?,
+        minimumDistance: Float
+    ) -> GraphPosition {
+        let dx = position.x - anchor.x
+        let dy = position.y - anchor.y
+        let distance = sqrt(dx * dx + dy * dy)
+        guard distance < minimumDistance else { return position }
+
+        if let previousPosition {
+            let previousDx = previousPosition.x - previousAnchor.x
+            let previousDy = previousPosition.y - previousAnchor.y
+            let previousDistance = sqrt(previousDx * previousDx + previousDy * previousDy)
+            if previousDistance > 0.001 {
+                return GraphPosition(
+                    x: anchor.x + (previousDx / previousDistance) * minimumDistance,
+                    y: anchor.y + (previousDy / previousDistance) * minimumDistance
+                )
+            }
+        }
+
+        return positionBySeparating(position, from: anchor, minimumDistance: minimumDistance)
     }
 
     private func spreadCrowdedComponents(

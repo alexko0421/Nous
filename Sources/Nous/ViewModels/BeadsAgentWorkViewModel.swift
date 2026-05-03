@@ -33,6 +33,7 @@ final class BeadsAgentWorkViewModel {
                     self.snapshot = snapshot
                     self.errorMessage = nil
                 case .failure(let error):
+                    self.snapshot = service.loadHarnessOnlySnapshot()
                     self.errorMessage = error.localizedDescription
                 }
 

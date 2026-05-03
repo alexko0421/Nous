@@ -5,6 +5,8 @@ struct BeadsAgentWorkSnapshot: Equatable {
     var ready: [BeadsIssue]
     var inProgress: [BeadsIssue]
     var recentClosed: [BeadsIssue]
+    var harness: HarnessHealthSnapshot
+    var runtimeHarness: RuntimeHarnessSnapshot
     var loadedAt: Date
 
     static let empty = BeadsAgentWorkSnapshot(
@@ -12,6 +14,8 @@ struct BeadsAgentWorkSnapshot: Equatable {
         ready: [],
         inProgress: [],
         recentClosed: [],
+        harness: .empty,
+        runtimeHarness: .empty,
         loadedAt: .distantPast
     )
 
@@ -40,6 +44,18 @@ struct BeadsAgentWorkCommand: Identifiable, Equatable {
             command: "bd ready --json",
             detail: "Inspect unblocked agent work.",
             systemImage: "checklist"
+        ),
+        BeadsAgentWorkCommand(
+            title: "Quick Gate",
+            command: "scripts/nous_harness_check.sh quick",
+            detail: "Run fast protected-file and targeted quality checks.",
+            systemImage: "shield.lefthalf.filled"
+        ),
+        BeadsAgentWorkCommand(
+            title: "Full Gate",
+            command: "scripts/nous_harness_check.sh full",
+            detail: "Run release-grade build, tests, and fixture checks.",
+            systemImage: "checkmark.shield"
         ),
         BeadsAgentWorkCommand(
             title: "Setup",

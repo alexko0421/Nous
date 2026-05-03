@@ -36,6 +36,22 @@ struct AgentCoordinationTrace: Equatable, Codable {
     let indexedSkillCount: Int
 }
 
+struct SlowCognitionPromptTrace: Equatable, Codable {
+    let artifactId: UUID
+    let organ: CognitionOrgan
+    let evidenceRefIds: [String]
+    let evidenceRefCount: Int
+    let confidence: Double
+
+    init(artifact: CognitionArtifact) {
+        self.artifactId = artifact.id
+        self.organ = artifact.organ
+        self.evidenceRefIds = artifact.evidenceRefs.map(\.id)
+        self.evidenceRefCount = artifact.evidenceRefs.count
+        self.confidence = artifact.confidence
+    }
+}
+
 struct PromptGovernanceTrace: Equatable, Codable {
     private static let memorySignalLayers: Set<String> = [
         "global_memory",
@@ -59,6 +75,7 @@ struct PromptGovernanceTrace: Equatable, Codable {
     let turnSteward: TurnStewardTrace?
     let agentCoordination: AgentCoordinationTrace?
     let citationTrace: CitationTrace?
+    let slowCognitionTrace: SlowCognitionPromptTrace?
 
     var hasMemorySignal: Bool {
         evidenceAttached || promptLayers.contains { Self.memorySignalLayers.contains($0) }
@@ -71,7 +88,8 @@ struct PromptGovernanceTrace: Equatable, Codable {
         highRiskQueryDetected: Bool,
         turnSteward: TurnStewardTrace? = nil,
         agentCoordination: AgentCoordinationTrace? = nil,
-        citationTrace: CitationTrace? = nil
+        citationTrace: CitationTrace? = nil,
+        slowCognitionTrace: SlowCognitionPromptTrace? = nil
     ) {
         self.promptLayers = promptLayers
         self.evidenceAttached = evidenceAttached
@@ -80,6 +98,7 @@ struct PromptGovernanceTrace: Equatable, Codable {
         self.turnSteward = turnSteward
         self.agentCoordination = agentCoordination
         self.citationTrace = citationTrace
+        self.slowCognitionTrace = slowCognitionTrace
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -90,6 +109,7 @@ struct PromptGovernanceTrace: Equatable, Codable {
         case turnSteward
         case agentCoordination
         case citationTrace
+        case slowCognitionTrace
     }
 
     init(from decoder: Decoder) throws {
@@ -101,6 +121,7 @@ struct PromptGovernanceTrace: Equatable, Codable {
         turnSteward = try container.decodeIfPresent(TurnStewardTrace.self, forKey: .turnSteward)
         agentCoordination = try container.decodeIfPresent(AgentCoordinationTrace.self, forKey: .agentCoordination)
         citationTrace = try container.decodeIfPresent(CitationTrace.self, forKey: .citationTrace)
+        slowCognitionTrace = try container.decodeIfPresent(SlowCognitionPromptTrace.self, forKey: .slowCognitionTrace)
     }
 }
 
@@ -119,15 +140,61 @@ struct PromptTraceEvaluationExpectations: Equatable, Codable {
     let memorySignal: PromptTraceMemoryExpectation
     let citationQuality: PromptTraceCitationExpectation?
     let requireSafetyPolicyForHighRisk: Bool
+    let requiredPromptLayers: [String]
+    let forbiddenPromptLayers: [String]
+    let requireSlowCognitionTraceWhenLayerPresent: Bool
 
     init(
         memorySignal: PromptTraceMemoryExpectation = .any,
         citationQuality: PromptTraceCitationExpectation? = nil,
-        requireSafetyPolicyForHighRisk: Bool = true
+        requireSafetyPolicyForHighRisk: Bool = true,
+        requiredPromptLayers: [String] = [],
+        forbiddenPromptLayers: [String] = [],
+        requireSlowCognitionTraceWhenLayerPresent: Bool = true
     ) {
         self.memorySignal = memorySignal
         self.citationQuality = citationQuality
         self.requireSafetyPolicyForHighRisk = requireSafetyPolicyForHighRisk
+        self.requiredPromptLayers = requiredPromptLayers
+        self.forbiddenPromptLayers = forbiddenPromptLayers
+        self.requireSlowCognitionTraceWhenLayerPresent = requireSlowCognitionTraceWhenLayerPresent
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case memorySignal
+        case citationQuality
+        case requireSafetyPolicyForHighRisk
+        case requiredPromptLayers
+        case forbiddenPromptLayers
+        case requireSlowCognitionTraceWhenLayerPresent
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        memorySignal = try container.decodeIfPresent(
+            PromptTraceMemoryExpectation.self,
+            forKey: .memorySignal
+        ) ?? .any
+        citationQuality = try container.decodeIfPresent(
+            PromptTraceCitationExpectation.self,
+            forKey: .citationQuality
+        )
+        requireSafetyPolicyForHighRisk = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .requireSafetyPolicyForHighRisk
+        ) ?? true
+        requiredPromptLayers = try container.decodeIfPresent(
+            [String].self,
+            forKey: .requiredPromptLayers
+        ) ?? []
+        forbiddenPromptLayers = try container.decodeIfPresent(
+            [String].self,
+            forKey: .forbiddenPromptLayers
+        ) ?? []
+        requireSlowCognitionTraceWhenLayerPresent = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .requireSlowCognitionTraceWhenLayerPresent
+        ) ?? true
     }
 }
 
@@ -143,6 +210,9 @@ enum PromptTraceEvaluationFindingCode: String, CaseIterable, Equatable, Codable 
     case weakCitationEvidence = "weak_citation_evidence"
     case longGapDominated = "long_gap_dominated"
     case safetyPolicyMissing = "safety_policy_missing"
+    case missingRequiredPromptLayer = "missing_required_prompt_layer"
+    case unexpectedPromptLayer = "unexpected_prompt_layer"
+    case missingSlowCognitionTrace = "missing_slow_cognition_trace"
 }
 
 enum PromptTraceEvaluationVerdict: String, Equatable, Codable {
@@ -368,11 +438,55 @@ struct PromptTraceEvaluationHarness {
             )
         }
 
+        findings.append(contentsOf: evaluatePromptLayers(trace, expectations))
+
         if let citationQuality = expectations.citationQuality {
             findings.append(contentsOf: evaluateCitationQuality(trace, citationQuality))
         }
 
         return PromptTraceEvaluationResult(name: testCase.name, findings: findings)
+    }
+
+    private func evaluatePromptLayers(
+        _ trace: PromptGovernanceTrace,
+        _ expectations: PromptTraceEvaluationExpectations
+    ) -> [PromptTraceEvaluationFinding] {
+        var findings: [PromptTraceEvaluationFinding] = []
+        let layers = Set(trace.promptLayers)
+
+        for requiredLayer in expectations.requiredPromptLayers where !layers.contains(requiredLayer) {
+            findings.append(
+                PromptTraceEvaluationFinding(
+                    code: .missingRequiredPromptLayer,
+                    severity: .failure,
+                    message: "Expected prompt layer \(requiredLayer), but the prompt trace did not include it."
+                )
+            )
+        }
+
+        for forbiddenLayer in expectations.forbiddenPromptLayers where layers.contains(forbiddenLayer) {
+            findings.append(
+                PromptTraceEvaluationFinding(
+                    code: .unexpectedPromptLayer,
+                    severity: .failure,
+                    message: "Prompt layer \(forbiddenLayer) was attached even though this case forbids it."
+                )
+            )
+        }
+
+        if expectations.requireSlowCognitionTraceWhenLayerPresent,
+           layers.contains("slow_cognition"),
+           trace.slowCognitionTrace == nil {
+            findings.append(
+                PromptTraceEvaluationFinding(
+                    code: .missingSlowCognitionTrace,
+                    severity: .failure,
+                    message: "Prompt declared slow cognition, but no slow-cognition trace was recorded."
+                )
+            )
+        }
+
+        return findings
     }
 
     private func evaluateCitationQuality(

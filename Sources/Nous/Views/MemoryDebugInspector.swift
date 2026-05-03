@@ -1079,6 +1079,11 @@ struct MemoryDebugInspector: View {
                 JudgeEventsTab(telemetry: telemetry)
                     .tabItem { Label("Judge", systemImage: "wand.and.sparkles") }
 
+                #if DEBUG
+                TurnCognitionInspectorTab(telemetry: telemetry)
+                    .tabItem { Label("Cognition", systemImage: "brain.head.profile") }
+                #endif
+
                 GalaxyRelationTelemetryTab(telemetry: galaxyRelationTelemetry)
                     .tabItem { Label("Galaxy", systemImage: "point.3.connected.trianglepath.dotted") }
 
@@ -1626,6 +1631,149 @@ struct GalaxyRelationTelemetryTab: View {
 
     private func reload() {
         snapshot = telemetry.snapshot()
+    }
+}
+
+struct TurnCognitionInspectorTab: View {
+    let telemetry: GovernanceTelemetryStore
+    @State private var feed: TurnCognitionInspectorFeed?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Turn Cognition")
+                            .font(.headline)
+                            .foregroundColor(AppColor.colaDarkText)
+                        Text("Recent runtime cognition signals, without prompt text.")
+                            .font(.caption)
+                            .foregroundColor(AppColor.secondaryText)
+                    }
+
+                    Spacer()
+
+                    Button("Refresh") { reload() }
+                }
+
+                if let feed {
+                    summaryCard(feed.summary)
+
+                    if feed.rows.isEmpty {
+                        Text("No turn cognition snapshots recorded yet.")
+                            .font(.caption)
+                            .foregroundColor(AppColor.secondaryText)
+                            .padding()
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.secondary.opacity(0.08))
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    } else {
+                        LazyVStack(alignment: .leading, spacing: 10) {
+                            ForEach(feed.rows) { row in
+                                rowCard(row)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding()
+        }
+        .background(AppColor.colaBeige)
+        .onAppear(perform: reload)
+    }
+
+    private func summaryCard(_ summary: TurnCognitionTelemetrySummary) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Runtime Summary")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(AppColor.colaDarkText)
+
+            HStack(spacing: 12) {
+                cognitionStat(title: "Turns", value: "\(summary.totalTurnCount)")
+                cognitionStat(title: "Slow Attached", value: percentage(summary.slowCognitionAttachmentRate))
+                cognitionStat(title: "Slow Sourced", value: percentage(summary.slowCognitionSourceCoverageRate))
+                cognitionStat(title: "Reviewed", value: percentage(summary.reviewCoverageRate))
+                cognitionStat(title: "Over Inference", value: percentage(summary.overInferenceRate))
+            }
+        }
+        .padding()
+        .background(Color.secondary.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private func rowCard(_ row: TurnCognitionInspectorRow) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(row.relativeTime)
+                    .font(.caption.monospacedDigit())
+                    .foregroundColor(AppColor.secondaryText)
+                Spacer()
+                Text(row.promptLayerSummary)
+                    .font(.caption2)
+                    .foregroundColor(AppColor.secondaryText)
+            }
+
+            HStack(spacing: 8) {
+                chip(
+                    row.slowCognitionStatus,
+                    color: row.hasSlowSource ? .green : (row.slowCognitionStatus == "No slow signal" ? .secondary : AppColor.colaOrange)
+                )
+                chip(
+                    row.hasReviewRisk ? "Review risk" : row.reviewStatus,
+                    color: row.hasReviewRisk ? .red : .secondary
+                )
+                if row.hadConversationRecovery {
+                    chip("Recovery", color: AppColor.colaOrange)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(row.slowCognitionDetail)
+                Text(row.reviewStatus)
+                Text(row.recoveryStatus)
+                Text(row.riskSummary)
+            }
+            .font(.caption)
+            .foregroundColor(AppColor.secondaryText)
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.6))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private func cognitionStat(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption2)
+                .foregroundColor(AppColor.secondaryText)
+            Text(value)
+                .font(.caption.monospacedDigit().weight(.semibold))
+                .foregroundColor(AppColor.colaDarkText)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 8)
+        .padding(.horizontal, 10)
+        .background(Color.white.opacity(0.6))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private func chip(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.caption2.weight(.semibold))
+            .foregroundColor(color)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(color.opacity(0.12))
+            .clipShape(Capsule())
+    }
+
+    private func percentage(_ value: Double) -> String {
+        "\(Int((value * 100).rounded()))%"
+    }
+
+    private func reload() {
+        feed = telemetry.turnCognitionInspectorFeed(limit: 8)
     }
 }
 

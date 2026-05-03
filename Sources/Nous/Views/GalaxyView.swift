@@ -41,7 +41,7 @@ struct GalaxyView: View {
                 GalaxySceneContainer(
                     scene: scene,
                     graphNodes: vm.nodes,
-                    graphEdges: vm.edges,
+                    graphEdges: visibleGraphEdges,
                     highlightedEdgeIds: highlightedEdgeIds,
                     positions: vm.positions,
                     selectedNodeId: vm.selectedNodeId,
@@ -56,7 +56,7 @@ struct GalaxyView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
             }
 
-            lensPicker
+            galaxyControls
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                 .padding(.bottom, 24)
 
@@ -74,11 +74,12 @@ struct GalaxyView: View {
                 connectedNode: journalConnectedNode,
                 edge: journalEdge
             )
+            let isRefining = journalEdge.map { vm.isRefining(edgeId: $0.id) } ?? false
 
             HStack {
                 Spacer(minLength: 0)
 
-                journalCard(summary: summary, selectedNode: selectedNode)
+                journalCard(summary: summary, selectedNode: selectedNode, isRefining: isRefining)
             }
             .padding(.vertical, GalaxyJournalLayout.verticalPadding)
             .padding(.trailing, GalaxyJournalLayout.trailingPadding)
@@ -90,7 +91,11 @@ struct GalaxyView: View {
         }
     }
 
-    private func journalCard(summary: GalaxyJournalSummary, selectedNode: NousNode) -> some View {
+    private func journalCard(
+        summary: GalaxyJournalSummary,
+        selectedNode: NousNode,
+        isRefining: Bool
+    ) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 10) {
                 Text(summary.badge)
@@ -105,29 +110,61 @@ struct GalaxyView: View {
                     .monospacedDigit()
                     .foregroundStyle(GalaxyPalette.secondaryText)
 
+                if isRefining {
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(0.62)
+
+                    Text("理解中")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(GalaxyPalette.secondaryText)
+                }
+
                 Spacer()
             }
 
-            VStack(alignment: .leading, spacing: 7) {
-                Text(summary.title)
-                    .font(.system(size: 17, weight: .bold))
-                    .foregroundStyle(GalaxyPalette.primaryText)
-                    .lineLimit(3)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text(summary.relationTitle)
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(relationColor(for: summary.lineKind))
 
-                Text(summary.body)
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundStyle(GalaxyPalette.secondaryText)
-                    .lineSpacing(2)
-                    .lineLimit(7)
-                    .fixedSize(horizontal: false, vertical: true)
+                        Text(summary.title)
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundStyle(GalaxyPalette.primaryText)
+                            .lineLimit(3)
+
+                        Text(summary.connectedNodeTitle)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(GalaxyPalette.tertiaryText)
+                            .lineLimit(2)
+                    }
+
+                    Text(summary.body)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(GalaxyPalette.secondaryText)
+                        .lineSpacing(2)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    VStack(alignment: .leading, spacing: 11) {
+                        ForEach(Array(summary.detailItems.enumerated()), id: \.offset) { _, item in
+                            journalDetailRow(item)
+                        }
+                    }
+                    .padding(.top, 2)
+
+                    if let caveat = summary.caveat {
+                        Text(caveat)
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .foregroundStyle(GalaxyPalette.warningText)
+                            .lineSpacing(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             }
+            .scrollIndicators(.hidden)
 
-            Text(summary.evidence)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(GalaxyPalette.tertiaryText)
-                .lineLimit(4)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 2)
 
             HStack(spacing: 8) {
                 Button {
@@ -171,6 +208,20 @@ struct GalaxyView: View {
         .shadow(color: .black.opacity(0.34), radius: 28, x: 0, y: 18)
     }
 
+    private func journalDetailRow(_ item: GalaxyJournalDetailItem) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(item.label)
+                .font(.system(size: 10.5, weight: .bold))
+                .foregroundStyle(GalaxyPalette.tertiaryText)
+
+            Text(item.text)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(GalaxyPalette.secondaryText)
+                .lineSpacing(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     private var lensPicker: some View {
         HStack(spacing: 2) {
             ForEach(GalaxyLensFilter.allCases) { lens in
@@ -210,6 +261,42 @@ struct GalaxyView: View {
         .shadow(color: .black.opacity(0.18), radius: 18, x: 0, y: 12)
     }
 
+    private var galaxyControls: some View {
+        VStack(spacing: 9) {
+            relationLegend
+            lensPicker
+        }
+    }
+
+    private var relationLegend: some View {
+        HStack(spacing: 12) {
+            ForEach(GalaxyRelationLineKind.legendCases) { kind in
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(relationColor(for: kind))
+                        .frame(width: 7, height: 7)
+
+                    Text(kind.title)
+                        .font(.system(size: 10.5, weight: .bold))
+                        .foregroundStyle(GalaxyPalette.secondaryText)
+                        .lineLimit(1)
+                }
+                .help(kind.title)
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 28)
+        .background(
+            Capsule()
+                .fill(GalaxyPalette.panel.opacity(0.52))
+        )
+        .background(.regularMaterial, in: Capsule())
+        .overlay(
+            Capsule()
+                .stroke(GalaxyPalette.strokeSoft, lineWidth: 1)
+        )
+    }
+
     private var loadingView: some View {
         VStack(spacing: 12) {
             ProgressView()
@@ -238,7 +325,11 @@ struct GalaxyView: View {
     }
 
     private var highlightedEdgeIds: Set<UUID> {
-        Set(vm.edges.filter(selectedLens.matches).map(\.id))
+        Set(visibleGraphEdges.map(\.id))
+    }
+
+    private var visibleGraphEdges: [NodeEdge] {
+        vm.edges.filter(selectedLens.matches)
     }
 
     private var selectedEdgesForLens: [NodeEdge] {
@@ -260,7 +351,7 @@ struct GalaxyView: View {
     }
 
     private var journalEdge: NodeEdge? {
-        selectedEdge ?? selectedEdgesForLens.first ?? vm.selectedNodeEdges.first
+        selectedEdge ?? selectedEdgesForLens.first
     }
 
     private var journalConnectedNode: NousNode? {
@@ -277,10 +368,32 @@ struct GalaxyView: View {
         reduceMotion ? nil : AppMotion.sidebarPanelSpring.animation
     }
 
+    private func relationColor(for kind: GalaxyRelationLineKind?) -> Color {
+        guard let kind else { return GalaxyPalette.accent }
+
+        switch kind {
+        case .samePattern, .manual:
+            return GalaxyPalette.patternLine
+        case .tension:
+            return GalaxyPalette.tensionLine
+        case .support:
+            return GalaxyPalette.supportLine
+        case .sameProject:
+            return GalaxyPalette.projectLine
+        case .candidate:
+            return GalaxyPalette.candidateLine
+        }
+    }
+
     private func handleNodeTap(_ id: UUID) {
+        let shouldSelect = vm.selectedNodeId != id
         withAnimation(smoothAnimation) {
             selectedEdgeId = nil
-            vm.selectedNodeId = vm.selectedNodeId == id ? nil : id
+            vm.selectedNodeId = shouldSelect ? id : nil
+        }
+
+        if shouldSelect {
+            vm.refineRelationship(edge: journalEdge)
         }
     }
 
@@ -295,6 +408,7 @@ struct GalaxyView: View {
                 vm.selectedNodeId = edge.sourceId
             }
         }
+        vm.refineRelationship(edge: edge)
     }
 
     private func handleCanvasTap() {
@@ -312,9 +426,15 @@ private enum GalaxyPalette {
     static let panelLift = Color.white.opacity(0.07)
     static let panelSelected = Color(red: 92/255, green: 73/255, blue: 51/255).opacity(0.34)
     static let accent = Color(red: 222/255, green: 179/255, blue: 120/255)
+    static let patternLine = Color(red: 226/255, green: 184/255, blue: 132/255)
+    static let tensionLine = Color(red: 205/255, green: 137/255, blue: 156/255)
+    static let supportLine = Color(red: 166/255, green: 191/255, blue: 143/255)
+    static let projectLine = Color(red: 142/255, green: 169/255, blue: 185/255)
+    static let candidateLine = Color(red: 206/255, green: 198/255, blue: 184/255).opacity(0.72)
     static let primaryText = Color(red: 245/255, green: 238/255, blue: 224/255)
     static let secondaryText = Color(red: 220/255, green: 211/255, blue: 194/255).opacity(0.72)
     static let tertiaryText = Color(red: 220/255, green: 211/255, blue: 194/255).opacity(0.48)
+    static let warningText = Color(red: 236/255, green: 177/255, blue: 110/255).opacity(0.92)
     static let stroke = Color.white.opacity(0.12)
     static let strokeSoft = Color.white.opacity(0.07)
     static let darkInk = Color(red: 28/255, green: 24/255, blue: 20/255)

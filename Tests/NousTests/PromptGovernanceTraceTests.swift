@@ -339,6 +339,28 @@ final class PromptGovernanceTraceTests: XCTestCase {
         XCTAssertEqual(result.findings.map(\.code), [.safetyPolicyMissing])
     }
 
+    func testPromptTraceEvaluationHarnessRequiresHighRiskPromptLayer() {
+        let trace = PromptGovernanceTrace(
+            promptLayers: ["anchor", "chat_mode"],
+            evidenceAttached: false,
+            safetyPolicyInvoked: true,
+            highRiskQueryDetected: true
+        )
+
+        let result = PromptTraceEvaluationHarness().evaluate(
+            PromptTraceEvaluationCase(
+                name: "high risk layer missing",
+                trace: trace,
+                expectations: PromptTraceEvaluationExpectations(
+                    requiredPromptLayers: ["high_risk_safety_mode"]
+                )
+            )
+        )
+
+        XCTAssertFalse(result.passed)
+        XCTAssertEqual(result.findings.map(\.code), [.missingRequiredPromptLayer])
+    }
+
     func testPromptTraceEvaluationHarnessFlagsUnexpectedMemorySignal() {
         let trace = PromptGovernanceTrace(
             promptLayers: ["anchor", "chat_mode", "citations"],
@@ -363,6 +385,45 @@ final class PromptGovernanceTraceTests: XCTestCase {
 
         XCTAssertFalse(result.passed)
         XCTAssertEqual(result.findings.map(\.code), [.unexpectedMemorySignal])
+    }
+
+    func testPromptTraceEvaluationHarnessFlagsForbiddenDurableMemoryLayer() {
+        let trace = PromptGovernanceTrace(
+            promptLayers: ["anchor", "chat_mode", "user_model"],
+            evidenceAttached: false,
+            safetyPolicyInvoked: false,
+            highRiskQueryDetected: false
+        )
+
+        let result = PromptTraceEvaluationHarness().evaluate(
+            PromptTraceEvaluationCase(
+                name: "durable memory forbidden",
+                trace: trace,
+                expectations: PromptTraceEvaluationExpectations(
+                    memorySignal: .forbidden,
+                    forbiddenPromptLayers: ["user_model"]
+                )
+            )
+        )
+
+        XCTAssertFalse(result.passed)
+        XCTAssertEqual(Set(result.findings.map(\.code)), Set([.unexpectedMemorySignal, .unexpectedPromptLayer]))
+    }
+
+    func testPromptTraceEvaluationHarnessFlagsSlowCognitionLayerWithoutTrace() {
+        let trace = PromptGovernanceTrace(
+            promptLayers: ["anchor", "chat_mode", "slow_cognition"],
+            evidenceAttached: false,
+            safetyPolicyInvoked: false,
+            highRiskQueryDetected: false
+        )
+
+        let result = PromptTraceEvaluationHarness().evaluate(
+            PromptTraceEvaluationCase(name: "missing slow cognition trace", trace: trace)
+        )
+
+        XCTAssertFalse(result.passed)
+        XCTAssertEqual(result.findings.map(\.code), [.missingSlowCognitionTrace])
     }
 
     func testPromptTraceEvaluationFixtureSuiteCoversBaselineFailuresAndWarnings() {
@@ -621,6 +682,9 @@ final class GovernanceTelemetryStoreTests: XCTestCase {
             assistantMessageId: UUID(uuidString: "00000000-0000-0000-0000-000000000903")!,
             promptLayers: ["anchor", "chat_mode", "slow_cognition"],
             slowCognitionAttached: true,
+            slowCognitionArtifactId: UUID(uuidString: "00000000-0000-0000-0000-000000000907")!,
+            slowCognitionEvidenceRefIds: ["evidence-a", "evidence-b"],
+            slowCognitionEvidenceRefCount: 2,
             reviewArtifactId: UUID(uuidString: "00000000-0000-0000-0000-000000000904")!,
             reviewRiskFlags: ["unsupported_memory_reference"],
             reviewConfidence: 0.62,
@@ -640,10 +704,207 @@ final class GovernanceTelemetryStoreTests: XCTestCase {
         XCTAssertFalse(encoded.contains("Assistant draft"))
     }
 
+    func testDecodesLegacyTurnCognitionSnapshotWithoutSlowProvenance() throws {
+        let json = """
+        {
+          "turnId": "00000000-0000-0000-0000-000000000911",
+          "conversationId": "00000000-0000-0000-0000-000000000912",
+          "assistantMessageId": "00000000-0000-0000-0000-000000000913",
+          "promptLayers": ["anchor", "chat_mode", "slow_cognition"],
+          "slowCognitionAttached": true,
+          "reviewArtifactId": "00000000-0000-0000-0000-000000000914",
+          "reviewRiskFlags": [],
+          "reviewConfidence": 0.74,
+          "conversationRecoveryRebasedMessageCount": 0,
+          "recordedAt": 456
+        }
+        """.data(using: .utf8)!
+
+        let snapshot = try JSONDecoder().decode(TurnCognitionSnapshot.self, from: json)
+
+        XCTAssertTrue(snapshot.slowCognitionAttached)
+        XCTAssertNil(snapshot.slowCognitionArtifactId)
+        XCTAssertEqual(snapshot.slowCognitionEvidenceRefIds, [])
+        XCTAssertEqual(snapshot.slowCognitionEvidenceRefCount, 0)
+    }
+
+    func testTurnCognitionSummaryIsEmptyWithoutSnapshots() {
+        let telemetry = makeTelemetry()
+
+        let summary = telemetry.turnCognitionSummary
+
+        XCTAssertEqual(summary.totalTurnCount, 0)
+        XCTAssertEqual(summary.slowCognitionAttachedCount, 0)
+        XCTAssertEqual(summary.slowCognitionSourcedCount, 0)
+        XCTAssertEqual(summary.reviewedTurnCount, 0)
+        XCTAssertEqual(summary.conversationRecoveryTurnCount, 0)
+        XCTAssertEqual(summary.reviewRiskFlagCounts, [:])
+        XCTAssertEqual(summary.slowCognitionAttachmentRate, 0)
+        XCTAssertEqual(summary.slowCognitionSourceCoverageRate, 0)
+        XCTAssertEqual(summary.reviewCoverageRate, 0)
+        XCTAssertEqual(summary.overInferenceRate, 0)
+        XCTAssertNil(summary.lastSnapshot)
+    }
+
+    func testTurnCognitionSummaryAggregatesRuntimeSignalsWithoutPromptText() throws {
+        let telemetry = makeTelemetry()
+        let first = makeSnapshot(
+            suffix: "921",
+            promptLayers: ["anchor", "chat_mode", "slow_cognition"],
+            slowCognitionAttached: true,
+            slowCognitionArtifactId: UUID(uuidString: "00000000-0000-0000-0000-000000000931")!,
+            slowCognitionEvidenceRefIds: ["evidence-a", "evidence-b"],
+            slowCognitionEvidenceRefCount: 2,
+            reviewArtifactId: UUID(uuidString: "00000000-0000-0000-0000-000000000941")!
+        )
+        let second = makeSnapshot(
+            suffix: "922",
+            promptLayers: ["anchor", "chat_mode", "slow_cognition"],
+            slowCognitionAttached: true,
+            reviewArtifactId: UUID(uuidString: "00000000-0000-0000-0000-000000000942")!,
+            reviewRiskFlags: ["unsupported_memory_reference", "weak_reasoning"],
+            conversationRecoveryReason: "missing_current_node",
+            conversationRecoveryRebasedMessageCount: 1
+        )
+        let third = makeSnapshot(
+            suffix: "923",
+            promptLayers: ["anchor", "chat_mode"],
+            slowCognitionAttached: false
+        )
+
+        telemetry.recordTurnCognitionSnapshot(first)
+        telemetry.recordTurnCognitionSnapshot(second)
+        telemetry.recordTurnCognitionSnapshot(third)
+
+        let summary = telemetry.turnCognitionSummary
+
+        XCTAssertEqual(summary.totalTurnCount, 3)
+        XCTAssertEqual(summary.slowCognitionAttachedCount, 2)
+        XCTAssertEqual(summary.slowCognitionSourcedCount, 1)
+        XCTAssertEqual(summary.reviewedTurnCount, 2)
+        XCTAssertEqual(summary.conversationRecoveryTurnCount, 1)
+        XCTAssertEqual(summary.reviewRiskFlagCount("unsupported_memory_reference"), 1)
+        XCTAssertEqual(summary.reviewRiskFlagCount("weak_reasoning"), 1)
+        XCTAssertEqual(summary.reviewRiskFlagCount("missing"), 0)
+        XCTAssertEqual(summary.slowCognitionAttachmentRate, 2.0 / 3.0, accuracy: 0.0001)
+        XCTAssertEqual(summary.slowCognitionSourceCoverageRate, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(summary.reviewCoverageRate, 2.0 / 3.0, accuracy: 0.0001)
+        XCTAssertEqual(summary.overInferenceRate, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(summary.lastSnapshot, third)
+
+        let encoded = String(data: try JSONEncoder().encode(summary.reviewRiskFlagCounts), encoding: .utf8) ?? ""
+        XCTAssertFalse(encoded.contains("Help me plan"))
+        XCTAssertFalse(encoded.contains("Assistant draft"))
+    }
+
+    func testTurnCognitionSummaryDoesNotCountSourceWhenSlowSignalWasNotAttached() {
+        let telemetry = makeTelemetry()
+        let inconsistentSnapshot = makeSnapshot(
+            suffix: "924",
+            promptLayers: ["anchor", "chat_mode"],
+            slowCognitionAttached: false,
+            slowCognitionArtifactId: UUID(uuidString: "00000000-0000-0000-0000-000000000934")!,
+            slowCognitionEvidenceRefIds: ["evidence-a"],
+            slowCognitionEvidenceRefCount: 1
+        )
+
+        telemetry.recordTurnCognitionSnapshot(inconsistentSnapshot)
+
+        let summary = telemetry.turnCognitionSummary
+        XCTAssertEqual(summary.slowCognitionAttachedCount, 0)
+        XCTAssertEqual(summary.slowCognitionSourcedCount, 0)
+        XCTAssertEqual(summary.slowCognitionSourceCoverageRate, 0)
+    }
+
+    func testRecentTurnCognitionSnapshotsReturnNewestFirstAndHonorLimit() {
+        let telemetry = makeTelemetry()
+        let first = makeSnapshot(suffix: "925", promptLayers: ["anchor"], slowCognitionAttached: false)
+        let second = makeSnapshot(suffix: "926", promptLayers: ["anchor", "slow_cognition"], slowCognitionAttached: true)
+        let third = makeSnapshot(suffix: "927", promptLayers: ["anchor"], slowCognitionAttached: false)
+
+        telemetry.recordTurnCognitionSnapshot(first)
+        telemetry.recordTurnCognitionSnapshot(second)
+        telemetry.recordTurnCognitionSnapshot(third)
+
+        XCTAssertEqual(telemetry.recentTurnCognitionSnapshots(limit: 2).map(\.turnId), [
+            third.turnId,
+            second.turnId
+        ])
+        XCTAssertEqual(telemetry.recentTurnCognitionSnapshots(limit: 0), [])
+        XCTAssertEqual(telemetry.recentTurnCognitionSnapshots(limit: -3), [])
+    }
+
+    func testRecentTurnCognitionSnapshotsKeepBoundedWindowAndSurviveStoreRecreation() {
+        let suiteName = "GovernanceTelemetryStoreTests.recent.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let firstStore = GovernanceTelemetryStore(defaults: defaults)
+        let snapshots = (900..<925).map { suffix in
+            makeSnapshot(
+                suffix: String(suffix),
+                promptLayers: ["anchor"],
+                slowCognitionAttached: false
+            )
+        }
+
+        for snapshot in snapshots {
+            firstStore.recordTurnCognitionSnapshot(snapshot)
+        }
+
+        let secondStore = GovernanceTelemetryStore(defaults: defaults)
+        let recent = secondStore.recentTurnCognitionSnapshots(limit: 50)
+
+        XCTAssertEqual(recent.count, 20)
+        XCTAssertEqual(recent.first?.turnId, snapshots.last?.turnId)
+        XCTAssertEqual(recent.last?.turnId, snapshots[5].turnId)
+    }
+
+    func testRecentTurnCognitionSnapshotsIgnoreMalformedStoredWindow() {
+        let suiteName = "GovernanceTelemetryStoreTests.malformedRecent.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        defaults.set(Data("not json".utf8), forKey: "nous.governance.recentTurnCognitionSnapshots")
+        let telemetry = GovernanceTelemetryStore(defaults: defaults)
+
+        XCTAssertEqual(telemetry.recentTurnCognitionSnapshots(limit: 10), [])
+    }
+
     private func makeTelemetry() -> GovernanceTelemetryStore {
         let suiteName = "GovernanceTelemetryStoreTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         return GovernanceTelemetryStore(defaults: defaults)
+    }
+
+    private func makeSnapshot(
+        suffix: String,
+        promptLayers: [String],
+        slowCognitionAttached: Bool,
+        slowCognitionArtifactId: UUID? = nil,
+        slowCognitionEvidenceRefIds: [String] = [],
+        slowCognitionEvidenceRefCount: Int = 0,
+        reviewArtifactId: UUID? = nil,
+        reviewRiskFlags: [String] = [],
+        conversationRecoveryReason: String? = nil,
+        conversationRecoveryRebasedMessageCount: Int = 0
+    ) -> TurnCognitionSnapshot {
+        TurnCognitionSnapshot(
+            turnId: UUID(uuidString: "00000000-0000-0000-0000-000000000\(suffix)")!,
+            conversationId: UUID(uuidString: "00000000-0000-0000-0000-000000001\(suffix)")!,
+            assistantMessageId: UUID(uuidString: "00000000-0000-0000-0000-000000002\(suffix)")!,
+            promptLayers: promptLayers,
+            slowCognitionAttached: slowCognitionAttached,
+            slowCognitionArtifactId: slowCognitionArtifactId,
+            slowCognitionEvidenceRefIds: slowCognitionEvidenceRefIds,
+            slowCognitionEvidenceRefCount: slowCognitionEvidenceRefCount,
+            reviewArtifactId: reviewArtifactId,
+            reviewRiskFlags: reviewRiskFlags,
+            reviewConfidence: reviewArtifactId == nil ? nil : 0.74,
+            conversationRecoveryReason: conversationRecoveryReason,
+            conversationRecoveryOriginalNodeId: nil,
+            conversationRecoveryRecoveredNodeId: nil,
+            conversationRecoveryRebasedMessageCount: conversationRecoveryRebasedMessageCount,
+            recordedAt: Date(timeIntervalSince1970: TimeInterval(Int(suffix) ?? 0))
+        )
     }
 }

@@ -26,6 +26,17 @@ require_arg() {
   fi
 }
 
+print_agentic_workflow_gate() {
+  cat <<'EOF'
+
+Agentic workflow:
+- Default to one lead agent; use read-only explorers for noisy investigation.
+- Worker agents require explicit ownership and disjoint write sets.
+- After verification, run scripts/agentic_workflow_check.sh --bead <id> --path <task-file>... before finish.
+- Playbook: docs/agentic-engineering-workflow.md
+EOF
+}
+
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$repo_root"
 
@@ -54,6 +65,7 @@ Agent gate:
 - Non-trivial code/docs work must claim or create a bead before edits.
 - Final answer must include either "Bead: <id> <status>" or "No bead: <reason>".
 EOF
+    print_agentic_workflow_gate
     ;;
 
   status)
@@ -62,6 +74,7 @@ EOF
     echo
     echo "== in progress =="
     bd list --status=in_progress --json
+    print_agentic_workflow_gate
     echo
     echo "== git status =="
     git status --short

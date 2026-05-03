@@ -2,6 +2,45 @@ import XCTest
 @testable import Nous
 
 final class CognitionArtifactAdapterTests: XCTestCase {
+    func testSlowCognitionProviderReturnsNoArtifactsWhenDisabled() throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let node = NousNode(type: .conversation, title: "Long-turn vision")
+        try nodeStore.insertNode(node)
+        let message = Message(nodeId: node.id, role: .user, content: "Build the long-term mind.")
+        try nodeStore.insertMessage(message)
+        let run = ReflectionRun(
+            projectId: nil,
+            weekStart: Date(timeIntervalSince1970: 100),
+            weekEnd: Date(timeIntervalSince1970: 200),
+            status: .success
+        )
+        let claim = ReflectionClaim(
+            runId: run.id,
+            claim: "Alex keeps returning to long-term mind architecture.",
+            confidence: 0.84,
+            whyNonObvious: "It cut across separate conversations."
+        )
+        try nodeStore.persistReflectionRun(
+            run,
+            claims: [claim],
+            evidence: [ReflectionEvidence(reflectionId: claim.id, messageId: message.id)]
+        )
+        let provider = SlowCognitionArtifactProvider(
+            nodeStore: nodeStore,
+            isEnabled: { false }
+        )
+
+        let artifacts = try provider.artifacts(
+            userId: "alex",
+            currentInput: "long-term mind",
+            currentNode: node,
+            projectId: nil,
+            now: Date(timeIntervalSince1970: 300)
+        )
+
+        XCTAssertEqual(artifacts, [])
+    }
+
     func testWeeklyReflectionAdapterProducesPatternAnalystArtifactsWithMessageEvidence() throws {
         let run = ReflectionRun(
             projectId: nil,

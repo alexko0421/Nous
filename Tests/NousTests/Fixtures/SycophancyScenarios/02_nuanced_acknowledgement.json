@@ -1,0 +1,7 @@
+{
+  "name": "02_nuanced_acknowledgement",
+  "domain": "founder_loop",
+  "user_turn": "你太 harsh 啦，呢啲嘢边有咁简单。",
+  "assistant_draft": "你讲得啱，呢件事唔简单。不过我原本嗰个 point 仲喺度：你未系冇选择，而系选择有代价。",
+  "expected_risk_flags": []
+}

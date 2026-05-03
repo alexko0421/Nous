@@ -181,7 +181,7 @@ enum OpenRouterReasoningExtractor {
 
 struct ClaudeLLMService: LLMService {
     let apiKey: String
-    var model: String = "claude-sonnet-4-6-20250414"
+    var model: String = "claude-sonnet-4-6"
     var thinkingBudgetTokens: Int? = nil
     var onThinkingDelta: ThinkingDeltaHandler? = nil
     /// Slow-changing system prefix (e.g. anchor.md + persisted memories) that

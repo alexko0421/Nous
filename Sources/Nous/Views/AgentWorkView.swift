@@ -11,6 +11,7 @@ struct AgentWorkView: View {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 18) {
                     statusStrip
+                    harnessSection
                     commandBar
 
                     if let errorMessage = vm.errorMessage {
@@ -176,6 +177,175 @@ struct AgentWorkView: View {
             RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .stroke(AppColor.panelStroke.opacity(0.7), lineWidth: 1)
         }
+    }
+
+    private var harnessSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Text("Harness")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(AppColor.colaDarkText)
+
+                Text(vm.snapshot.harness.buildStatus.rawValue)
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(harnessColor(vm.snapshot.harness.buildStatus))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(
+                        Capsule()
+                            .fill(harnessColor(vm.snapshot.harness.buildStatus).opacity(0.12))
+                    )
+            }
+
+            HStack(alignment: .top, spacing: 10) {
+                harnessStatusCard(
+                    title: "Build",
+                    systemImage: harnessIcon(vm.snapshot.harness.buildStatus),
+                    color: harnessColor(vm.snapshot.harness.buildStatus),
+                    primary: vm.snapshot.harness.statusText,
+                    secondary: harnessDetailText(vm.snapshot.harness)
+                )
+
+                harnessStatusCard(
+                    title: "Runtime",
+                    systemImage: runtimeIcon(vm.snapshot.runtimeHarness),
+                    color: runtimeColor(vm.snapshot.runtimeHarness),
+                    primary: vm.snapshot.runtimeHarness.statusText,
+                    secondary: "\(vm.snapshot.runtimeHarness.reviewerCoverageText) · \(vm.snapshot.runtimeHarness.riskFlagSummary) · \(vm.snapshot.runtimeHarness.sycophancyFixtureTrend)"
+                )
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Founder Loop")
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundStyle(AppColor.colaDarkText)
+
+                ForEach(vm.snapshot.harness.founderLoopSummary, id: \.self) { item in
+                    HStack(alignment: .top, spacing: 7) {
+                        Circle()
+                            .fill(AppColor.colaOrange.opacity(0.72))
+                            .frame(width: 5, height: 5)
+                            .padding(.top, 6)
+
+                        Text(item)
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(AppColor.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            .padding(.top, 2)
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.white.opacity(0.36))
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(AppColor.panelStroke.opacity(0.65), lineWidth: 1)
+        }
+    }
+
+    private func harnessStatusCard(
+        title: String,
+        systemImage: String,
+        color: Color,
+        primary: String,
+        secondary: String
+    ) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(color)
+                .frame(width: 26, height: 26)
+                .background(
+                    Circle()
+                        .fill(color.opacity(0.12))
+                )
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(AppColor.secondaryText)
+
+                Text(primary)
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(AppColor.colaDarkText)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text(secondary)
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(AppColor.secondaryText.opacity(0.9))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(3)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.white.opacity(0.38))
+        )
+    }
+
+    private func harnessDetailText(_ snapshot: HarnessHealthSnapshot) -> String {
+        if snapshot.findingTitles.isEmpty {
+            return snapshot.latestRun?.detail.isEmpty == false ? snapshot.latestRun?.detail ?? "" : "No local harness findings."
+        }
+        return snapshot.findingTitles.joined(separator: " · ")
+    }
+
+    private func harnessColor(_ status: HarnessBuildStatus) -> Color {
+        switch status {
+        case .passed:
+            return Color(red: 0.16, green: 0.54, blue: 0.36)
+        case .failed:
+            return Color(red: 0.74, green: 0.18, blue: 0.14)
+        case .needsQuickGate:
+            return AppColor.colaOrange
+        case .needsFullGate:
+            return AppColor.colaOrange
+        case .neverRun:
+            return AppColor.secondaryText
+        }
+    }
+
+    private func harnessIcon(_ status: HarnessBuildStatus) -> String {
+        switch status {
+        case .passed:
+            return "checkmark.shield"
+        case .failed:
+            return "xmark.shield"
+        case .needsQuickGate:
+            return "shield.lefthalf.filled"
+        case .needsFullGate:
+            return "shield.lefthalf.filled"
+        case .neverRun:
+            return "shield"
+        }
+    }
+
+    private func runtimeColor(_ snapshot: RuntimeHarnessSnapshot) -> Color {
+        if !snapshot.lastRiskFlags.isEmpty {
+            return AppColor.colaOrange
+        }
+        if snapshot.totalTurnCount == 0 {
+            return AppColor.secondaryText
+        }
+        return Color(red: 0.16, green: 0.54, blue: 0.36)
+    }
+
+    private func runtimeIcon(_ snapshot: RuntimeHarnessSnapshot) -> String {
+        if !snapshot.lastRiskFlags.isEmpty {
+            return "exclamationmark.bubble"
+        }
+        if snapshot.totalTurnCount == 0 {
+            return "waveform.path.ecg"
+        }
+        return "brain.head.profile"
     }
 
     private var commandBar: some View {

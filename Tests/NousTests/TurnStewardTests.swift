@@ -4,6 +4,21 @@ import XCTest
 final class TurnStewardTests: XCTestCase {
     private let steward = TurnSteward()
 
+    func testRouterModeDefaultsToShadowAndCanBeFlippedWithDefaults() {
+        let suiteName = "TurnStewardTests.router-mode.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        XCTAssertEqual(ResponseStanceRouterMode.current(defaults: defaults), .shadow)
+
+        defaults.set(ResponseStanceRouterMode.active.rawValue, forKey: ResponseStanceRouterMode.userDefaultsKey)
+        XCTAssertEqual(ResponseStanceRouterMode.current(defaults: defaults), .active)
+
+        defaults.set("not-a-mode", forKey: ResponseStanceRouterMode.userDefaultsKey)
+        XCTAssertEqual(ResponseStanceRouterMode.current(defaults: defaults), .shadow)
+    }
+
     func testActiveQuickActionWins() {
         let decision = steward.steer(
             prepared: preparedTurn(userText: "brainstorm something else"),

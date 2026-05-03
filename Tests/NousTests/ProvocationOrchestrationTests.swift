@@ -10,6 +10,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
         private let lock = NSLock()
         private var storedReceivedSystems: [String?] = []
         private var storedReplyOutput: String = "ok"
+        private var storedReplyQueue: [String] = []
         private var storedNextError: Error?
 
         var replyOutput: String {
@@ -27,10 +28,16 @@ final class ProvocationOrchestrationTests: XCTestCase {
             get { lock.withLock { storedNextError } }
             set { lock.withLock { storedNextError = newValue } }
         }
+        func enqueueReplyOutputs(_ outputs: [String]) {
+            lock.withLock {
+                storedReplyQueue.append(contentsOf: outputs)
+            }
+        }
         func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
             let snapshot = lock.withLock { () -> (String, Error?) in
                 storedReceivedSystems.append(system)
-                return (storedReplyOutput, storedNextError)
+                let output = storedReplyQueue.isEmpty ? storedReplyOutput : storedReplyQueue.removeFirst()
+                return (output, storedNextError)
             }
             if let err = snapshot.1 { throw err }
             let out = snapshot.0
@@ -139,6 +146,89 @@ final class ProvocationOrchestrationTests: XCTestCase {
     }
 
     @MainActor
+    private func rebuildViewModel(routerMode: ResponseStanceRouterMode) {
+        let vectorStore = VectorStore(nodeStore: store)
+        let memoryService = UserMemoryService(nodeStore: store, llmServiceProvider: { self.llm })
+        let conversationSessionStore = ConversationSessionStore(nodeStore: store, telemetry: telemetry)
+        let memoryCore = UserMemoryCore(nodeStore: store, llmServiceProvider: { self.llm })
+        let planner = TurnPlanner(
+            nodeStore: store,
+            vectorStore: vectorStore,
+            embeddingService: EmbeddingService(),
+            memoryProjectionService: MemoryProjectionService(nodeStore: store),
+            contradictionMemoryService: ContradictionMemoryService(core: memoryCore),
+            currentProviderProvider: { .claude },
+            judgeLLMServiceFactory: { CannedLLMService() },
+            provocationJudgeFactory: { _ in self.judge },
+            governanceTelemetry: telemetry,
+            skillStore: skillStore,
+            skillMatcher: SkillMatcher()
+        )
+        let runner = ChatTurnRunner(
+            conversationSessionStore: conversationSessionStore,
+            turnSteward: TurnSteward(
+                skillStore: skillStore,
+                routerModeProvider: { routerMode },
+                currentProviderProvider: { .claude },
+                llmServiceProvider: { self.llm }
+            ),
+            turnPlanner: planner,
+            turnExecutor: TurnExecutor(
+                llmServiceProvider: { self.llm },
+                shouldUseGeminiHistoryCache: { false },
+                shouldPersistAssistantThinking: { false }
+            ),
+            outcomeFactory: TurnOutcomeFactory(shouldPersistMemory: { _, _ in false }),
+            onPlanReady: { [telemetry] plan in
+                telemetry?.recordPromptTrace(plan.promptTrace)
+                if let event = plan.judgeEventDraft {
+                    telemetry?.appendJudgeEvent(event)
+                }
+            }
+        )
+
+        viewModel = ChatViewModel(
+            nodeStore: store,
+            vectorStore: vectorStore,
+            embeddingService: EmbeddingService(),
+            graphEngine: GraphEngine(nodeStore: store, vectorStore: vectorStore),
+            userMemoryService: memoryService,
+            userMemoryScheduler: UserMemoryScheduler(service: memoryService),
+            conversationSessionStore: conversationSessionStore,
+            turnRunner: runner,
+            llmServiceProvider: { self.llm },
+            currentProviderProvider: { .claude },
+            judgeLLMServiceFactory: { CannedLLMService() },
+            provocationJudgeFactory: { _ in self.judge },
+            skillStore: skillStore,
+            skillMatcher: SkillMatcher(),
+            skillTracker: nil,
+            governanceTelemetry: telemetry,
+            scratchPadStore: makeScratchPadStore(),
+            shouldUseGeminiHistoryCache: { false },
+            shouldPersistAssistantThinking: { false }
+        )
+    }
+
+    @MainActor
+    private func sendTurnAndCaptureMainSystem(_ input: String) async throws -> (String, TurnStewardTrace) {
+        let previousSystemCount = llm.receivedSystems.count
+        viewModel.startNewConversation(title: "Active router validation", cancelInFlightWork: false)
+        viewModel.inputText = input
+        await viewModel.send()
+
+        let newSystems = llm.receivedSystems
+            .dropFirst(previousSystemCount)
+            .compactMap { $0 }
+        let mainSystem = try XCTUnwrap(
+            newSystems.first { $0.contains("# WHO YOU ARE") },
+            "expected a main Nous prompt after sending '\(input)'"
+        )
+        let trace = try XCTUnwrap(viewModel.lastPromptGovernanceTrace?.turnSteward)
+        return (mainSystem, trace)
+    }
+
+    @MainActor
     private func assertQuickModeStopsClarifying(
         mode: QuickActionMode,
         openingReply: String,
@@ -204,6 +294,42 @@ final class ProvocationOrchestrationTests: XCTestCase {
         XCTAssertNil(viewModel.activeQuickActionMode,
                      "mode must drop after single-turn completion")
         XCTAssertEqual(viewModel.messages.last?.content, finalGuidance)
+    }
+
+    @MainActor
+    func testActiveStanceRouterValidationTriptychExercisesChatViewpointAndPlan() async throws {
+        rebuildViewModel(routerMode: .active)
+
+        let (chatSystem, chatTrace) = try await sendTurnAndCaptureMainSystem("最近听返首旧歌，突然觉得好有味道")
+        XCTAssertEqual(chatTrace.route, .ordinaryChat)
+        XCTAssertEqual(chatTrace.routerMode, .active)
+        XCTAssertEqual(chatTrace.responseStance, .companion)
+        XCTAssertEqual(chatTrace.judgePolicy, .off)
+        XCTAssertFalse(chatSystem.contains("TURN GUIDANCE:"))
+
+        llm.enqueueReplyOutputs([
+            """
+            {"stance":"softAnalysis","confidence":0.91,"softerFallback":"reflective","reason":"decision-flavored viewpoint request"}
+            """,
+            "我会先分清楚判断同情绪。"
+        ])
+        let (viewpointSystem, viewpointTrace) = try await sendTurnAndCaptureMainSystem("你觉得我应该点样处理呢件事？")
+        XCTAssertEqual(viewpointTrace.route, .ordinaryChat)
+        XCTAssertEqual(viewpointTrace.routerMode, .active)
+        XCTAssertEqual(viewpointTrace.routerSource, .classifier)
+        XCTAssertEqual(viewpointTrace.responseStance, .softAnalysis)
+        XCTAssertEqual(viewpointTrace.judgePolicy, .silentFraming)
+        XCTAssertEqual(viewpointSystem.components(separatedBy: "TURN GUIDANCE:").count - 1, 1)
+        XCTAssertTrue(viewpointSystem.contains("Response stance: Give calm tradeoff analysis."))
+
+        let (planSystem, planTrace) = try await sendTurnAndCaptureMainSystem("help me plan this week")
+        XCTAssertEqual(planTrace.route, .plan)
+        XCTAssertEqual(planTrace.routerMode, .active)
+        XCTAssertEqual(planTrace.responseStance, .softAnalysis)
+        XCTAssertEqual(planTrace.judgePolicy, .visibleTension)
+        XCTAssertTrue(planSystem.contains("ACTIVE QUICK MODE: Plan"))
+        XCTAssertTrue(planSystem.contains("Response shape: Produce a concrete structured plan. Do not stay in coaching mode."))
+        XCTAssertFalse(planSystem.contains("RESPONSE STANCE:"))
     }
 
     func testJudgeVerdictParsesInferredMode() throws {
@@ -613,7 +739,9 @@ final class ProvocationOrchestrationTests: XCTestCase {
 
         XCTAssertTrue(system.contains("ACTIVE QUICK MODE: Brainstorm"))
         XCTAssertTrue(system.contains("BRAINSTORM MODE QUALITY CONTRACT"))
-        XCTAssertTrue(system.contains("TURN STEWARD RESPONSE SHAPE"))
+        XCTAssertTrue(system.contains("TURN GUIDANCE"))
+        XCTAssertTrue(system.contains("Response shape: Generate distinct directions before judging which feel alive."))
+        XCTAssertFalse(system.contains("TURN STEWARD RESPONSE SHAPE"))
         XCTAssertTrue(system.contains("structurally distinct framings or directions"))
         XCTAssertFalse(system.contains("INTERACTIVE CLARIFICATION UI"))
         XCTAssertFalse(system.contains("BEHAVIOR:"),

@@ -13,13 +13,16 @@ protocol SlowCognitionArtifactProviding {
 final class SlowCognitionArtifactProvider: SlowCognitionArtifactProviding {
     private let nodeStore: NodeStore
     private let shadowLearningStore: (any ShadowLearningStoring)?
+    private let isEnabled: () -> Bool
 
     init(
         nodeStore: NodeStore,
-        shadowLearningStore: (any ShadowLearningStoring)? = nil
+        shadowLearningStore: (any ShadowLearningStoring)? = nil,
+        isEnabled: @escaping () -> Bool = { true }
     ) {
         self.nodeStore = nodeStore
         self.shadowLearningStore = shadowLearningStore
+        self.isEnabled = isEnabled
     }
 
     func artifacts(
@@ -29,6 +32,8 @@ final class SlowCognitionArtifactProvider: SlowCognitionArtifactProviding {
         projectId: UUID?,
         now: Date
     ) throws -> [CognitionArtifact] {
+        guard isEnabled() else { return [] }
+
         var artifacts: [CognitionArtifact] = []
 
         let claims = try nodeStore.fetchActiveReflectionClaims(projectId: projectId)
@@ -85,6 +90,129 @@ final class CognitionReviewer: CognitionReviewing {
         "记得",
         "記得"
     ]
+    private static let sycophancyPushbackPhrases = [
+        "too harsh",
+        "太 harsh",
+        "harsh",
+        "冇咁简单",
+        "冇咁簡單",
+        "唔简单",
+        "唔簡單",
+        "你错",
+        "你錯",
+        "you're wrong",
+        "you are wrong"
+    ]
+    private static let sycophancyCapitulationPhrases = [
+        "you're right",
+        "you are right",
+        "你讲得啱",
+        "你講得啱",
+        "你说得对",
+        "你說得對",
+        "我之前太",
+        "我唔应该",
+        "我唔應該",
+        "i shouldn't have",
+        "完全冇问题",
+        "完全冇問題",
+        "completely fine"
+    ]
+    private static let preservedChallengePhrases = [
+        "不过",
+        "不過",
+        "但",
+        "however",
+        "that said",
+        "原本嗰个 point",
+        "仲喺度",
+        "代价",
+        "代價",
+        "tradeoff",
+        "trade-off",
+        "tension"
+    ]
+    private static let overInferencePhrases = [
+        "一直都",
+        "你总是",
+        "你總是",
+        "人格",
+        "最核心",
+        "核心嘅模式",
+        "core pattern",
+        "always avoid",
+        "diagnosis"
+    ]
+    private static let currentFactPhrases = [
+        "f-1",
+        "visa",
+        "i-20",
+        "cpt",
+        "opt",
+        "sevis",
+        "units",
+        "12 units",
+        "legal",
+        "law",
+        "deadline",
+        "current",
+        "today",
+        "明天",
+        "聽日",
+        "下个学期",
+        "下個學期"
+    ]
+    private static let confidentAdvicePhrases = [
+        "可以",
+        "冇问题",
+        "冇問題",
+        "no problem",
+        "you can",
+        "照做",
+        "just do",
+        "definitely",
+        "一定"
+    ]
+    private static let verificationPhrases = [
+        "verify",
+        "check",
+        "official",
+        "dso",
+        "advisor",
+        "not legal advice",
+        "我唔确定",
+        "我唔確定",
+        "唔确定",
+        "唔確定",
+        "确认",
+        "確認",
+        "学校",
+        "學校"
+    ]
+    private static let acuteSafetyPhrases = [
+        "想死",
+        "自杀",
+        "自殺",
+        "kill myself",
+        "suicide",
+        "harm myself",
+        "唔想再顶",
+        "唔想再頂"
+    ]
+    private static let safetyEscalationPhrases = [
+        "988",
+        "emergency",
+        "crisis",
+        "trusted",
+        "call",
+        "text",
+        "安全",
+        "即刻",
+        "马上",
+        "馬上",
+        "附近",
+        "陪你"
+    ]
     private static let excerptBoundaryCharacters: Set<Character> = [".", "!", "?", "。", "！", "？", "\n"]
 
     func review(plan: TurnPlan, executionResult: TurnExecutionResult) throws -> CognitionArtifact? {
@@ -96,7 +224,11 @@ final class CognitionReviewer: CognitionReviewing {
             for: plan,
             executionResult: executionResult
         )
-        let riskFlags = riskFlags(unsupportedMemoryExcerpt: unsupportedMemoryExcerpt)
+        let riskFlags = riskFlags(
+            for: plan,
+            executionResult: executionResult,
+            unsupportedMemoryExcerpt: unsupportedMemoryExcerpt
+        )
         let artifact = CognitionArtifact(
             organ: .reviewer,
             title: "Silent reviewer audit",
@@ -105,7 +237,11 @@ final class CognitionReviewer: CognitionReviewing {
             jurisdiction: .turnContext,
             evidenceRefs: evidenceRefs(
                 for: plan,
-                unsupportedMemoryExcerpt: unsupportedMemoryExcerpt
+                assistantRiskExcerpt: assistantRiskExcerpt(
+                    executionResult: executionResult,
+                    unsupportedMemoryExcerpt: unsupportedMemoryExcerpt,
+                    riskFlags: riskFlags
+                )
             ),
             riskFlags: riskFlags,
             trace: CognitionTrace(
@@ -137,7 +273,7 @@ final class CognitionReviewer: CognitionReviewing {
 
     private func evidenceRefs(
         for plan: TurnPlan,
-        unsupportedMemoryExcerpt: String?
+        assistantRiskExcerpt: String?
     ) -> [CognitionEvidenceRef] {
         var refs = [
             CognitionEvidenceRef(
@@ -155,12 +291,12 @@ final class CognitionReviewer: CognitionReviewing {
             )
         })
 
-        if let unsupportedMemoryExcerpt {
+        if let assistantRiskExcerpt {
             refs.append(
                 CognitionEvidenceRef(
                     source: .assistantDraft,
                     id: "\(plan.turnId.uuidString):assistant_draft",
-                    quote: unsupportedMemoryExcerpt
+                    quote: assistantRiskExcerpt
                 )
             )
         }
@@ -179,11 +315,72 @@ final class CognitionReviewer: CognitionReviewing {
         return memoryReferenceExcerpt(in: executionResult.assistantContent)
     }
 
-    private func riskFlags(unsupportedMemoryExcerpt: String?) -> [String] {
-        guard unsupportedMemoryExcerpt != nil else {
-            return []
+    private func riskFlags(
+        for plan: TurnPlan,
+        executionResult: TurnExecutionResult,
+        unsupportedMemoryExcerpt: String?
+    ) -> [String] {
+        var flags: [String] = []
+
+        if unsupportedMemoryExcerpt != nil {
+            flags.append("unsupported_memory_reference")
         }
-        return ["unsupported_memory_reference"]
+
+        if hasSycophancyRisk(user: plan.prepared.userMessage.content, assistant: executionResult.assistantContent) {
+            flags.append("sycophancy_risk")
+        }
+
+        if hasOverInferenceRisk(plan: plan, assistant: executionResult.assistantContent) {
+            flags.append("over_inference")
+        }
+
+        if hasCurrentFactUncertainty(user: plan.prepared.userMessage.content, assistant: executionResult.assistantContent) {
+            flags.append("current_fact_uncertainty")
+        }
+
+        if hasSafetyEscalationMiss(plan: plan, assistant: executionResult.assistantContent) {
+            flags.append("safety_escalation")
+        }
+
+        return Array(Set(flags)).sorted()
+    }
+
+    private func assistantRiskExcerpt(
+        executionResult: TurnExecutionResult,
+        unsupportedMemoryExcerpt: String?,
+        riskFlags: [String]
+    ) -> String? {
+        if let unsupportedMemoryExcerpt {
+            return unsupportedMemoryExcerpt
+        }
+        guard !riskFlags.isEmpty else { return nil }
+        return snippet(executionResult.assistantContent)
+    }
+
+    private func hasSycophancyRisk(user: String, assistant: String) -> Bool {
+        containsAny(Self.sycophancyPushbackPhrases, in: user) &&
+            containsAny(Self.sycophancyCapitulationPhrases, in: assistant) &&
+            !containsAny(Self.preservedChallengePhrases, in: assistant)
+    }
+
+    private func hasOverInferenceRisk(plan: TurnPlan, assistant: String) -> Bool {
+        !plan.promptTrace.hasMemorySignal &&
+            containsAny(Self.overInferencePhrases, in: assistant)
+    }
+
+    private func hasCurrentFactUncertainty(user: String, assistant: String) -> Bool {
+        containsAny(Self.currentFactPhrases, in: user) &&
+            containsAny(Self.confidentAdvicePhrases, in: assistant) &&
+            !containsAny(Self.verificationPhrases, in: assistant)
+    }
+
+    private func hasSafetyEscalationMiss(plan: TurnPlan, assistant: String) -> Bool {
+        let user = plan.prepared.userMessage.content
+        let acuteSafetyDetected = plan.promptTrace.highRiskQueryDetected ||
+            containsAny(Self.acuteSafetyPhrases, in: user)
+        return acuteSafetyDetected &&
+            containsAny(Self.acuteSafetyPhrases, in: user) &&
+            !containsAny(Self.safetyEscalationPhrases, in: assistant)
     }
 
     private func memoryReferenceExcerpt(in text: String) -> String? {
@@ -227,7 +424,14 @@ final class CognitionReviewer: CognitionReviewing {
             return "Silent reviewer saw no obvious evidence-boundary issue in this high-stakes turn."
         }
 
-        return "Silent reviewer flagged possible evidence-boundary issues: \(riskFlags.joined(separator: ", "))."
+        return "Silent reviewer flagged runtime quality risks: \(riskFlags.joined(separator: ", "))."
+    }
+
+    private func containsAny(_ phrases: [String], in text: String) -> Bool {
+        let lowercased = text.lowercased()
+        return phrases.contains { phrase in
+            lowercased.range(of: phrase.lowercased(), options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        }
     }
 
     private func snippet(_ text: String, limit: Int = 220) -> String? {
@@ -493,32 +697,68 @@ enum CognitionArtifactSelector {
 }
 
 enum CognitionPromptFormatter {
+    private static let maxBlockCharacters = 1_800
+    private static let maxTitleCharacters = 96
+    private static let maxSummaryCharacters = 360
+    private static let maxEvidenceIdCharacters = 96
+    private static let maxEvidenceQuoteCharacters = 160
+    private static let maxSuggestionCharacters = 220
+    private static let safetyInstruction = "Use this as a sourced, optional signal for this turn. Mention it only if it genuinely helps Alex think; do not describe internal organs, agents, traces, or this injection."
+
     static func volatileBlock(for artifact: CognitionArtifact) -> String {
         let evidence = artifact.evidenceRefs
             .prefix(4)
             .map { ref in
+                let evidenceId = clippedInline(ref.id, limit: maxEvidenceIdCharacters)
                 if let quote = ref.quote, !quote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    return "\(ref.source.rawValue):\(ref.id) quote=\"\(quote)\""
+                    return "\(ref.source.rawValue):\(evidenceId) quote=\"\(clippedInline(quote, limit: maxEvidenceQuoteCharacters))\""
                 }
-                return "\(ref.source.rawValue):\(ref.id)"
+                return "\(ref.source.rawValue):\(evidenceId)"
             }
             .joined(separator: "\n")
 
         let suggestion = artifact.suggestedSurfacing
-            .map { "\nSuggested use: \($0)" } ?? ""
+            .map { "\nSuggested use: \(clippedInline($0, limit: maxSuggestionCharacters))" } ?? ""
 
-        return """
+        let prefix = """
         ---
 
         SLOW COGNITION SIGNAL:
         Organ: \(artifact.organ.rawValue)
-        Title: \(artifact.title)
+        Title: \(clippedInline(artifact.title, limit: maxTitleCharacters))
         Confidence: \(String(format: "%.2f", artifact.confidence))
-        Summary: \(artifact.summary)
+        Summary: \(clippedInline(artifact.summary, limit: maxSummaryCharacters))
         Evidence:
-        \(evidence)\(suggestion)
-
-        Use this as a sourced, optional signal for this turn. Mention it only if it genuinely helps Alex think; do not describe internal organs, agents, traces, or this injection.
         """
+        let fixedCharacters = prefix.count + 1 + 2 + safetyInstruction.count
+        let evidenceBudget = max(0, maxBlockCharacters - fixedCharacters)
+        let boundedEvidence = clippedBlock("\(evidence)\(suggestion)", limit: evidenceBudget)
+        return """
+        \(prefix)
+        \(boundedEvidence)
+
+        \(safetyInstruction)
+        """
+    }
+
+    private static func clippedInline(_ text: String, limit: Int) -> String {
+        let collapsed = text
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard collapsed.count > limit else { return collapsed }
+        guard limit > 3 else { return String("...".prefix(limit)) }
+        return String(collapsed.prefix(limit - 3))
+            .trimmingCharacters(in: .whitespacesAndNewlines) + "..."
+    }
+
+    private static func clippedBlock(_ text: String, limit: Int) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard limit > 0 else { return "" }
+        guard trimmed.count > limit else { return trimmed }
+        guard limit > 3 else { return String("...".prefix(limit)) }
+        return String(trimmed.prefix(limit - 3))
+            .trimmingCharacters(in: .whitespacesAndNewlines) + "..."
     }
 }

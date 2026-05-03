@@ -95,13 +95,19 @@ enum BeadsAgentWorkServiceError: LocalizedError, Equatable {
 
 final class BeadsAgentWorkService {
     private let commandRunner: any BeadsCommandRunning
+    private let harnessLoader: any HarnessHealthLoading
+    private let runtimeHarnessLoader: any RuntimeHarnessLoading
     private let recentClosedLimit: Int
 
     init(
         commandRunner: any BeadsCommandRunning = ProcessBeadsCommandRunner(),
+        harnessLoader: any HarnessHealthLoading = HarnessHealthService(),
+        runtimeHarnessLoader: any RuntimeHarnessLoading = RuntimeHarnessService(),
         recentClosedLimit: Int = 6
     ) {
         self.commandRunner = commandRunner
+        self.harnessLoader = harnessLoader
+        self.runtimeHarnessLoader = runtimeHarnessLoader
         self.recentClosedLimit = recentClosedLimit
     }
 
@@ -126,6 +132,20 @@ final class BeadsAgentWorkService {
             ready: ready,
             inProgress: inProgress,
             recentClosed: Array(closed.prefix(recentClosedLimit)),
+            harness: harnessLoader.loadSnapshot(),
+            runtimeHarness: runtimeHarnessLoader.loadSnapshot(),
+            loadedAt: Date()
+        )
+    }
+
+    func loadHarnessOnlySnapshot() -> BeadsAgentWorkSnapshot {
+        BeadsAgentWorkSnapshot(
+            beadsPath: "",
+            ready: [],
+            inProgress: [],
+            recentClosed: [],
+            harness: harnessLoader.loadSnapshot(),
+            runtimeHarness: runtimeHarnessLoader.loadSnapshot(),
             loadedAt: Date()
         )
     }

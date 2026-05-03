@@ -39,7 +39,7 @@ let fixturesDir = URL(fileURLWithPath: CommandLine.arguments[1])
 guard let apiKey = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] else {
     fputs("ANTHROPIC_API_KEY required.\n", stderr); exit(64)
 }
-let llm = ClaudeLLMService(apiKey: apiKey, model: "claude-haiku-4-5-20251001")
+let llm = ClaudeLLMService(apiKey: apiKey, model: "claude-sonnet-4-6")
 let judge = ProvocationJudge(llmService: llm, timeout: 5.0)
 
 let files = try FileManager.default.contentsOfDirectory(at: fixturesDir,
@@ -78,7 +78,8 @@ for file in files {
             userMessage: fx.userMessage,
             citablePool: pool,
             previousMode: previousMode,
-            provider: .claude
+            provider: .claude,
+            feedbackLoop: nil
         )
         var diffs: [String] = []
         if verdict.shouldProvoke != fx.expected.shouldProvoke {

@@ -226,8 +226,15 @@ final class ChatViewModel {
             skillStore: skillStore,
             skillMatcher: skillMatcher ?? SkillMatcher(),
             skillTracker: skillTracker,
+            cognitionReviewer: CognitionReviewer(),
             onPlanReady: { [governanceTelemetry] plan in
                 governanceTelemetry.recordPromptTrace(plan.promptTrace)
+            },
+            onReviewArtifact: { [governanceTelemetry] artifact in
+                governanceTelemetry.recordCognitionArtifact(artifact)
+            },
+            onTurnCognitionSnapshot: { [governanceTelemetry] snapshot in
+                governanceTelemetry.recordTurnCognitionSnapshot(snapshot)
             }
         )
         cachedQuickActionOpeningRunner = runner

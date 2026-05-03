@@ -75,7 +75,7 @@ final class GalaxyRelationJudge {
         return GalaxyRelationVerdict(
             relationKind: .topicSimilarity,
             confidence: similarity,
-            explanation: "These nodes are semantically close, but Nous does not yet have stronger evidence for a deeper relationship.",
+            explanation: "这只是语义相似，不是强结论；需要更多证据才能判断真正关系。",
             sourceEvidence: evidenceExcerpt(from: source),
             targetEvidence: evidenceExcerpt(from: target)
         )
@@ -265,17 +265,17 @@ final class GalaxyRelationJudge {
     private func explanation(for relationKind: GalaxyRelationKind) -> String {
         switch relationKind {
         case .samePattern:
-            return "These nodes appear to express the same underlying pattern through different surface topics."
+            return "这两段可能在不同话题下重复同一种行为或判断模式。"
         case .tension:
-            return "These nodes may pull against each other: one states a boundary or constraint while the other points toward a goal, plan, or proposal."
+            return "这两段可能互相拉扯：一边是边界或限制，另一边是目标、计划或提议。"
         case .supports:
-            return "One node appears to give a reason, rule, or insight that supports the other."
+            return "其中一段像是在给另一段提供理由、规则或洞察。"
         case .contradicts:
-            return "These nodes may conflict with each other and are worth reviewing together."
+            return "这两段可能互相冲突，值得放在一起重新检查。"
         case .causeEffect:
-            return "These nodes may describe a cause-and-effect chain."
+            return "这两段可能构成一条原因到结果的线索。"
         case .topicSimilarity:
-            return "These nodes are semantically close, but Nous does not yet have stronger evidence for a deeper relationship."
+            return "这只是语义相似，不是强结论；需要更多证据才能判断真正关系。"
         }
     }
 
@@ -361,15 +361,21 @@ final class GalaxyRelationJudge {
         - same_pattern means different surface topics express the same underlying behavior, constraint, or decision pattern.
         - tension means one node pulls against a boundary, constraint, value, or prior decision in the other.
         - topic_similarity is allowed only when they are merely about the same topic.
+        - A shared word, person, object, activity, or shopping/purchase context is not enough for same_pattern or tension.
+        - For any relation stronger than topic_similarity, the explanation must say why SOURCE and TARGET relate through a concrete mechanism.
+        - source_evidence and target_evidence must be Chinese evidence summaries grounded in the corresponding side.
+        - Do not copy English source text into evidence fields. Translate or tightly paraphrase it into Chinese.
+        - If you cannot name the mechanism using evidence from both sides, return none.
+        - If you cannot produce faithful Chinese evidence summaries for both sides, return none.
         - none means the link would not help Alex think.
 
         Return strict JSON only:
         {
           "relation": "same_pattern|tension|supports|contradicts|cause_effect|topic_similarity|none",
           "confidence": 0.0,
-          "explanation": "one short sentence",
-          "source_evidence": "short exact or tight paraphrase from source",
-          "target_evidence": "short exact or tight paraphrase from target",
+          "explanation": "中文一句话，具体说明 SOURCE 和 TARGET 为什么有关系；不要写泛泛的'值得留意'",
+          "source_evidence": "中文短句，紧贴 SOURCE 的具体证据；不要输出英文",
+          "target_evidence": "中文短句，紧贴 TARGET 的具体证据；不要输出英文",
           "source_atom_id": "UUID from SOURCE atoms if one supports this relation, otherwise null",
           "target_atom_id": "UUID from TARGET atoms if one supports this relation, otherwise null"
         }
@@ -395,7 +401,7 @@ final class GalaxyRelationJudge {
 
         let stream = try await llm.generate(
             messages: [LLMMessage(role: "user", content: prompt)],
-            system: "You are a strict knowledge-graph relation judge for Nous. Prefer none over weak links. Return JSON only."
+            system: "You are a strict knowledge-graph relation judge for Nous. Prefer none over weak links. Return JSON only. explanation 用中文; evidence 用中文，不要输出英文证据。"
         )
         var output = ""
         for try await chunk in stream {
@@ -446,6 +452,15 @@ final class GalaxyRelationJudge {
         let targetAtomId = validAtomId(payload.targetAtomId, allowedIds: targetAtomIds)
         guard !explanation.isEmpty, !sourceEvidence.isEmpty, !targetEvidence.isEmpty else {
             throw LLMVerdictError.invalidResponse
+        }
+        guard
+            GalaxyExplanationQuality.containsCJK(sourceEvidence),
+            GalaxyExplanationQuality.containsCJK(targetEvidence)
+        else {
+            return nil
+        }
+        guard payload.relation == .topicSimilarity || GalaxyExplanationQuality.hasUsefulChineseExplanation(explanation) else {
+            return nil
         }
 
         return GalaxyRelationVerdict(

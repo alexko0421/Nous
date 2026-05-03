@@ -676,10 +676,11 @@ CHAT FORMAT POLICY:
         if allowInteractiveClarification { layers.append("interactive_clarification") }
         if turnSteward != nil { layers.append("turn_steward") }
         if agentCoordination != nil { layers.append("agent_coordination") }
-        if CognitionArtifactSelector.selectForChat(
+        let selectedSlowCognitionArtifact = CognitionArtifactSelector.selectForChat(
             currentInput: currentUserInput,
             artifacts: slowCognitionArtifacts
-        ) != nil {
+        )
+        if selectedSlowCognitionArtifact != nil {
             layers.append("slow_cognition")
         }
         if !shadowLearningHints.isEmpty { layers.append("shadow_learning") }
@@ -693,7 +694,8 @@ CHAT FORMAT POLICY:
             highRiskQueryDetected: highRiskQueryDetected,
             turnSteward: turnSteward,
             agentCoordination: agentCoordination,
-            citationTrace: citationTrace(for: promptCitations)
+            citationTrace: citationTrace(for: promptCitations),
+            slowCognitionTrace: selectedSlowCognitionArtifact.map(SlowCognitionPromptTrace.init)
         )
     }
 

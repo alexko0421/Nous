@@ -105,6 +105,32 @@ semantic knowledge, values, and strategy belong in Nous, not Beads.
 See `docs/beads-agent-memory.md` and `docs/memory-jurisdiction.md` for the
 full boundary.
 
+## Automation
+
+The lightweight automation layer is intentionally advisory first:
+
+- `scripts/beads_agent_workflow.sh start` and `status` print the short
+  delegation reminder and point back to this playbook.
+- `scripts/agentic_workflow_check.sh` checks for frozen-anchor edits, `.codex`
+  agent/config changes, verification hints for Swift/project/script changes,
+  direct `Nous.xcodeproj` drift, staged-file risk, and explicit Bead state.
+  Use repeated `--path <file-or-dir>` arguments to limit changed-file, staging,
+  and verification hints to the current task while keeping frozen-anchor safety
+  global. A scoped check fails when the supplied paths match no changed files;
+  use `--path .` only when the task intentionally covers the full dirty worktree.
+- Hooks or CI gates are deferred until the workflow proves useful without
+  blocking legitimate local work.
+
+Run the check after task verification and before closing the Bead:
+
+```bash
+scripts/agentic_workflow_check.sh --bead <id> \
+  --path docs/agentic-engineering-workflow.md \
+  --path scripts/beads_agent_workflow.sh \
+  --path scripts/agentic_workflow_check.sh
+scripts/beads_agent_workflow.sh finish <id> "<verification summary>"
+```
+
 ## Reusable Prompts
 
 Read-only exploration:

@@ -7,7 +7,10 @@ final class QuickActionOpeningRunner {
     private let outcomeFactory: TurnOutcomeFactory
     private let currentProviderProvider: () -> LLMProvider
     private let quickActionAddendumResolver: QuickActionAddendumResolver
+    private let cognitionReviewer: (any CognitionReviewing)?
     private let onPlanReady: (TurnPlan) -> Void
+    private let onReviewArtifact: (CognitionArtifact) -> Void
+    private let onTurnCognitionSnapshot: (TurnCognitionSnapshot) -> Void
 
     init(
         conversationSessionStore: ConversationSessionStore,
@@ -18,7 +21,10 @@ final class QuickActionOpeningRunner {
         skillStore: (any SkillStoring)? = nil,
         skillMatcher: any SkillMatching = SkillMatcher(),
         skillTracker: (any SkillTracking)? = nil,
-        onPlanReady: @escaping (TurnPlan) -> Void = { _ in }
+        cognitionReviewer: (any CognitionReviewing)? = nil,
+        onPlanReady: @escaping (TurnPlan) -> Void = { _ in },
+        onReviewArtifact: @escaping (CognitionArtifact) -> Void = { _ in },
+        onTurnCognitionSnapshot: @escaping (TurnCognitionSnapshot) -> Void = { _ in }
     ) {
         self.conversationSessionStore = conversationSessionStore
         self.memoryContextBuilder = memoryContextBuilder
@@ -30,7 +36,10 @@ final class QuickActionOpeningRunner {
             skillMatcher: skillMatcher,
             skillTracker: skillTracker
         )
+        self.cognitionReviewer = cognitionReviewer
         self.onPlanReady = onPlanReady
+        self.onReviewArtifact = onReviewArtifact
+        self.onTurnCognitionSnapshot = onTurnCognitionSnapshot
     }
 
     func run(
@@ -91,6 +100,17 @@ final class QuickActionOpeningRunner {
             return nil
         }
 
+        let reviewArtifact = runSilentReviewIfNeeded(
+            plan: plan,
+            executionResult: executionResult,
+            committed: committed
+        )
+        onTurnCognitionSnapshot(TurnCognitionSnapshotFactory.make(
+            plan: plan,
+            committed: committed,
+            reviewArtifact: reviewArtifact
+        ))
+
         let completion = outcomeFactory.makeCompletion(
             turnId: turnId,
             nextQuickActionModeIfCompleted: mode,
@@ -100,6 +120,33 @@ final class QuickActionOpeningRunner {
         )
         await sink.emit(.completed(completion))
         return completion
+    }
+
+    private func runSilentReviewIfNeeded(
+        plan: TurnPlan,
+        executionResult: TurnExecutionResult,
+        committed: CommittedAssistantTurn
+    ) -> CognitionArtifact? {
+        guard let cognitionReviewer else { return nil }
+
+        do {
+            if let artifact = try cognitionReviewer.review(
+                plan: plan,
+                executionResult: executionResult
+            ) {
+                let auditedArtifact = artifact.replacingHiddenOpeningPromptReference(
+                    hiddenMessageId: plan.prepared.userMessage.id,
+                    assistantMessage: committed.assistantMessage
+                )
+                onReviewArtifact(auditedArtifact)
+                return auditedArtifact
+            }
+        } catch {
+            #if DEBUG
+            NSLog("[NousTurn] opening silent reviewer failed turn=%@ error=%@", plan.turnId.uuidString, error.localizedDescription)
+            #endif
+        }
+        return nil
     }
 
     private func makePlan(mode: QuickActionMode, node: NousNode, turnId: UUID) throws -> TurnPlan {
@@ -209,5 +256,39 @@ final class QuickActionOpeningRunner {
         case .infrastructure(let message):
             return TurnFailure(stage: .execution, message: message)
         }
+    }
+}
+
+private extension CognitionArtifact {
+    func replacingHiddenOpeningPromptReference(
+        hiddenMessageId: UUID,
+        assistantMessage: Message
+    ) -> CognitionArtifact {
+        let hiddenId = hiddenMessageId.uuidString
+        var changed = false
+        let auditedRefs = evidenceRefs.map { ref in
+            guard ref.source == .message, ref.id == hiddenId else { return ref }
+            changed = true
+            return CognitionEvidenceRef(
+                source: .message,
+                id: assistantMessage.id.uuidString,
+                quote: assistantMessage.content
+            )
+        }
+
+        guard changed else { return self }
+        return CognitionArtifact(
+            id: id,
+            organ: organ,
+            title: title,
+            summary: summary,
+            confidence: confidence,
+            jurisdiction: jurisdiction,
+            evidenceRefs: auditedRefs,
+            suggestedSurfacing: suggestedSurfacing,
+            riskFlags: riskFlags,
+            trace: trace,
+            createdAt: createdAt
+        )
     }
 }

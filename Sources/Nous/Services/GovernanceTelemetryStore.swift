@@ -37,7 +37,47 @@ struct PromptTraceEvaluationMetrics: Equatable {
     }
 }
 
+struct TurnCognitionTelemetrySummary: Equatable {
+    let totalTurnCount: Int
+    let slowCognitionAttachedCount: Int
+    let slowCognitionSourcedCount: Int
+    let reviewedTurnCount: Int
+    let conversationRecoveryTurnCount: Int
+    let reviewRiskFlagCounts: [String: Int]
+    let lastSnapshot: TurnCognitionSnapshot?
+
+    var slowCognitionAttachmentRate: Double {
+        rate(slowCognitionAttachedCount, of: totalTurnCount)
+    }
+
+    var slowCognitionSourceCoverageRate: Double {
+        rate(slowCognitionSourcedCount, of: slowCognitionAttachedCount)
+    }
+
+    var reviewCoverageRate: Double {
+        rate(reviewedTurnCount, of: totalTurnCount)
+    }
+
+    var overInferenceRate: Double {
+        rate(
+            reviewRiskFlagCount("over_inference") + reviewRiskFlagCount("unsupported_memory_reference"),
+            of: reviewedTurnCount
+        )
+    }
+
+    func reviewRiskFlagCount(_ flag: String) -> Int {
+        reviewRiskFlagCounts[flag, default: 0]
+    }
+
+    private func rate(_ numerator: Int, of denominator: Int) -> Double {
+        guard denominator > 0 else { return 0 }
+        return Double(numerator) / Double(denominator)
+    }
+}
+
 final class GovernanceTelemetryStore {
+    private static let recentTurnCognitionSnapshotLimit = 20
+
     private let defaults: UserDefaults
     private let nodeStore: NodeStore?
 
@@ -49,6 +89,12 @@ final class GovernanceTelemetryStore {
         static let conversationRecoveryCount = "nous.governance.conversationRecoveryCount"
         static let lastTurnCognitionSnapshot = "nous.governance.lastTurnCognitionSnapshot"
         static let turnCognitionSnapshotCount = "nous.governance.turnCognitionSnapshotCount"
+        static let turnCognitionSlowAttachedCount = "nous.governance.turnCognitionSlowAttachedCount"
+        static let turnCognitionSlowSourcedCount = "nous.governance.turnCognitionSlowSourcedCount"
+        static let turnCognitionReviewedTurnCount = "nous.governance.turnCognitionReviewedTurnCount"
+        static let turnCognitionRecoveryTurnCount = "nous.governance.turnCognitionRecoveryTurnCount"
+        static let turnCognitionRiskFlagCounts = "nous.governance.turnCognitionRiskFlagCounts"
+        static let recentTurnCognitionSnapshots = "nous.governance.recentTurnCognitionSnapshots"
 
         static func counter(_ counter: EvalCounter) -> String {
             "nous.governance.counter.\(counter.rawValue)"
@@ -135,7 +181,8 @@ final class GovernanceTelemetryStore {
         }
 
         defaults.set(data, forKey: Keys.lastCognitionArtifact)
-        if artifact.riskFlags.contains("unsupported_memory_reference") {
+        if artifact.riskFlags.contains("unsupported_memory_reference") ||
+            artifact.riskFlags.contains("over_inference") {
             increment(.overInferenceRate)
         }
     }
@@ -148,11 +195,44 @@ final class GovernanceTelemetryStore {
         if let data = try? JSONEncoder().encode(snapshot) {
             defaults.set(data, forKey: Keys.lastTurnCognitionSnapshot)
         }
-        defaults.set(defaults.integer(forKey: Keys.turnCognitionSnapshotCount) + 1, forKey: Keys.turnCognitionSnapshotCount)
+        recordRecentTurnCognitionSnapshot(snapshot)
+        incrementIntegerKey(Keys.turnCognitionSnapshotCount)
+        if snapshot.slowCognitionAttached {
+            incrementIntegerKey(Keys.turnCognitionSlowAttachedCount)
+        }
+        if snapshot.slowCognitionAttached &&
+            snapshot.slowCognitionArtifactId != nil &&
+            snapshot.slowCognitionEvidenceRefCount > 0 {
+            incrementIntegerKey(Keys.turnCognitionSlowSourcedCount)
+        }
+        if snapshot.reviewArtifactId != nil {
+            incrementIntegerKey(Keys.turnCognitionReviewedTurnCount)
+        }
+        if snapshot.conversationRecoveryReason != nil || snapshot.conversationRecoveryRebasedMessageCount > 0 {
+            incrementIntegerKey(Keys.turnCognitionRecoveryTurnCount)
+        }
+        recordReviewRiskFlags(snapshot.reviewRiskFlags)
     }
 
     func turnCognitionSnapshotCount() -> Int {
         defaults.integer(forKey: Keys.turnCognitionSnapshotCount)
+    }
+
+    var turnCognitionSummary: TurnCognitionTelemetrySummary {
+        TurnCognitionTelemetrySummary(
+            totalTurnCount: defaults.integer(forKey: Keys.turnCognitionSnapshotCount),
+            slowCognitionAttachedCount: defaults.integer(forKey: Keys.turnCognitionSlowAttachedCount),
+            slowCognitionSourcedCount: defaults.integer(forKey: Keys.turnCognitionSlowSourcedCount),
+            reviewedTurnCount: defaults.integer(forKey: Keys.turnCognitionReviewedTurnCount),
+            conversationRecoveryTurnCount: defaults.integer(forKey: Keys.turnCognitionRecoveryTurnCount),
+            reviewRiskFlagCounts: storedReviewRiskFlagCounts(),
+            lastSnapshot: lastTurnCognitionSnapshot
+        )
+    }
+
+    func recentTurnCognitionSnapshots(limit: Int) -> [TurnCognitionSnapshot] {
+        guard limit > 0 else { return [] }
+        return Array(storedRecentTurnCognitionSnapshots().prefix(limit))
     }
 
     func increment(_ counter: EvalCounter, by amount: Int = 1) {
@@ -194,6 +274,48 @@ final class GovernanceTelemetryStore {
             let key = Keys.promptEvaluationFindingCount(finding.code)
             defaults.set(defaults.integer(forKey: key) + 1, forKey: key)
         }
+    }
+
+    private func incrementIntegerKey(_ key: String, by amount: Int = 1) {
+        defaults.set(defaults.integer(forKey: key) + amount, forKey: key)
+    }
+
+    private func recordReviewRiskFlags(_ flags: [String]) {
+        guard !flags.isEmpty else { return }
+        var counts = storedReviewRiskFlagCounts()
+        for flag in flags {
+            counts[flag, default: 0] += 1
+        }
+        if let data = try? JSONEncoder().encode(counts) {
+            defaults.set(data, forKey: Keys.turnCognitionRiskFlagCounts)
+        }
+    }
+
+    private func storedReviewRiskFlagCounts() -> [String: Int] {
+        guard let data = defaults.data(forKey: Keys.turnCognitionRiskFlagCounts),
+              let counts = try? JSONDecoder().decode([String: Int].self, from: data) else {
+            return [:]
+        }
+        return counts
+    }
+
+    private func recordRecentTurnCognitionSnapshot(_ snapshot: TurnCognitionSnapshot) {
+        var snapshots = storedRecentTurnCognitionSnapshots()
+        snapshots.insert(snapshot, at: 0)
+        if snapshots.count > Self.recentTurnCognitionSnapshotLimit {
+            snapshots = Array(snapshots.prefix(Self.recentTurnCognitionSnapshotLimit))
+        }
+        if let data = try? JSONEncoder().encode(snapshots) {
+            defaults.set(data, forKey: Keys.recentTurnCognitionSnapshots)
+        }
+    }
+
+    private func storedRecentTurnCognitionSnapshots() -> [TurnCognitionSnapshot] {
+        guard let data = defaults.data(forKey: Keys.recentTurnCognitionSnapshots),
+              let snapshots = try? JSONDecoder().decode([TurnCognitionSnapshot].self, from: data) else {
+            return []
+        }
+        return snapshots
     }
 
     func recordMemoryStorageSuppressed(reason: MemorySuppressionReason = .unspecified) {

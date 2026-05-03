@@ -90,6 +90,19 @@ struct QuickActionMemoryPolicy: Equatable {
     let includeJudgeFocus: Bool
     let includeBehaviorProfile: Bool
 
+    var includeSlowCognition: Bool {
+        includeGlobalMemory ||
+            includeEssentialStory ||
+            includeUserModel ||
+            includeMemoryEvidence ||
+            includeProjectMemory ||
+            includeConversationMemory ||
+            includeRecentConversations ||
+            includeProjectGoal ||
+            includeCitations ||
+            includeContradictionRecall
+    }
+
     static let full = QuickActionMemoryPolicy(
         includeGlobalMemory: true,
         includeEssentialStory: true,

@@ -220,6 +220,9 @@ final class ChatTurnRunnerShadowLearningTests: XCTestCase {
         XCTAssertEqual(snapshot.assistantMessageId, completion.assistantMessage.id)
         XCTAssertTrue(snapshot.slowCognitionAttached)
         XCTAssertTrue(snapshot.promptLayers.contains("slow_cognition"))
+        XCTAssertEqual(snapshot.slowCognitionArtifactId, slowArtifact.id)
+        XCTAssertEqual(snapshot.slowCognitionEvidenceRefIds, slowArtifact.evidenceRefs.map(\.id))
+        XCTAssertEqual(snapshot.slowCognitionEvidenceRefCount, slowArtifact.evidenceRefs.count)
         XCTAssertNotNil(snapshot.reviewArtifactId)
         XCTAssertEqual(snapshot.reviewRiskFlags, [])
         XCTAssertEqual(snapshot.conversationRecoveryRebasedMessageCount, 0)
@@ -227,6 +230,76 @@ final class ChatTurnRunnerShadowLearningTests: XCTestCase {
         let encoded = String(data: try JSONEncoder().encode(snapshot), encoding: .utf8) ?? ""
         XCTAssertFalse(encoded.contains(request.inputText))
         XCTAssertFalse(encoded.contains("Plan ready"))
+    }
+
+    func testRunnerPreservesSlowCognitionProvenanceWhenAgentLoopFallsBackToSingleShot() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let snapshotCapture = TurnCognitionSnapshotCapture()
+        let slowArtifact = CognitionArtifact(
+            organ: .patternAnalyst,
+            title: "Long-turn cognition direction",
+            summary: "Alex is designing Nous as a long-term mind system.",
+            confidence: 0.82,
+            jurisdiction: .selfReflection,
+            evidenceRefs: [
+                CognitionEvidenceRef(
+                    source: .reflectionClaim,
+                    id: UUID().uuidString,
+                    quote: "long-term mind system"
+                )
+            ],
+            suggestedSurfacing: "Use when Alex asks about long-term Nous direction.",
+            trace: CognitionTrace(
+                producer: .patternAnalyst,
+                sourceJobId: BackgroundAIJobID.weeklyReflection.rawValue
+            )
+        )
+        let runner = ChatTurnRunner(
+            conversationSessionStore: ConversationSessionStore(nodeStore: nodeStore),
+            turnPlanner: makePlanner(
+                nodeStore: nodeStore,
+                currentProvider: .openrouter,
+                slowCognitionArtifactProvider: FixedSlowCognitionArtifactProvider(artifacts: [slowArtifact])
+            ),
+            turnExecutor: TurnExecutor(
+                llmServiceProvider: {
+                    FixedLLMService(output: "Plan ready\n<chat_title>Fallback snapshot</chat_title>")
+                },
+                shouldUseGeminiHistoryCache: { false },
+                shouldPersistAssistantThinking: { false }
+            ),
+            outcomeFactory: TurnOutcomeFactory(shouldPersistMemory: { _, _ in false }),
+            onTurnCognitionSnapshot: { snapshotCapture.append($0) }
+        )
+        let request = TurnRequest(
+            turnId: UUID(),
+            snapshot: TurnSessionSnapshot(
+                currentNode: nil,
+                messages: [],
+                defaultProjectId: nil,
+                activeChatMode: nil,
+                activeQuickActionMode: .plan
+            ),
+            inputText: "How should we build the long-term mind system?",
+            attachments: [],
+            now: Date(timeIntervalSince1970: 5_000)
+        )
+        let sink = TurnSequencedEventSink(turnId: request.turnId, sink: NoOpTurnEventSink())
+
+        let completion = await runner.run(
+            request: request,
+            sink: sink,
+            abortReason: { .unexpectedCancellation }
+        )
+
+        XCTAssertNotNil(completion)
+        let snapshot = try XCTUnwrap(snapshotCapture.values().first)
+        XCTAssertEqual(snapshotCapture.values().count, 1)
+        XCTAssertTrue(snapshot.promptLayers.contains("slow_cognition"))
+        XCTAssertTrue(snapshot.slowCognitionAttached)
+        XCTAssertEqual(snapshot.slowCognitionArtifactId, slowArtifact.id)
+        XCTAssertEqual(snapshot.slowCognitionEvidenceRefIds, slowArtifact.evidenceRefs.map(\.id))
+        XCTAssertEqual(snapshot.slowCognitionEvidenceRefCount, slowArtifact.evidenceRefs.count)
     }
 
     func testSilentReviewerSkipsOrdinaryCompanionTurns() throws {
@@ -391,6 +464,7 @@ final class ChatTurnRunnerShadowLearningTests: XCTestCase {
 
     private func makePlanner(
         nodeStore: NodeStore,
+        currentProvider: LLMProvider = .gemini,
         judgeLLMServiceFactory: @escaping () -> (any LLMService)? = { nil },
         slowCognitionArtifactProvider: (any SlowCognitionArtifactProviding)? = nil
     ) -> TurnPlanner {
@@ -401,7 +475,7 @@ final class ChatTurnRunnerShadowLearningTests: XCTestCase {
             embeddingService: EmbeddingService(),
             memoryProjectionService: MemoryProjectionService(nodeStore: nodeStore),
             contradictionMemoryService: ContradictionMemoryService(core: core),
-            currentProviderProvider: { .gemini },
+            currentProviderProvider: { currentProvider },
             judgeLLMServiceFactory: judgeLLMServiceFactory,
             slowCognitionArtifactProvider: slowCognitionArtifactProvider
         )

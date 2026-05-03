@@ -15,8 +15,8 @@ final class SettingsViewModel {
         static let geminiForeground = "gemini-2.5-pro"
         static let geminiJudge = "gemini-2.5-pro"
         static let geminiReflection = "gemini-2.5-pro"
-        static let claudeForeground = "claude-sonnet-4-6-20250414"
-        static let claudeJudge = "claude-haiku-4-5-20251001"
+        static let claudeForeground = "claude-sonnet-4-6"
+        static let claudeJudge = "claude-sonnet-4-6"
         static let openAIForeground = "gpt-4o"
         static let openAIJudge = "gpt-4o-mini"
         static let openRouterForeground = "anthropic/claude-sonnet-4.6"
@@ -285,8 +285,12 @@ final class SettingsViewModel {
             guard !openaiApiKey.isEmpty else { return nil }
             return OpenAILLMService(apiKey: openaiApiKey, model: ModelCatalog.openAIJudge)
         case .openrouter:
-            guard !geminiApiKey.isEmpty else { return nil }
-            return GeminiLLMService(apiKey: geminiApiKey, model: ModelCatalog.geminiJudge)
+            guard !openrouterApiKey.isEmpty else { return nil }
+            return OpenRouterLLMService(
+                apiKey: openrouterApiKey,
+                model: ModelCatalog.openRouterForeground,
+                webSearchEnabled: false
+            )
         }
     }
 
@@ -335,7 +339,7 @@ final class SettingsViewModel {
         case .openai:
             return ModelCatalog.openAIJudge
         case .openrouter:
-            return ModelCatalog.geminiJudge
+            return ModelCatalog.openRouterForeground
         }
     }
 
@@ -353,10 +357,10 @@ final class SettingsViewModel {
         case .openai:
             return "Separate lightweight judge model for retrieval and provocation decisions."
         case .openrouter:
-            if geminiApiKey.isEmpty {
-                return "Missing Gemini API key; judge checks are currently skipped while OpenRouter handles foreground chat."
+            if openrouterApiKey.isEmpty {
+                return "Missing OpenRouter API key; judge checks are currently skipped."
             }
-            return "Uses Google AI Studio Gemini 2.5 Pro for judge checks while OpenRouter handles foreground chat."
+            return "Uses OpenRouter Sonnet 4.6 for judge checks while OpenRouter handles foreground chat."
         }
     }
 

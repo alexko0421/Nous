@@ -97,6 +97,113 @@ final class GraphEngineTests: XCTestCase {
         XCTAssertEqual(unrelated.x, originalUnrelated.x, accuracy: 0.001)
     }
 
+    func testDragRelaxationPropagatesThroughConnectedChainWithDampedFalloff() throws {
+        let draggedId = UUID()
+        let directNeighborId = UUID()
+        let secondDegreeNeighborId = UUID()
+        let unrelatedId = UUID()
+        let positions = [
+            draggedId: GraphPosition(x: 0, y: 0),
+            directNeighborId: GraphPosition(x: 90, y: 0),
+            secondDegreeNeighborId: GraphPosition(x: 190, y: 0),
+            unrelatedId: GraphPosition(x: -220, y: 0)
+        ]
+        let edges = [
+            NodeEdge(sourceId: draggedId, targetId: directNeighborId, strength: 1.0, type: .semantic),
+            NodeEdge(sourceId: directNeighborId, targetId: secondDegreeNeighborId, strength: 0.8, type: .semantic)
+        ]
+
+        let relaxed = GraphLayoutEngine().relaxPositionsAfterDrag(
+            draggedNodeId: draggedId,
+            from: GraphPosition(x: 0, y: 0),
+            to: GraphPosition(x: 140, y: 0),
+            positions: positions,
+            edges: edges
+        )
+
+        let directNeighbor = try XCTUnwrap(relaxed[directNeighborId])
+        let secondDegreeNeighbor = try XCTUnwrap(relaxed[secondDegreeNeighborId])
+        let unrelated = try XCTUnwrap(relaxed[unrelatedId])
+
+        XCTAssertGreaterThan(directNeighbor.x, 90)
+        XCTAssertGreaterThan(secondDegreeNeighbor.x, 190)
+        XCTAssertLessThan(secondDegreeNeighbor.x - 190, directNeighbor.x - 90)
+        XCTAssertEqual(unrelated.x, -220, accuracy: 0.001)
+    }
+
+    func testSmallDragRunsLiveForceThroughWiderConnectedGraph() throws {
+        let draggedId = UUID()
+        let firstNeighborId = UUID()
+        let secondNeighborId = UUID()
+        let thirdNeighborId = UUID()
+        let unrelatedId = UUID()
+        let positions = [
+            draggedId: GraphPosition(x: 0, y: 0),
+            firstNeighborId: GraphPosition(x: 90, y: 0),
+            secondNeighborId: GraphPosition(x: 180, y: 0),
+            thirdNeighborId: GraphPosition(x: 270, y: 0),
+            unrelatedId: GraphPosition(x: -220, y: 0)
+        ]
+        let edges = [
+            NodeEdge(sourceId: draggedId, targetId: firstNeighborId, strength: 1.0, type: .semantic),
+            NodeEdge(sourceId: firstNeighborId, targetId: secondNeighborId, strength: 0.9, type: .semantic),
+            NodeEdge(sourceId: secondNeighborId, targetId: thirdNeighborId, strength: 0.8, type: .semantic)
+        ]
+
+        let relaxed = GraphLayoutEngine().relaxPositionsAfterDrag(
+            draggedNodeId: draggedId,
+            from: GraphPosition(x: 0, y: 0),
+            to: GraphPosition(x: 14, y: 0),
+            positions: positions,
+            edges: edges
+        )
+
+        let firstNeighbor = try XCTUnwrap(relaxed[firstNeighborId])
+        let secondNeighbor = try XCTUnwrap(relaxed[secondNeighborId])
+        let thirdNeighbor = try XCTUnwrap(relaxed[thirdNeighborId])
+        let unrelated = try XCTUnwrap(relaxed[unrelatedId])
+
+        XCTAssertGreaterThan(firstNeighbor.x, 96)
+        XCTAssertGreaterThan(secondNeighbor.x, 184)
+        XCTAssertGreaterThan(thirdNeighbor.x, 272)
+        XCTAssertEqual(unrelated.x, -220, accuracy: 0.001)
+    }
+
+    func testDragRelaxationLeavesDisconnectedEdgeComponentStill() throws {
+        let draggedId = UUID()
+        let connectedId = UUID()
+        let remoteSourceId = UUID()
+        let remoteTargetId = UUID()
+        let positions = [
+            draggedId: GraphPosition(x: 0, y: 0),
+            connectedId: GraphPosition(x: 92, y: 0),
+            remoteSourceId: GraphPosition(x: -260, y: -80),
+            remoteTargetId: GraphPosition(x: -176, y: -80)
+        ]
+        let edges = [
+            NodeEdge(sourceId: draggedId, targetId: connectedId, strength: 1.0, type: .semantic),
+            NodeEdge(sourceId: remoteSourceId, targetId: remoteTargetId, strength: 0.9, type: .semantic)
+        ]
+
+        let relaxed = GraphLayoutEngine().relaxPositionsAfterDrag(
+            draggedNodeId: draggedId,
+            from: GraphPosition(x: 0, y: 0),
+            to: GraphPosition(x: 36, y: 0),
+            positions: positions,
+            edges: edges
+        )
+
+        let connected = try XCTUnwrap(relaxed[connectedId])
+        let remoteSource = try XCTUnwrap(relaxed[remoteSourceId])
+        let remoteTarget = try XCTUnwrap(relaxed[remoteTargetId])
+
+        XCTAssertGreaterThan(connected.x, 92)
+        XCTAssertEqual(remoteSource.x, -260, accuracy: 0.001)
+        XCTAssertEqual(remoteSource.y, -80, accuracy: 0.001)
+        XCTAssertEqual(remoteTarget.x, -176, accuracy: 0.001)
+        XCTAssertEqual(remoteTarget.y, -80, accuracy: 0.001)
+    }
+
     private func minimumPairDistance(in positions: [UUID: GraphPosition]) -> Float {
         let values = Array(positions.values)
         guard values.count > 1 else { return 0 }
@@ -229,6 +336,89 @@ final class GraphEngineTests: XCTestCase {
         let edge = try XCTUnwrap(nodeStore.fetchEdges(nodeId: n1.id).first)
         XCTAssertEqual(edge.relationKind, .topicSimilarity)
         XCTAssertGreaterThan(edge.strength, 0.75)
+    }
+
+    func testRefineSemanticEdgeUpgradesVectorEdgeWithConcreteLLMRelation() async throws {
+        engine = GraphEngine(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            relationJudge: GalaxyRelationJudge(
+                llmServiceProvider: {
+                    StaticGraphRelationLLMService(output: """
+                    {
+                      "relation": "same_pattern",
+                      "confidence": 0.86,
+                      "explanation": "两段都在问 UI/UX 能不能成为产品成功的关键能力。",
+                      "source_evidence": "未来 aui 设计师系咪一个好吃香嘅职位",
+                      "target_evidence": "最终用户用嘅都係个 interface，所以 UI 靓唔靓、UX 好唔好",
+                      "source_atom_id": null,
+                      "target_atom_id": null
+                    }
+                    """)
+                }
+            )
+        )
+        var n1 = NousNode(
+            type: .conversation,
+            title: "UIUX 设计师嘅未来",
+            content: "你觉得喺未来 aui 设计师系咪一个好吃香嘅职位呢。"
+        )
+        n1.embedding = [1.0, 0.0, 0.0]
+        var n2 = NousNode(
+            type: .conversation,
+            title: "Direction 模式开场",
+            content: "最终用户用嘅都係个 interface，所以 UI 靓唔靓、UX 好唔好，都係决定个 product 成功与否嘅关键。"
+        )
+        n2.embedding = [0.9, 0.1, 0.0]
+        try nodeStore.insertNode(n1)
+        try nodeStore.insertNode(n2)
+        try engine.generateSemanticEdges(for: n1)
+        let originalEdge = try XCTUnwrap(nodeStore.fetchEdges(nodeId: n1.id).first)
+        XCTAssertEqual(originalEdge.relationKind, .topicSimilarity)
+
+        let refinedEdge = try await engine.refineSemanticEdge(sourceId: n1.id, targetId: n2.id)
+
+        XCTAssertEqual(refinedEdge?.id, originalEdge.id)
+        XCTAssertEqual(refinedEdge?.relationKind, .samePattern)
+        XCTAssertEqual(refinedEdge?.explanation, "两段都在问 UI/UX 能不能成为产品成功的关键能力。")
+        let storedEdge = try XCTUnwrap(nodeStore.fetchEdges(nodeId: n1.id).first)
+        XCTAssertEqual(storedEdge.id, originalEdge.id)
+        XCTAssertEqual(storedEdge.relationKind, .samePattern)
+    }
+
+    func testRefineSemanticEdgeRemovesVectorEdgeWhenLLMFindsNoUsefulRelation() async throws {
+        engine = GraphEngine(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            relationJudge: GalaxyRelationJudge(
+                llmServiceProvider: {
+                    StaticGraphRelationLLMService(output: """
+                    {
+                      "relation": "none",
+                      "confidence": 0.92,
+                      "explanation": "只是共同提到购物，不能构成有用关系。",
+                      "source_evidence": "buy the shoes tomorrow right after class",
+                      "target_evidence": "hung out around shopping/buying things",
+                      "source_atom_id": null,
+                      "target_atom_id": null
+                    }
+                    """)
+                }
+            )
+        )
+        var n1 = NousNode(type: .conversation, title: "Shoe decision", content: "Alex plans to buy the shoes tomorrow right after class.")
+        n1.embedding = [1.0, 0.0, 0.0]
+        var n2 = NousNode(type: .note, title: "Shopping hangout", content: "Alex and the Mexican girl previously hung out around shopping/buying things.")
+        n2.embedding = [0.95, 0.05, 0.0]
+        try nodeStore.insertNode(n1)
+        try nodeStore.insertNode(n2)
+        try engine.generateSemanticEdges(for: n1)
+        XCTAssertEqual(try nodeStore.fetchEdges(nodeId: n1.id).count, 1)
+
+        let refinedEdge = try await engine.refineSemanticEdge(sourceId: n1.id, targetId: n2.id)
+
+        XCTAssertNil(refinedEdge)
+        XCTAssertTrue(try nodeStore.fetchEdges(nodeId: n1.id).isEmpty)
     }
 
     func testGenerateSharedEdges() throws {

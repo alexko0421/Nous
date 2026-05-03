@@ -116,7 +116,7 @@ final class SettingsViewModelTests: XCTestCase {
     func testRuntimeModelSummariesShowOpenRouterForegroundAndJudgeModels() {
         let vm = makeViewModel()
         vm.selectedProvider = .openrouter
-        vm.geminiApiKey = "gemini-key"
+        vm.openrouterApiKey = "openrouter-key"
 
         XCTAssertEqual(
             vm.runtimeModelSummaries,
@@ -128,8 +128,8 @@ final class SettingsViewModelTests: XCTestCase {
                 ),
                 .init(
                     label: "Judge tasks",
-                    model: "gemini-2.5-pro",
-                    detail: "Uses Google AI Studio Gemini 2.5 Pro for judge checks while OpenRouter handles foreground chat."
+                    model: "anthropic/claude-sonnet-4.6",
+                    detail: "Uses OpenRouter Sonnet 4.6 for judge checks while OpenRouter handles foreground chat."
                 ),
                 .init(
                     label: "Weekly reflections",
@@ -140,16 +140,16 @@ final class SettingsViewModelTests: XCTestCase {
         )
     }
 
-    func testRuntimeModelSummariesShowOpenRouterJudgeTargetWhenGeminiKeyMissing() {
+    func testRuntimeModelSummariesShowOpenRouterJudgeTargetWhenOpenRouterKeyMissing() {
         let vm = makeViewModel()
         vm.selectedProvider = .openrouter
 
         let judge = vm.runtimeModelSummaries.first { $0.label == "Judge tasks" }
 
-        XCTAssertEqual(judge?.model, "gemini-2.5-pro")
+        XCTAssertEqual(judge?.model, "anthropic/claude-sonnet-4.6")
         XCTAssertEqual(
             judge?.detail,
-            "Missing Gemini API key; judge checks are currently skipped while OpenRouter handles foreground chat."
+            "Missing OpenRouter API key; judge checks are currently skipped."
         )
     }
 
@@ -166,23 +166,32 @@ final class SettingsViewModelTests: XCTestCase {
         XCTAssertFalse(vm.shouldShowSupplementalGeminiKeyField)
     }
 
-    func testMakeJudgeLLMServiceUsesGeminiProForOpenRouterWhenGeminiKeyExists() {
+    func testMakeJudgeLLMServiceUsesOpenRouterSonnet46ForOpenRouterWhenOpenRouterKeyExists() {
         let vm = makeViewModel()
         vm.selectedProvider = .openrouter
         vm.openrouterApiKey = "test-key"
-        vm.geminiApiKey = "gemini-key"
 
         let service = vm.makeJudgeLLMService()
-        let gemini = service as? GeminiLLMService
-        XCTAssertEqual(gemini?.model, "gemini-2.5-pro")
+        let openRouter = service as? OpenRouterLLMService
+        XCTAssertEqual(openRouter?.model, "anthropic/claude-sonnet-4.6")
+        XCTAssertEqual(openRouter?.webSearchEnabled, false)
     }
 
-    func testMakeJudgeLLMServiceReturnsNilForOpenRouterWhenGeminiKeyMissing() {
+    func testMakeJudgeLLMServiceReturnsNilForOpenRouterWhenOpenRouterKeyMissing() {
         let vm = makeViewModel()
         vm.selectedProvider = .openrouter
-        vm.openrouterApiKey = "test-key"
 
         XCTAssertNil(vm.makeJudgeLLMService())
+    }
+
+    func testMakeJudgeLLMServiceUsesSonnet46ForClaudeWhenClaudeKeyExists() {
+        let vm = makeViewModel()
+        vm.selectedProvider = .claude
+        vm.claudeApiKey = "test-key"
+
+        let service = vm.makeJudgeLLMService()
+        let claude = service as? ClaudeLLMService
+        XCTAssertEqual(claude?.model, "claude-sonnet-4-6")
     }
 
     func testMakeLLMServiceConfiguresOpenRouterWebSearch() {

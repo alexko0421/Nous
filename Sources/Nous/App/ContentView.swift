@@ -22,11 +22,7 @@ struct ContentView: View {
     @AppStorage("nous.appearance") private var appearanceMode = "system"
 
     private var preferredScheme: ColorScheme? {
-        switch appearanceMode {
-        case "light": return .light
-        case "dark":  return .dark
-        default:      return nil
-        }
+        AppAppearanceMode.preferredColorScheme(for: appearanceMode)
     }
 
     var body: some View {
@@ -53,6 +49,7 @@ struct ContentView: View {
             }
         }
         .preferredColorScheme(preferredScheme)
+        .background(WindowAppearanceBridge(appearanceMode: appearanceMode))
     }
 
     @ViewBuilder

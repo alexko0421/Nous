@@ -8,6 +8,8 @@ final class BeadsAgentWorkServiceTests: XCTestCase {
         XCTAssertEqual(commands.map(\.command), [
             "bd prime",
             "bd ready --json",
+            "scripts/nous_harness_check.sh quick",
+            "scripts/nous_harness_check.sh full",
             "scripts/setup_beads_agent_memory.sh"
         ])
         XCTAssertTrue(commands.allSatisfy { !$0.command.contains(" close ") })
@@ -138,6 +140,70 @@ final class BeadsAgentWorkServiceTests: XCTestCase {
         XCTAssertTrue(snapshot.inProgress.isEmpty)
         XCTAssertTrue(snapshot.recentClosed.isEmpty)
     }
+
+    func testHarnessOnlySnapshotLoadsQualityStateWithoutBeadsCommands() {
+        let harnessRun = HarnessRunRecord(
+            mode: .quick,
+            status: .passed,
+            startedAt: Date(timeIntervalSince1970: 10),
+            endedAt: Date(timeIntervalSince1970: 12),
+            findings: [.sourceSetChanged],
+            detail: "Quick gate passed."
+        )
+        let harness = HarnessHealthSnapshot(recentRuns: [harnessRun])
+        let runtime = RuntimeHarnessSnapshot(
+            totalTurnCount: 2,
+            reviewedTurnCount: 2,
+            reviewerCoverageRate: 1,
+            riskFlagCounts: ["sycophancy_risk": 1],
+            lastRiskFlags: ["sycophancy_risk"],
+            sycophancyFixtureTrend: "9/9 sycophancy fixtures passing"
+        )
+        let runner = FakeBeadsCommandRunner(outputs: [:])
+        let service = BeadsAgentWorkService(
+            commandRunner: runner,
+            harnessLoader: FakeHarnessHealthLoader(snapshot: harness),
+            runtimeHarnessLoader: FakeRuntimeHarnessLoader(snapshot: runtime)
+        )
+
+        let snapshot = service.loadHarnessOnlySnapshot()
+
+        XCTAssertTrue(runner.invocations.isEmpty)
+        XCTAssertEqual(snapshot.harness.latestQuickRun, harnessRun)
+        XCTAssertEqual(snapshot.runtimeHarness, runtime)
+        XCTAssertTrue(snapshot.ready.isEmpty)
+        XCTAssertTrue(snapshot.inProgress.isEmpty)
+        XCTAssertTrue(snapshot.recentClosed.isEmpty)
+    }
+
+    @MainActor
+    func testViewModelKeepsHarnessVisibleWhenBeadsRefreshFails() async {
+        let harnessRun = HarnessRunRecord(
+            mode: .quick,
+            status: .passed,
+            startedAt: Date(timeIntervalSince1970: 10),
+            endedAt: Date(timeIntervalSince1970: 12),
+            findings: [.sourceSetChanged],
+            detail: "Quick gate passed."
+        )
+        let service = BeadsAgentWorkService(
+            commandRunner: FakeBeadsCommandRunner(outputs: [:]),
+            harnessLoader: FakeHarnessHealthLoader(snapshot: HarnessHealthSnapshot(recentRuns: [harnessRun])),
+            runtimeHarnessLoader: FakeRuntimeHarnessLoader(snapshot: RuntimeHarnessSnapshot(totalTurnCount: 1))
+        )
+        let viewModel = BeadsAgentWorkViewModel(service: service)
+
+        viewModel.refresh()
+        for _ in 0..<50 where viewModel.isLoading {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        XCTAssertFalse(viewModel.isLoading)
+        XCTAssertTrue(viewModel.hasLoaded)
+        XCTAssertNotNil(viewModel.errorMessage)
+        XCTAssertEqual(viewModel.snapshot.harness.latestQuickRun, harnessRun)
+        XCTAssertEqual(viewModel.snapshot.runtimeHarness.totalTurnCount, 1)
+    }
 }
 
 private final class FakeBeadsCommandRunner: BeadsCommandRunning {
@@ -160,4 +226,20 @@ private final class FakeBeadsCommandRunner: BeadsCommandRunning {
 
 private struct MissingFakeBeadsOutput: Error {
     let arguments: [String]
+}
+
+private struct FakeHarnessHealthLoader: HarnessHealthLoading {
+    let snapshot: HarnessHealthSnapshot
+
+    func loadSnapshot() -> HarnessHealthSnapshot {
+        snapshot
+    }
+}
+
+private struct FakeRuntimeHarnessLoader: RuntimeHarnessLoading {
+    let snapshot: RuntimeHarnessSnapshot
+
+    func loadSnapshot() -> RuntimeHarnessSnapshot {
+        snapshot
+    }
 }

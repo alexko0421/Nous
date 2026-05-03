@@ -230,9 +230,8 @@ final class TurnPlanner {
             indexedSkillCount: indexedSkillIds.count,
             provider: provider
         )
-        let responseShapeBlock = Self.responseShapeBlock(for: stewardship)
-        let responseStanceBlock = Self.responseStanceBlock(for: stewardship)
-        let quickActionContextBlocks = [resolvedQuickActionAddendum, responseShapeBlock, responseStanceBlock]
+        let turnGuidanceBlock = Self.turnGuidanceBlock(for: stewardship)
+        let quickActionContextBlocks = [resolvedQuickActionAddendum, turnGuidanceBlock]
             .compactMap { block -> String? in
                 guard let block,
                       !block.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -246,13 +245,15 @@ final class TurnPlanner {
             memoryGraphRecall,
             removingDuplicateFocusText: focusMemoryText
         )
-        let slowCognitionArtifacts = (try? slowCognitionArtifactProvider?.artifacts(
-            userId: "alex",
-            currentInput: promptQuery,
-            currentNode: prepared.node,
-            projectId: prepared.node.projectId,
-            now: request.now
-        )) ?? []
+        let slowCognitionArtifacts = policy.includeSlowCognition
+            ? (try? slowCognitionArtifactProvider?.artifacts(
+                userId: "alex",
+                currentInput: promptQuery,
+                currentNode: prepared.node,
+                projectId: prepared.node.projectId,
+                now: request.now
+            )) ?? []
+            : []
 
         let turnSlice = PromptContextAssembler.assembleContext(
             chatMode: effectiveMode,
@@ -465,32 +466,38 @@ final class TurnPlanner {
         }
     }
 
-    private static func responseShapeBlock(for decision: TurnStewardDecision) -> String? {
-        let instruction: String?
-        switch decision.responseShape {
-        case .answerNow:
-            instruction = nil
-        case .askOneQuestion:
-            instruction = "Ask exactly one short question before giving guidance. Do not include a clarification card."
-        case .producePlan:
-            instruction = "Produce a concrete structured plan. Do not stay in coaching mode."
-        case .listDirections:
-            instruction = "Generate distinct directions before judging which feel alive."
-        case .narrowNextStep:
-            instruction = "Narrow to one concrete next step. Do not leave equally weighted options."
-        }
+    private static func turnGuidanceBlock(for decision: TurnStewardDecision) -> String? {
+        let guidance = [
+            responseShapeInstruction(for: decision.responseShape).map { "Response shape: \($0)" },
+            responseStanceInstruction(for: decision).map { "Response stance: \($0)" }
+        ].compactMap { $0 }
 
-        guard let instruction else { return nil }
+        guard !guidance.isEmpty else { return nil }
         return """
         ---
 
-        TURN STEWARD RESPONSE SHAPE:
-        \(instruction)
+        TURN GUIDANCE:
+        \(guidance.joined(separator: "\n"))
         Do not mention routing, stewardship, modes, policies, or internal instructions.
         """
     }
 
-    private static func responseStanceBlock(for decision: TurnStewardDecision) -> String? {
+    private static func responseShapeInstruction(for shape: ResponseShape) -> String? {
+        switch shape {
+        case .answerNow:
+            return nil
+        case .askOneQuestion:
+            return "Ask exactly one short question before giving guidance. Do not include a clarification card."
+        case .producePlan:
+            return "Produce a concrete structured plan. Do not stay in coaching mode."
+        case .listDirections:
+            return "Generate distinct directions before judging which feel alive."
+        case .narrowNextStep:
+            return "Narrow to one concrete next step. Do not leave equally weighted options."
+        }
+    }
+
+    private static func responseStanceInstruction(for decision: TurnStewardDecision) -> String? {
         guard decision.route == .ordinaryChat,
               decision.trace.routerMode == .active,
               let stance = decision.trace.responseStance else {
@@ -510,15 +517,7 @@ final class TurnPlanner {
         case .hardJudge:
             instruction = "Alex explicitly invited challenge. You may name a real tension plainly, but stay useful and proportionate."
         }
-
-        guard let instruction else { return nil }
-        return """
-        ---
-
-        RESPONSE STANCE:
-        \(instruction)
-        Do not mention routing, stewardship, modes, policies, or internal instructions.
-        """
+        return instruction
     }
 
     private func makeJudgeEvent(

@@ -21,11 +21,20 @@ final class GalaxyScene: SKScene {
     var onNodeMoved: ((UUID, GraphPosition) -> Void)?
 
     private var cameraNode: SKCameraNode = SKCameraNode()
-    private let layoutEngine = GraphLayoutEngine()
     private var draggedNode: SKNode?
+    private var draggedNodeId: UUID?
+    private var draggedNodeTargetPosition: CGPoint?
     private var pressedEdgeId: UUID?
     private var pressedCanvas = false
     private var dragStartPosition: CGPoint = .zero
+    private var dragStartViewPosition: CGPoint = .zero
+    private var draggedNodeOffset: CGPoint = .zero
+    private var cameraDragStartPosition: CGPoint = .zero
+    private var dragPhysicsVelocities: [UUID: CGVector] = [:]
+    private var dragPhysicsRestLengths: [UUID: CGFloat] = [:]
+    private var dragPhysicsComponentIds: Set<UUID> = []
+    private var dragPhysicsEdges: [NodeEdge] = []
+    private var lastDragPhysicsUpdateTime: TimeInterval?
     private var edgeSprites: [UUID: SKShapeNode] = [:]
     private var nodeSprites: [UUID: SKShapeNode] = [:]
     private var nodeTitleLabels: [UUID: SKLabelNode] = [:]
@@ -96,6 +105,22 @@ final class GalaxyScene: SKScene {
         updateEdgePaths()
     }
 
+    override func update(_ currentTime: TimeInterval) {
+        guard draggedNodeId != nil else {
+            lastDragPhysicsUpdateTime = nil
+            return
+        }
+
+        let rawDeltaTime = lastDragPhysicsUpdateTime.map { currentTime - $0 } ?? (1.0 / 60.0)
+        lastDragPhysicsUpdateTime = currentTime
+
+        let previousPositions = positions
+        if applyDragPhysics(deltaTime: CGFloat(rawDeltaTime).clamped(to: CGFloat(1.0 / 120.0)...CGFloat(1.0 / 30.0))) {
+            syncPositions()
+            publishMovedPositions(previousPositions: previousPositions)
+        }
+    }
+
     private func drawEdges() {
         for edge in graphEdges {
             guard
@@ -103,9 +128,10 @@ final class GalaxyScene: SKScene {
                 let tgtPos = positions[edge.targetId]
             else { continue }
 
-            let path = CGMutablePath()
-            path.move(to: CGPoint(x: CGFloat(srcPos.x), y: CGFloat(srcPos.y)))
-            path.addLine(to: CGPoint(x: CGFloat(tgtPos.x), y: CGFloat(tgtPos.y)))
+            let lineKind = GalaxyRelationLineKind.kind(for: edge)
+            let start = CGPoint(x: CGFloat(srcPos.x), y: CGFloat(srcPos.y))
+            let end = CGPoint(x: CGFloat(tgtPos.x), y: CGFloat(tgtPos.y))
+            let path = edgePath(from: start, to: end, kind: lineKind)
 
             let line = SKShapeNode(path: path)
             let isSelectedEdge = edge.id == selectedEdgeId
@@ -114,10 +140,18 @@ final class GalaxyScene: SKScene {
             let strength = CGFloat(edge.strength).clamped(to: 0...1)
             let confidence = CGFloat(edge.confidence).clamped(to: 0...1)
             let visualStrength = max(strength, confidence)
-            let baseAlpha = isHighlightedEdge ? 0.36 + visualStrength * 0.22 : 0.10 + visualStrength * 0.08
+            let baseAlpha = lineKind == .candidate
+                ? 0.024 + visualStrength * 0.034
+                : (isHighlightedEdge ? 0.36 + visualStrength * 0.22 : 0.10 + visualStrength * 0.08)
 
             line.strokeColor = edgeColor(for: edge, alpha: isSelectedEdge ? 0.92 : (touchesSelectedNode ? max(baseAlpha, 0.58) : baseAlpha))
-            line.lineWidth = isSelectedEdge ? 2.0 : (touchesSelectedNode ? 1.45 : (isHighlightedEdge ? 1.12 + visualStrength * 0.42 : 0.72))
+            line.lineWidth = lineWidth(
+                for: lineKind,
+                visualStrength: visualStrength,
+                isSelectedEdge: isSelectedEdge,
+                touchesSelectedNode: touchesSelectedNode,
+                isHighlightedEdge: isHighlightedEdge
+            )
             line.glowWidth = 0
             line.zPosition = -1
             edgeSprites[edge.id] = line
@@ -146,7 +180,7 @@ final class GalaxyScene: SKScene {
 
             if isSelected || node.isFavorite {
                 let emphasisRing = SKShapeNode(circleOfRadius: CGFloat(radius + 3))
-                emphasisRing.strokeColor = galaxyAmber(alpha: isSelected ? 0.18 : 0.09)
+                emphasisRing.strokeColor = isSelected ? galaxyAmber(alpha: 0.18) : neutralStroke(alpha: 0.16)
                 emphasisRing.lineWidth = 0.7
                 emphasisRing.fillColor = .clear
                 emphasisRing.zPosition = 0
@@ -246,25 +280,13 @@ final class GalaxyScene: SKScene {
     }
 
     private func fillColor(for node: NousNode, isSelected: Bool) -> SKColor {
-        if isSelected {
-            return galaxyAmber(alpha: 0.98)
-        }
+        let alpha: CGFloat = isSelected || node.isFavorite ? 0.98 : 0.94
 
-        if node.isFavorite {
-            return champagneNode(alpha: 0.96)
-        }
-
-        switch nodePaletteIndex(for: node) {
-        case 0:
-            return ivoryNode(alpha: 0.95)
-        case 1:
-            return warmOrangeNode(alpha: 0.94)
-        case 2:
-            return sageNode(alpha: 0.94)
-        case 3:
-            return blueMistNode(alpha: 0.93)
-        default:
-            return roseTaupeNode(alpha: 0.94)
+        switch node.type {
+        case .conversation:
+            return neutralConversationNode(alpha: alpha)
+        case .note:
+            return neutralNoteNode(alpha: alpha)
         }
     }
 
@@ -274,34 +296,91 @@ final class GalaxyScene: SKScene {
         }
 
         if node.isFavorite {
-            return galaxyAmber(alpha: 0.44)
+            return neutralStroke(alpha: 0.52)
         }
 
-        return ivoryNode(alpha: 0.30)
+        return neutralStroke(alpha: 0.34)
     }
 
     private func edgeColor(for edge: NodeEdge, alpha: CGFloat) -> SKColor {
-        switch edge.type {
-        case .manual:
+        switch GalaxyRelationLineKind.kind(for: edge) {
+        case .samePattern, .manual:
             return galaxyAmber(alpha: alpha)
-        case .shared:
+        case .tension:
+            return roseLine(alpha: alpha)
+        case .support:
+            return sageLine(alpha: alpha)
+        case .sameProject:
             return blueMistLine(alpha: alpha)
-        case .semantic:
-            switch edge.relationKind {
-            case .tension, .contradicts:
-                return galaxyAmber(alpha: alpha)
-            case .samePattern:
-                return plumLine(alpha: alpha)
-            case .supports, .causeEffect:
-                return sageLine(alpha: alpha)
-            case .topicSimilarity:
-                return quietLine(alpha: alpha)
-            }
+        case .candidate:
+            return quietLine(alpha: alpha)
+        case nil:
+            return quietLine(alpha: alpha)
         }
     }
 
-    private func nodePaletteIndex(for node: NousNode) -> Int {
-        node.id.uuidString.unicodeScalars.reduce(0) { $0 + Int($1.value) } % 5
+    private func edgePath(
+        from start: CGPoint,
+        to end: CGPoint,
+        kind: GalaxyRelationLineKind?
+    ) -> CGPath {
+        guard kind == .candidate else {
+            let path = CGMutablePath()
+            path.move(to: start)
+            path.addLine(to: end)
+            return path
+        }
+
+        return dashedPath(from: start, to: end, dashLength: 6, gapLength: 7)
+    }
+
+    private func dashedPath(
+        from start: CGPoint,
+        to end: CGPoint,
+        dashLength: CGFloat,
+        gapLength: CGFloat
+    ) -> CGPath {
+        let path = CGMutablePath()
+        let dx = end.x - start.x
+        let dy = end.y - start.y
+        let distance = sqrt(dx * dx + dy * dy)
+        guard distance > 0 else { return path }
+
+        let ux = dx / distance
+        let uy = dy / distance
+        var travelled: CGFloat = 0
+
+        while travelled < distance {
+            let dashEnd = min(travelled + dashLength, distance)
+            let segmentStart = CGPoint(
+                x: start.x + ux * travelled,
+                y: start.y + uy * travelled
+            )
+            let segmentEnd = CGPoint(
+                x: start.x + ux * dashEnd,
+                y: start.y + uy * dashEnd
+            )
+
+            path.move(to: segmentStart)
+            path.addLine(to: segmentEnd)
+            travelled += dashLength + gapLength
+        }
+
+        return path
+    }
+
+    private func lineWidth(
+        for kind: GalaxyRelationLineKind?,
+        visualStrength: CGFloat,
+        isSelectedEdge: Bool,
+        touchesSelectedNode: Bool,
+        isHighlightedEdge: Bool
+    ) -> CGFloat {
+        if kind == .candidate {
+            return isSelectedEdge ? 1.35 : (touchesSelectedNode ? 1.0 : 0.38)
+        }
+
+        return isSelectedEdge ? 2.0 : (touchesSelectedNode ? 1.45 : (isHighlightedEdge ? 1.12 + visualStrength * 0.42 : 0.72))
     }
 
     private func labelColor(for node: NousNode, isSelected: Bool) -> SKColor {
@@ -320,28 +399,16 @@ final class GalaxyScene: SKScene {
         SKColor(red: 242/255, green: 229/255, blue: 205/255, alpha: alpha)
     }
 
-    private func taupeNode(alpha: CGFloat) -> SKColor {
-        SKColor(red: 184/255, green: 166/255, blue: 139/255, alpha: alpha)
+    private func neutralConversationNode(alpha: CGFloat) -> SKColor {
+        SKColor(red: 224/255, green: 224/255, blue: 221/255, alpha: alpha)
     }
 
-    private func champagneNode(alpha: CGFloat) -> SKColor {
-        SKColor(red: 236/255, green: 202/255, blue: 144/255, alpha: alpha)
+    private func neutralNoteNode(alpha: CGFloat) -> SKColor {
+        SKColor(red: 185/255, green: 186/255, blue: 185/255, alpha: alpha)
     }
 
-    private func warmOrangeNode(alpha: CGFloat) -> SKColor {
-        SKColor(red: 227/255, green: 166/255, blue: 95/255, alpha: alpha)
-    }
-
-    private func sageNode(alpha: CGFloat) -> SKColor {
-        SKColor(red: 166/255, green: 179/255, blue: 142/255, alpha: alpha)
-    }
-
-    private func blueMistNode(alpha: CGFloat) -> SKColor {
-        SKColor(red: 150/255, green: 169/255, blue: 184/255, alpha: alpha)
-    }
-
-    private func roseTaupeNode(alpha: CGFloat) -> SKColor {
-        SKColor(red: 190/255, green: 145/255, blue: 133/255, alpha: alpha)
+    private func neutralStroke(alpha: CGFloat) -> SKColor {
+        SKColor(red: 236/255, green: 232/255, blue: 224/255, alpha: alpha)
     }
 
     private func quietLine(alpha: CGFloat) -> SKColor {
@@ -358,6 +425,10 @@ final class GalaxyScene: SKScene {
 
     private func plumLine(alpha: CGFloat) -> SKColor {
         SKColor(red: 188/255, green: 157/255, blue: 204/255, alpha: alpha)
+    }
+
+    private func roseLine(alpha: CGFloat) -> SKColor {
+        SKColor(red: 205/255, green: 137/255, blue: 156/255, alpha: alpha)
     }
 
     private func truncated(_ text: String, maxLen: Int) -> String {
@@ -458,6 +529,12 @@ final class GalaxyScene: SKScene {
         event.location(in: self)
     }
 
+    private func viewPoint(from event: NSEvent) -> CGPoint {
+        guard let view else { return scenePoint(from: event) }
+        let point = view.convert(event.locationInWindow, from: nil)
+        return CGPoint(x: point.x, y: point.y)
+    }
+
     private func updateEdgePaths() {
         for edge in graphEdges {
             guard
@@ -466,23 +543,39 @@ final class GalaxyScene: SKScene {
                 let tgtPos = positions[edge.targetId]
             else { continue }
 
-            let path = CGMutablePath()
-            path.move(to: CGPoint(x: CGFloat(srcPos.x), y: CGFloat(srcPos.y)))
-            path.addLine(to: CGPoint(x: CGFloat(tgtPos.x), y: CGFloat(tgtPos.y)))
-            line.path = path
+            let start = CGPoint(x: CGFloat(srcPos.x), y: CGFloat(srcPos.y))
+            let end = CGPoint(x: CGFloat(tgtPos.x), y: CGFloat(tgtPos.y))
+            line.path = edgePath(
+                from: start,
+                to: end,
+                kind: GalaxyRelationLineKind.kind(for: edge)
+            )
         }
     }
 
     // MARK: - Mouse Events
 
     override func mouseDown(with event: NSEvent) {
-        let point = scenePoint(from: event)
+        beginPointerInteraction(
+            at: scenePoint(from: event),
+            viewPoint: viewPoint(from: event)
+        )
+    }
+
+    private func beginPointerInteraction(at point: CGPoint, viewPoint: CGPoint) {
         dragStartPosition = point
+        dragStartViewPosition = viewPoint
+        draggedNodeOffset = .zero
+        cameraDragStartPosition = cameraNode.position
 
         switch tapTarget(at: point) {
         case .node:
             guard let (sprite, _) = nodeAt(point: point) else { return }
             draggedNode = sprite
+            draggedNodeOffset = CGPoint(
+                x: sprite.position.x - point.x,
+                y: sprite.position.y - point.y
+            )
         case .edge(let edgeId):
             pressedEdgeId = edgeId
         case .canvas:
@@ -491,27 +584,43 @@ final class GalaxyScene: SKScene {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        movePointerInteraction(
+            to: scenePoint(from: event),
+            viewPoint: viewPoint(from: event)
+        )
+    }
+
+    private func movePointerInteraction(to point: CGPoint, viewPoint: CGPoint) {
+        if pressedCanvas {
+            let dx = viewPoint.x - dragStartViewPosition.x
+            let dy = viewPoint.y - dragStartViewPosition.y
+            cameraNode.position = CGPoint(
+                x: cameraDragStartPosition.x - dx * cameraNode.xScale,
+                y: cameraDragStartPosition.y - dy * cameraNode.yScale
+            )
+            updateTitleLabelVisibility()
+            return
+        }
+
         guard let dragged = draggedNode else { return }
-        let point = scenePoint(from: event)
+        let centerPoint = CGPoint(
+            x: point.x + draggedNodeOffset.x,
+            y: point.y + draggedNodeOffset.y
+        )
 
         if let name = dragged.name, let id = UUID(uuidString: name) {
             let previousPositions = positions
-            let previousPosition = positions[id] ?? GraphPosition(
-                x: Float(dragged.position.x),
-                y: Float(dragged.position.y)
-            )
-            let position = GraphPosition(x: Float(point.x), y: Float(point.y))
-            positions = layoutEngine.relaxPositionsAfterDrag(
-                draggedNodeId: id,
-                from: previousPosition,
-                to: position,
-                positions: positions,
-                edges: graphEdges
-            )
+            if draggedNodeId != id {
+                prepareDragPhysics(for: id)
+            }
+            draggedNodeTargetPosition = centerPoint
+            positions[id] = GraphPosition(x: Float(centerPoint.x), y: Float(centerPoint.y))
+            dragPhysicsVelocities[id] = .zero
+            _ = applyDragPhysics(deltaTime: CGFloat(1.0 / 60.0))
             syncPositions()
             publishMovedPositions(previousPositions: previousPositions)
         } else {
-            dragged.position = point
+            dragged.position = centerPoint
             updateEdgePaths()
         }
     }
@@ -531,15 +640,29 @@ final class GalaxyScene: SKScene {
     }
 
     override func mouseUp(with event: NSEvent) {
+        endPointerInteraction(
+            at: scenePoint(from: event),
+            viewPoint: viewPoint(from: event)
+        )
+    }
+
+    private func endPointerInteraction(at point: CGPoint, viewPoint: CGPoint) {
         defer {
             draggedNode = nil
+            draggedNodeId = nil
+            draggedNodeTargetPosition = nil
             pressedEdgeId = nil
             pressedCanvas = false
+            draggedNodeOffset = .zero
+            dragPhysicsVelocities.removeAll()
+            dragPhysicsRestLengths.removeAll()
+            dragPhysicsComponentIds.removeAll()
+            dragPhysicsEdges.removeAll()
+            lastDragPhysicsUpdateTime = nil
         }
 
-        let point = scenePoint(from: event)
-        let dx = point.x - dragStartPosition.x
-        let dy = point.y - dragStartPosition.y
+        let dx = viewPoint.x - dragStartViewPosition.x
+        let dy = viewPoint.y - dragStartViewPosition.y
         let distance = sqrt(dx * dx + dy * dy)
 
         if let edgeId = pressedEdgeId, distance < 5 {
@@ -560,6 +683,131 @@ final class GalaxyScene: SKScene {
                 onNodeTapped?(id)
             }
         }
+    }
+
+    private func prepareDragPhysics(for nodeId: UUID) {
+        draggedNodeId = nodeId
+        dragPhysicsComponentIds = connectedComponentIds(startingAt: nodeId)
+        dragPhysicsEdges = graphEdges.filter { edge in
+            dragPhysicsComponentIds.contains(edge.sourceId) && dragPhysicsComponentIds.contains(edge.targetId)
+        }
+        dragPhysicsRestLengths = Dictionary(uniqueKeysWithValues: dragPhysicsEdges.compactMap { edge in
+            guard
+                let source = positions[edge.sourceId],
+                let target = positions[edge.targetId]
+            else { return nil }
+
+            let dx = CGFloat(target.x - source.x)
+            let dy = CGFloat(target.y - source.y)
+            let distance = sqrt(dx * dx + dy * dy).clamped(to: 64...260)
+            return (edge.id, distance)
+        })
+
+        for id in dragPhysicsComponentIds {
+            dragPhysicsVelocities[id] = .zero
+        }
+        lastDragPhysicsUpdateTime = nil
+    }
+
+    private func applyDragPhysics(deltaTime: CGFloat) -> Bool {
+        guard
+            let draggedNodeId,
+            let targetPosition = draggedNodeTargetPosition,
+            positions[draggedNodeId] != nil
+        else { return false }
+
+        positions[draggedNodeId] = GraphPosition(
+            x: Float(targetPosition.x),
+            y: Float(targetPosition.y)
+        )
+
+        guard !dragPhysicsEdges.isEmpty else { return true }
+
+        let frameScale = (deltaTime * 60).clamped(to: 0.25...2.0)
+        let substepScale = frameScale / 2
+        applyDragPhysicsSubstep(frameScale: substepScale)
+        applyDragPhysicsSubstep(frameScale: substepScale)
+        positions[draggedNodeId] = GraphPosition(
+            x: Float(targetPosition.x),
+            y: Float(targetPosition.y)
+        )
+        dragPhysicsVelocities[draggedNodeId] = .zero
+        return true
+    }
+
+    private func applyDragPhysicsSubstep(frameScale: CGFloat) {
+        guard let draggedNodeId else { return }
+
+        var forces: [UUID: CGVector] = [:]
+        for edge in dragPhysicsEdges {
+            guard
+                let source = positions[edge.sourceId],
+                let target = positions[edge.targetId]
+            else { continue }
+
+            let dx = CGFloat(target.x - source.x)
+            let dy = CGFloat(target.y - source.y)
+            let distance = max(sqrt(dx * dx + dy * dy), 1)
+            let unitX = dx / distance
+            let unitY = dy / distance
+            let restLength = dragPhysicsRestLengths[edge.id] ?? distance
+            let strength = CGFloat(edge.strength).clamped(to: 0.25...1)
+            let force = (distance - restLength) * 0.18 * strength
+            let forceX = unitX * force
+            let forceY = unitY * force
+
+            let sourcePinned = edge.sourceId == draggedNodeId
+            let targetPinned = edge.targetId == draggedNodeId
+            let pinnedMultiplier: CGFloat = 1.22
+
+            if !sourcePinned {
+                let multiplier = targetPinned ? pinnedMultiplier : 1
+                forces[edge.sourceId, default: .zero].dx += forceX * multiplier
+                forces[edge.sourceId, default: .zero].dy += forceY * multiplier
+            }
+            if !targetPinned {
+                let multiplier = sourcePinned ? pinnedMultiplier : 1
+                forces[edge.targetId, default: .zero].dx -= forceX * multiplier
+                forces[edge.targetId, default: .zero].dy -= forceY * multiplier
+            }
+        }
+
+        let damping = pow(0.82, frameScale)
+        for id in dragPhysicsComponentIds where id != draggedNodeId {
+            guard var position = positions[id] else { continue }
+
+            let force = forces[id, default: .zero]
+            var velocity = dragPhysicsVelocities[id, default: .zero]
+            velocity.dx = (velocity.dx + force.dx * frameScale).clamped(to: -34...34) * damping
+            velocity.dy = (velocity.dy + force.dy * frameScale).clamped(to: -34...34) * damping
+
+            position.x += Float(velocity.dx * frameScale)
+            position.y += Float(velocity.dy * frameScale)
+            positions[id] = position
+            dragPhysicsVelocities[id] = velocity
+        }
+    }
+
+    private func connectedComponentIds(startingAt startId: UUID) -> Set<UUID> {
+        var adjacency: [UUID: Set<UUID>] = [:]
+        for edge in graphEdges {
+            adjacency[edge.sourceId, default: []].insert(edge.targetId)
+            adjacency[edge.targetId, default: []].insert(edge.sourceId)
+        }
+
+        var visited: Set<UUID> = [startId]
+        var queue = Array(adjacency[startId, default: []])
+        while let id = queue.first {
+            queue.removeFirst()
+            guard !visited.contains(id) else { continue }
+            visited.insert(id)
+
+            for neighbor in adjacency[id, default: []] where !visited.contains(neighbor) {
+                queue.append(neighbor)
+            }
+        }
+
+        return visited
     }
 
     // MARK: - Zoom (scroll wheel)
@@ -599,6 +847,22 @@ final class GalaxyScene: SKScene {
     func refreshPresentationForTesting(selectedNodeId: UUID?) {
         self.selectedNodeId = selectedNodeId
         refreshPresentationState()
+    }
+
+    func beginPointerInteractionForTesting(at point: CGPoint, viewPoint: CGPoint? = nil) {
+        beginPointerInteraction(at: point, viewPoint: viewPoint ?? point)
+    }
+
+    func movePointerInteractionForTesting(to point: CGPoint, viewPoint: CGPoint? = nil) {
+        movePointerInteraction(to: point, viewPoint: viewPoint ?? point)
+    }
+
+    func endPointerInteractionForTesting(at point: CGPoint, viewPoint: CGPoint? = nil) {
+        endPointerInteraction(at: point, viewPoint: viewPoint ?? point)
+    }
+
+    var cameraPositionForTesting: CGPoint {
+        cameraNode.position
     }
 }
 

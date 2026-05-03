@@ -1,5 +1,7 @@
 .superpowers/
 .beads/
+.build/
+results/
 *.xcuserstate
 xcuserdata/
 .DS_Store
