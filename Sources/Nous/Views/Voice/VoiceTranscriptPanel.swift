@@ -23,7 +23,7 @@ struct VoiceTranscriptPanel: View {
                 .frame(maxWidth: 480)
                 .frame(maxHeight: 360)
                 .background(
-                    NativeGlassPanel(cornerRadius: 14, tintColor: AppColor.glassTint) { EmptyView() }
+                    NativeGlassPanel(cornerRadius: 14, tintColor: AppColor.surfaceGlassTint) { EmptyView() }
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 14)

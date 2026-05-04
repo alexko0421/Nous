@@ -113,7 +113,7 @@ final class ActionMenuSeparationMotionTests: XCTestCase {
         }
     }
 
-    func testComposerGlassUsesSharedGlassTexture() throws {
+    func testGlassHierarchyUsesExplicitSurfaceAndControlTiers() throws {
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -123,18 +123,68 @@ final class ActionMenuSeparationMotionTests: XCTestCase {
             encoding: .utf8
         )
         XCTAssertFalse(themeSource.contains("composerGlassTint"))
+        XCTAssertTrue(themeSource.contains("surfaceGlassTint"))
+        XCTAssertTrue(themeSource.contains("controlGlassTint"))
 
-        let composerFiles = [
+        let sourceRoot = repoRoot.appendingPathComponent("Sources/Nous")
+        let swiftFiles = FileManager.default.enumerator(at: sourceRoot, includingPropertiesForKeys: nil)?
+            .compactMap { $0 as? URL }
+            .filter { $0.pathExtension == "swift" } ?? []
+
+        for fileURL in swiftFiles {
+            let source = try String(contentsOf: fileURL, encoding: .utf8)
+            XCTAssertFalse(source.contains("AppColor.glassTint"), fileURL.path)
+        }
+
+        let controlFiles = [
             "Sources/Nous/Views/ChatArea.swift",
             "Sources/Nous/Views/WelcomeView.swift"
         ]
 
-        for relativePath in composerFiles {
+        for relativePath in controlFiles {
             let fileURL = repoRoot.appendingPathComponent(relativePath)
             let source = try String(contentsOf: fileURL, encoding: .utf8)
 
             XCTAssertFalse(source.contains("AppColor.composerGlassTint"), relativePath)
-            XCTAssertTrue(source.contains("tintColor: AppColor.glassTint"), relativePath)
+            XCTAssertTrue(source.contains("tintColor: AppColor.controlGlassTint"), relativePath)
         }
+
+        let surfaceFiles = [
+            "Sources/Nous/Views/LeftSidebar.swift",
+            "Sources/Nous/Views/ScratchPadPanel.swift",
+            "Sources/Nous/Views/GalaxyView.swift"
+        ]
+
+        for relativePath in surfaceFiles {
+            let fileURL = repoRoot.appendingPathComponent(relativePath)
+            let source = try String(contentsOf: fileURL, encoding: .utf8)
+
+            XCTAssertTrue(source.contains("tintColor: AppColor.surfaceGlassTint"), relativePath)
+        }
+    }
+
+    func testWelcomeQuickActionsUseQuietControlGlassChips() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Views/WelcomeView.swift"),
+            encoding: .utf8
+        )
+        guard let buttonRange = source.range(of: "struct QuickActionButton") else {
+            XCTFail("QuickActionButton should exist in WelcomeView.swift")
+            return
+        }
+        let buttonSource = String(source[buttonRange.lowerBound...])
+
+        XCTAssertTrue(buttonSource.contains("tintColor: AppColor.controlGlassTint"))
+        XCTAssertTrue(buttonSource.contains(".font(.system(size: 10.5, weight: .semibold, design: .rounded))"))
+        XCTAssertTrue(buttonSource.contains(".padding(.horizontal, 11)"))
+        XCTAssertTrue(buttonSource.contains(".padding(.vertical, 6)"))
+        XCTAssertTrue(buttonSource.contains(".frame(height: 30)"))
+        XCTAssertTrue(buttonSource.contains("AppColor.colaOrange.opacity(0.035)"))
+        XCTAssertTrue(buttonSource.contains("AppColor.panelStroke.opacity(0.68)"))
+        XCTAssertTrue(buttonSource.contains(".scaleEffect(isHovered ? 1.02 : 1.0)"))
     }
 }

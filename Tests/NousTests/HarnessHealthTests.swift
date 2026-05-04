@@ -294,6 +294,60 @@ final class HarnessHealthTests: XCTestCase {
         XCTAssertEqual(snapshot.agentToolReliability.summaryText, "No agent tool traces recorded.")
     }
 
+    func testRuntimeHarnessSummarizesBehaviorEvalSignals() throws {
+        let telemetry = makeRuntimeHarnessTelemetry()
+        telemetry.recordBehaviorEvalEvent(BehaviorEvalEvent(
+            conversationId: UUID(),
+            assistantMessageId: UUID(),
+            userMessageId: UUID(),
+            outcome: .continued,
+            latencySeconds: 8
+        ))
+        telemetry.recordBehaviorEvalEvent(BehaviorEvalEvent(
+            conversationId: UUID(),
+            assistantMessageId: UUID(),
+            userMessageId: UUID(),
+            outcome: .correction,
+            latencySeconds: 12
+        ))
+        telemetry.recordBehaviorEvalEvent(BehaviorEvalEvent(
+            conversationId: UUID(),
+            assistantMessageId: UUID(),
+            userMessageId: UUID(),
+            outcome: .retry,
+            latencySeconds: 20
+        ))
+        telemetry.recordBehaviorEvalEvent(BehaviorEvalEvent(
+            conversationId: UUID(),
+            assistantMessageId: UUID(),
+            userMessageId: nil,
+            outcome: .delete,
+            latencySeconds: 4
+        ))
+
+        let snapshot = RuntimeHarnessService(telemetry: telemetry).loadSnapshot()
+
+        XCTAssertEqual(snapshot.behaviorEval.totalOutcomeCount, 4)
+        XCTAssertEqual(snapshot.behaviorEval.continuedCount, 1)
+        XCTAssertEqual(snapshot.behaviorEval.correctionCount, 1)
+        XCTAssertEqual(snapshot.behaviorEval.retryCount, 1)
+        XCTAssertEqual(snapshot.behaviorEval.deleteCount, 1)
+        XCTAssertEqual(snapshot.behaviorEval.keepRate, 0.25, accuracy: 0.0001)
+        XCTAssertEqual(snapshot.behaviorEval.interventionRate, 0.75, accuracy: 0.0001)
+        XCTAssertEqual(
+            snapshot.behaviorEval.summaryText,
+            "Behavior keep-rate 25% · correction 1 · retry 1 · delete 1"
+        )
+    }
+
+    func testRuntimeHarnessBehaviorEvalIsQuietWithoutSignals() {
+        let snapshot = RuntimeHarnessService(telemetry: makeRuntimeHarnessTelemetry()).loadSnapshot()
+
+        XCTAssertEqual(snapshot.behaviorEval.totalOutcomeCount, 0)
+        XCTAssertEqual(snapshot.behaviorEval.keepRate, 0)
+        XCTAssertEqual(snapshot.behaviorEval.summaryText, "No behavior eval signals recorded.")
+    }
+
     func testWindowRuntimeSmokeUsesCGWindowListAsTheWindowOracle() throws {
         let repoURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

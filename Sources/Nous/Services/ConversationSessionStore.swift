@@ -69,13 +69,19 @@ protocol ConversationRecoveryTelemetryRecording: AnyObject {
 final class ConversationSessionStore {
     private let nodeStore: NodeStore
     private let telemetry: (any ConversationRecoveryTelemetryRecording)?
+    private let behaviorTelemetry: (any BehaviorEvalTelemetryRecording)?
+    private let now: () -> Date
 
     init(
         nodeStore: NodeStore,
-        telemetry: (any ConversationRecoveryTelemetryRecording)? = nil
+        telemetry: (any ConversationRecoveryTelemetryRecording)? = nil,
+        behaviorTelemetry: (any BehaviorEvalTelemetryRecording)? = nil,
+        now: @escaping () -> Date = Date.init
     ) {
         self.nodeStore = nodeStore
         self.telemetry = telemetry
+        self.behaviorTelemetry = behaviorTelemetry ?? telemetry as? any BehaviorEvalTelemetryRecording
+        self.now = now
     }
 
     func startConversation(
@@ -107,11 +113,21 @@ final class ConversationSessionStore {
         let node = recovered.node
         let rebasedCurrentMessages = recovered.currentMessages
 
-        let userMessage = Message(nodeId: node.id, role: .user, content: userMessageContent)
+        let userMessage = Message(
+            nodeId: node.id,
+            role: .user,
+            content: userMessageContent,
+            timestamp: now()
+        )
         try nodeStore.insertMessage(userMessage)
 
         let messagesAfterUserAppend = rebasedCurrentMessages + [userMessage]
         let updatedNode = try persistTranscript(nodeId: node.id, messages: messagesAfterUserAppend)
+        recordBehaviorEvalForUserFollowUp(
+            conversationId: node.id,
+            messagesBeforeUserAppend: rebasedCurrentMessages,
+            userMessage: userMessage
+        )
         return PreparedConversationTurn(
             node: updatedNode,
             userMessage: userMessage,
@@ -161,7 +177,8 @@ final class ConversationSessionStore {
     func removeAssistantTurn(
         nodeId: UUID,
         assistantMessage: Message,
-        retainedMessages: [Message]
+        retainedMessages: [Message],
+        behaviorOutcome: BehaviorEvalOutcome = .delete
     ) throws -> NousNode {
         guard assistantMessage.role == .assistant,
               retainedMessages.allSatisfy({ $0.id != assistantMessage.id })
@@ -171,6 +188,11 @@ final class ConversationSessionStore {
 
         try nodeStore.clearJudgeEventMessageId(messageId: assistantMessage.id)
         try nodeStore.deleteMessage(id: assistantMessage.id)
+        recordBehaviorEvalForAssistantRemoval(
+            conversationId: nodeId,
+            assistantMessage: assistantMessage,
+            outcome: behaviorOutcome
+        )
         return try persistTranscript(nodeId: nodeId, messages: retainedMessages)
     }
 
@@ -246,6 +268,44 @@ final class ConversationSessionStore {
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? firstUser
         guard !queryOnly.isEmpty else { return nil }
         return String(queryOnly.prefix(40)).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func recordBehaviorEvalForUserFollowUp(
+        conversationId: UUID,
+        messagesBeforeUserAppend: [Message],
+        userMessage: Message
+    ) {
+        guard messagesBeforeUserAppend.last?.role == .assistant,
+              let assistantMessage = messagesBeforeUserAppend.last else {
+            return
+        }
+
+        let event = BehaviorEvalEvent(
+            conversationId: conversationId,
+            assistantMessageId: assistantMessage.id,
+            userMessageId: userMessage.id,
+            outcome: BehaviorEvalClassifier.classifyUserFollowUp(userMessage.content),
+            latencySeconds: max(0, userMessage.timestamp.timeIntervalSince(assistantMessage.timestamp)),
+            recordedAt: userMessage.timestamp
+        )
+        behaviorTelemetry?.recordBehaviorEvalEvent(event)
+    }
+
+    private func recordBehaviorEvalForAssistantRemoval(
+        conversationId: UUID,
+        assistantMessage: Message,
+        outcome: BehaviorEvalOutcome
+    ) {
+        let recordedAt = now()
+        let event = BehaviorEvalEvent(
+            conversationId: conversationId,
+            assistantMessageId: assistantMessage.id,
+            userMessageId: nil,
+            outcome: outcome,
+            latencySeconds: max(0, recordedAt.timeIntervalSince(assistantMessage.timestamp)),
+            recordedAt: recordedAt
+        )
+        behaviorTelemetry?.recordBehaviorEvalEvent(event)
     }
 
     private func recoverCurrentConversationIfNeeded(
@@ -329,6 +389,13 @@ extension ConversationSessionStore {
 
         let messagesAfterAppend = try nodeStore.fetchMessages(nodeId: node.id)
         let updatedNode = try persistTranscript(nodeId: node.id, messages: messagesAfterAppend)
+        if let userIndex = messagesAfterAppend.firstIndex(where: { $0.id == userMessage.id }) {
+            recordBehaviorEvalForUserFollowUp(
+                conversationId: node.id,
+                messagesBeforeUserAppend: Array(messagesAfterAppend[..<userIndex]),
+                userMessage: userMessage
+            )
+        }
 
         return CommittedVoiceTurn(
             node: updatedNode,

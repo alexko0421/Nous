@@ -201,7 +201,7 @@ struct GalaxyView: View {
                 .fill(GalaxyPalette.panel.opacity(0.78))
         )
         .background(
-            NativeGlassPanel(cornerRadius: 30, tintColor: AppColor.glassTint) { EmptyView() }
+            NativeGlassPanel(cornerRadius: 30, tintColor: AppColor.surfaceGlassTint) { EmptyView() }
         )
         .overlay(
             RoundedRectangle(cornerRadius: 30, style: .continuous)
@@ -256,7 +256,7 @@ struct GalaxyView: View {
                 .fill(GalaxyPalette.panel.opacity(0.66))
         )
         .background(
-            NativeGlassPanel(cornerRadius: 22, tintColor: AppColor.glassTint) { EmptyView() }
+            NativeGlassPanel(cornerRadius: 22, tintColor: AppColor.controlGlassTint) { EmptyView() }
         )
         .overlay(
             Capsule()
@@ -295,7 +295,7 @@ struct GalaxyView: View {
                 .fill(GalaxyPalette.panel.opacity(0.52))
         )
         .background(
-            NativeGlassPanel(cornerRadius: 14, tintColor: AppColor.glassTint) { EmptyView() }
+            NativeGlassPanel(cornerRadius: 14, tintColor: AppColor.controlGlassTint) { EmptyView() }
         )
         .overlay(
             Capsule()

@@ -49,12 +49,6 @@ struct AgentWorkView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(AppColor.colaBeige)
-        .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 36, style: .continuous)
-                .stroke(AppColor.panelStroke.opacity(0.8), lineWidth: 1)
-                .allowsHitTesting(false)
-        }
         .onAppear {
             if !vm.hasLoaded {
                 vm.refresh()
@@ -95,13 +89,11 @@ struct AgentWorkView: View {
                 .foregroundStyle(AppColor.colaDarkText)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color.white.opacity(0.48))
-                )
+                .background(NativeGlassPanel(cornerRadius: 12, tintColor: AppColor.controlGlassTint) { EmptyView() })
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(AppColor.panelStroke.opacity(0.75), lineWidth: 1)
+                        .stroke(AppColor.panelStroke.opacity(0.55), lineWidth: 1)
                 }
             }
             .buttonStyle(.plain)
@@ -169,13 +161,11 @@ struct AgentWorkView: View {
             }
         }
         .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(Color.white.opacity(0.42))
-        )
+        .background(NativeGlassPanel(cornerRadius: 20, tintColor: AppColor.surfaceGlassTint) { EmptyView() })
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(AppColor.panelStroke.opacity(0.7), lineWidth: 1)
+                .stroke(AppColor.panelStroke.opacity(0.52), lineWidth: 1)
         }
     }
 
@@ -237,13 +227,11 @@ struct AgentWorkView: View {
             .padding(.top, 2)
         }
         .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.white.opacity(0.36))
-        )
+        .background(NativeGlassPanel(cornerRadius: 18, tintColor: AppColor.surfaceGlassTint) { EmptyView() })
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(AppColor.panelStroke.opacity(0.65), lineWidth: 1)
+                .stroke(AppColor.panelStroke.opacity(0.50), lineWidth: 1)
         }
     }
 
@@ -285,10 +273,12 @@ struct AgentWorkView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
-        .background(
+        .background(NativeGlassPanel(cornerRadius: 14, tintColor: AppColor.controlGlassTint) { EmptyView() })
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.white.opacity(0.38))
-        )
+                .stroke(AppColor.panelStroke.opacity(0.42), lineWidth: 1)
+        }
     }
 
     private func harnessDetailText(_ snapshot: HarnessHealthSnapshot) -> String {
@@ -303,6 +293,7 @@ struct AgentWorkView: View {
             snapshot.reviewerCoverageText,
             snapshot.riskFlagSummary,
             snapshot.agentToolReliability.summaryText,
+            snapshot.behaviorEval.summaryText,
             snapshot.sycophancyFixtureTrend
         ].joined(separator: " · ")
     }
@@ -388,13 +379,11 @@ struct AgentWorkView: View {
             }
         }
         .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.white.opacity(0.34))
-        )
+        .background(NativeGlassPanel(cornerRadius: 18, tintColor: AppColor.surfaceGlassTint) { EmptyView() })
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(AppColor.panelStroke.opacity(0.65), lineWidth: 1)
+                .stroke(AppColor.panelStroke.opacity(0.50), lineWidth: 1)
         }
     }
 
@@ -435,10 +424,12 @@ struct AgentWorkView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(10)
-            .background(
+            .background(NativeGlassPanel(cornerRadius: 14, tintColor: AppColor.controlGlassTint) { EmptyView() })
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color.white.opacity(0.38))
-            )
+                    .stroke(AppColor.panelStroke.opacity(0.42), lineWidth: 1)
+            }
         }
         .buttonStyle(.plain)
         .help("Copy \(command.command)")
@@ -501,10 +492,12 @@ struct AgentWorkView: View {
             .foregroundStyle(AppColor.secondaryText)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)
-            .background(
+            .background(NativeGlassPanel(cornerRadius: 16, tintColor: AppColor.controlGlassTint) { EmptyView() })
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color.white.opacity(0.28))
-            )
+                    .stroke(AppColor.panelStroke.opacity(0.40), lineWidth: 1)
+            }
     }
 
     private func errorBanner(_ message: String) -> some View {
@@ -541,7 +534,7 @@ struct AgentWorkView: View {
                     .padding(.vertical, 7)
                     .background(
                         Capsule()
-                            .fill(Color.white.opacity(0.48))
+                            .fill(AppColor.subtleFill)
                     )
                 }
                 .buttonStyle(.plain)
@@ -614,7 +607,7 @@ private struct BeadsIssueRow: View {
                         .frame(width: 28, height: 28)
                         .background(
                             Circle()
-                                .fill(Color.white.opacity(0.46))
+                                .fill(AppColor.subtleFill)
                         )
                 }
                 .buttonStyle(.plain)
@@ -628,10 +621,8 @@ private struct BeadsIssueRow: View {
             }
         }
         .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.white.opacity(0.42))
-        )
+        .background(NativeGlassPanel(cornerRadius: 18, tintColor: AppColor.surfaceGlassTint) { EmptyView() })
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(alignment: .leading) {
             RoundedRectangle(cornerRadius: 2, style: .continuous)
                 .fill(accent.opacity(0.72))
@@ -640,7 +631,7 @@ private struct BeadsIssueRow: View {
         }
         .overlay {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(AppColor.panelStroke.opacity(0.7), lineWidth: 1)
+                .stroke(AppColor.panelStroke.opacity(0.50), lineWidth: 1)
         }
         .animation(.easeOut(duration: 0.16), value: isExpanded)
     }
@@ -738,7 +729,7 @@ private struct BeadsIssueRow: View {
             .padding(.vertical, 3)
             .background(
                 Capsule()
-                    .fill(Color.white.opacity(0.46))
+                    .fill(AppColor.subtleFill)
             )
     }
 

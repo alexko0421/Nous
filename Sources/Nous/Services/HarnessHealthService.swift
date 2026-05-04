@@ -205,7 +205,8 @@ final class RuntimeHarnessService: RuntimeHarnessLoading {
             riskFlagCounts: summary.reviewRiskFlagCounts,
             lastRiskFlags: summary.lastSnapshot?.reviewRiskFlags ?? [],
             sycophancyFixtureTrend: sycophancyFixtureTrend(),
-            agentToolReliability: agentToolReliabilitySummary()
+            agentToolReliability: agentToolReliabilitySummary(),
+            behaviorEval: telemetry.behaviorEvalSummary
         )
     }
 

@@ -139,6 +139,7 @@
 		57BA3E025BE84729DF287254 /* ShadowPatternLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC0D38E54AA33A28AE031AF9 /* ShadowPatternLifecycle.swift */; };
 		57CA97DF7C66876FEF077B9C /* Message.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55859ED677DFDB237447B2EC /* Message.swift */; };
 		5811B6668BF83CAA212C34B2 /* VoicePreviewService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8449CEBBA6CFF148386D61AC /* VoicePreviewService.swift */; };
+		583111E61DA920DA9EE83A28 /* SettingsUILayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DE59AA1E12DF13B70FF58E3 /* SettingsUILayoutTests.swift */; };
 		58CDED90A7C15858ACDADAC0 /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = A0FC8786751C66E9D130220C /* MLX */; };
 		591098A3ED97FCFC3D0D5EDD /* MemoryCuratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2010D48EDB5161D59D6C81C /* MemoryCuratorTests.swift */; };
 		5E272E29C29FC5E62496799A /* NoteEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 783585E09595EF502C060F91 /* NoteEditor.swift */; };
@@ -394,6 +395,7 @@
 		1AEEECB38B12401CA44B5965 /* MemoryAtomEmbeddingBackfillServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryAtomEmbeddingBackfillServiceTests.swift; sourceTree = "<group>"; };
 		1B2D97D9D7ACB3B0FAA8B275 /* TopicEmojiResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopicEmojiResolverTests.swift; sourceTree = "<group>"; };
 		1CBB699A907CF77A1922610E /* DirectionAgent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectionAgent.swift; sourceTree = "<group>"; };
+		1DE59AA1E12DF13B70FF58E3 /* SettingsUILayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsUILayoutTests.swift; sourceTree = "<group>"; };
 		1E2A8A28B09A9853BF6A24E3 /* ShadowLearningPattern.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShadowLearningPattern.swift; sourceTree = "<group>"; };
 		1E5AA12D0A2E516A1C1D750C /* DisclosurePillMotionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisclosurePillMotionTests.swift; sourceTree = "<group>"; };
 		1F6849C3E42FE9DEDA460891 /* BeadsAgentWorkViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BeadsAgentWorkViewModel.swift; sourceTree = "<group>"; };
@@ -1171,6 +1173,7 @@
 				08F9F1F71CFCDC24C78B9092 /* ScratchPadStoreTests.swift */,
 				DEF476DFC481C52A24E6D9D7 /* SeedSkillImporterTests.swift */,
 				C5EFA402A208E3F77A7A109F /* SeedSkillsResourceTests.swift */,
+				1DE59AA1E12DF13B70FF58E3 /* SettingsUILayoutTests.swift */,
 				52A4DACC5A583988C1FEF736 /* SettingsViewModelTests.swift */,
 				D108235F494686641E327542 /* ShadowLearningSignalRecorderTests.swift */,
 				24AAE66757F64E35CAEB81C2 /* ShadowLearningStewardTests.swift */,
@@ -1699,6 +1702,7 @@
 				973F0E1BA6A8CFDC939DAF85 /* ScratchPadStoreTests.swift in Sources */,
 				F9D32F9963FE1EF2437DB5FD /* SeedSkillImporterTests.swift in Sources */,
 				9519063A753AADE9400CA756 /* SeedSkillsResourceTests.swift in Sources */,
+				583111E61DA920DA9EE83A28 /* SettingsUILayoutTests.swift in Sources */,
 				149B66174FAC02EF0B0134B0 /* SettingsViewModelTests.swift in Sources */,
 				E4B1007D03D6C47ECCF782A2 /* ShadowLearningSignalRecorderTests.swift in Sources */,
 				4ECD37CB163CFEEFD654068A /* ShadowLearningStewardTests.swift in Sources */,

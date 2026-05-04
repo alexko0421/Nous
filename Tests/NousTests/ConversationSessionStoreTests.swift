@@ -137,6 +137,61 @@ final class ConversationSessionStoreTests: XCTestCase {
         XCTAssertNil(prepared.recoveryEvent)
     }
 
+    func testPrepareUserTurnRecordsBehaviorCorrectionAfterAssistantReply() throws {
+        let telemetry = RecordingBehaviorEvalTelemetry()
+        sessionStore = ConversationSessionStore(
+            nodeStore: store,
+            behaviorTelemetry: telemetry,
+            now: { Date(timeIntervalSince1970: 120) }
+        )
+        let node = try sessionStore.startConversation(title: "Behavior")
+        let firstUser = Message(
+            nodeId: node.id,
+            role: .user,
+            content: "Can you compare the options?",
+            timestamp: Date(timeIntervalSince1970: 100)
+        )
+        let assistant = Message(
+            nodeId: node.id,
+            role: .assistant,
+            content: "Austin is clearly best.",
+            timestamp: Date(timeIntervalSince1970: 110)
+        )
+        try store.insertMessage(firstUser)
+        try store.insertMessage(assistant)
+
+        let prepared = try sessionStore.prepareUserTurn(
+            currentNode: node,
+            currentMessages: [firstUser, assistant],
+            defaultProjectId: nil,
+            userMessageContent: "Actually that's not what I asked."
+        )
+
+        XCTAssertEqual(telemetry.events.count, 1)
+        let event = try XCTUnwrap(telemetry.events.first)
+        XCTAssertEqual(event.outcome, .correction)
+        XCTAssertEqual(event.conversationId, node.id)
+        XCTAssertEqual(event.assistantMessageId, assistant.id)
+        XCTAssertEqual(event.userMessageId, prepared.userMessage.id)
+        XCTAssertEqual(try XCTUnwrap(event.latencySeconds), 10, accuracy: 0.001)
+    }
+
+    func testPrepareUserTurnDoesNotRecordBehaviorForConsecutiveUserMessages() throws {
+        let telemetry = RecordingBehaviorEvalTelemetry()
+        sessionStore = ConversationSessionStore(nodeStore: store, behaviorTelemetry: telemetry)
+        let node = try sessionStore.startConversation(title: "Behavior")
+        let firstUser = Message(nodeId: node.id, role: .user, content: "First")
+
+        _ = try sessionStore.prepareUserTurn(
+            currentNode: node,
+            currentMessages: [firstUser],
+            defaultProjectId: nil,
+            userMessageContent: "One more thought before you answer."
+        )
+
+        XCTAssertTrue(telemetry.events.isEmpty)
+    }
+
     func testCommitAssistantTurnRenamesPlaceholderTitleAndPatchesJudgeEvent() throws {
         let node = try sessionStore.startConversation(projectId: nil)
         let userMessage = Message(nodeId: node.id, role: .user, content: "Should I move to New York or Austin?")
@@ -210,12 +265,53 @@ final class ConversationSessionStoreTests: XCTestCase {
         XCTAssertEqual(storedMessage.agentTraceJson, trace)
         XCTAssertEqual(storedMessage.decodedAgentTraceRecords.first?.detail, "Matched")
     }
+
+    func testRemoveAssistantTurnRecordsBehaviorDeleteSignal() throws {
+        let telemetry = RecordingBehaviorEvalTelemetry()
+        sessionStore = ConversationSessionStore(
+            nodeStore: store,
+            behaviorTelemetry: telemetry,
+            now: { Date(timeIntervalSince1970: 205) }
+        )
+        let node = try sessionStore.startConversation(title: "Behavior")
+        let user = Message(nodeId: node.id, role: .user, content: "Draft a plan.")
+        let assistant = Message(
+            nodeId: node.id,
+            role: .assistant,
+            content: "Plan A",
+            timestamp: Date(timeIntervalSince1970: 200)
+        )
+        try store.insertMessage(user)
+        try store.insertMessage(assistant)
+
+        _ = try sessionStore.removeAssistantTurn(
+            nodeId: node.id,
+            assistantMessage: assistant,
+            retainedMessages: [user]
+        )
+
+        XCTAssertEqual(telemetry.events.count, 1)
+        let event = try XCTUnwrap(telemetry.events.first)
+        XCTAssertEqual(event.outcome, .delete)
+        XCTAssertEqual(event.conversationId, node.id)
+        XCTAssertEqual(event.assistantMessageId, assistant.id)
+        XCTAssertNil(event.userMessageId)
+        XCTAssertEqual(try XCTUnwrap(event.latencySeconds), 5, accuracy: 0.001)
+    }
 }
 
 private final class RecordingConversationRecoveryTelemetry: ConversationRecoveryTelemetryRecording {
     private(set) var events: [ConversationRecoveryTelemetryEvent] = []
 
     func recordConversationRecovery(_ event: ConversationRecoveryTelemetryEvent) {
+        events.append(event)
+    }
+}
+
+private final class RecordingBehaviorEvalTelemetry: BehaviorEvalTelemetryRecording {
+    private(set) var events: [BehaviorEvalEvent] = []
+
+    func recordBehaviorEvalEvent(_ event: BehaviorEvalEvent) {
         events.append(event)
     }
 }

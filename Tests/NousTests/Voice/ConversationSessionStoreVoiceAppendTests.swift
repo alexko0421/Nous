@@ -81,4 +81,37 @@ final class ConversationSessionStoreVoiceAppendTests: XCTestCase {
         XCTAssertEqual(result.messagesAfterAppend.count, 2)
         XCTAssertEqual(result.messagesAfterAppend.map(\.source), [.typed, .voice])
     }
+
+    func testAppendVoiceUserMessageRecordsBehaviorEvalAfterVoiceAssistant() throws {
+        let telemetry = RecordingBehaviorEvalTelemetry()
+        store = ConversationSessionStore(nodeStore: nodeStore, behaviorTelemetry: telemetry)
+        let conversation = try store.startConversation(title: "Voice behavior")
+        let assistant = try store.appendVoiceAssistantMessage(
+            nodeId: conversation.id,
+            text: "Austin is clearly best.",
+            timestamp: Date(timeIntervalSince1970: 100)
+        ).assistantMessage
+
+        let user = try store.appendVoiceUserMessage(
+            nodeId: conversation.id,
+            text: "Actually, that's not what I asked.",
+            timestamp: Date(timeIntervalSince1970: 112)
+        ).userMessage
+
+        XCTAssertEqual(telemetry.events.count, 1)
+        let event = try XCTUnwrap(telemetry.events.first)
+        XCTAssertEqual(event.outcome, .correction)
+        XCTAssertEqual(event.conversationId, conversation.id)
+        XCTAssertEqual(event.assistantMessageId, assistant.id)
+        XCTAssertEqual(event.userMessageId, user.id)
+        XCTAssertEqual(try XCTUnwrap(event.latencySeconds), 12, accuracy: 0.001)
+    }
+}
+
+private final class RecordingBehaviorEvalTelemetry: BehaviorEvalTelemetryRecording {
+    private(set) var events: [BehaviorEvalEvent] = []
+
+    func recordBehaviorEvalEvent(_ event: BehaviorEvalEvent) {
+        events.append(event)
+    }
 }

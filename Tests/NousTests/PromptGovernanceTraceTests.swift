@@ -901,6 +901,72 @@ final class GovernanceTelemetryStoreTests: XCTestCase {
         XCTAssertEqual(telemetry.recentTurnCognitionSnapshots(limit: 10), [])
     }
 
+    func testBehaviorEvalClassifierRecognizesCorrectionRetryAndContinue() {
+        XCTAssertEqual(
+            BehaviorEvalClassifier.classifyUserFollowUp("Actually, that's wrong."),
+            .correction
+        )
+        XCTAssertEqual(
+            BehaviorEvalClassifier.classifyUserFollowUp("唔係，我意思係你要比較風險。"),
+            .correction
+        )
+        XCTAssertEqual(
+            BehaviorEvalClassifier.classifyUserFollowUp("Try again from first principles."),
+            .retry
+        )
+        XCTAssertEqual(
+            BehaviorEvalClassifier.classifyUserFollowUp("再嚟一次，今次短啲。"),
+            .retry
+        )
+        XCTAssertEqual(
+            BehaviorEvalClassifier.classifyUserFollowUp("Good, now turn this into a checklist."),
+            .continued
+        )
+    }
+
+    func testBehaviorEvalTelemetryStoresBoundedCategoricalSignalsWithoutPromptText() throws {
+        let telemetry = makeTelemetry()
+        let event = BehaviorEvalEvent(
+            conversationId: UUID(uuidString: "00000000-0000-0000-0000-000000000A01")!,
+            assistantMessageId: UUID(uuidString: "00000000-0000-0000-0000-000000000A02")!,
+            userMessageId: UUID(uuidString: "00000000-0000-0000-0000-000000000A03")!,
+            outcome: .correction,
+            latencySeconds: 3,
+            recordedAt: Date(timeIntervalSince1970: 10)
+        )
+
+        telemetry.recordBehaviorEvalEvent(event)
+
+        XCTAssertEqual(telemetry.recentBehaviorEvalEvents(limit: 10), [event])
+        XCTAssertEqual(telemetry.behaviorEvalSummary.totalOutcomeCount, 1)
+        XCTAssertEqual(telemetry.behaviorEvalSummary.correctionCount, 1)
+
+        let encoded = String(data: try JSONEncoder().encode(telemetry.recentBehaviorEvalEvents(limit: 10)), encoding: .utf8) ?? ""
+        XCTAssertFalse(encoded.contains("Actually"))
+        XCTAssertFalse(encoded.contains("wrong"))
+    }
+
+    func testBehaviorEvalTelemetryKeepsMostRecentHundredSignals() throws {
+        let telemetry = makeTelemetry()
+
+        for offset in 0..<105 {
+            telemetry.recordBehaviorEvalEvent(BehaviorEvalEvent(
+                conversationId: UUID(),
+                assistantMessageId: UUID(),
+                userMessageId: UUID(),
+                outcome: .continued,
+                recordedAt: Date(timeIntervalSince1970: TimeInterval(offset))
+            ))
+        }
+
+        let events = telemetry.recentBehaviorEvalEvents(limit: 200)
+
+        XCTAssertEqual(events.count, 100)
+        XCTAssertEqual(events.first?.recordedAt, Date(timeIntervalSince1970: 104))
+        XCTAssertEqual(events.last?.recordedAt, Date(timeIntervalSince1970: 5))
+        XCTAssertEqual(telemetry.behaviorEvalSummary.totalOutcomeCount, 100)
+    }
+
     private func makeTelemetry() -> GovernanceTelemetryStore {
         let suiteName = "GovernanceTelemetryStoreTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
