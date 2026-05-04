@@ -335,6 +335,9 @@ struct TurnPlan {
     let focusBlock: String?
     let provider: LLMProvider
     let indexedSkillIds: Set<UUID>
+    let loadedSkillIds: Set<UUID>
+    let memoryEvidenceSourceIds: Set<UUID>
+    let loadedCitationIds: Set<UUID>
 
     init(
         turnId: UUID,
@@ -349,7 +352,10 @@ struct TurnPlan {
         transcriptMessages: [LLMMessage],
         focusBlock: String?,
         provider: LLMProvider,
-        indexedSkillIds: Set<UUID> = []
+        indexedSkillIds: Set<UUID> = [],
+        loadedSkillIds: Set<UUID> = [],
+        memoryEvidenceSourceIds: Set<UUID> = [],
+        loadedCitationIds: Set<UUID> = []
     ) {
         self.turnId = turnId
         self.prepared = prepared
@@ -364,5 +370,8 @@ struct TurnPlan {
         self.focusBlock = focusBlock
         self.provider = provider
         self.indexedSkillIds = indexedSkillIds
+        self.loadedSkillIds = loadedSkillIds
+        self.memoryEvidenceSourceIds = memoryEvidenceSourceIds
+        self.loadedCitationIds = loadedCitationIds
     }
 }

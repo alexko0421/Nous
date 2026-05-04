@@ -206,7 +206,9 @@ final class RuntimeHarnessService: RuntimeHarnessLoading {
             lastRiskFlags: summary.lastSnapshot?.reviewRiskFlags ?? [],
             sycophancyFixtureTrend: sycophancyFixtureTrend(),
             agentToolReliability: agentToolReliabilitySummary(),
-            behaviorEval: telemetry.behaviorEvalSummary
+            behaviorEval: telemetry.behaviorEvalSummary,
+            contextManifest: telemetry.contextManifestSummary,
+            modelHarnessProfiles: ModelHarnessProfileCatalog.coverageSummary
         )
     }
 

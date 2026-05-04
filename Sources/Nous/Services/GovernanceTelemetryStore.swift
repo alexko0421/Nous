@@ -236,9 +236,266 @@ protocol BehaviorEvalTelemetryRecording: AnyObject {
     func recordBehaviorEvalEvent(_ event: BehaviorEvalEvent)
 }
 
+enum ContextManifestResourceSource: String, Codable, Equatable {
+    case memory
+    case skill
+    case citation
+}
+
+enum ContextManifestResourceState: String, Codable, Equatable {
+    case loaded
+    case indexed
+}
+
+struct ContextManifestResource: Codable, Equatable {
+    let source: ContextManifestResourceSource
+    let label: String
+    let referenceId: String
+    let state: ContextManifestResourceState
+    let used: Bool
+}
+
+struct ContextManifestRecord: Identifiable, Codable, Equatable {
+    let id: UUID
+    let turnId: UUID
+    let conversationId: UUID
+    let assistantMessageId: UUID
+    let resources: [ContextManifestResource]
+    let recordedAt: Date
+
+    init(
+        id: UUID = UUID(),
+        turnId: UUID,
+        conversationId: UUID,
+        assistantMessageId: UUID,
+        resources: [ContextManifestResource],
+        recordedAt: Date = Date()
+    ) {
+        self.id = id
+        self.turnId = turnId
+        self.conversationId = conversationId
+        self.assistantMessageId = assistantMessageId
+        self.resources = resources
+        self.recordedAt = recordedAt
+    }
+}
+
+struct ContextManifestTelemetrySummary: Equatable {
+    let totalManifestCount: Int
+    let totalResourceCount: Int
+    let loadedMemoryCount: Int
+    let loadedSkillCount: Int
+    let indexedSkillCount: Int
+    let loadedCitationCount: Int
+    let usedMemoryCount: Int
+    let usedSkillCount: Int
+    let usedCitationCount: Int
+
+    init(
+        totalManifestCount: Int = 0,
+        totalResourceCount: Int = 0,
+        loadedMemoryCount: Int = 0,
+        loadedSkillCount: Int = 0,
+        indexedSkillCount: Int = 0,
+        loadedCitationCount: Int = 0,
+        usedMemoryCount: Int = 0,
+        usedSkillCount: Int = 0,
+        usedCitationCount: Int = 0
+    ) {
+        self.totalManifestCount = totalManifestCount
+        self.totalResourceCount = totalResourceCount
+        self.loadedMemoryCount = loadedMemoryCount
+        self.loadedSkillCount = loadedSkillCount
+        self.indexedSkillCount = indexedSkillCount
+        self.loadedCitationCount = loadedCitationCount
+        self.usedMemoryCount = usedMemoryCount
+        self.usedSkillCount = usedSkillCount
+        self.usedCitationCount = usedCitationCount
+    }
+
+    static let empty = ContextManifestTelemetrySummary()
+
+    var usedResourceCount: Int {
+        usedMemoryCount + usedSkillCount + usedCitationCount
+    }
+
+    var usageRate: Double {
+        guard totalResourceCount > 0 else { return 0 }
+        return Double(usedResourceCount) / Double(totalResourceCount)
+    }
+
+    var summaryText: String {
+        guard totalManifestCount > 0, totalResourceCount > 0 else {
+            return "No context manifest signals recorded."
+        }
+
+        return [
+            "Context manifest \(totalResourceCount) resources",
+            "\(usedResourceCount) used",
+            "memory \(loadedMemoryCount)",
+            "citation \(loadedCitationCount)",
+            "skill indexed \(indexedSkillCount)"
+        ].joined(separator: " · ")
+    }
+
+    static func summarize(records: [ContextManifestRecord]) -> ContextManifestTelemetrySummary {
+        let resources = records.flatMap(\.resources)
+        return ContextManifestTelemetrySummary(
+            totalManifestCount: records.count,
+            totalResourceCount: resources.count,
+            loadedMemoryCount: resources.filter { $0.source == .memory && $0.state == .loaded }.count,
+            loadedSkillCount: resources.filter { $0.source == .skill && $0.state == .loaded }.count,
+            indexedSkillCount: resources.filter { $0.source == .skill && $0.state == .indexed }.count,
+            loadedCitationCount: resources.filter { $0.source == .citation && $0.state == .loaded }.count,
+            usedMemoryCount: resources.filter { $0.source == .memory && $0.used }.count,
+            usedSkillCount: resources.filter { $0.source == .skill && $0.used }.count,
+            usedCitationCount: resources.filter { $0.source == .citation && $0.used }.count
+        )
+    }
+}
+
+enum ContextManifestFactory {
+    private static let memoryPromptLayers: Set<String> = [
+        "operating_context",
+        "global_memory",
+        "essential_story",
+        "project_memory",
+        "conversation_memory",
+        "memory_evidence",
+        "memory_graph_recall",
+        "user_model",
+        "project_goal",
+        "recent_conversations",
+        "slow_cognition"
+    ]
+
+    static func make(
+        plan: TurnPlan,
+        assistantMessageId: UUID,
+        assistantContent: String,
+        agentTraceJson: String?
+    ) -> ContextManifestRecord {
+        let usedSkillIds = toolLoadedSkillIds(from: agentTraceJson)
+        let loadedPromptLayers = Set(plan.promptTrace.promptLayers)
+        var resources: [ContextManifestResource] = []
+        var seen = Set<String>()
+
+        func append(_ resource: ContextManifestResource) {
+            let key = [
+                resource.source.rawValue,
+                resource.label,
+                resource.referenceId,
+                resource.state.rawValue
+            ].joined(separator: ":")
+            guard seen.insert(key).inserted else { return }
+            resources.append(resource)
+        }
+
+        for layer in plan.promptTrace.promptLayers where memoryPromptLayers.contains(layer) {
+            if layer == "memory_evidence", !plan.memoryEvidenceSourceIds.isEmpty {
+                for sourceId in plan.memoryEvidenceSourceIds.sortedByUUIDString() {
+                    append(ContextManifestResource(
+                        source: .memory,
+                        label: layer,
+                        referenceId: sourceId.uuidString,
+                        state: .loaded,
+                        used: false
+                    ))
+                }
+                continue
+            }
+            append(ContextManifestResource(
+                source: .memory,
+                label: layer,
+                referenceId: layer,
+                state: .loaded,
+                used: false
+            ))
+        }
+
+        if loadedPromptLayers.contains("citations") {
+            let loadedCitationIds = plan.loadedCitationIds.isEmpty
+                ? Set(plan.citations.map(\.node.id))
+                : plan.loadedCitationIds
+            for citation in plan.citations {
+                guard loadedCitationIds.contains(citation.node.id) else { continue }
+                append(ContextManifestResource(
+                    source: .citation,
+                    label: "node",
+                    referenceId: citation.node.id.uuidString,
+                    state: .loaded,
+                    used: assistantContent.containsCaseFolded(citation.node.title)
+                ))
+            }
+        }
+
+        for skillId in plan.loadedSkillIds.sortedByUUIDString() {
+            append(ContextManifestResource(
+                source: .skill,
+                label: "quick_action_skill",
+                referenceId: skillId.uuidString,
+                state: .loaded,
+                used: usedSkillIds.contains(skillId)
+            ))
+        }
+
+        for skillId in plan.indexedSkillIds.subtracting(plan.loadedSkillIds).sortedByUUIDString() {
+            append(ContextManifestResource(
+                source: .skill,
+                label: "quick_action_skill",
+                referenceId: skillId.uuidString,
+                state: .indexed,
+                used: usedSkillIds.contains(skillId)
+            ))
+        }
+
+        return ContextManifestRecord(
+            turnId: plan.turnId,
+            conversationId: plan.prepared.node.id,
+            assistantMessageId: assistantMessageId,
+            resources: resources
+        )
+    }
+
+    private static func toolLoadedSkillIds(from agentTraceJson: String?) -> Set<UUID> {
+        Set(AgentTraceCodec.decode(agentTraceJson).compactMap { record -> UUID? in
+            guard record.kind == .toolResult,
+                  record.toolName == AgentToolNames.loadSkill,
+                  record.outcome == .success,
+                  let inputJSON = record.inputJSON,
+                  let data = inputJSON.data(using: .utf8),
+                  let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let skillId = object["skill_id"] as? String else {
+                return nil
+            }
+            return UUID(uuidString: skillId)
+        })
+    }
+}
+
+private extension Collection where Element == UUID {
+    func sortedByUUIDString() -> [UUID] {
+        sorted { $0.uuidString < $1.uuidString }
+    }
+}
+
+private extension String {
+    func containsCaseFolded(_ other: String) -> Bool {
+        let needle = other.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return false }
+        let foldedSelf = folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .lowercased()
+        let foldedNeedle = needle
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .lowercased()
+        return foldedSelf.contains(foldedNeedle)
+    }
+}
+
 final class GovernanceTelemetryStore {
     private static let recentTurnCognitionSnapshotLimit = 20
     private static let recentBehaviorEvalEventLimit = 100
+    private static let recentContextManifestLimit = 100
 
     private let defaults: UserDefaults
     private let nodeStore: NodeStore?
@@ -258,6 +515,7 @@ final class GovernanceTelemetryStore {
         static let turnCognitionRiskFlagCounts = "nous.governance.turnCognitionRiskFlagCounts"
         static let recentTurnCognitionSnapshots = "nous.governance.recentTurnCognitionSnapshots"
         static let recentBehaviorEvalEvents = "nous.governance.recentBehaviorEvalEvents"
+        static let recentContextManifests = "nous.governance.recentContextManifests"
 
         static func counter(_ counter: EvalCounter) -> String {
             "nous.governance.counter.\(counter.rawValue)"
@@ -407,6 +665,20 @@ final class GovernanceTelemetryStore {
         return Array(storedRecentBehaviorEvalEvents().prefix(limit))
     }
 
+    var contextManifestSummary: ContextManifestTelemetrySummary {
+        ContextManifestTelemetrySummary.summarize(records: storedRecentContextManifests())
+    }
+
+    func recordContextManifest(_ record: ContextManifestRecord) {
+        guard !record.resources.isEmpty else { return }
+        recordRecentContextManifest(record)
+    }
+
+    func recentContextManifests(limit: Int) -> [ContextManifestRecord] {
+        guard limit > 0 else { return [] }
+        return Array(storedRecentContextManifests().prefix(limit))
+    }
+
     func increment(_ counter: EvalCounter, by amount: Int = 1) {
         let key = Keys.counter(counter)
         defaults.set(defaults.integer(forKey: key) + amount, forKey: key)
@@ -507,6 +779,25 @@ final class GovernanceTelemetryStore {
             return []
         }
         return events
+    }
+
+    private func recordRecentContextManifest(_ record: ContextManifestRecord) {
+        var records = storedRecentContextManifests()
+        records.insert(record, at: 0)
+        if records.count > Self.recentContextManifestLimit {
+            records = Array(records.prefix(Self.recentContextManifestLimit))
+        }
+        if let data = try? JSONEncoder().encode(records) {
+            defaults.set(data, forKey: Keys.recentContextManifests)
+        }
+    }
+
+    private func storedRecentContextManifests() -> [ContextManifestRecord] {
+        guard let data = defaults.data(forKey: Keys.recentContextManifests),
+              let records = try? JSONDecoder().decode([ContextManifestRecord].self, from: data) else {
+            return []
+        }
+        return records
     }
 
     func recordMemoryStorageSuppressed(reason: MemorySuppressionReason = .unspecified) {

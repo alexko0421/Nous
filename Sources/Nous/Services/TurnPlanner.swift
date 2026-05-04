@@ -35,7 +35,9 @@ final class TurnPlanner {
         skillTracker: (any SkillTracking)? = nil,
         shadowPatternPromptProvider: (any ShadowPatternPromptProviding)? = nil,
         slowCognitionArtifactProvider: (any SlowCognitionArtifactProviding)? = nil,
-        agentLoopProviderSupportsToolUse: @escaping (LLMProvider) -> Bool = { $0 == .openrouter },
+        agentLoopProviderSupportsToolUse: @escaping (LLMProvider) -> Bool = {
+            ModelHarnessProfileCatalog.profile(for: $0).supportsAgentToolUse
+        },
         runJudge: @escaping (@escaping () async throws -> JudgeVerdict) async throws -> JudgeVerdict = { operation in
             try await operation()
         }
@@ -280,6 +282,18 @@ final class TurnPlanner {
             slowCognitionArtifacts: slowCognitionArtifacts,
             now: request.now
         )
+        let promptResourceIds = PromptContextAssembler.promptResourceIds(
+            operatingContext: memoryContext.operatingContext,
+            globalMemory: globalMemory,
+            essentialStory: essentialStory,
+            userModel: userModel,
+            memoryEvidence: memoryEvidence,
+            projectMemory: projectMemory,
+            conversationMemory: conversationMemory,
+            recentConversations: recentConversations,
+            citations: citations,
+            projectGoal: projectGoal
+        )
         let promptTrace = PromptContextAssembler.governanceTrace(
             chatMode: effectiveMode,
             currentUserInput: promptQuery,
@@ -346,7 +360,10 @@ final class TurnPlanner {
                 transcriptMessages: transcriptMessages(from: prepared.messagesAfterUserAppend),
                 focusBlock: focusBlock,
                 provider: provider,
-                indexedSkillIds: indexedSkillIds
+                indexedSkillIds: indexedSkillIds,
+                loadedSkillIds: Set(quickActionResolution.loadedSkills.map(\.skillID)),
+                memoryEvidenceSourceIds: promptResourceIds.memoryEvidenceSourceIds,
+                loadedCitationIds: promptResourceIds.citationIds
             )
         }
 
@@ -370,7 +387,10 @@ final class TurnPlanner {
             transcriptMessages: transcriptMessages(from: prepared.messagesAfterUserAppend),
             focusBlock: focusBlock,
             provider: provider,
-            indexedSkillIds: indexedSkillIds
+            indexedSkillIds: indexedSkillIds,
+            loadedSkillIds: Set(quickActionResolution.loadedSkills.map(\.skillID)),
+            memoryEvidenceSourceIds: promptResourceIds.memoryEvidenceSourceIds,
+            loadedCitationIds: promptResourceIds.citationIds
         )
     }
 

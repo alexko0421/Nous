@@ -967,6 +967,103 @@ final class GovernanceTelemetryStoreTests: XCTestCase {
         XCTAssertEqual(telemetry.behaviorEvalSummary.totalOutcomeCount, 100)
     }
 
+    func testContextManifestTelemetryStoresBoundedResourceSignalsWithoutPromptText() throws {
+        let telemetry = makeTelemetry()
+        let turnId = UUID(uuidString: "00000000-0000-0000-0000-000000000B01")!
+        let conversationId = UUID(uuidString: "00000000-0000-0000-0000-000000000B02")!
+        let assistantMessageId = UUID(uuidString: "00000000-0000-0000-0000-000000000B03")!
+        let citationId = UUID(uuidString: "00000000-0000-0000-0000-000000000B04")!
+        let skillId = UUID(uuidString: "00000000-0000-0000-0000-000000000B05")!
+        let record = ContextManifestRecord(
+            turnId: turnId,
+            conversationId: conversationId,
+            assistantMessageId: assistantMessageId,
+            resources: [
+                ContextManifestResource(
+                    source: .memory,
+                    label: "global_memory",
+                    referenceId: "global_memory",
+                    state: .loaded,
+                    used: false
+                ),
+                ContextManifestResource(
+                    source: .citation,
+                    label: "node",
+                    referenceId: citationId.uuidString,
+                    state: .loaded,
+                    used: true
+                ),
+                ContextManifestResource(
+                    source: .skill,
+                    label: "quick_action_skill",
+                    referenceId: skillId.uuidString,
+                    state: .indexed,
+                    used: false
+                )
+            ],
+            recordedAt: Date(timeIntervalSince1970: 20)
+        )
+
+        telemetry.recordContextManifest(record)
+
+        XCTAssertEqual(telemetry.recentContextManifests(limit: 10), [record])
+        XCTAssertEqual(telemetry.contextManifestSummary.totalManifestCount, 1)
+        XCTAssertEqual(telemetry.contextManifestSummary.loadedMemoryCount, 1)
+        XCTAssertEqual(telemetry.contextManifestSummary.loadedCitationCount, 1)
+        XCTAssertEqual(telemetry.contextManifestSummary.indexedSkillCount, 1)
+        XCTAssertEqual(telemetry.contextManifestSummary.usedCitationCount, 1)
+
+        let encoded = String(data: try JSONEncoder().encode(telemetry.recentContextManifests(limit: 10)), encoding: .utf8) ?? ""
+        XCTAssertFalse(encoded.contains("Alex wants raw SQLite ownership."))
+        XCTAssertFalse(encoded.contains("Architecture Decision"))
+        XCTAssertFalse(encoded.contains("Loaded direction content"))
+    }
+
+    func testContextManifestTelemetryIgnoresEmptyRecordsForQuietState() {
+        let telemetry = makeTelemetry()
+        telemetry.recordContextManifest(ContextManifestRecord(
+            turnId: UUID(),
+            conversationId: UUID(),
+            assistantMessageId: UUID(),
+            resources: []
+        ))
+
+        XCTAssertTrue(telemetry.recentContextManifests(limit: 10).isEmpty)
+        XCTAssertEqual(telemetry.contextManifestSummary.totalManifestCount, 0)
+        XCTAssertEqual(telemetry.contextManifestSummary.totalResourceCount, 0)
+        XCTAssertEqual(telemetry.contextManifestSummary.summaryText, "No context manifest signals recorded.")
+    }
+
+    func testContextManifestTelemetryKeepsMostRecentHundredSignals() {
+        let telemetry = makeTelemetry()
+
+        for offset in 0..<105 {
+            telemetry.recordContextManifest(ContextManifestRecord(
+                turnId: UUID(),
+                conversationId: UUID(),
+                assistantMessageId: UUID(),
+                resources: [
+                    ContextManifestResource(
+                        source: .memory,
+                        label: "global_memory",
+                        referenceId: "global_memory",
+                        state: .loaded,
+                        used: false
+                    )
+                ],
+                recordedAt: Date(timeIntervalSince1970: TimeInterval(offset))
+            ))
+        }
+
+        let records = telemetry.recentContextManifests(limit: 200)
+
+        XCTAssertEqual(records.count, 100)
+        XCTAssertEqual(records.first?.recordedAt, Date(timeIntervalSince1970: 104))
+        XCTAssertEqual(records.last?.recordedAt, Date(timeIntervalSince1970: 5))
+        XCTAssertEqual(telemetry.contextManifestSummary.totalManifestCount, 100)
+        XCTAssertEqual(telemetry.contextManifestSummary.totalResourceCount, 100)
+    }
+
     private func makeTelemetry() -> GovernanceTelemetryStore {
         let suiteName = "GovernanceTelemetryStoreTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!

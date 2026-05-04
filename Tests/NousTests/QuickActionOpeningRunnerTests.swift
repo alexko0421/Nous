@@ -88,6 +88,49 @@ final class QuickActionOpeningRunnerTests: XCTestCase {
         XCTAssertFalse(llm.receivedPromptText.contains("RECENT CONVERSATIONS WITH ALEX"))
     }
 
+    func testOpeningRunnerRecordsContextManifestAfterSuccessfulCommit() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let conversationStore = ConversationSessionStore(nodeStore: nodeStore)
+        let node = try conversationStore.startConversation()
+        try nodeStore.insertMemoryEntry(memoryEntry(scope: .global, content: "- Alex owns the data layer."))
+        var contextManifests: [ContextManifestRecord] = []
+
+        let runner = QuickActionOpeningRunner(
+            conversationSessionStore: conversationStore,
+            memoryContextBuilder: makeMemoryContextBuilder(nodeStore: nodeStore),
+            turnExecutor: TurnExecutor(
+                llmServiceProvider: { OpeningPromptCapturingLLM(output: "先讲一个真实问题。") },
+                shouldUseGeminiHistoryCache: { false },
+                shouldPersistAssistantThinking: { false }
+            ),
+            outcomeFactory: TurnOutcomeFactory(shouldPersistMemory: { _, _ in false }),
+            onContextManifest: { contextManifests.append($0) }
+        )
+        let turnId = UUID()
+        let sink = TurnSequencedEventSink(turnId: turnId, sink: OpeningTurnEventCapture())
+
+        let maybeCompletion = await runner.run(
+            mode: .direction,
+            node: node,
+            turnId: turnId,
+            sink: sink,
+            abortReason: { .unexpectedCancellation }
+        )
+        let completion = try XCTUnwrap(maybeCompletion)
+
+        XCTAssertEqual(contextManifests.count, 1)
+        XCTAssertEqual(contextManifests[0].turnId, turnId)
+        XCTAssertEqual(contextManifests[0].conversationId, node.id)
+        XCTAssertEqual(contextManifests[0].assistantMessageId, completion.assistantMessage.id)
+        XCTAssertTrue(contextManifests[0].resources.contains(ContextManifestResource(
+            source: .memory,
+            label: "global_memory",
+            referenceId: "global_memory",
+            state: .loaded,
+            used: false
+        )))
+    }
+
     func testOpeningRunnerTracesSingleShotAgentCoordination() async throws {
         let nodeStore = try NodeStore(path: ":memory:")
         let conversationStore = ConversationSessionStore(nodeStore: nodeStore)

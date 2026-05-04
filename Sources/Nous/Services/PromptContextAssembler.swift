@@ -187,6 +187,11 @@ struct MemoryPromptPacket {
     }
 }
 
+struct PromptContextResourceIds: Equatable {
+    let memoryEvidenceSourceIds: Set<UUID>
+    let citationIds: Set<UUID>
+}
+
 enum PromptContextAssembler {
     /// Loads the anchor document -- Nous's immutable core identity and thinking methods.
     /// This is who Nous is. It does not change with context.
@@ -956,6 +961,36 @@ CHAT FORMAT POLICY:
         )
 
         return TurnSystemSlice(blocks: blocks)
+    }
+
+    static func promptResourceIds(
+        operatingContext: OperatingContext? = nil,
+        globalMemory: String?,
+        essentialStory: String? = nil,
+        userModel: UserModel? = nil,
+        memoryEvidence: [MemoryEvidenceSnippet] = [],
+        projectMemory: String?,
+        conversationMemory: String?,
+        recentConversations: [(title: String, memory: String)],
+        citations: [SearchResult],
+        projectGoal: String?
+    ) -> PromptContextResourceIds {
+        let memoryPacket = MemoryPromptPacket(
+            operatingContext: operatingContext,
+            globalMemory: globalMemory,
+            essentialStory: essentialStory,
+            userModel: userModel,
+            memoryEvidence: memoryEvidence,
+            projectMemory: projectMemory,
+            conversationMemory: conversationMemory,
+            recentConversations: recentConversations,
+            projectGoal: projectGoal
+        )
+
+        return PromptContextResourceIds(
+            memoryEvidenceSourceIds: Set(memoryPacket.promptMemoryEvidence.map(\.sourceNodeId)),
+            citationIds: Set(memoryPacket.filteredCitations(citations).map(\.node.id))
+        )
     }
 
     static func indexedSkillIds(

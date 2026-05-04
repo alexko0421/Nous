@@ -95,7 +95,7 @@ final class ChatViewModel {
             turnExecutor: turnExecutor,
             agentLoopExecutorFactory: { [weak self] mode, _, _ in
                 guard let self,
-                      self.currentProviderProvider() == .openrouter,
+                      ModelHarnessProfileCatalog.profile(for: self.currentProviderProvider()).supportsAgentToolUse,
                       let llm = self.llmServiceProvider() else {
                     return nil
                 }
@@ -142,6 +142,9 @@ final class ChatViewModel {
             },
             onTurnCognitionSnapshot: { [governanceTelemetry] snapshot in
                 governanceTelemetry.recordTurnCognitionSnapshot(snapshot)
+            },
+            onContextManifest: { [governanceTelemetry] record in
+                governanceTelemetry.recordContextManifest(record)
             }
         )
     }
@@ -169,7 +172,7 @@ final class ChatViewModel {
             shadowPatternPromptProvider: shadowPatternPromptProvider,
             slowCognitionArtifactProvider: slowCognitionArtifactProvider,
             agentLoopProviderSupportsToolUse: { [weak self] provider in
-                guard provider == .openrouter,
+                guard ModelHarnessProfileCatalog.profile(for: provider).supportsAgentToolUse,
                       let llm = self?.llmServiceProvider()
                 else { return false }
 
@@ -237,6 +240,9 @@ final class ChatViewModel {
             },
             onTurnCognitionSnapshot: { [governanceTelemetry] snapshot in
                 governanceTelemetry.recordTurnCognitionSnapshot(snapshot)
+            },
+            onContextManifest: { [governanceTelemetry] record in
+                governanceTelemetry.recordContextManifest(record)
             }
         )
         cachedQuickActionOpeningRunner = runner
