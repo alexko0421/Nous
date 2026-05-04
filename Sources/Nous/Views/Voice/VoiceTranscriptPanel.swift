@@ -23,12 +23,11 @@ struct VoiceTranscriptPanel: View {
                 .frame(maxWidth: 480)
                 .frame(maxHeight: 360)
                 .background(
+                    NativeGlassPanel(cornerRadius: 14, tintColor: AppColor.glassTint) { EmptyView() }
+                )
+                .overlay(
                     RoundedRectangle(cornerRadius: 14)
-                        .fill(.ultraThinMaterial)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14)
-                                .stroke(AppColor.colaOrange.opacity(0.18), lineWidth: 1)
-                        )
+                        .stroke(AppColor.colaOrange.opacity(0.18), lineWidth: 1)
                 )
                 .transition(.move(edge: .top).combined(with: .opacity))
                 .animation(.easeOut(duration: 0.22), value: isVisible)

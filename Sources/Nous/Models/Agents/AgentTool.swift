@@ -71,8 +71,16 @@ struct AgentToolInput {
     }
 
     init(argumentsJSON: String) throws {
-        guard let data = argumentsJSON.data(using: .utf8),
-              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard let data = argumentsJSON.data(using: .utf8) else {
+            throw AgentToolError.invalidArgument("arguments")
+        }
+        let decoded: Any
+        do {
+            decoded = try JSONSerialization.jsonObject(with: data)
+        } catch {
+            throw AgentToolError.invalidArgument("arguments")
+        }
+        guard let object = decoded as? [String: Any] else {
             throw AgentToolError.invalidArgument("arguments")
         }
         self.raw = object

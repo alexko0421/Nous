@@ -74,10 +74,6 @@ struct AppColor {
         dark: NSColor(white: 1, alpha: 0.08)
     )
     static let glassTint = dynamicNSColor(
-        light: NSColor(white: 0, alpha: 0.06),
-        dark: NSColor(red: 34/255, green: 34/255, blue: 37/255, alpha: 0.20)
-    )
-    static let composerGlassTint = dynamicNSColor(
         light: NSColor(white: 1, alpha: 0.22),
         dark: NSColor(red: 72/255, green: 72/255, blue: 78/255, alpha: 0.24)
     )
@@ -94,9 +90,6 @@ struct AppColor {
         dark: NSColor(red: 140/255, green: 80/255, blue: 45/255, alpha: 0.7)
     )
     
-    // System ultra thin material for the premium blur
-    // In SwiftUI we use `.ultraThinMaterial` directly where needed.
-
     // Galaxy dark theme
     static let galaxyBackground = Color(red: 26/255, green: 26/255, blue: 46/255)
     static let galaxyNodeGlow = Color(red: 243/255, green: 131/255, blue: 53/255)

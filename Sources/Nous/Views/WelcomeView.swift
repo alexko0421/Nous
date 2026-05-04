@@ -183,7 +183,7 @@ struct WelcomeView: View {
             .background(
                 NativeGlassPanel(
                     cornerRadius: 18,
-                    tintColor: AppColor.composerGlassTint
+                    tintColor: AppColor.glassTint
                 ) { EmptyView() }
             )
             .overlay(

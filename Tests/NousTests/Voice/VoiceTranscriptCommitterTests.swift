@@ -5,13 +5,11 @@ import XCTest
 final class VoiceTranscriptCommitterTests: XCTestCase {
     private var nodeStore: NodeStore!
     private var sessionStore: ConversationSessionStore!
-    private var tempDBPath: String!
     private var scratchPadDefaultsSuiteName: String!
 
     override func setUp() async throws {
         try await super.setUp()
-        tempDBPath = NSTemporaryDirectory() + "voice-committer-test-\(UUID().uuidString).db"
-        nodeStore = try NodeStore(path: tempDBPath)
+        nodeStore = try NodeStore(path: ":memory:")
         sessionStore = ConversationSessionStore(nodeStore: nodeStore)
         scratchPadDefaultsSuiteName = "VoiceTranscriptCommitterTests.scratchpad.\(UUID().uuidString)"
     }
@@ -22,7 +20,6 @@ final class VoiceTranscriptCommitterTests: XCTestCase {
         }
         sessionStore = nil
         nodeStore = nil
-        try? FileManager.default.removeItem(atPath: tempDBPath)
         try await super.tearDown()
     }
 

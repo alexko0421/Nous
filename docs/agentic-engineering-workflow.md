@@ -192,6 +192,21 @@ The lightweight automation layer is intentionally advisory first:
 - Hooks or CI gates are deferred until the workflow proves useful without
   blocking legitimate local work.
 
+## Agent Harness Upgrade Roadmap
+
+Use the harness as a measurable system, not a vibe check.
+
+- V1 tool reliability telemetry: persist structured tool outcome, provider,
+  quick-action mode, duration, iteration, and error category in agent traces.
+- V2 behavior eval: add lightweight satisfaction proxies such as immediate
+  correction, repeated question, deletion, or continued forward motion.
+- V3 dynamic context manifest: record which memories, skills, and citations were
+  loaded for a turn and whether they were actually used.
+- V4 model harness profiles: tune tool schema, cache, thinking capture, step
+  budget, and fallback policy per provider/model.
+- V5 delegation metrics: measure whether explorers/verifiers reduce rework or
+  merely add coordination cost.
+
 ## Measuring Whether This Helps
 
 Static checks prove documentation completeness and workflow visibility only.

@@ -94,9 +94,11 @@ private struct StopButton: View {
     var body: some View {
         Button(action: onTap) {
             ZStack {
+                NativeGlassPanel(cornerRadius: 18, tintColor: AppColor.glassTint) { EmptyView() }
+                    .clipShape(Circle())
+
                 Circle()
                     .fill(outerColor)
-                    .background(.ultraThinMaterial, in: Circle())
 
                 Circle()
                     .stroke(borderColor, lineWidth: 1)

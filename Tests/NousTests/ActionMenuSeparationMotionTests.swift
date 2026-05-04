@@ -113,7 +113,7 @@ final class ActionMenuSeparationMotionTests: XCTestCase {
         }
     }
 
-    func testComposerInputUsesDedicatedGlassTexture() throws {
+    func testComposerGlassUsesSharedGlassTexture() throws {
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -122,7 +122,7 @@ final class ActionMenuSeparationMotionTests: XCTestCase {
             contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Theme/AppColor.swift"),
             encoding: .utf8
         )
-        XCTAssertTrue(themeSource.contains("composerGlassTint"))
+        XCTAssertFalse(themeSource.contains("composerGlassTint"))
 
         let composerFiles = [
             "Sources/Nous/Views/ChatArea.swift",
@@ -133,7 +133,8 @@ final class ActionMenuSeparationMotionTests: XCTestCase {
             let fileURL = repoRoot.appendingPathComponent(relativePath)
             let source = try String(contentsOf: fileURL, encoding: .utf8)
 
-            XCTAssertTrue(source.contains("tintColor: AppColor.composerGlassTint"), relativePath)
+            XCTAssertFalse(source.contains("AppColor.composerGlassTint"), relativePath)
+            XCTAssertTrue(source.contains("tintColor: AppColor.glassTint"), relativePath)
         }
     }
 }

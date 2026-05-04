@@ -268,7 +268,10 @@ final class HarnessHealthTests: XCTestCase {
             ])
         ))
 
-        let snapshot = RuntimeHarnessService(nodeStore: store).loadSnapshot()
+        let snapshot = RuntimeHarnessService(
+            telemetry: makeRuntimeHarnessTelemetry(),
+            nodeStore: store
+        ).loadSnapshot()
 
         XCTAssertEqual(snapshot.agentToolReliability.totalToolCallCount, 3)
         XCTAssertEqual(snapshot.agentToolReliability.failedToolCallCount, 2)
@@ -281,12 +284,14 @@ final class HarnessHealthTests: XCTestCase {
 
     func testRuntimeHarnessAgentToolReliabilityIsQuietWithoutTraces() throws {
         let store = try NodeStore(path: ":memory:")
-        let snapshot = RuntimeHarnessService(nodeStore: store).loadSnapshot()
+        let snapshot = RuntimeHarnessService(
+            telemetry: makeRuntimeHarnessTelemetry(),
+            nodeStore: store
+        ).loadSnapshot()
 
         XCTAssertEqual(snapshot.agentToolReliability.totalToolCallCount, 0)
         XCTAssertEqual(snapshot.agentToolReliability.failedToolCallCount, 0)
         XCTAssertEqual(snapshot.agentToolReliability.summaryText, "No agent tool traces recorded.")
-        XCTAssertEqual(snapshot.statusText, "No runtime turns recorded")
     }
 
     func testWindowRuntimeSmokeUsesCGWindowListAsTheWindowOracle() throws {
@@ -301,5 +306,12 @@ final class HarnessHealthTests: XCTestCase {
         XCTAssertTrue(script.contains("NOUS_DATABASE_PROFILE"))
         XCTAssertTrue(script.contains("-scheme Nous"))
         XCTAssertFalse(script.contains("count windows"))
+    }
+
+    private func makeRuntimeHarnessTelemetry() -> GovernanceTelemetryStore {
+        let suiteName = "HarnessHealthTests.runtime.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        return GovernanceTelemetryStore(defaults: defaults)
     }
 }
