@@ -341,7 +341,7 @@ private struct NotchPanelRoot: View {
                     .padding(.top, 16)
                     .padding(.bottom, 14)
                     .background(
-                        NativeGlassPanel(cornerRadius: 36, tintColor: AppColor.glassTint) { EmptyView() }
+                        NativeGlassPanel(cornerRadius: 36, tintColor: AppColor.controlGlassTint) { EmptyView() }
                             .shadow(color: .black.opacity(0.08), radius: 12, x: 0, y: 4)
                     )
                     .overlay(

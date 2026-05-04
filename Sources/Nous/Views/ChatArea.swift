@@ -378,7 +378,7 @@ struct ChatArea: View {
                                         cornerRadius: 18,
                                         tintColor: voiceController.isActive
                                             ? NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.22)
-                                            : AppColor.glassTint
+                                            : AppColor.controlGlassTint
                                     ) { EmptyView() }
                                         .frame(width: 36, height: 36)
                                         .overlay(
@@ -419,7 +419,7 @@ struct ChatArea: View {
                                 .background(
                                     NativeGlassPanel(
                                         cornerRadius: 18,
-                                        tintColor: AppColor.glassTint
+                                        tintColor: AppColor.controlGlassTint
                                     ) { EmptyView() }
                                 )
                                 .overlay(
@@ -492,7 +492,7 @@ struct ChatArea: View {
                 }
             }) {
                 ZStack {
-                    NativeGlassPanel(cornerRadius: 16, tintColor: AppColor.glassTint) { EmptyView() }
+                    NativeGlassPanel(cornerRadius: 16, tintColor: AppColor.controlGlassTint) { EmptyView() }
                         .frame(width: 32, height: 32)
                         .overlay(
                             Circle()
@@ -519,7 +519,7 @@ struct ChatArea: View {
                             cornerRadius: 16,
                             tintColor: isScratchPadVisible
                                 ? NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.22)
-                                : AppColor.glassTint
+                                : AppColor.controlGlassTint
                         ) { EmptyView() }
                         .frame(width: 32, height: 32)
                         .overlay(
@@ -1129,7 +1129,7 @@ struct ActionMenuCapsule: View {
         .background(
             NativeGlassPanel(
                 cornerRadius: ActionMenuPopoutMetrics.capsuleCornerRadius,
-                tintColor: AppColor.glassTint
+                tintColor: AppColor.controlGlassTint
             ) { EmptyView() }
         )
         .overlay(
@@ -1263,7 +1263,7 @@ struct DownvoteFeedbackPopover: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
                     .background(
-                        NativeGlassPanel(cornerRadius: 16, tintColor: AppColor.glassTint) { EmptyView() }
+                        NativeGlassPanel(cornerRadius: 16, tintColor: AppColor.controlGlassTint) { EmptyView() }
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -1297,7 +1297,7 @@ struct DownvoteFeedbackPopover: View {
         .padding(16)
         .frame(width: 320)
         .background(
-            NativeGlassPanel(cornerRadius: 24, tintColor: AppColor.glassTint) { EmptyView() }
+            NativeGlassPanel(cornerRadius: 24, tintColor: AppColor.surfaceGlassTint) { EmptyView() }
         )
         .overlay(
             RoundedRectangle(cornerRadius: 24, style: .continuous)

@@ -75,8 +75,170 @@ struct TurnCognitionTelemetrySummary: Equatable {
     }
 }
 
+enum BehaviorEvalOutcome: String, Codable, Equatable {
+    case continued
+    case correction
+    case retry
+    case delete
+}
+
+struct BehaviorEvalEvent: Identifiable, Codable, Equatable {
+    let id: UUID
+    let conversationId: UUID
+    let assistantMessageId: UUID
+    let userMessageId: UUID?
+    let outcome: BehaviorEvalOutcome
+    let latencySeconds: TimeInterval?
+    let recordedAt: Date
+
+    init(
+        id: UUID = UUID(),
+        conversationId: UUID,
+        assistantMessageId: UUID,
+        userMessageId: UUID?,
+        outcome: BehaviorEvalOutcome,
+        latencySeconds: TimeInterval? = nil,
+        recordedAt: Date = Date()
+    ) {
+        self.id = id
+        self.conversationId = conversationId
+        self.assistantMessageId = assistantMessageId
+        self.userMessageId = userMessageId
+        self.outcome = outcome
+        self.latencySeconds = latencySeconds
+        self.recordedAt = recordedAt
+    }
+}
+
+struct BehaviorEvalTelemetrySummary: Equatable {
+    let totalOutcomeCount: Int
+    let continuedCount: Int
+    let correctionCount: Int
+    let retryCount: Int
+    let deleteCount: Int
+
+    init(
+        totalOutcomeCount: Int = 0,
+        continuedCount: Int = 0,
+        correctionCount: Int = 0,
+        retryCount: Int = 0,
+        deleteCount: Int = 0
+    ) {
+        self.totalOutcomeCount = totalOutcomeCount
+        self.continuedCount = continuedCount
+        self.correctionCount = correctionCount
+        self.retryCount = retryCount
+        self.deleteCount = deleteCount
+    }
+
+    static let empty = BehaviorEvalTelemetrySummary()
+
+    var interventionCount: Int {
+        correctionCount + retryCount + deleteCount
+    }
+
+    var keepRate: Double {
+        guard totalOutcomeCount > 0 else { return 0 }
+        return Double(continuedCount) / Double(totalOutcomeCount)
+    }
+
+    var interventionRate: Double {
+        guard totalOutcomeCount > 0 else { return 0 }
+        return Double(interventionCount) / Double(totalOutcomeCount)
+    }
+
+    var summaryText: String {
+        guard totalOutcomeCount > 0 else {
+            return "No behavior eval signals recorded."
+        }
+
+        let keepPercent = Int((keepRate * 100).rounded())
+        return [
+            "Behavior keep-rate \(keepPercent)%",
+            "correction \(correctionCount)",
+            "retry \(retryCount)",
+            "delete \(deleteCount)"
+        ].joined(separator: " · ")
+    }
+
+    static func summarize(events: [BehaviorEvalEvent]) -> BehaviorEvalTelemetrySummary {
+        BehaviorEvalTelemetrySummary(
+            totalOutcomeCount: events.count,
+            continuedCount: events.filter { $0.outcome == .continued }.count,
+            correctionCount: events.filter { $0.outcome == .correction }.count,
+            retryCount: events.filter { $0.outcome == .retry }.count,
+            deleteCount: events.filter { $0.outcome == .delete }.count
+        )
+    }
+}
+
+enum BehaviorEvalClassifier {
+    static func classifyUserFollowUp(_ text: String) -> BehaviorEvalOutcome {
+        let normalized = text
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+
+        if containsAny(normalized, retryMarkers) {
+            return .retry
+        }
+
+        if containsAny(normalized, correctionMarkers) {
+            return .correction
+        }
+
+        return .continued
+    }
+
+    private static let retryMarkers = [
+        "try again",
+        "do it again",
+        "again from",
+        "one more time",
+        "start over",
+        "redo",
+        "retry",
+        "re-answer",
+        "重新",
+        "重来",
+        "再试",
+        "再試",
+        "再嚟",
+        "再来"
+    ]
+
+    private static let correctionMarkers = [
+        "actually",
+        "that's wrong",
+        "that is wrong",
+        "incorrect",
+        "not what i asked",
+        "i mean",
+        "you missed",
+        "you misunderstood",
+        "should be",
+        "唔系",
+        "唔係",
+        "不是",
+        "不对",
+        "不對",
+        "错",
+        "錯",
+        "修正"
+    ]
+
+    private static func containsAny(_ text: String, _ markers: [String]) -> Bool {
+        markers.contains { text.contains($0) }
+    }
+}
+
+protocol BehaviorEvalTelemetryRecording: AnyObject {
+    func recordBehaviorEvalEvent(_ event: BehaviorEvalEvent)
+}
+
 final class GovernanceTelemetryStore {
     private static let recentTurnCognitionSnapshotLimit = 20
+    private static let recentBehaviorEvalEventLimit = 100
 
     private let defaults: UserDefaults
     private let nodeStore: NodeStore?
@@ -95,6 +257,7 @@ final class GovernanceTelemetryStore {
         static let turnCognitionRecoveryTurnCount = "nous.governance.turnCognitionRecoveryTurnCount"
         static let turnCognitionRiskFlagCounts = "nous.governance.turnCognitionRiskFlagCounts"
         static let recentTurnCognitionSnapshots = "nous.governance.recentTurnCognitionSnapshots"
+        static let recentBehaviorEvalEvents = "nous.governance.recentBehaviorEvalEvents"
 
         static func counter(_ counter: EvalCounter) -> String {
             "nous.governance.counter.\(counter.rawValue)"
@@ -235,6 +398,15 @@ final class GovernanceTelemetryStore {
         return Array(storedRecentTurnCognitionSnapshots().prefix(limit))
     }
 
+    var behaviorEvalSummary: BehaviorEvalTelemetrySummary {
+        BehaviorEvalTelemetrySummary.summarize(events: storedRecentBehaviorEvalEvents())
+    }
+
+    func recentBehaviorEvalEvents(limit: Int) -> [BehaviorEvalEvent] {
+        guard limit > 0 else { return [] }
+        return Array(storedRecentBehaviorEvalEvents().prefix(limit))
+    }
+
     func increment(_ counter: EvalCounter, by amount: Int = 1) {
         let key = Keys.counter(counter)
         defaults.set(defaults.integer(forKey: key) + amount, forKey: key)
@@ -316,6 +488,25 @@ final class GovernanceTelemetryStore {
             return []
         }
         return snapshots
+    }
+
+    private func recordRecentBehaviorEvalEvent(_ event: BehaviorEvalEvent) {
+        var events = storedRecentBehaviorEvalEvents()
+        events.insert(event, at: 0)
+        if events.count > Self.recentBehaviorEvalEventLimit {
+            events = Array(events.prefix(Self.recentBehaviorEvalEventLimit))
+        }
+        if let data = try? JSONEncoder().encode(events) {
+            defaults.set(data, forKey: Keys.recentBehaviorEvalEvents)
+        }
+    }
+
+    private func storedRecentBehaviorEvalEvents() -> [BehaviorEvalEvent] {
+        guard let data = defaults.data(forKey: Keys.recentBehaviorEvalEvents),
+              let events = try? JSONDecoder().decode([BehaviorEvalEvent].self, from: data) else {
+            return []
+        }
+        return events
     }
 
     func recordMemoryStorageSuppressed(reason: MemorySuppressionReason = .unspecified) {
@@ -418,5 +609,11 @@ extension GovernanceTelemetryStore: ConversationRecoveryTelemetryRecording {
             defaults.set(data, forKey: Keys.lastConversationRecovery)
         }
         defaults.set(defaults.integer(forKey: Keys.conversationRecoveryCount) + 1, forKey: Keys.conversationRecoveryCount)
+    }
+}
+
+extension GovernanceTelemetryStore: BehaviorEvalTelemetryRecording {
+    func recordBehaviorEvalEvent(_ event: BehaviorEvalEvent) {
+        recordRecentBehaviorEvalEvent(event)
     }
 }

@@ -26,7 +26,7 @@ struct VoiceCapsuleView: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
             .background(
-                NativeGlassPanel(cornerRadius: 36, tintColor: AppColor.glassTint) { EmptyView() }
+                NativeGlassPanel(cornerRadius: 36, tintColor: AppColor.controlGlassTint) { EmptyView() }
                     .shadow(color: .black.opacity(0.08), radius: 12, x: 0, y: 4)
             )
             .overlay(
@@ -115,7 +115,7 @@ struct VoiceModeButton: View {
                     cornerRadius: 18,
                     tintColor: isActive
                         ? NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.22)
-                        : AppColor.glassTint
+                        : AppColor.controlGlassTint
                 ) { EmptyView() }
 
                 Image(systemName: isActive ? "mic.fill" : "mic")

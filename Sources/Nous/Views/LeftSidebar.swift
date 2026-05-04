@@ -143,7 +143,7 @@ struct NavIconButton<Icon: View>: View {
     var body: some View {
         Button(action: action) {
             VStack(spacing: 6) {
-                NativeGlassPanel(cornerRadius: 18, tintColor: AppColor.glassTint) {
+                NativeGlassPanel(cornerRadius: 18, tintColor: AppColor.controlGlassTint) {
                     EmptyView()
                 }
                 .frame(width: 36, height: 36)
@@ -253,7 +253,7 @@ struct LeftSidebar: View {
     var body: some View {
         NativeGlassPanel(
             cornerRadius: 32,
-            tintColor: AppColor.glassTint
+            tintColor: AppColor.surfaceGlassTint
         ) {
             VStack(alignment: .leading, spacing: 0) {
                 MacOSTrafficLights()

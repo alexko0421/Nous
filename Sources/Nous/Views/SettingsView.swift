@@ -65,13 +65,16 @@ struct SettingsView: View {
 
                 Spacer()
             }
-            .frame(width: 180)
+            .frame(width: 168)
             .padding(.horizontal, 8)
             .background(
-                NativeGlassPanel(cornerRadius: 0, tintColor: AppColor.glassTint) { EmptyView() }
+                NativeGlassPanel(cornerRadius: 0, tintColor: AppColor.surfaceGlassTint) { EmptyView() }
             )
 
-            Divider()
+            Rectangle()
+                .fill(AppColor.panelStroke.opacity(0.35))
+                .frame(width: 1)
+                .padding(.vertical, 22)
 
             // ── Right content area ────────────────────────────────
             Group {
@@ -103,309 +106,285 @@ struct SettingsView: View {
 
     // MARK: - Profile
     private var profileContent: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                pageHeader(title: "Profile", subtitle: "Keep the identity Nous uses in memory simple and stable.")
-
-                settingsCard {
-                    sectionLabel("Identity")
-                    HStack(spacing: 16) {
-                        Circle()
-                            .fill(AppColor.colaOrange.opacity(0.14))
-                            .frame(width: 54, height: 54)
-                            .overlay(
-                                Text(username.first.map(String.init)?.uppercased() ?? "A")
-                                    .font(.system(size: 20, weight: .semibold, design: .rounded))
-                                    .foregroundColor(AppColor.colaOrange)
-                            )
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Display name")
-                                .font(.system(size: 16, weight: .semibold, design: .rounded))
-                                .foregroundColor(AppColor.colaDarkText)
-                            Text("Used in the sidebar and in long-term memory summaries.")
-                                .font(.system(size: 13, design: .rounded))
-                                .foregroundColor(AppColor.secondaryText)
-                        }
-                        Spacer()
-                    }
-                    fieldShell {
-                        TextField("Display Name", text: $username)
-                            .font(.system(size: 14, weight: .medium, design: .rounded))
-                            .foregroundColor(AppColor.colaDarkText)
-                    }
-                    helperCopy("Keep this stable. Changing it too often makes memory history harder to read.")
-                }
-
-                settingsCard {
-                    sectionLabel("Operating Context")
+        settingsPage(title: "Profile", subtitle: "Keep the identity Nous uses in memory simple and stable.") {
+            settingsCard {
+                sectionLabel("Identity")
+                HStack(spacing: 16) {
+                    Circle()
+                        .fill(AppColor.colaOrange.opacity(0.14))
+                        .frame(width: 54, height: 54)
+                        .overlay(
+                            Text(username.first.map(String.init)?.uppercased() ?? "A")
+                                .font(.system(size: 20, weight: .semibold, design: .rounded))
+                                .foregroundColor(AppColor.colaOrange)
+                        )
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Manual context")
+                        Text("Display name")
                             .font(.system(size: 16, weight: .semibold, design: .rounded))
                             .foregroundColor(AppColor.colaDarkText)
-                        Text("Used as a global profile before every chat. It stays separate from learned memory.")
+                        Text("Used in the sidebar and in long-term memory summaries.")
                             .font(.system(size: 13, design: .rounded))
                             .foregroundColor(AppColor.secondaryText)
-                            .fixedSize(horizontal: false, vertical: true)
                     }
+                    Spacer()
+                }
+                fieldShell {
+                    TextField("Display Name", text: $username)
+                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                        .foregroundColor(AppColor.colaDarkText)
+                }
+                helperCopy("Keep this stable. Changing it too often makes memory history harder to read.")
+            }
 
-                    operatingContextField(
-                        title: "Identity",
-                        description: "Stable facts Nous should know about you.",
-                        text: $vm.operatingContextIdentity
-                    )
-                    operatingContextField(
-                        title: "Current Work / Goals",
-                        description: "What you are actively trying to move forward.",
-                        text: $vm.operatingContextCurrentWork
-                    )
-                    operatingContextField(
-                        title: "Communication Style",
-                        description: "How Nous should think and talk with you.",
-                        text: $vm.operatingContextCommunicationStyle
-                    )
-                    operatingContextField(
-                        title: "Hard Boundaries",
-                        description: "Things Nous should not do or store without explicit consent.",
-                        text: $vm.operatingContextBoundaries
-                    )
-
-                    HStack(spacing: 12) {
-                        if let error = vm.operatingContextSaveError {
-                            Text(error)
-                                .font(.system(size: 12, design: .rounded))
-                                .foregroundColor(.red)
-                        }
-                        Spacer()
-                        Button(action: { vm.saveOperatingContextFromSettings() }) {
-                            Label("Save Context", systemImage: "checkmark.circle.fill")
-                                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 9)
-                        .background(AppColor.colaOrange)
-                        .clipShape(Capsule())
-                    }
-
-                    helperCopy("Boundaries are treated as hard constraints. The other fields guide tone, priorities, and tradeoffs.")
+            settingsCard {
+                sectionLabel("Operating Context")
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Manual context")
+                        .font(.system(size: 16, weight: .semibold, design: .rounded))
+                        .foregroundColor(AppColor.colaDarkText)
+                    Text("Used as a global profile before every chat. It stays separate from learned memory.")
+                        .font(.system(size: 13, design: .rounded))
+                        .foregroundColor(AppColor.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
-                settingsCard {
-                    sectionLabel("Appearance")
-                    HStack(alignment: .center, spacing: 16) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Theme")
-                                .font(.system(size: 16, weight: .semibold, design: .rounded))
-                                .foregroundColor(AppColor.colaDarkText)
-                            Text("Controls the light or dark appearance of the Nous interface.")
-                                .font(.system(size: 13, design: .rounded))
-                                .foregroundColor(AppColor.secondaryText)
-                        }
-                        Spacer()
-                        appearancePicker
+                operatingContextField(
+                    title: "Identity",
+                    description: "Stable facts Nous should know about you.",
+                    text: $vm.operatingContextIdentity
+                )
+                operatingContextField(
+                    title: "Current Work / Goals",
+                    description: "What you are actively trying to move forward.",
+                    text: $vm.operatingContextCurrentWork
+                )
+                operatingContextField(
+                    title: "Communication Style",
+                    description: "How Nous should think and talk with you.",
+                    text: $vm.operatingContextCommunicationStyle
+                )
+                operatingContextField(
+                    title: "Hard Boundaries",
+                    description: "Things Nous should not do or store without explicit consent.",
+                    text: $vm.operatingContextBoundaries
+                )
+
+                HStack(spacing: 12) {
+                    if let error = vm.operatingContextSaveError {
+                        Text(error)
+                            .font(.system(size: 12, design: .rounded))
+                            .foregroundColor(.red)
                     }
+                    Spacer()
+                    Button(action: { vm.saveOperatingContextFromSettings() }) {
+                        Label("Save Context", systemImage: "checkmark.circle.fill")
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .background(AppColor.colaOrange)
+                    .clipShape(Capsule())
+                }
+
+                helperCopy("Boundaries are treated as hard constraints. The other fields guide tone, priorities, and tradeoffs.")
+            }
+
+            settingsCard {
+                sectionLabel("Appearance")
+                HStack(alignment: .center, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Theme")
+                            .font(.system(size: 16, weight: .semibold, design: .rounded))
+                            .foregroundColor(AppColor.colaDarkText)
+                        Text("Controls the light or dark appearance of the Nous interface.")
+                            .font(.system(size: 13, design: .rounded))
+                            .foregroundColor(AppColor.secondaryText)
+                    }
+                    Spacer()
+                    appearancePicker
                 }
             }
-            .frame(maxWidth: 760, alignment: .leading)
-            .padding(.horizontal, 36)
-            .padding(.vertical, 32)
-            .frame(maxWidth: .infinity, alignment: .top)
         }
     }
 
     // MARK: - General
     private var generalContent: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                pageHeader(title: "General", subtitle: "Choose the default AI and the privacy-sensitive automation Nous is allowed to run.")
-
-                settingsCard {
-                    sectionLabel("Default provider")
-                    HStack(alignment: .center, spacing: 16) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("LLM provider")
-                                .font(.system(size: 16, weight: .semibold, design: .rounded))
-                                .foregroundColor(AppColor.colaDarkText)
-                            Text("Nous uses this for foreground chat and judge tasks.")
-                                .font(.system(size: 13, design: .rounded))
-                                .foregroundColor(AppColor.secondaryText)
-                        }
-                        Spacer()
-                        Picker("LLM Provider", selection: $vm.selectedProvider) {
-                            Text("Local MLX").tag(LLMProvider.local)
-                            Text("Google Gemini").tag(LLMProvider.gemini)
-                            Text("Anthropic Claude").tag(LLMProvider.claude)
-                            Text("OpenAI").tag(LLMProvider.openai)
-                            Text("OpenRouter").tag(LLMProvider.openrouter)
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                        .onChange(of: vm.selectedProvider) { _, _ in vm.savePreferences() }
-                    }
-
-                    if vm.geminiApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Text("Weekly reflections always run on Gemini 2.5 Pro. Add a Gemini API key below — even when the foreground provider is something else.")
-                            .font(.system(size: 12, design: .rounded))
-                            .foregroundColor(AppColor.secondaryText)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.top, 8)
-                    }
-                }
-
-                if vm.selectedProvider != .local {
-                    settingsCard {
-                        sectionLabel("Credentials")
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(apiKeyTitle)
-                                .font(.system(size: 16, weight: .semibold, design: .rounded))
-                                .foregroundColor(AppColor.colaDarkText)
-                            Text(vm.credentialStorageDescription)
-                                .font(.system(size: 13, design: .rounded))
-                                .foregroundColor(AppColor.secondaryText)
-                        }
-                        fieldShell {
-                            Group {
-                                switch vm.selectedProvider {
-                                case .gemini:
-                                    SecureField("Gemini API Key", text: $vm.geminiApiKey)
-                                        .onSubmit { vm.savePreferences() }
-                                case .claude:
-                                    SecureField("Claude API Key", text: $vm.claudeApiKey)
-                                        .onSubmit { vm.savePreferences() }
-                                case .openai:
-                                    SecureField("OpenAI API Key", text: $vm.openaiApiKey)
-                                        .onSubmit { vm.savePreferences() }
-                                case .openrouter:
-                                    SecureField("OpenRouter API Key", text: $vm.openrouterApiKey)
-                                        .onSubmit { vm.savePreferences() }
-                                case .local:
-                                    EmptyView()
-                                }
-                            }
-                            .font(.system(size: 14, weight: .medium, design: .rounded))
+        settingsPage(title: "General", subtitle: "Choose the default AI and the privacy-sensitive automation Nous is allowed to run.") {
+            settingsCard {
+                sectionLabel("Default provider")
+                HStack(alignment: .center, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("LLM provider")
+                            .font(.system(size: 16, weight: .semibold, design: .rounded))
                             .foregroundColor(AppColor.colaDarkText)
-                        }
-                        helperCopy("Leave empty to keep Nous fully local.")
+                        Text("Nous uses this for foreground chat and judge tasks.")
+                            .font(.system(size: 13, design: .rounded))
+                            .foregroundColor(AppColor.secondaryText)
                     }
+                    Spacer()
+                    Picker("LLM Provider", selection: $vm.selectedProvider) {
+                        Text("Local MLX").tag(LLMProvider.local)
+                        Text("Google Gemini").tag(LLMProvider.gemini)
+                        Text("Anthropic Claude").tag(LLMProvider.claude)
+                        Text("OpenAI").tag(LLMProvider.openai)
+                        Text("OpenRouter").tag(LLMProvider.openrouter)
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .onChange(of: vm.selectedProvider) { _, _ in vm.savePreferences() }
                 }
 
-                if vm.shouldShowSupplementalGeminiKeyField {
-                    settingsCard {
-                        sectionLabel("Gemini support key")
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Gemini API Key")
-                                .font(.system(size: 16, weight: .semibold, design: .rounded))
-                                .foregroundColor(AppColor.colaDarkText)
-                            Text("Used for judge checks and weekly reflections when your foreground chat uses another provider.")
-                                .font(.system(size: 13, design: .rounded))
-                                .foregroundColor(AppColor.secondaryText)
-                        }
-                        fieldShell {
-                            SecureField("Gemini API Key", text: $vm.geminiApiKey)
-                                .font(.system(size: 14, weight: .medium, design: .rounded))
-                                .foregroundColor(AppColor.colaDarkText)
-                                .onSubmit { vm.savePreferences() }
-                        }
-                        helperCopy("Leave empty to skip those Gemini-backed background checks.")
-                    }
-                }
-
-                settingsCard {
-                    sectionLabel("Privacy-sensitive automation")
-                    toggleRow(
-                        title: "Finder export",
-                        subtitle: "Write notes and conversations as Markdown in Documents for Finder browsing. Assistant thinking only exports if the toggle below is on. Turning this off removes the generated export folder.",
-                        isOn: preferenceBinding(\.finderSyncEnabled)
-                    )
-                    toggleRow(
-                        title: "Background AI maintenance",
-                        subtitle: "Allow launch-time chat-title repair and weekly reflections. With cloud providers, this can send existing chats to the active model. Off by default.",
-                        isOn: preferenceBinding(\.backgroundAnalysisEnabled)
-                    )
-                    if vm.selectedProvider == .openrouter {
-                        toggleRow(
-                            title: "OpenRouter web search",
-                            subtitle: "Allow OpenRouter to use its web search server tool for current facts such as prices, stock, laws, schedules, and product availability.",
-                            isOn: preferenceBinding(\.openRouterWebSearchEnabled)
-                        )
-                    }
-                    toggleRow(
-                        title: "Store assistant thinking",
-                        subtitle: "Keep assistant reasoning traces in local chat history and Finder export. Turning this off clears previously stored thinking from SQLite. Off by default.",
-                        isOn: preferenceBinding(\.assistantThinkingEnabled)
-                    )
-                    toggleRow(
-                        title: "Gemini history cache",
-                        subtitle: "Let Gemini create short-lived cached transcript prefixes on Google's servers for long chats. Only applies when Gemini is active and lasts up to 5 minutes. Off by default.",
-                        isOn: preferenceBinding(\.geminiHistoryCacheEnabled)
-                    )
+                if vm.geminiApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text("Weekly reflections always run on Gemini 2.5 Pro. Add a Gemini API key below — even when the foreground provider is something else.")
+                        .font(.system(size: 12, design: .rounded))
+                        .foregroundColor(AppColor.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 8)
                 }
             }
-            .frame(maxWidth: 760, alignment: .leading)
-            .padding(.horizontal, 36)
-            .padding(.vertical, 32)
-            .frame(maxWidth: .infinity, alignment: .top)
+
+            if vm.selectedProvider != .local {
+                settingsCard {
+                    sectionLabel("Credentials")
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(apiKeyTitle)
+                            .font(.system(size: 16, weight: .semibold, design: .rounded))
+                            .foregroundColor(AppColor.colaDarkText)
+                        Text(vm.credentialStorageDescription)
+                            .font(.system(size: 13, design: .rounded))
+                            .foregroundColor(AppColor.secondaryText)
+                    }
+                    fieldShell {
+                        Group {
+                            switch vm.selectedProvider {
+                            case .gemini:
+                                SecureField("Gemini API Key", text: $vm.geminiApiKey)
+                                    .onSubmit { vm.savePreferences() }
+                            case .claude:
+                                SecureField("Claude API Key", text: $vm.claudeApiKey)
+                                    .onSubmit { vm.savePreferences() }
+                            case .openai:
+                                SecureField("OpenAI API Key", text: $vm.openaiApiKey)
+                                    .onSubmit { vm.savePreferences() }
+                            case .openrouter:
+                                SecureField("OpenRouter API Key", text: $vm.openrouterApiKey)
+                                    .onSubmit { vm.savePreferences() }
+                            case .local:
+                                EmptyView()
+                            }
+                        }
+                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                        .foregroundColor(AppColor.colaDarkText)
+                    }
+                    helperCopy("Leave empty to keep Nous fully local.")
+                }
+            }
+
+            if vm.shouldShowSupplementalGeminiKeyField {
+                settingsCard {
+                    sectionLabel("Gemini support key")
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Gemini API Key")
+                            .font(.system(size: 16, weight: .semibold, design: .rounded))
+                            .foregroundColor(AppColor.colaDarkText)
+                        Text("Used for judge checks and weekly reflections when your foreground chat uses another provider.")
+                            .font(.system(size: 13, design: .rounded))
+                            .foregroundColor(AppColor.secondaryText)
+                    }
+                    fieldShell {
+                        SecureField("Gemini API Key", text: $vm.geminiApiKey)
+                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                            .foregroundColor(AppColor.colaDarkText)
+                            .onSubmit { vm.savePreferences() }
+                    }
+                    helperCopy("Leave empty to skip those Gemini-backed background checks.")
+                }
+            }
+
+            settingsCard {
+                sectionLabel("Privacy-sensitive automation")
+                toggleRow(
+                    title: "Finder export",
+                    subtitle: "Write notes and conversations as Markdown in Documents for Finder browsing. Assistant thinking only exports if the toggle below is on. Turning this off removes the generated export folder.",
+                    isOn: preferenceBinding(\.finderSyncEnabled)
+                )
+                toggleRow(
+                    title: "Background AI maintenance",
+                    subtitle: "Allow launch-time chat-title repair and weekly reflections. With cloud providers, this can send existing chats to the active model. Off by default.",
+                    isOn: preferenceBinding(\.backgroundAnalysisEnabled)
+                )
+                if vm.selectedProvider == .openrouter {
+                    toggleRow(
+                        title: "OpenRouter web search",
+                        subtitle: "Allow OpenRouter to use its web search server tool for current facts such as prices, stock, laws, schedules, and product availability.",
+                        isOn: preferenceBinding(\.openRouterWebSearchEnabled)
+                    )
+                }
+                toggleRow(
+                    title: "Store assistant thinking",
+                    subtitle: "Keep assistant reasoning traces in local chat history and Finder export. Turning this off clears previously stored thinking from SQLite. Off by default.",
+                    isOn: preferenceBinding(\.assistantThinkingEnabled)
+                )
+                toggleRow(
+                    title: "Gemini history cache",
+                    subtitle: "Let Gemini create short-lived cached transcript prefixes on Google's servers for long chats. Only applies when Gemini is active and lasts up to 5 minutes. Off by default.",
+                    isOn: preferenceBinding(\.geminiHistoryCacheEnabled)
+                )
+            }
         }
     }
 
     // MARK: - Models
     private var modelsContent: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                pageHeader(title: "Models", subtitle: "Inspect the exact models Nous runs and track the local model state on this Mac.")
-
-                settingsCard {
-                    sectionLabel("Actual models")
-                    VStack(alignment: .leading, spacing: 14) {
-                        ForEach(vm.runtimeModelSummaries) { summary in
-                            runtimeModelRow(summary)
-                        }
+        settingsPage(title: "Models", subtitle: "Inspect the exact models Nous runs and track the local model state on this Mac.") {
+            settingsCard {
+                sectionLabel("Actual models")
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(vm.runtimeModelSummaries) { summary in
+                        runtimeModelRow(summary)
                     }
-                }
-
-                settingsCard {
-                    sectionLabel("Voice Mode")
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("OpenAI Realtime API Key")
-                            .font(.system(size: 16, weight: .semibold, design: .rounded))
-                            .foregroundColor(AppColor.colaDarkText)
-                        Text("Voice Mode uses OpenAI Realtime separately from the default chat provider.")
-                            .font(.system(size: 13, design: .rounded))
-                            .foregroundColor(AppColor.secondaryText)
-                    }
-                    fieldShell {
-                        SecureField("OpenAI API Key", text: $vm.openaiApiKey)
-                            .font(.system(size: 14, weight: .medium, design: .rounded))
-                            .foregroundColor(AppColor.colaDarkText)
-                            .onSubmit { vm.savePreferences() }
-                    }
-                    VStack(alignment: .leading, spacing: 14) {
-                        voicePickerRow
-                        languagePickerRow
-                    }
-                    helperCopy("Gemini and OpenRouter keys do not start the realtime voice session. Voice changes apply to the next voice session.")
-                }
-
-                settingsCard {
-                    sectionLabel("On-device models")
-                    modelRow(label: "Local LLM",  name: vm.localModelId,     isLoaded: vm.isLLMLoaded,       progress: vm.llmDownloadProgress,       onLoad: { Task { await vm.loadLocalLLM() } })
-                    modelRow(label: "Embedder",    name: vm.embeddingModelId, isLoaded: vm.isEmbeddingLoaded, progress: vm.embeddingDownloadProgress, onLoad: { Task { await vm.loadEmbeddingModel() } })
-                }
-
-                settingsCard {
-                    sectionLabel("Knowledge base")
-                    HStack(spacing: 12) {
-                        statTile(title: "Vectors",  value: "\(vm.vectorCount)")
-                        statTile(title: "Database", value: vm.databaseSize)
-                    }
-                    helperCopy("Local models keep memory private. Vector count reflects nodes with embeddings in SQLite.")
                 }
             }
-            .frame(maxWidth: 760, alignment: .leading)
-            .padding(.horizontal, 36)
-            .padding(.vertical, 32)
-            .frame(maxWidth: .infinity, alignment: .top)
+
+            settingsCard {
+                sectionLabel("Voice Mode")
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("OpenAI Realtime API Key")
+                        .font(.system(size: 16, weight: .semibold, design: .rounded))
+                        .foregroundColor(AppColor.colaDarkText)
+                    Text("Voice Mode uses OpenAI Realtime separately from the default chat provider.")
+                        .font(.system(size: 13, design: .rounded))
+                        .foregroundColor(AppColor.secondaryText)
+                }
+                fieldShell {
+                    SecureField("OpenAI API Key", text: $vm.openaiApiKey)
+                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                        .foregroundColor(AppColor.colaDarkText)
+                        .onSubmit { vm.savePreferences() }
+                }
+                VStack(alignment: .leading, spacing: 14) {
+                    voicePickerRow
+                    languagePickerRow
+                }
+                helperCopy("Gemini and OpenRouter keys do not start the realtime voice session. Voice changes apply to the next voice session.")
+            }
+
+            settingsCard {
+                sectionLabel("On-device models")
+                modelRow(label: "Local LLM",  name: vm.localModelId,     isLoaded: vm.isLLMLoaded,       progress: vm.llmDownloadProgress,       onLoad: { Task { await vm.loadLocalLLM() } })
+                modelRow(label: "Embedder",    name: vm.embeddingModelId, isLoaded: vm.isEmbeddingLoaded, progress: vm.embeddingDownloadProgress, onLoad: { Task { await vm.loadEmbeddingModel() } })
+            }
+
+            settingsCard {
+                sectionLabel("Knowledge base")
+                HStack(spacing: 12) {
+                    statTile(title: "Vectors",  value: "\(vm.vectorCount)")
+                    statTile(title: "Database", value: vm.databaseSize)
+                }
+                helperCopy("Local models keep memory private. Vector count reflects nodes with embeddings in SQLite.")
+            }
         }
     }
 
@@ -417,6 +396,24 @@ struct SettingsView: View {
         case .openai:     return "OpenAI API Key"
         case .openrouter: return "OpenRouter API Key"
         case .local:      return "API Key"
+        }
+    }
+
+    @ViewBuilder
+    private func settingsPage<Content: View>(
+        title: String,
+        subtitle: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                pageHeader(title: title, subtitle: subtitle)
+                content()
+            }
+            .frame(maxWidth: 820, alignment: .leading)
+            .padding(.horizontal, 44)
+            .padding(.vertical, 36)
+            .frame(maxWidth: .infinity, alignment: .top)
         }
     }
 
@@ -435,12 +432,13 @@ struct SettingsView: View {
 
     @ViewBuilder
     private func settingsCard<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 16) { content() }
-            .padding(24)
+        VStack(alignment: .leading, spacing: 15) { content() }
+            .padding(22)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(AppColor.surfaceSecondary)
-            .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(AppColor.panelStroke, lineWidth: 1))
+            .background(NativeGlassPanel(cornerRadius: 22, tintColor: AppColor.surfaceGlassTint) { EmptyView() })
+            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(AppColor.panelStroke.opacity(0.88), lineWidth: 1))
+            .shadow(color: .black.opacity(0.04), radius: 10, x: 0, y: 4)
     }
 
     @ViewBuilder
@@ -449,9 +447,9 @@ struct SettingsView: View {
             .textFieldStyle(.plain)
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
-            .background(AppColor.surfacePrimary)
+            .background(NativeGlassPanel(cornerRadius: 16, tintColor: AppColor.controlGlassTint) { EmptyView() })
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(AppColor.panelStroke, lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(AppColor.panelStroke.opacity(0.78), lineWidth: 1))
     }
 
     @ViewBuilder
@@ -494,11 +492,11 @@ struct SettingsView: View {
                 .scrollContentBackground(.hidden)
                 .frame(minHeight: 64)
                 .padding(10)
-                .background(AppColor.surfacePrimary)
+                .background(NativeGlassPanel(cornerRadius: 16, tintColor: AppColor.controlGlassTint) { EmptyView() })
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(AppColor.panelStroke, lineWidth: 1)
+                        .stroke(AppColor.panelStroke.opacity(0.78), lineWidth: 1)
                 )
         }
     }
@@ -520,9 +518,9 @@ struct SettingsView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
-        .background(AppColor.surfacePrimary)
+        .background(NativeGlassPanel(cornerRadius: 18, tintColor: AppColor.controlGlassTint) { EmptyView() })
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(AppColor.panelStroke, lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(AppColor.panelStroke.opacity(0.78), lineWidth: 1))
     }
 
     private func preferenceBinding(_ keyPath: ReferenceWritableKeyPath<SettingsViewModel, Bool>) -> Binding<Bool> {
@@ -643,8 +641,9 @@ struct SettingsView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
-        .background(AppColor.surfacePrimary)
+        .background(NativeGlassPanel(cornerRadius: 18, tintColor: AppColor.controlGlassTint) { EmptyView() })
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(AppColor.panelStroke.opacity(0.72), lineWidth: 1))
     }
 
     @ViewBuilder
@@ -665,6 +664,10 @@ struct SettingsView: View {
             Toggle("", isOn: isOn)
                 .labelsHidden()
         }
+        .padding(14)
+        .background(NativeGlassPanel(cornerRadius: 16, tintColor: AppColor.controlGlassTint) { EmptyView() })
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(AppColor.panelStroke.opacity(0.74), lineWidth: 1))
     }
 
     @ViewBuilder
@@ -702,8 +705,9 @@ struct SettingsView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(AppColor.surfacePrimary)
+        .background(NativeGlassPanel(cornerRadius: 18, tintColor: AppColor.controlGlassTint) { EmptyView() })
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(AppColor.panelStroke.opacity(0.72), lineWidth: 1))
     }
 
     @ViewBuilder
@@ -724,16 +728,20 @@ struct SettingsView: View {
             }
             .foregroundColor(active ? AppColor.colaOrange : AppColor.secondaryText)
             .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .frame(height: 34)
             .background(
                 ZStack {
                     if active {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(AppColor.colaOrange.opacity(0.10))
+                        NativeGlassPanel(cornerRadius: 12, tintColor: AppColor.controlGlassTint) { EmptyView() }
                             .matchedGeometryEffect(id: "navHighlight", in: navAnimation)
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(AppColor.colaOrange.opacity(0.07))
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(AppColor.colaOrange.opacity(0.14), lineWidth: 1)
                     }
                 }
             )
+            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
     }
 
@@ -742,7 +750,7 @@ struct SettingsView: View {
         ZStack {
             NativeGlassPanel(
                 cornerRadius: 16,
-                tintColor: AppColor.glassTint
+                tintColor: AppColor.controlGlassTint
             ) { EmptyView() }
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -804,8 +812,8 @@ private struct NavHoverButton<Label: View>: View {
     var body: some View {
         Button(action: action) { label }
             .buttonStyle(.plain)
-            .scaleEffect(isHovered ? 1.03 : 1.0)
-            .animation(.spring(response: 0.28, dampingFraction: 0.6), value: isHovered)
+            .scaleEffect(isHovered ? 1.01 : 1.0)
+            .animation(.spring(response: 0.26, dampingFraction: 0.82), value: isHovered)
             .onHover { isHovered = $0 }
     }
 }

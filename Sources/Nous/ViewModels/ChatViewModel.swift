@@ -702,7 +702,8 @@ final class ChatViewModel {
             updatedNode = try conversationSessionStore.removeAssistantTurn(
                 nodeId: node.id,
                 assistantMessage: latestAssistant,
-                retainedMessages: retainedMessages
+                retainedMessages: retainedMessages,
+                behaviorOutcome: .retry
             )
         } catch {
             presentAssistantFailure("Error: \(error.localizedDescription)")

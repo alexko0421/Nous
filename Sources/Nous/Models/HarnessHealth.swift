@@ -403,6 +403,7 @@ struct RuntimeHarnessSnapshot: Equatable {
     var lastRiskFlags: [String]
     var sycophancyFixtureTrend: String
     var agentToolReliability: AgentToolReliabilitySummary
+    var behaviorEval: BehaviorEvalTelemetrySummary
 
     init(
         totalTurnCount: Int = 0,
@@ -411,7 +412,8 @@ struct RuntimeHarnessSnapshot: Equatable {
         riskFlagCounts: [String: Int] = [:],
         lastRiskFlags: [String] = [],
         sycophancyFixtureTrend: String = "No fixture history yet",
-        agentToolReliability: AgentToolReliabilitySummary = .empty
+        agentToolReliability: AgentToolReliabilitySummary = .empty,
+        behaviorEval: BehaviorEvalTelemetrySummary = .empty
     ) {
         self.totalTurnCount = totalTurnCount
         self.reviewedTurnCount = reviewedTurnCount
@@ -420,6 +422,7 @@ struct RuntimeHarnessSnapshot: Equatable {
         self.lastRiskFlags = lastRiskFlags.sorted()
         self.sycophancyFixtureTrend = sycophancyFixtureTrend
         self.agentToolReliability = agentToolReliability
+        self.behaviorEval = behaviorEval
     }
 
     static let empty = RuntimeHarnessSnapshot()

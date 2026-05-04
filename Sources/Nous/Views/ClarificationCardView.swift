@@ -12,7 +12,7 @@ struct ClarificationCardView: View {
     var body: some View {
         NativeGlassPanel(
             cornerRadius: 22,
-            tintColor: AppColor.glassTint
+            tintColor: AppColor.surfaceGlassTint
         ) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 8) {

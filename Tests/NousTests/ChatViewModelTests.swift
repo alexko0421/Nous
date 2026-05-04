@@ -401,6 +401,10 @@ final class ChatViewModelTests: XCTestCase {
         let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
         let scheduler = UserMemoryScheduler(service: userMemoryService)
         let scratchPadStore = await MainActor.run { makeScratchPadStore(nodeStore: nodeStore) }
+        let defaultsSuiteName = "ChatViewModelTests.regenerateTelemetry.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: defaultsSuiteName)!
+        defaults.removePersistentDomain(forName: defaultsSuiteName)
+        let telemetry = GovernanceTelemetryStore(defaults: defaults, nodeStore: nodeStore)
         var llm = SingleReplyLLMService(output: "first answer")
 
         let vm = ChatViewModel(
@@ -413,6 +417,7 @@ final class ChatViewModelTests: XCTestCase {
             llmServiceProvider: { llm },
             currentProviderProvider: { .local },
             judgeLLMServiceFactory: { nil },
+            governanceTelemetry: telemetry,
             scratchPadStore: scratchPadStore
         )
 
@@ -435,6 +440,8 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertFalse(storedMessages.contains { $0.content == "first answer" })
         XCTAssertFalse(storedNode.content.contains("first answer"))
         XCTAssertTrue(storedNode.content.contains("second answer"))
+        XCTAssertEqual(telemetry.behaviorEvalSummary.retryCount, 1)
+        XCTAssertEqual(telemetry.behaviorEvalSummary.deleteCount, 0)
     }
 
     func testSendRecoversRestoredConversationWhenCurrentNodeMissingFromStore() async throws {

@@ -183,7 +183,7 @@ struct WelcomeView: View {
             .background(
                 NativeGlassPanel(
                     cornerRadius: 18,
-                    tintColor: AppColor.glassTint
+                    tintColor: AppColor.controlGlassTint
                 ) { EmptyView() }
             )
             .overlay(
@@ -247,7 +247,7 @@ struct WelcomeView: View {
                         cornerRadius: 16,
                         tintColor: isVoiceActive
                             ? NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.22)
-                            : AppColor.glassTint
+                            : AppColor.controlGlassTint
                     ) { EmptyView() }
                 )
                 .overlay(
@@ -335,33 +335,37 @@ struct QuickActionButton: View {
 
     var body: some View {
         Button(action: perform) {
-            HStack(spacing: 6) {
+            HStack(spacing: 5) {
                 Image(systemName: action.icon)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 10.5, weight: .semibold))
 
                 Text(action.label)
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .font(.system(size: 10.5, weight: .semibold, design: .rounded))
             }
-            .foregroundColor(isHovered ? AppColor.colaDarkText : AppColor.secondaryText)
-            .padding(.horizontal, 12) // Slightly reduced from 14
-            .padding(.vertical, 7)    // Slightly reduced from 8
+            .foregroundColor(isHovered ? AppColor.colaDarkText.opacity(0.92) : AppColor.secondaryText)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 6)
+            .frame(height: 30)
             .background(
-                NativeGlassPanel(cornerRadius: 16, tintColor: AppColor.glassTint) {
+                NativeGlassPanel(cornerRadius: 16, tintColor: AppColor.controlGlassTint) {
                     if isHovered {
                         Capsule()
-                            .fill(AppColor.colaDarkText.opacity(0.04))
+                            .fill(AppColor.colaOrange.opacity(0.035))
                     }
                 }
                 .clipShape(Capsule())
             )
             .overlay(
                 Capsule()
-                    .stroke(isHovered ? AppColor.colaOrange.opacity(0.3) : AppColor.panelStroke, lineWidth: 0.5)
+                    .stroke(
+                        isHovered ? AppColor.colaOrange.opacity(0.18) : AppColor.panelStroke.opacity(0.68),
+                        lineWidth: 0.5
+                    )
             )
         }
         .buttonStyle(.plain)
-        .scaleEffect(isHovered ? 1.05 : 1.0)
-        .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isHovered)
+        .scaleEffect(isHovered ? 1.02 : 1.0)
+        .animation(.spring(response: 0.24, dampingFraction: 0.82), value: isHovered)
         .onHover { isHovered = $0 }
     }
 }

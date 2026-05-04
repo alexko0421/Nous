@@ -11,7 +11,7 @@ struct ScratchPadPanel: View {
     @Namespace private var toggleAnimation
 
     var body: some View {
-        NativeGlassPanel(cornerRadius: 32, tintColor: AppColor.glassTint) {
+        NativeGlassPanel(cornerRadius: 32, tintColor: AppColor.surfaceGlassTint) {
             VStack(alignment: .leading, spacing: 0) {
                 header
                 divider
@@ -77,7 +77,7 @@ struct ScratchPadPanel: View {
             ZStack {
                 NativeGlassPanel(
                     cornerRadius: 16,
-                    tintColor: AppColor.glassTint
+                    tintColor: AppColor.controlGlassTint
                 ) { EmptyView() }
                 .overlay(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -167,7 +167,7 @@ struct ScratchPadPanel: View {
             .padding(.horizontal, 32)
             .padding(.vertical, 40)
             .background(
-                NativeGlassPanel(cornerRadius: 12, tintColor: AppColor.glassTint) { EmptyView() }
+                NativeGlassPanel(cornerRadius: 12, tintColor: AppColor.surfaceGlassTint) { EmptyView() }
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -440,7 +440,7 @@ struct LiquidGlassButtonStyle: ButtonStyle {
                     cornerRadius: 14,
                     tintColor: configuration.isPressed 
                         ? NSColor(white: 0, alpha: 0.1) // slightly darker when pressed
-                        : AppColor.glassTint
+                        : AppColor.controlGlassTint
                 ) { EmptyView() }
                 .opacity(isDisabled ? 0.5 : 1.0)
             )
