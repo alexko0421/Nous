@@ -20,12 +20,20 @@ protocol Judging {
 extension ProvocationJudge: Judging {}
 
 final class ProvocationJudge {
+    static let defaultTimeout: TimeInterval = 8.0
+
     private let llmService: any LLMService
     private let timeout: TimeInterval
+    private let onThinkingDelta: ThinkingDeltaHandler?
 
-    init(llmService: any LLMService, timeout: TimeInterval = 1.5) {
+    init(
+        llmService: any LLMService,
+        timeout: TimeInterval = ProvocationJudge.defaultTimeout,
+        onThinkingDelta: ThinkingDeltaHandler? = nil
+    ) {
         self.llmService = llmService
         self.timeout = timeout
+        self.onThinkingDelta = onThinkingDelta
     }
 
     func judge(
@@ -41,11 +49,15 @@ final class ProvocationJudge {
             feedbackLoop: feedbackLoop
         )
         let llmMessages = [LLMMessage(role: "user", content: userMessage)]
+        let service = Self.configuredThinkingService(
+            llmService,
+            onThinkingDelta: onThinkingDelta
+        )
 
         let rawOutput: String
         do {
             rawOutput = try await withTimeout(seconds: timeout) {
-                try await self.collect(try await self.llmService.generate(messages: llmMessages, system: systemPrompt))
+                try await self.collect(try await service.generate(messages: llmMessages, system: systemPrompt))
             }
         } catch is TimeoutError {
             throw JudgeError.timeout
@@ -216,6 +228,17 @@ final class ProvocationJudge {
             idx = text.index(after: idx)
         }
         return nil
+    }
+
+    private static func configuredThinkingService(
+        _ service: any LLMService,
+        onThinkingDelta: ThinkingDeltaHandler?
+    ) -> any LLMService {
+        guard let onThinkingDelta,
+              let configurable = service as? any ThinkingDeltaConfigurableLLMService else {
+            return service
+        }
+        return configurable.withThinkingDeltaHandler(onThinkingDelta)
     }
 }
 

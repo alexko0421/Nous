@@ -141,17 +141,34 @@ final class WeeklyReflectionService {
     private let nodeStore: NodeStore
     private let llm: StructuredLLMClient
     private let now: () -> Date
+    private let backgroundTelemetry: (any BackgroundAIJobTelemetryRecording)?
 
-    init(nodeStore: NodeStore, llm: StructuredLLMClient, now: @escaping () -> Date = Date.init) {
+    init(
+        nodeStore: NodeStore,
+        llm: StructuredLLMClient,
+        now: @escaping () -> Date = Date.init,
+        backgroundTelemetry: (any BackgroundAIJobTelemetryRecording)? = nil
+    ) {
         self.nodeStore = nodeStore
         self.llm = llm
         self.now = now
+        self.backgroundTelemetry = backgroundTelemetry
     }
 
     /// Convenience init matching the production call site: a concrete
     /// `GeminiLLMService`. Test code uses the protocol-based init with a fake.
-    convenience init(nodeStore: NodeStore, llm: GeminiLLMService, now: @escaping () -> Date = Date.init) {
-        self.init(nodeStore: nodeStore, llm: GeminiStructuredLLMAdapter(service: llm), now: now)
+    convenience init(
+        nodeStore: NodeStore,
+        llm: GeminiLLMService,
+        now: @escaping () -> Date = Date.init,
+        backgroundTelemetry: (any BackgroundAIJobTelemetryRecording)? = nil
+    ) {
+        self.init(
+            nodeStore: nodeStore,
+            llm: GeminiStructuredLLMAdapter(service: llm),
+            now: now,
+            backgroundTelemetry: backgroundTelemetry
+        )
     }
 
     /// Idempotent entrypoint. Returns `nil` if a run already exists for this
@@ -163,7 +180,16 @@ final class WeeklyReflectionService {
         weekStart: Date,
         weekEnd: Date
     ) async throws -> RunResult? {
+        let startedAt = now()
         if try nodeStore.existsReflectionRun(projectId: projectId, weekStart: weekStart, weekEnd: weekEnd) {
+            recordBackgroundRun(
+                status: .skipped,
+                startedAt: startedAt,
+                inputCount: 0,
+                outputCount: 0,
+                detail: "already_ran",
+                costCents: nil
+            )
             return nil
         }
 
@@ -189,6 +215,14 @@ final class WeeklyReflectionService {
                 costCents: 0
             )
             try nodeStore.persistReflectionRun(rejected, claims: [], evidence: [])
+            recordBackgroundRun(
+                status: .skipped,
+                startedAt: startedAt,
+                inputCount: messageCount,
+                outputCount: 0,
+                detail: "insufficient_messages=\(messageCount)",
+                costCents: 0
+            )
             return RunResult(run: rejected, claims: [], evidence: [])
         }
 
@@ -228,6 +262,14 @@ final class WeeklyReflectionService {
                 costCents: 0
             )
             try nodeStore.persistReflectionRun(failedRun, claims: [], evidence: [])
+            recordBackgroundRun(
+                status: .failed,
+                startedAt: startedAt,
+                inputCount: messageCount,
+                outputCount: 0,
+                detail: "llm_failure",
+                costCents: 0
+            )
             throw ServiceError.llmFailure(error)
         }
 
@@ -254,6 +296,14 @@ final class WeeklyReflectionService {
                 costCents: cost
             )
             try nodeStore.persistReflectionRun(failedRun, claims: [], evidence: [])
+            recordBackgroundRun(
+                status: .failed,
+                startedAt: startedAt,
+                inputCount: messageCount,
+                outputCount: 0,
+                detail: "validator_malformed",
+                costCents: cost
+            )
             if case let .malformed(detail) = err {
                 throw ServiceError.validatorMalformed(detail)
             }
@@ -273,6 +323,14 @@ final class WeeklyReflectionService {
                 costCents: cost
             )
             try nodeStore.persistReflectionRun(rejected, claims: [], evidence: [])
+            recordBackgroundRun(
+                status: .completed,
+                startedAt: startedAt,
+                inputCount: messageCount,
+                outputCount: 0,
+                detail: "claims=0,rejected=\((validation.rejectionReason ?? .generic).rawValue)",
+                costCents: cost
+            )
             return RunResult(run: rejected, claims: [], evidence: [])
         }
 
@@ -296,7 +354,36 @@ final class WeeklyReflectionService {
             costCents: cost
         )
         try nodeStore.persistReflectionRun(run, claims: validation.claims, evidence: evidence)
+        recordBackgroundRun(
+            status: .completed,
+            startedAt: startedAt,
+            inputCount: messageCount,
+            outputCount: validation.claims.count,
+            detail: "claims=\(validation.claims.count)",
+            costCents: cost
+        )
         return RunResult(run: run, claims: validation.claims, evidence: evidence)
+    }
+
+    private func recordBackgroundRun(
+        status: BackgroundAIJobStatus,
+        startedAt: Date,
+        inputCount: Int,
+        outputCount: Int,
+        detail: String,
+        costCents: Int?
+    ) {
+        backgroundTelemetry?.record(BackgroundAIJobRunRecord(
+            id: UUID(),
+            jobId: .weeklyReflection,
+            status: status,
+            startedAt: startedAt,
+            endedAt: now(),
+            inputCount: inputCount,
+            outputCount: outputCount,
+            detail: detail,
+            costCents: costCents
+        ))
     }
 
     /// The most recently completed ISO-8601 week at `now`. That is: the week

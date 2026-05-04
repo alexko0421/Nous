@@ -58,11 +58,21 @@ struct NativeGlassPanel<Content: View>: NSViewRepresentable {
     }
 }
 
+enum AppWindowLookup {
+    static func mainWindow(in windows: [NSWindow], keyWindow: NSWindow?) -> NSWindow? {
+        windows.first(where: { $0 is NousMainWindow })
+            ?? windows.first(where: { $0.titleVisibility == .hidden && $0.canBecomeMain })
+            ?? keyWindow
+            ?? windows.first
+    }
+}
+
 // Helper for window controls
 func getAppWindow() -> NSWindow? {
-    NSApplication.shared.windows.first(where: { $0.titleVisibility == .hidden }) 
-        ?? NSApplication.shared.keyWindow 
-        ?? NSApplication.shared.windows.first
+    AppWindowLookup.mainWindow(
+        in: NSApplication.shared.windows,
+        keyWindow: NSApplication.shared.keyWindow
+    )
 }
 
 // Galaxy Icon - clean port of the React reference
@@ -184,9 +194,7 @@ struct MacOSTrafficLights: View {
                 icon: "xmark",
                 iconSize: 7,
                 action: { 
-                    getAppWindow()?.close() 
-                    // Safely exit app if it's the only window
-                    NSApplication.shared.terminate(nil)
+                    getAppWindow()?.close()
                 }
             )
             
@@ -385,7 +393,12 @@ struct LeftSidebar: View {
                 .padding(.bottom, 16)
             }
         }
-        .frame(width: 154)
+        .frame(width: GalaxySidebarLayout.width)
+        .overlay(
+            RoundedRectangle(cornerRadius: 32, style: .continuous)
+                .stroke(AppColor.panelStroke.opacity(0.78), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.12), radius: 18, x: 0, y: 8)
         .onAppear { loadData() }
         .onReceive(
             NotificationCenter.default.publisher(

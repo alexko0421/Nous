@@ -3,25 +3,34 @@ import SwiftUI
 
 struct ChatArea: View {
     @Bindable var vm: ChatViewModel
+    @Bindable var voiceController: VoiceCommandController
     @Binding var isSidebarVisible: Bool
     @Binding var isScratchPadVisible: Bool
+    let voiceUnavailableReason: String?
+    let voiceAttachmentResetToken: UUID
+    let onToggleVoiceMode: () -> Void
     var onNavigateToNode: (NousNode) -> Void = { _ in }
 
     @State private var attachments: [AttachedFileContext] = []
     @State private var isRelevantChatsExpanded = false
     @State private var isAttachmentMenuPresented = false
+    @State private var isActionMenuExpanded = false
     @State private var isFileImporterPresented = false
     @State private var isPhotosPickerPresented = false
+    @State private var isImageDropTargeted = false
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
     @State private var floatingHeaderHeight: CGFloat = 76
     @State private var floatingComposerHeight: CGFloat = 124
     @State private var activeDownvotePopoverMessageId: UUID?
     @State private var downvoteFeedbackReason: JudgeFeedbackReason?
     @State private var downvoteFeedbackNote: String = ""
+    @FocusState private var isComposerFocused: Bool
+    @Namespace private var composerPrimaryActionNamespace
 
     private let bottomScrollAnchor = "chat-bottom-anchor"
     private let bottomVisibleSpacing: CGFloat = 53
     private let composerMaxWidth: CGFloat = 820
+    private let composerActionMotion = ComposerPrimaryActionMotion()
     
     private var isWelcomeState: Bool {
         vm.messages.isEmpty && vm.currentNode == nil
@@ -36,6 +45,22 @@ struct ChatArea: View {
 
     private var canPrimaryAction: Bool {
         vm.isGenerating || canSend
+    }
+
+    private var shouldSeparateComposerPrimaryAction: Bool {
+        ComposerSeparationPolicy.shouldSeparate(
+            inputText: vm.inputText,
+            hasAttachments: !attachments.isEmpty,
+            isGenerating: vm.isGenerating
+        )
+    }
+
+    private var remainingImageAttachmentSlots: Int {
+        AttachmentLimitPolicy.remainingImageSlots(in: attachments)
+    }
+
+    private var canPickPhotoAttachment: Bool {
+        remainingImageAttachmentSlots > 0
     }
 
     private var activeClarificationCard: ClarificationCard? {
@@ -58,15 +83,30 @@ struct ChatArea: View {
         vm.citations.map(\.node.id)
     }
 
+    private var streamingPresentation: StreamingAssistantPresentation {
+        StreamingAssistantPresentation(
+            isGenerating: vm.isGenerating,
+            currentThinking: vm.currentThinking,
+            currentThinkingStartedAt: vm.currentThinkingStartedAt,
+            currentResponse: vm.currentResponse,
+            currentAgentTraceIsEmpty: vm.currentAgentTrace.isEmpty
+        )
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if isWelcomeState {
                 WelcomeView(
                     inputText: $vm.inputText,
                     attachments: attachments,
-                    onPickAttachment: { isAttachmentMenuPresented = true },
+                    onPickAttachment: { isFileImporterPresented = true },
+                    onPickPhoto: { isPhotosPickerPresented = true },
+                    onVoice: { onToggleVoiceMode() },
+                    canPickPhoto: canPickPhotoAttachment,
+                    isVoiceActive: voiceController.isActive,
                     onRemoveAttachment: removeAttachment,
                     onSend: sendCurrentInput,
+                    onImageDrop: handleImageDrop,
                     onQuickActionSelected: { mode in
                         Task {
                             await vm.beginQuickActionConversation(mode)
@@ -85,8 +125,13 @@ struct ChatArea: View {
                                         MessageBubble(
                                             text: msg.content,
                                             thinkingContent: msg.thinkingContent,
+                                            thinkingStartedAt: nil,
+                                            agentTraceRecords: msg.decodedAgentTraceRecords,
                                             isThinkingStreaming: false,
-                                            isUser: msg.role == .user
+                                            isAgentTraceStreaming: false,
+                                            isUser: msg.role == .user,
+                                            source: msg.source,
+                                            timestamp: msg.timestamp
                                         )
                                         if shouldShowRelevantChats(after: msg) {
                                             RAGCitationView(
@@ -133,6 +178,18 @@ struct ChatArea: View {
                                                     }
                                                 }
 
+                                                if vm.canRegenerateAssistantMessage(msg.id) {
+                                                    AssistantFeedbackButton(
+                                                        symbolName: "arrow.clockwise",
+                                                        isSelected: false,
+                                                        helpText: "Regenerate response"
+                                                    ) {
+                                                        Task {
+                                                            await vm.regenerateLatestAssistant()
+                                                        }
+                                                    }
+                                                }
+
                                                 CopyButton(text: msg.content)
                                             }
                                             .font(.footnote)
@@ -140,13 +197,37 @@ struct ChatArea: View {
                                         }
                                     }
                                 }
-                                if vm.isGenerating && (!vm.currentThinking.isEmpty || !vm.currentResponse.isEmpty) {
+                                if streamingPresentation.showsPendingThinking {
+                                    HStack {
+                                        ThinkingAccordion(
+                                            content: streamingPresentation.pendingThinkingContent,
+                                            isStreaming: true,
+                                            startedAt: streamingPresentation.pendingThinkingStartedAt
+                                        )
+                                        Spacer(minLength: 0)
+                                    }
+                                }
+                                if streamingPresentation.showsPendingAgentTrace {
+                                    HStack {
+                                        AgentTraceAccordion(
+                                            records: vm.currentAgentTrace,
+                                            isStreaming: true
+                                        )
+                                        Spacer(minLength: 0)
+                                    }
+                                }
+                                if streamingPresentation.showsAssistantDraft {
                                     VStack(alignment: .leading, spacing: 4) {
                                         MessageBubble(
                                             text: vm.currentResponse,
-                                            thinkingContent: vm.currentThinking.isEmpty ? nil : vm.currentThinking,
-                                            isThinkingStreaming: vm.currentResponse.isEmpty,
-                                            isUser: false
+                                            thinkingContent: streamingPresentation.draftThinkingContent,
+                                            thinkingStartedAt: streamingPresentation.draftThinkingStartedAt,
+                                            agentTraceRecords: vm.currentAgentTrace,
+                                            isThinkingStreaming: streamingPresentation.isDraftThinkingStreaming,
+                                            isAgentTraceStreaming: streamingPresentation.isDraftAgentTraceStreaming,
+                                            isUser: false,
+                                            source: .typed,
+                                            timestamp: Date()
                                         )
                                         if !vm.citations.isEmpty {
                                             RAGCitationView(
@@ -163,7 +244,7 @@ struct ChatArea: View {
                                     .id(bottomScrollAnchor)
                             }
                             .padding(.horizontal, 36)
-                            .padding(.top, floatingHeaderHeight + 24)
+                            .padding(.top, 76)
                             .padding(.bottom, 8)
                         }
                         .onAppear {
@@ -208,7 +289,7 @@ struct ChatArea: View {
                     )
 
                     // Floating Header
-                    VStack {
+                    ZStack(alignment: .top) {
                         HStack {
                             Text(vm.currentNode?.title ?? "Nous")
                                 .font(.system(size: 20, weight: .bold, design: .rounded))
@@ -219,7 +300,33 @@ struct ChatArea: View {
                         .padding(.leading, 76)
                         .padding(.trailing, 36)
                         .padding(.top, 22)
+
+                        if voiceController.visibleSurface == .inWindow &&
+                            VoiceCapsuleVisibilityPolicy.shouldShowCapsule(
+                                isVoiceActive: voiceController.isActive,
+                                status: voiceController.status,
+                                hasPendingAction: voiceController.pendingAction != nil,
+                                hasSummaryPreview: voiceController.summaryPreview != nil
+                            ) {
+                            VoiceCapsuleView(
+                                status: voiceController.status,
+                                subtitleText: voiceController.subtitleText,
+                                audioLevel: voiceController.audioLevel,
+                                hasPendingConfirmation: voiceController.pendingAction != nil,
+                                summaryPreview: voiceController.summaryPreview,
+                                onConfirm: voiceController.confirmPendingAction,
+                                onCancel: voiceController.cancelPendingAction,
+                                onDismissSummary: voiceController.dismissSummaryPreview
+                            )
+                            .padding(.top, 16)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                            .allowsHitTesting(voiceController.visibleSurface == .inWindow)
+                        }
                     }
+                    .animation(.spring(response: 0.4, dampingFraction: 0.8), value: voiceController.isActive)
+                    .animation(.spring(response: 0.4, dampingFraction: 0.8), value: voiceController.status.shouldDisplayPill)
+                    .animation(.spring(response: 0.4, dampingFraction: 0.8), value: voiceController.pendingAction != nil)
+                    .animation(.spring(response: 0.4, dampingFraction: 0.8), value: voiceController.summaryPreview)
                     .padding(.bottom, 36)
                     .background(
                         LinearGradient(
@@ -233,7 +340,7 @@ struct ChatArea: View {
                         )
                         .allowsHitTesting(false)
                     )
-                    .allowsHitTesting(false)
+                    .allowsHitTesting(voiceController.pendingAction != nil || voiceController.summaryPreview != nil)
                     .readHeight { floatingHeaderHeight = $0 }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
@@ -258,30 +365,57 @@ struct ChatArea: View {
                         }
 
                         HStack(spacing: 12) {
-                            Button(action: { isAttachmentMenuPresented = true }) {
-                                NativeGlassPanel(cornerRadius: 18, tintColor: AppColor.glassTint) { EmptyView() }
-                                    .frame(width: 36, height: 36)
-                                    .overlay(
-                                        Image(systemName: "plus")
-                                            .font(.system(size: 13, weight: .semibold))
-                                            .foregroundColor(AppColor.secondaryText)
-                                    )
-                                    .overlay(
-                                        Circle()
-                                            .stroke(AppColor.panelStroke, lineWidth: 1)
-                                    )
-                            }
-                            .buttonStyle(.plain)
+                                Button(action: {
+                                    if voiceController.isActive {
+                                        onToggleVoiceMode()
+                                    } else {
+                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                            isActionMenuExpanded.toggle()
+                                        }
+                                    }
+                                }) {
+                                    NativeGlassPanel(
+                                        cornerRadius: 18,
+                                        tintColor: voiceController.isActive
+                                            ? NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.22)
+                                            : AppColor.glassTint
+                                    ) { EmptyView() }
+                                        .frame(width: 36, height: 36)
+                                        .overlay(
+                                            Image(systemName: voiceController.isActive ? "mic.fill" : (isActionMenuExpanded ? "xmark" : "plus"))
+                                                .font(.system(size: 13, weight: .semibold))
+                                                .foregroundColor(voiceController.isActive ? AppColor.colaOrange : AppColor.secondaryText)
+                                                .rotationEffect(.degrees(isActionMenuExpanded && !voiceController.isActive ? 90 : 0))
+                                        )
+                                        .overlay(
+                                            Circle()
+                                                .stroke(AppColor.panelStroke, lineWidth: 1)
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                                .help(voiceController.isActive ? "Stop Voice Mode" : "Actions")
 
-                            TextField("", text: $vm.inputText, axis: .vertical)
-                                .textFieldStyle(.plain)
-                                .font(.system(size: 13, weight: .medium, design: .rounded))
-                                .foregroundColor(AppColor.colaDarkText)
-                                .lineLimit(1...6)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .padding(.horizontal, 18)
-                                .padding(.vertical, 10)
-                                .frame(minHeight: 36)
+                                ZStack(alignment: .leading) {
+                                    RotatingComposerPromptLabel(
+                                        inputText: vm.inputText,
+                                        isFocused: isComposerFocused,
+                                        horizontalPadding: 18
+                                    )
+
+                                    TextField("", text: $vm.inputText, axis: .vertical)
+                                        .focused($isComposerFocused)
+                                        .textFieldStyle(.plain)
+                                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                                        .foregroundColor(AppColor.colaDarkText)
+                                        .lineLimit(1...6)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .padding(.leading, 18)
+                                        .padding(.trailing, 18)
+                                        .padding(.vertical, 10)
+                                        .frame(minHeight: 36)
+                                        .onSubmit(sendCurrentInput)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
                                 .background(
                                     NativeGlassPanel(
                                         cornerRadius: 18,
@@ -293,33 +427,53 @@ struct ChatArea: View {
                                         .stroke(AppColor.panelStroke, lineWidth: 1)
                                 )
                                 .shadow(color: .black.opacity(0.04), radius: 6, x: 0, y: 2)
-                                .onSubmit(sendCurrentInput)
 
-                            Button(action: handlePrimaryAction) {
-                                Image(systemName: vm.isGenerating ? "stop.fill" : "arrow.up")
-                                    .font(.system(size: 13, weight: .bold))
-                                    .foregroundColor(.white)
-                            }
-                            .buttonStyle(.plain)
-                            .frame(width: 36, height: 36)
-                            .background(
-                                NativeGlassPanel(
-                                    cornerRadius: 18,
-                                    tintColor: canPrimaryAction
-                                        ? NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.88)
-                                        : NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.18)
-                                ) { EmptyView() }
-                            )
-                            .overlay(
-                                Circle()
-                                    .stroke(canPrimaryAction ? Color.white.opacity(0.18) : AppColor.panelStroke, lineWidth: 1)
-                            )
-                            .disabled(!canPrimaryAction)
+                                if shouldSeparateComposerPrimaryAction {
+                                    primaryActionButton(isSeparated: true)
+                                        .transition(.scale(scale: 0.72, anchor: .leading).combined(with: .opacity))
+                                }
                         }
+                        .animation(
+                            .timingCurve(0.68, -0.6, 0.32, 1.6, duration: 0.42),
+                            value: shouldSeparateComposerPrimaryAction
+                        )
+                        .overlay(alignment: .bottomLeading) {
+                            ActionMenuCapsule(
+                                isExpanded: isActionMenuExpanded,
+                                onFile: {
+                                    isFileImporterPresented = true
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isActionMenuExpanded = false }
+                                },
+                                onPhoto: {
+                                    isPhotosPickerPresented = true
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isActionMenuExpanded = false }
+                                },
+                                onVoice: {
+                                    onToggleVoiceMode()
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isActionMenuExpanded = false }
+                                },
+                                canPickPhoto: canPickPhotoAttachment
+                            )
+                            .offset(y: -ActionMenuPopoutMetrics.sourceOffsetFromRowBottom)
+                        }
+                        .padding(.top, isActionMenuExpanded ? ActionMenuPopoutMetrics.reservedTopPadding : 0)
+                        .animation(.spring(response: 0.38, dampingFraction: 0.82), value: isActionMenuExpanded)
                     }
                     .frame(maxWidth: composerMaxWidth)
                     .padding(.horizontal, 36)
                     .padding(.bottom, 16)
+                    .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                    .onDrop(
+                        of: AttachmentDropSupport.acceptedTypeIdentifiers,
+                        isTargeted: $isImageDropTargeted,
+                        perform: handleImageDrop
+                    )
+                    .overlay {
+                        if isImageDropTargeted {
+                            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                                .stroke(AppColor.colaOrange.opacity(0.55), lineWidth: 1.5)
+                        }
+                    }
                     .readHeight { floatingComposerHeight = $0 }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                 }
@@ -333,7 +487,7 @@ struct ChatArea: View {
         }
         .overlay(alignment: .topLeading) {
             Button(action: {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                withAnimation(AppMotion.sidebarPanelSpring.animation) {
                     isSidebarVisible.toggle()
                 }
             }) {
@@ -356,7 +510,7 @@ struct ChatArea: View {
         .overlay(alignment: .topTrailing) {
             if !isWelcomeState {
                 Button(action: {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                    withAnimation(AppMotion.markdownPanelSpring.animation) {
                         isScratchPadVisible.toggle()
                     }
                 }) {
@@ -392,6 +546,7 @@ struct ChatArea: View {
             Button("Photo") {
                 isPhotosPickerPresented = true
             }
+            .disabled(!canPickPhotoAttachment)
             Button("Cancel", role: .cancel) {}
         }
         .fileImporter(
@@ -403,7 +558,7 @@ struct ChatArea: View {
         .photosPicker(
             isPresented: $isPhotosPickerPresented,
             selection: $selectedPhotoItems,
-            maxSelectionCount: 6,
+            maxSelectionCount: max(1, remainingImageAttachmentSlots),
             matching: .images
         )
         .onChange(of: selectedPhotoItems) { _, items in
@@ -421,11 +576,21 @@ struct ChatArea: View {
             attachments = []
             closeDownvotePopover()
         }
+        .onChange(of: voiceAttachmentResetToken) { _, _ in
+            attachments = []
+        }
+        .onChange(of: vm.inputText) { _, _ in
+            if isActionMenuExpanded {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                    isActionMenuExpanded = false
+                }
+            }
+        }
     }
 
     private func sendCurrentInput() {
         guard canSend else { return }
-        let pendingAttachments = attachments
+        let pendingAttachments = AttachmentLimitPolicy.limitingImageAttachments(attachments)
         attachments = []
         Task { await vm.send(attachments: pendingAttachments) }
     }
@@ -436,6 +601,78 @@ struct ChatArea: View {
             return
         }
         sendCurrentInput()
+    }
+
+    private func primaryActionButton(isSeparated: Bool) -> some View {
+        Button(action: handlePrimaryAction) {
+            Image(systemName: vm.isGenerating ? "stop.fill" : "arrow.up")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundColor(isSeparated ? .white : AppColor.secondaryText)
+                .opacity(composerActionMotion.iconOpacity(isSeparated: isSeparated))
+        }
+        .buttonStyle(.plain)
+        .frame(width: 36, height: 36)
+        .background(
+            primaryActionBackground(isSeparated: isSeparated)
+        )
+        .overlay(
+            primaryActionStroke(isSeparated: isSeparated)
+        )
+        .shadow(
+            color: AppColor.colaOrange.opacity(composerActionMotion.glowOpacity(
+                isSeparated: isSeparated,
+                canAct: canPrimaryAction
+            )),
+            radius: isSeparated ? 8 : 0,
+            x: 0,
+            y: isSeparated ? 2 : 0
+        )
+        .matchedGeometryEffect(id: "chatPrimaryAction", in: composerPrimaryActionNamespace)
+        .disabled(!canPrimaryAction)
+        .help(vm.isGenerating ? "Stop generating" : "Send")
+    }
+
+    private func primaryActionBackground(isSeparated: Bool) -> some View {
+        Group {
+            if isSeparated {
+                ZStack {
+                    Circle()
+                        .fill(AppColor.colaOrange.opacity(composerActionMotion.fillOpacity(
+                            isSeparated: isSeparated,
+                            canAct: canPrimaryAction
+                        )))
+
+                    NativeGlassPanel(
+                        cornerRadius: 18,
+                        tintColor: primaryActionTint(isSeparated: isSeparated)
+                    ) { EmptyView() }
+                    .opacity(canPrimaryAction ? 0.52 : 0.9)
+                }
+            } else {
+                Circle()
+                    .fill(Color.clear)
+            }
+        }
+    }
+
+    private func primaryActionStroke(isSeparated: Bool) -> some View {
+        Group {
+            if isSeparated {
+                Circle()
+                    .stroke(canPrimaryAction ? Color.white.opacity(0.18) : AppColor.panelStroke, lineWidth: 1)
+            } else {
+                Circle()
+                    .stroke(Color.clear, lineWidth: 1)
+            }
+        }
+    }
+
+    private func primaryActionTint(isSeparated: Bool) -> NSColor {
+        let alpha = composerActionMotion.tintAlpha(
+            isSeparated: isSeparated,
+            canAct: canPrimaryAction
+        )
+        return NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: alpha)
     }
 
     private func sendClarificationOption(_ option: String) {
@@ -452,15 +689,31 @@ struct ChatArea: View {
         appendAttachments(AttachmentExtractor.fileContexts(from: urls))
     }
 
+    private func handleImageDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard canPickPhotoAttachment else { return false }
+        Task {
+            let droppedAttachments = await AttachmentExtractor.droppedImageContexts(from: providers)
+            await MainActor.run {
+                appendAttachments(droppedAttachments)
+            }
+        }
+        return true
+    }
+
     private func appendAttachments(_ newAttachments: [AttachedFileContext]) {
+        var updatedAttachments = attachments
         for attachment in newAttachments {
-            let alreadyExists = attachments.contains {
+            let alreadyExists = !AttachmentLimitPolicy.isImageAttachment(attachment) && updatedAttachments.contains {
                 $0.name == attachment.name && $0.extractedText == attachment.extractedText
             }
             if !alreadyExists {
-                attachments.append(attachment)
+                updatedAttachments = AttachmentLimitPolicy.applyingImageLimit(
+                    to: updatedAttachments,
+                    appending: [attachment]
+                )
             }
         }
+        attachments = updatedAttachments
     }
 
     private func shouldShowRelevantChats(after message: Message) -> Bool {
@@ -532,67 +785,88 @@ struct ChatArea: View {
 struct MessageBubble: View {
     let text: String
     let thinkingContent: String?
+    let thinkingStartedAt: Date?
+    let agentTraceRecords: [AgentTraceRecord]
     let isThinkingStreaming: Bool
+    let isAgentTraceStreaming: Bool
     let isUser: Bool
+    let source: MessageSource
+    let timestamp: Date
 
-    private let userBubbleMaxWidth: CGFloat = 620
-    private let assistantTextMaxWidth: CGFloat = 690
+    private let userBubbleMaxWidth: CGFloat = 520
     private let userParagraphSpacing: CGFloat = 10
-    private let assistantParagraphSpacing: CGFloat = 14
 
-    private var paragraphTexts: [String] {
-        let parsed = isUser
-            ? ClarificationContent(displayText: text, card: nil, keepsQuickActionMode: false)
-            : ClarificationCardParser.parse(text)
+    private var userParagraphTexts: [String] {
+        Self.normalizedParagraphs(from: text)
+    }
 
-        return Self.normalizedParagraphs(from: parsed.displayText)
+    private var assistantDisplayText: String {
+        ClarificationCardParser.parse(text).displayText
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if let thinkingContent, !thinkingContent.isEmpty {
-                ThinkingAccordion(content: thinkingContent, isStreaming: isThinkingStreaming)
+            if !isUser && !agentTraceRecords.isEmpty {
+                AgentTraceAccordion(records: agentTraceRecords, isStreaming: isAgentTraceStreaming)
             }
-            if !paragraphTexts.isEmpty {
+            if let thinkingContent, !thinkingContent.isEmpty {
+                ThinkingAccordion(
+                    content: thinkingContent,
+                    isStreaming: isThinkingStreaming,
+                    startedAt: thinkingStartedAt
+                )
+            }
+            let hasContent = isUser ? !userParagraphTexts.isEmpty : !assistantDisplayText.isEmpty
+            if hasContent {
                 if isUser {
                     HStack {
                         Spacer(minLength: 60)
-                        VStack(alignment: .leading, spacing: userParagraphSpacing) {
-                            ForEach(Array(paragraphTexts.enumerated()), id: \.offset) { _, paragraph in
-                                Text(paragraph)
-                                    .font(.system(size: 14, weight: .regular))
-                                    .foregroundColor(AppColor.colaDarkText)
-                                    .lineSpacing(6)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .textSelection(.enabled)
+                        VStack(alignment: .trailing, spacing: 2) {
+                            VStack(alignment: .leading, spacing: userParagraphSpacing) {
+                                ForEach(Array(userParagraphTexts.enumerated()), id: \.offset) { _, paragraph in
+                                    Text(paragraph)
+                                        .font(.system(size: 14, weight: .regular))
+                                        .foregroundColor(AppColor.colaDarkText)
+                                        .lineSpacing(6)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .textSelection(.enabled)
+                                }
                             }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 12)
+                            .background(AppColor.colaBubble)
+                            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                            timestampRow
+                                .padding(.trailing, 4)
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                        .background(AppColor.colaBubble)
-                        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                        .frame(maxWidth: userBubbleMaxWidth, alignment: .trailing)
                     }
                 } else {
-                    HStack {
-                        VStack(alignment: .leading, spacing: assistantParagraphSpacing) {
-                            ForEach(Array(paragraphTexts.enumerated()), id: \.offset) { _, paragraph in
-                                Text(paragraph)
-                                    .font(.system(size: 14, weight: .regular))
-                                    .foregroundColor(AppColor.colaDarkText)
-                                    .lineSpacing(8)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .textSelection(.enabled)
-                            }
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            AssistantBubbleContent(displayText: assistantDisplayText)
+                            Spacer(minLength: 0)
                         }
-                        .frame(maxWidth: assistantTextMaxWidth, alignment: .leading)
-                        .padding(.top, 6)
-                        .padding(.bottom, 10)
-                        Spacer(minLength: 0)
+                        timestampRow
                     }
-                    .animation(.easeOut(duration: 0.15), value: paragraphTexts)
                 }
             }
         }
+    }
+
+    private var timestampRow: some View {
+        HStack(spacing: 4) {
+            Text(timestamp, style: .time)
+                .font(.system(size: 10, weight: .regular, design: .rounded))
+                .foregroundStyle(AppColor.secondaryText)
+            if source == .voice {
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(AppColor.colaOrange.opacity(0.6))
+                    .accessibilityLabel("Voice")
+            }
+        }
+        .padding(.top, 2)
     }
 
     private static func normalizedParagraphs(from text: String) -> [String] {
@@ -681,6 +955,77 @@ struct MessageBubble: View {
     }
 }
 
+struct StreamingAssistantPresentation {
+    let isGenerating: Bool
+    let currentThinking: String
+    let currentThinkingStartedAt: Date?
+    let currentResponse: String
+    let currentAgentTraceIsEmpty: Bool
+
+    private static let placeholderThinkingContent = "Preparing context and shaping the reply."
+
+    private var displayThinkingContent: String {
+        let trimmedThinking = currentThinking.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedThinking.isEmpty ? Self.placeholderThinkingContent : currentThinking
+    }
+
+    var showsPendingThinking: Bool {
+        isGenerating && currentResponse.isEmpty
+    }
+
+    var pendingThinkingContent: String {
+        displayThinkingContent
+    }
+
+    var pendingThinkingStartedAt: Date? {
+        currentThinkingStartedAt
+    }
+
+    var showsPendingAgentTrace: Bool {
+        isGenerating && !currentAgentTraceIsEmpty && currentResponse.isEmpty
+    }
+
+    var showsAssistantDraft: Bool {
+        isGenerating && !currentResponse.isEmpty
+    }
+
+    var draftThinkingContent: String? {
+        guard showsAssistantDraft else { return nil }
+        return displayThinkingContent
+    }
+
+    var draftThinkingStartedAt: Date? {
+        guard draftThinkingContent != nil else { return nil }
+        return currentThinkingStartedAt
+    }
+
+    var isDraftThinkingStreaming: Bool {
+        showsAssistantDraft
+    }
+
+    var isDraftAgentTraceStreaming: Bool {
+        false
+    }
+}
+
+private struct AssistantBubbleContent: View {
+    let displayText: String
+
+    private let assistantTextMaxWidth: CGFloat = 520
+
+    var body: some View {
+        // Single parse per body recompute via Swift `let` binding.
+        // Computed properties are NOT memoized by SwiftUI — `let` here ensures
+        // the renderer and animation modifier reference the same parse output.
+        let segments = ChatMarkdownRenderer.parse(displayText)
+        return ChatMarkdownView(segments: segments)
+            .frame(maxWidth: assistantTextMaxWidth, alignment: .leading)
+            .padding(.top, 6)
+            .padding(.bottom, 10)
+            .animation(.easeOut(duration: 0.15), value: segments.count)
+    }
+}
+
 struct CopyButton: View {
     let text: String
     @State private var copied = false
@@ -724,6 +1069,149 @@ struct AssistantFeedbackButton: View {
         .foregroundStyle(isSelected ? AppColor.colaOrange : AppColor.colaDarkText.opacity(0.5))
         .animation(.easeInOut(duration: 0.15), value: isSelected)
         .help(helpText)
+    }
+}
+
+enum ActionMenuPopoutMetrics {
+    static let reservedTopPadding: CGFloat = 68
+    static let sourceOffsetFromRowBottom: CGFloat = 44
+    static let itemHeight: CGFloat = 52
+    static let itemWidth: CGFloat = 52
+    static let capsuleCornerRadius: CGFloat = 18
+}
+
+struct ActionMenuCapsule: View {
+    let isExpanded: Bool
+    let onFile: () -> Void
+    let onPhoto: () -> Void
+    let onVoice: () -> Void
+    let canPickPhoto: Bool
+
+    private let motion = ActionMenuSeparationMotion()
+
+    private var capsuleScale: CGSize {
+        motion.capsuleScale(isExpanded: isExpanded)
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ActionMenuButton(
+                icon: "doc",
+                title: "File",
+                isExpanded: isExpanded,
+                separationIndex: 0,
+                action: onFile
+            )
+
+            ActionMenuDivider(isExpanded: isExpanded)
+
+            ActionMenuButton(
+                icon: "photo",
+                title: "Photo",
+                isExpanded: isExpanded,
+                separationIndex: 1,
+                isEnabled: canPickPhoto,
+                action: onPhoto
+            )
+
+            ActionMenuDivider(isExpanded: isExpanded)
+
+            ActionMenuButton(
+                icon: "mic",
+                title: "Voice",
+                isExpanded: isExpanded,
+                separationIndex: 2,
+                action: onVoice
+            )
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 6)
+        .background(
+            NativeGlassPanel(
+                cornerRadius: ActionMenuPopoutMetrics.capsuleCornerRadius,
+                tintColor: AppColor.glassTint
+            ) { EmptyView() }
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: ActionMenuPopoutMetrics.capsuleCornerRadius, style: .continuous)
+                .stroke(AppColor.panelStroke, lineWidth: 1)
+        )
+        .scaleEffect(x: capsuleScale.width, y: capsuleScale.height, anchor: .bottomLeading)
+        .offset(
+            x: motion.capsuleOffset(isExpanded: isExpanded).width,
+            y: motion.capsuleOffset(isExpanded: isExpanded).height
+        )
+        .opacity(motion.capsuleOpacity(isExpanded: isExpanded))
+        .blur(radius: motion.capsuleBlur(isExpanded: isExpanded))
+        .shadow(color: .black.opacity(isExpanded ? 0.12 : 0), radius: 12, x: 0, y: 6)
+        .frame(height: ActionMenuPopoutMetrics.reservedTopPadding, alignment: .bottomLeading)
+        .allowsHitTesting(isExpanded)
+        .accessibilityHidden(!isExpanded)
+        .animation(.spring(response: 0.38, dampingFraction: 0.82), value: isExpanded)
+    }
+}
+
+struct ActionMenuDivider: View {
+    let isExpanded: Bool
+
+    var body: some View {
+        Rectangle()
+            .fill(AppColor.panelStroke.opacity(isExpanded ? 0.62 : 0))
+            .frame(width: 1, height: 30)
+            .animation(.easeInOut(duration: 0.18), value: isExpanded)
+    }
+}
+
+struct ActionMenuButton: View {
+    let icon: String
+    let title: String
+    let isExpanded: Bool
+    let separationIndex: Int
+    var isEnabled: Bool = true
+    let action: () -> Void
+
+    @State private var isHovered = false
+    private let motion = ActionMenuSeparationMotion()
+
+    private var emergenceAnimation: Animation {
+        .easeOut(duration: 0.2)
+            .delay(motion.delay(for: separationIndex, isExpanded: isExpanded))
+    }
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.system(size: 15, weight: .medium))
+                Text(title)
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+            }
+            .foregroundColor(isEnabled ? AppColor.colaDarkText : AppColor.secondaryText.opacity(0.72))
+            .frame(width: ActionMenuPopoutMetrics.itemWidth, height: ActionMenuPopoutMetrics.itemHeight)
+            .overlay(
+                ZStack {
+                    if isHovered && isEnabled {
+                        RoundedRectangle(cornerRadius: 13, style: .continuous)
+                            .fill(AppColor.colaDarkText.opacity(0.04))
+                            .padding(2)
+                    }
+                }
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!isExpanded || !isEnabled)
+        .opacity(motion.itemOpacity(isExpanded: isExpanded, isEnabled: isEnabled))
+        .scaleEffect(isExpanded ? (isHovered && isEnabled ? 1.035 : 1.0) : 0.96)
+        .offset(
+            x: motion.itemOffset(for: separationIndex, isExpanded: isExpanded).width,
+            y: motion.itemOffset(for: separationIndex, isExpanded: isExpanded).height
+        )
+        .blur(radius: isExpanded ? 0 : 3)
+        .animation(emergenceAnimation, value: isExpanded)
+        .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isHovered)
+        .onHover { isHovered = $0 }
+        .accessibilityHidden(!isExpanded)
     }
 }
 

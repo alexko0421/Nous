@@ -10,7 +10,7 @@ final class ProvocationKindDerivationTests: XCTestCase {
             reason: "tension but venting elsewhere", inferredMode: .companion
         )
         XCTAssertEqual(
-            ChatViewModel.deriveProvocationKind(verdict: verdict, contradictionCandidateIds: ["E1"]),
+            TurnInteractionPolicy.deriveProvocationKind(verdict: verdict, contradictionCandidateIds: ["E1"]),
             .neutral
         )
     }
@@ -22,7 +22,7 @@ final class ProvocationKindDerivationTests: XCTestCase {
             reason: "cuts against earlier decision", inferredMode: .strategist
         )
         XCTAssertEqual(
-            ChatViewModel.deriveProvocationKind(verdict: verdict, contradictionCandidateIds: ["E1", "E2"]),
+            TurnInteractionPolicy.deriveProvocationKind(verdict: verdict, contradictionCandidateIds: ["E1", "E2"]),
             .contradiction
         )
     }
@@ -34,7 +34,7 @@ final class ProvocationKindDerivationTests: XCTestCase {
             reason: "latent connection worth surfacing", inferredMode: .strategist
         )
         XCTAssertEqual(
-            ChatViewModel.deriveProvocationKind(verdict: verdict, contradictionCandidateIds: ["E1", "E2"]),
+            TurnInteractionPolicy.deriveProvocationKind(verdict: verdict, contradictionCandidateIds: ["E1", "E2"]),
             .spark
         )
     }
@@ -46,7 +46,7 @@ final class ProvocationKindDerivationTests: XCTestCase {
             reason: "schema violation but flagged anyway", inferredMode: .strategist
         )
         XCTAssertEqual(
-            ChatViewModel.deriveProvocationKind(verdict: verdict, contradictionCandidateIds: []),
+            TurnInteractionPolicy.deriveProvocationKind(verdict: verdict, contradictionCandidateIds: []),
             .spark
         )
     }

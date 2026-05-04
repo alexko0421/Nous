@@ -15,3 +15,9 @@ Key routing rules:
 - Design system, brand → invoke design-consultation
 - Visual audit, design polish → invoke design-review
 - Architecture review → invoke plan-eng-review
+
+## Beads engineering memory
+
+Use Beads (`bd`) for coding-agent task tracking and stable repo-specific engineering memories. Run `scripts/beads_agent_workflow.sh start` at session start. For non-trivial code/docs work, claim or create a bead before editing and finish with `scripts/beads_agent_workflow.sh finish <id> "<verification summary>"`. Keep Alex/product/thinking memory in Nous, not Beads. Full protocol: `docs/beads-agent-memory.md`.
+
+For agent delegation decisions, follow `docs/agentic-engineering-workflow.md`: default to one lead agent, use the Context Boundary Card before delegating, and keep agent teams deferred unless explicitly requested. Non-trivial work needs concrete verification; use a separate Verifier/Gatekeeper only when false-green risk justifies the extra context boundary.

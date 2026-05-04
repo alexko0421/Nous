@@ -71,6 +71,92 @@ final class UserMemoryServiceTests: XCTestCase {
                       "prompt must carry the literal 'ALEX ONLY' marker so evidence framing is explicit")
     }
 
+    func testRefreshConversationPromptGuardsTemporalStateAndCorrections() async throws {
+        let capture = PromptSequenceCapture()
+        let mock = QueueMockLLMService(
+            capture: capture,
+            replies: [
+                "- Alex is waiting to send a 4am update",
+                #"{"facts":[],"decision_chains":[],"semantic_atoms":[]}"#
+            ]
+        )
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let node = NousNode(type: .conversation, title: "Future plan chat", content: "")
+        try store.insertNode(node)
+
+        let messages: [Message] = [
+            Message(
+                nodeId: node.id,
+                role: .user,
+                content: "I plan to sleep, wake up at 4am, then send her an update.",
+                timestamp: Date(timeIntervalSince1970: 1)
+            ),
+            Message(
+                nodeId: node.id,
+                role: .user,
+                content: "No, I have not sent it yet. I will only know tomorrow.",
+                timestamp: Date(timeIntervalSince1970: 2)
+            )
+        ]
+
+        await service.refreshConversation(nodeId: node.id, projectId: nil, messages: messages)
+
+        let prompts = await capture.prompts()
+        guard let sentPrompt = prompts.first else {
+            XCTFail("QueueMockLLMService was never called")
+            return
+        }
+
+        XCTAssertTrue(sentPrompt.contains("planned/future/waiting"),
+                      "prompt must explicitly protect future plans from being rewritten as completed events")
+        XCTAssertTrue(sentPrompt.contains("latest correction"),
+                      "prompt must explicitly make Alex's latest correction override older memory")
+    }
+
+    func testRefreshConversationAddsPreviousQuestionContextForShortReplies() async throws {
+        let capture = PromptSequenceCapture()
+        let mock = QueueMockLLMService(
+            capture: capture,
+            replies: [
+                "- Alex confirmed the Evo SL is buyable where he is",
+                #"{"facts":[],"decision_chains":[],"semantic_atoms":[]}"#
+            ]
+        )
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let node = NousNode(type: .conversation, title: "Shoe decision", content: "")
+        try store.insertNode(node)
+
+        let assistantQuestion = "你而家系话 EVO SL 喺美国买唔买到㗎？\n\n买唔买到先？"
+        let userReply = "咁梗系买到啦"
+        let messages: [Message] = [
+            Message(
+                nodeId: node.id,
+                role: .assistant,
+                content: assistantQuestion,
+                timestamp: Date(timeIntervalSince1970: 1)
+            ),
+            Message(
+                nodeId: node.id,
+                role: .user,
+                content: userReply,
+                timestamp: Date(timeIntervalSince1970: 2)
+            )
+        ]
+
+        await service.refreshConversation(nodeId: node.id, projectId: nil, messages: messages)
+
+        let prompts = await capture.prompts()
+        XCTAssertGreaterThanOrEqual(prompts.count, 2)
+        for prompt in prompts.prefix(2) {
+            XCTAssertTrue(prompt.contains("previous_nous_question_context_only"))
+            XCTAssertTrue(prompt.contains("EVO SL 喺美国买唔买到"))
+            XCTAssertTrue(prompt.contains(userReply))
+            XCTAssertTrue(prompt.contains("Do not treat Nous context as source evidence"))
+        }
+    }
+
     /// P0 fix from post-commit /plan-eng-review: Alex routinely pastes Nous's
     /// prior reply into his next user turn as a markdown blockquote (`> …`)
     /// when asking for clarification. The role filter alone would let that
@@ -832,12 +918,147 @@ final class UserMemoryServiceTests: XCTestCase {
         XCTAssertTrue(facts.allSatisfy { $0.stability == .stable })
         XCTAssertTrue(facts.allSatisfy { $0.sourceNodeIds == [node.id] })
 
+        let atoms = try store.fetchMemoryAtoms()
+            .filter { $0.scope == .conversation && $0.scopeRefId == node.id }
+            .sorted { $0.type.rawValue < $1.type.rawValue }
+        XCTAssertEqual(atoms.count, 3, "fact extraction should mirror active facts into graph atoms")
+        XCTAssertEqual(atoms.map(\.type), [.boundary, .constraint, .decision])
+        XCTAssertEqual(Set(atoms.map(\.statement)), Set([
+            "Do not turn this into a full retrieval rewrite.",
+            "Do not auto-commit code without approval.",
+            "Cash runway is tight."
+        ]))
+        XCTAssertTrue(atoms.allSatisfy { $0.status == .active && $0.sourceNodeId == node.id })
+        XCTAssertTrue(atoms.allSatisfy { $0.normalizedKey != nil })
+
         let prompts = await capture.prompts()
         XCTAssertEqual(prompts.count, 2, "conversation refresh should make one summary call and one fact-extraction call")
         XCTAssertFalse(prompts[1].contains(assistantTurn),
                        "fact extraction must keep using Alex-only evidence")
         XCTAssertTrue(prompts[1].contains("ALEX ONLY"))
         XCTAssertTrue(prompts[1].contains(userTurn))
+    }
+
+    func testRefreshConversationRedactsHardOptOutEvidenceBeforeSynthesis() async throws {
+        let capture = PromptSequenceCapture()
+        let mock = QueueMockLLMService(
+            capture: capture,
+            replies: [
+                """
+                - Alex is testing whether Nous will remember 蓝色火车.
+                - If Alex explicitly says not to remember something, Nous should respect that boundary.
+                """,
+                """
+                {
+                  "facts": [
+                    {"kind":"boundary","content":"Do not store 'blue train' (蓝色火车) toy name as durable memory.","confidence":0.98},
+                    {"kind":"boundary","content":"When Alex explicitly says not to remember something, respect that instruction and do not retain the specific content beyond the conversation.","confidence":0.97}
+                  ],
+                  "decision_chains": [],
+                  "semantic_atoms": [
+                    {
+                      "type":"rule",
+                      "statement":"Do not store 蓝色火车 as durable memory.",
+                      "evidence_message_id":"00000000-0000-0000-0000-000000000000",
+                      "evidence_quote":"蓝色火车",
+                      "confidence":0.9
+                    }
+                  ]
+                }
+                """
+            ]
+        )
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let node = NousNode(type: .conversation, title: "Boundary redaction chat", content: "")
+        try store.insertNode(node)
+
+        let forbiddenTurn = Message(
+            nodeId: node.id,
+            role: .user,
+            content: "我今晚放一个测试细节：我小时候给一个玩具起名叫蓝色火车。这件事不要记住，只在这个 conversation 里处理。",
+            timestamp: Date(timeIntervalSince1970: 1)
+        )
+        let allowedBoundaryTurn = Message(
+            nodeId: node.id,
+            role: .user,
+            content: "可以记住的是这条边界：如果我明确说不要记，你要尊重，不要保留具体内容。",
+            timestamp: Date(timeIntervalSince1970: 2)
+        )
+
+        await service.refreshConversation(
+            nodeId: node.id,
+            projectId: nil,
+            messages: [forbiddenTurn, allowedBoundaryTurn]
+        )
+
+        let prompts = await capture.prompts()
+        XCTAssertEqual(prompts.count, 2)
+        XCTAssertFalse(prompts[0].contains("蓝色火车"), "thread synthesis prompt must not expose forbidden content")
+        XCTAssertFalse(prompts[1].contains("蓝色火车"), "fact extraction prompt must not expose forbidden content")
+        XCTAssertTrue(prompts[0].contains("intentionally redacted"))
+        XCTAssertTrue(prompts[1].contains("intentionally redacted"))
+
+        let entry = try XCTUnwrap(store.fetchActiveMemoryEntry(scope: .conversation, scopeRefId: node.id))
+        XCTAssertFalse(entry.content.contains("蓝色火车"), "thread memory must redact forbidden content even if the model echoes it")
+
+        let facts = try store.fetchActiveMemoryFactEntries(
+            scope: .conversation,
+            scopeRefId: node.id,
+            kinds: [.boundary]
+        )
+        XCTAssertEqual(facts.count, 1)
+        XCTAssertFalse(facts.contains { $0.content.contains("蓝色火车") })
+        XCTAssertTrue(facts.first?.content.contains("explicitly says not to remember") == true)
+
+        let atoms = try store.fetchMemoryAtoms()
+        XCTAssertFalse(atoms.contains { $0.statement.contains("蓝色火车") })
+    }
+
+    func testRefreshConversationKeepsUnchangedFactActiveWithoutArchivedDuplicates() async throws {
+        let capture = PromptSequenceCapture()
+        let factPayload = """
+        {
+          "facts": [
+            {"kind":"boundary","content":"When Alex explicitly says not to remember something, respect that instruction and do not retain the specific content beyond the conversation.","confidence":0.97}
+          ],
+          "decision_chains": [],
+          "semantic_atoms": []
+        }
+        """
+        let mock = QueueMockLLMService(
+            capture: capture,
+            replies: [
+                "- first summary",
+                factPayload,
+                "- second summary",
+                factPayload
+            ]
+        )
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let node = NousNode(type: .conversation, title: "Fact duplicate chat", content: "")
+        try store.insertNode(node)
+
+        let message = Message(
+            nodeId: node.id,
+            role: .user,
+            content: "If I explicitly say not to remember something, respect that boundary and do not keep the specific content.",
+            timestamp: Date(timeIntervalSince1970: 1)
+        )
+
+        await service.refreshConversation(nodeId: node.id, projectId: nil, messages: [message])
+        await service.refreshConversation(nodeId: node.id, projectId: nil, messages: [message])
+
+        let allFacts = try store.fetchMemoryFactEntries()
+            .filter { $0.scope == .conversation && $0.scopeRefId == node.id }
+        XCTAssertEqual(allFacts.count, 1, "unchanged facts should update in place, not create archived duplicate rows")
+        XCTAssertEqual(allFacts.first?.status, .active)
+
+        let atoms = try store.fetchMemoryAtoms()
+            .filter { $0.scope == .conversation && $0.scopeRefId == node.id }
+        XCTAssertEqual(atoms.count, 1, "unchanged fact atoms should upsert in place")
+        XCTAssertEqual(atoms.first?.status, .active)
     }
 
     func testRefreshConversationInvalidFactJSONFailsClosed() async throws {
@@ -867,6 +1088,856 @@ final class UserMemoryServiceTests: XCTestCase {
                        "canonical thread memory must still write even if fact extraction fails")
         XCTAssertTrue(try store.fetchMemoryFactEntries().isEmpty,
                       "invalid fact JSON must fail closed and leave sidecar facts untouched")
+        XCTAssertTrue(try store.fetchMemoryAtoms().isEmpty,
+                      "invalid fact JSON must fail closed and leave graph atoms untouched")
+    }
+
+    func testRefreshConversationExtractsDecisionChainsIntoGraphRecall() async throws {
+        let capture = PromptSequenceCapture()
+        let mock = QueueMockLLMService(
+            capture: capture,
+            replies: [
+                "- Alex rejected solving emotions as the product frame",
+                """
+                {
+                  "facts": [
+                    {"kind":"decision","content":"Do not frame the product as solving emotions.","confidence":0.91}
+                  ],
+                  "decision_chains": [
+                    {
+                      "rejected_proposal":"Build Nous around solving emotions.",
+                      "rejection":"Alex rejected solving emotions as unrealistic.",
+                      "reasons":["Emotions cannot be solved like a mechanical problem."],
+                      "replacement":"Observe and coexist with emotions.",
+                      "evidence_quote":"We should not build this as solving emotions. It is unrealistic.",
+                      "confidence":0.89
+                    }
+                  ]
+                }
+                """
+            ]
+        )
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let oldChat = NousNode(type: .conversation, title: "Emotion product framing", content: "")
+        try store.insertNode(oldChat)
+        let userMessage = Message(
+            nodeId: oldChat.id,
+            role: .user,
+            content: "We should not build this as solving emotions. It is unrealistic. The better frame is observing and coexisting with emotions.",
+            timestamp: Date(timeIntervalSince1970: 1)
+        )
+        try store.insertMessage(userMessage)
+
+        await service.refreshConversation(
+            nodeId: oldChat.id,
+            projectId: nil,
+            messages: [userMessage]
+        )
+
+        let graphStore = MemoryGraphStore(nodeStore: store)
+        let rejection = try XCTUnwrap(
+            try store.fetchMemoryAtoms()
+                .first { $0.type == .rejection && $0.status == .active }
+        )
+        let chain = try XCTUnwrap(graphStore.decisionChain(for: rejection.id))
+        XCTAssertEqual(chain.rejectedProposal?.statement, "Build Nous around solving emotions.")
+        XCTAssertEqual(chain.reasons.map(\.statement), ["Emotions cannot be solved like a mechanical problem."])
+        XCTAssertEqual(chain.replacement?.statement, "Observe and coexist with emotions.")
+        XCTAssertEqual(rejection.sourceNodeId, oldChat.id)
+        XCTAssertEqual(rejection.eventTime, Date(timeIntervalSince1970: 1))
+        XCTAssertEqual(rejection.sourceMessageId, userMessage.id)
+
+        let newChatId = UUID()
+        let recall = service.currentDecisionGraphRecall(
+            currentMessage: "我哋三周前否決過邊個方案，點解？",
+            projectId: nil,
+            conversationId: newChatId,
+            now: Date(timeIntervalSince1970: 1 + 21 * 24 * 60 * 60)
+        )
+
+        XCTAssertEqual(recall.count, 1)
+        XCTAssertTrue(recall[0].contains("Build Nous around solving emotions."))
+        XCTAssertTrue(recall[0].contains("Emotions cannot be solved like a mechanical problem."))
+        XCTAssertTrue(recall[0].contains("Observe and coexist with emotions."))
+        XCTAssertTrue(recall[0].contains("status=active"))
+        XCTAssertTrue(recall[0].contains("source_message_id="))
+        XCTAssertTrue(recall[0].contains("event_time=1970-01-01T00:00:01Z"))
+    }
+
+    /// Live-path integration: a prior `currentPosition` Alex held in this chat
+    /// must end up `superseded` (with a `supersedes` edge) once
+    /// `refreshConversation` extracts a decision chain rejecting the same
+    /// position. Without this, the audit's exact "fake memory" failure
+    /// reappears at the integration layer: pre-existing position stays as
+    /// just `archived` next to the new rejection, and recall has no way to
+    /// answer "when did I change my mind?".
+    func testRefreshConversationSupersedesPriorMatchingCurrentPositionInGraph() async throws {
+        let capture = PromptSequenceCapture()
+        let mock = QueueMockLLMService(
+            capture: capture,
+            replies: [
+                "- Alex changed his framing of emotions",
+                """
+                {
+                  "facts": [],
+                  "decision_chains": [
+                    {
+                      "rejected_proposal":"Solve emotions",
+                      "rejection":"Alex now rejects solving emotions as a frame.",
+                      "reasons":["Emotions are not solvable like a mechanical problem."],
+                      "replacement":"Observe and coexist with emotions.",
+                      "evidence_quote":"I no longer want to frame this as solving emotions.",
+                      "confidence":0.9
+                    }
+                  ]
+                }
+                """
+            ]
+        )
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let chat = NousNode(type: .conversation, title: "Emotion frame shift", content: "")
+        try store.insertNode(chat)
+        let message = Message(
+            nodeId: chat.id,
+            role: .user,
+            content: "I no longer want to frame this as solving emotions. Observing and coexisting fits better.",
+            timestamp: Date(timeIntervalSince1970: 1)
+        )
+        try store.insertMessage(message)
+
+        // Pre-existing currentPosition that the new chain will reject.
+        let priorPosition = MemoryAtom(
+            type: .currentPosition,
+            statement: "Solve emotions",
+            normalizedKey: "current_position|solve emotions",
+            scope: .conversation,
+            scopeRefId: chat.id,
+            status: .active,
+            confidence: 0.85,
+            eventTime: Date(timeIntervalSince1970: 0),
+            createdAt: Date(timeIntervalSince1970: 0),
+            updatedAt: Date(timeIntervalSince1970: 0),
+            sourceNodeId: chat.id
+        )
+        try store.insertMemoryAtom(priorPosition)
+
+        await service.refreshConversation(
+            nodeId: chat.id,
+            projectId: nil,
+            messages: [message]
+        )
+
+        let updatedPrior = try XCTUnwrap(store.fetchMemoryAtom(id: priorPosition.id))
+        XCTAssertEqual(
+            updatedPrior.status,
+            .superseded,
+            "Prior currentPosition must be flagged superseded after the live extractor produces a chain that rejects it."
+        )
+
+        let supersedesEdges = try store.fetchMemoryEdges()
+            .filter { $0.type == .supersedes && $0.toAtomId == priorPosition.id }
+        XCTAssertEqual(
+            supersedesEdges.count,
+            1,
+            "Exactly one supersedes edge must point at the prior atom."
+        )
+        let edge = try XCTUnwrap(supersedesEdges.first)
+        let fromAtom = try XCTUnwrap(store.fetchMemoryAtom(id: edge.fromAtomId))
+        XCTAssertEqual(fromAtom.type, .rejection)
+        XCTAssertTrue(
+            fromAtom.statement.contains("solving emotions"),
+            "Edge source should be the new rejection atom from the chain."
+        )
+    }
+
+    /// Live extractor must produce `preference` / `belief` / `correction`
+    /// atoms with full provenance so the planner's preferenceRecall /
+    /// ruleRecall / contradictionReview intents finally have data to return.
+    /// Each atom requires `evidence_quote` matching the source message — same
+    /// hallucination guard as decision chains. Without these, planner intents
+    /// covering the 3 most common recall surfaces stay forever empty.
+    func testRefreshConversationExtractsSemanticAtomsWithProvenance() async throws {
+        let capture = PromptSequenceCapture()
+        let mock = QueueMockLLMService(
+            capture: capture,
+            replies: [
+                "- Alex stated three durable preferences/beliefs.",
+                """
+                {
+                  "facts": [],
+                  "decision_chains": [],
+                  "semantic_atoms": [
+                    {
+                      "type": "preference",
+                      "statement": "Alex never wants em dashes in final copy.",
+                      "evidence_quote": "Remember that I never want em dashes in final copy.",
+                      "confidence": 0.92
+                    },
+                    {
+                      "type": "belief",
+                      "statement": "Alex believes naming products precisely is more important than naming them quickly.",
+                      "evidence_quote": "I think naming products precisely matters more than shipping a name fast.",
+                      "confidence": 0.84
+                    },
+                    {
+                      "type": "correction",
+                      "statement": "Alex no longer trusts the original wow-curve framing of onboarding.",
+                      "evidence_quote": "I was wrong earlier; the wow-curve framing of onboarding does not hold up for me anymore.",
+                      "confidence": 0.78
+                    }
+                  ]
+                }
+                """
+            ]
+        )
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let chat = NousNode(type: .conversation, title: "Stable preferences", content: "")
+        try store.insertNode(chat)
+        let userMessage = Message(
+            nodeId: chat.id,
+            role: .user,
+            content: """
+            Remember that I never want em dashes in final copy. \
+            I think naming products precisely matters more than shipping a name fast. \
+            I was wrong earlier; the wow-curve framing of onboarding does not hold up for me anymore.
+            """,
+            timestamp: Date(timeIntervalSince1970: 5)
+        )
+        try store.insertMessage(userMessage)
+
+        await service.refreshConversation(nodeId: chat.id, projectId: nil, messages: [userMessage])
+
+        let atoms = try store.fetchMemoryAtoms()
+        let preference = try XCTUnwrap(atoms.first(where: { $0.type == .preference }))
+        XCTAssertEqual(preference.statement, "Alex never wants em dashes in final copy.")
+        XCTAssertEqual(preference.sourceMessageId, userMessage.id)
+        XCTAssertEqual(preference.eventTime, userMessage.timestamp)
+        XCTAssertEqual(preference.status, .active)
+
+        let belief = try XCTUnwrap(atoms.first(where: { $0.type == .belief }))
+        XCTAssertEqual(belief.statement, "Alex believes naming products precisely is more important than naming them quickly.")
+        XCTAssertEqual(belief.sourceMessageId, userMessage.id)
+
+        let correction = try XCTUnwrap(atoms.first(where: { $0.type == .correction }))
+        XCTAssertEqual(correction.statement, "Alex no longer trusts the original wow-curve framing of onboarding.")
+        XCTAssertEqual(correction.sourceMessageId, userMessage.id)
+    }
+
+    /// Semantic atoms (preference/belief/correction) must NOT use the
+    /// burn-and-replace lifecycle that decision chains use. If they did, a
+    /// stable preference Alex stated in turn N would be archived in turn N+1
+    /// just because that turn's extraction didn't re-mention it. This test
+    /// pins the survival contract: a prior preference atom stays `.active`
+    /// across an unrelated refresh cycle.
+    func testSemanticAtomsSurviveLaterUnrelatedRefresh() async throws {
+        let capture = PromptSequenceCapture()
+        let mock = QueueMockLLMService(
+            capture: capture,
+            replies: [
+                "- Different topic entirely",
+                """
+                {
+                  "facts": [],
+                  "decision_chains": [],
+                  "semantic_atoms": []
+                }
+                """
+            ]
+        )
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let chat = NousNode(type: .conversation, title: "Survival test", content: "")
+        try store.insertNode(chat)
+        let userMessage = Message(
+            nodeId: chat.id,
+            role: .user,
+            content: "Today's chat is about something else entirely.",
+            timestamp: Date(timeIntervalSince1970: 10)
+        )
+        try store.insertMessage(userMessage)
+
+        let priorPreference = MemoryAtom(
+            type: .preference,
+            statement: "Alex never wants em dashes in final copy.",
+            normalizedKey: "preference|alex never wants em dashes in final copy.",
+            scope: .conversation,
+            scopeRefId: chat.id,
+            status: .active,
+            confidence: 0.92,
+            eventTime: Date(timeIntervalSince1970: 1),
+            sourceNodeId: chat.id
+        )
+        try store.insertMemoryAtom(priorPreference)
+
+        await service.refreshConversation(nodeId: chat.id, projectId: nil, messages: [userMessage])
+
+        let updated = try XCTUnwrap(store.fetchMemoryAtom(id: priorPreference.id))
+        XCTAssertEqual(
+            updated.status,
+            .active,
+            "Stable semantic atoms must survive refresh cycles that don't re-extract them."
+        )
+    }
+
+    /// Semantic atom upsert: re-extracting the same preference must update
+    /// the existing atom (bump lastSeenAt) instead of inserting a duplicate.
+    /// Same normalized-key contract as decision chain atoms — without it,
+    /// stable preferences would multiply across turns.
+    func testSemanticAtomsAreUpsertedByNormalizedKey() async throws {
+        let capture = PromptSequenceCapture()
+        let mock = QueueMockLLMService(
+            capture: capture,
+            replies: [
+                "- Alex restates a known preference.",
+                """
+                {
+                  "facts": [],
+                  "decision_chains": [],
+                  "semantic_atoms": [
+                    {
+                      "type": "preference",
+                      "statement": "Alex never wants em dashes in final copy.",
+                      "evidence_quote": "Again — never em dashes in final copy.",
+                      "confidence": 0.95
+                    }
+                  ]
+                }
+                """
+            ]
+        )
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let chat = NousNode(type: .conversation, title: "Upsert test", content: "")
+        try store.insertNode(chat)
+        let userMessage = Message(
+            nodeId: chat.id,
+            role: .user,
+            content: "Again — never em dashes in final copy.",
+            timestamp: Date(timeIntervalSince1970: 50)
+        )
+        try store.insertMessage(userMessage)
+
+        let priorPreference = MemoryAtom(
+            type: .preference,
+            statement: "Alex never wants em dashes in final copy.",
+            normalizedKey: "preference|alex never wants em dashes in final copy.",
+            scope: .conversation,
+            scopeRefId: chat.id,
+            status: .active,
+            confidence: 0.7,
+            eventTime: Date(timeIntervalSince1970: 1),
+            sourceNodeId: chat.id
+        )
+        try store.insertMemoryAtom(priorPreference)
+
+        await service.refreshConversation(nodeId: chat.id, projectId: nil, messages: [userMessage])
+
+        let preferenceAtoms = try store.fetchMemoryAtoms().filter {
+            $0.type == .preference && $0.scopeRefId == chat.id
+        }
+        XCTAssertEqual(preferenceAtoms.count, 1, "Re-extracted preference must upsert in place.")
+        let merged = preferenceAtoms[0]
+        XCTAssertEqual(merged.id, priorPreference.id, "Upsert must reuse the existing atom id.")
+        XCTAssertGreaterThanOrEqual(merged.confidence, 0.92, "Upsert must take max confidence between old and new.")
+    }
+
+    /// Live-path integration: when the extractor produces a `correction`
+    /// semantic atom that names a `corrects` target text, a prior `belief`
+    /// (or `preference`) atom in the same scope whose normalized statement
+    /// matches must end up `superseded` with a `supersedes` edge from the
+    /// new correction to it. Without this, "I no longer think X" coexists
+    /// as just another active atom alongside the original X — recall has
+    /// no way to answer "when did Alex change his mind about X?".
+    func testRefreshConversationCorrectionSupersedesPriorMatchingBelief() async throws {
+        let capture = PromptSequenceCapture()
+        let mock = QueueMockLLMService(
+            capture: capture,
+            replies: [
+                "- Alex retracted a prior belief.",
+                """
+                {
+                  "facts": [],
+                  "decision_chains": [],
+                  "semantic_atoms": [
+                    {
+                      "type": "correction",
+                      "statement": "Alex no longer trusts the wow-curve framing of onboarding.",
+                      "corrects": "Wow-curve framing of onboarding holds up.",
+                      "evidence_quote": "I was wrong about the wow-curve framing.",
+                      "confidence": 0.86
+                    }
+                  ]
+                }
+                """
+            ]
+        )
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let chat = NousNode(type: .conversation, title: "Belief shift", content: "")
+        try store.insertNode(chat)
+        let userMessage = Message(
+            nodeId: chat.id,
+            role: .user,
+            content: "I was wrong about the wow-curve framing. It does not actually hold up.",
+            timestamp: Date(timeIntervalSince1970: 50)
+        )
+        try store.insertMessage(userMessage)
+
+        let priorBelief = MemoryAtom(
+            type: .belief,
+            statement: "Wow-curve framing of onboarding holds up.",
+            normalizedKey: "belief|wow-curve framing of onboarding holds up.",
+            scope: .conversation,
+            scopeRefId: chat.id,
+            status: .active,
+            confidence: 0.8,
+            eventTime: Date(timeIntervalSince1970: 1),
+            sourceNodeId: chat.id
+        )
+        try store.insertMemoryAtom(priorBelief)
+
+        await service.refreshConversation(nodeId: chat.id, projectId: nil, messages: [userMessage])
+
+        let updated = try XCTUnwrap(store.fetchMemoryAtom(id: priorBelief.id))
+        XCTAssertEqual(
+            updated.status,
+            .superseded,
+            "Prior belief must be flagged superseded after the live extractor produces a correction targeting it."
+        )
+
+        let supersedesEdges = try store.fetchMemoryEdges()
+            .filter { $0.type == .supersedes && $0.toAtomId == priorBelief.id }
+        XCTAssertEqual(supersedesEdges.count, 1)
+        let edge = try XCTUnwrap(supersedesEdges.first)
+        let fromAtom = try XCTUnwrap(store.fetchMemoryAtom(id: edge.fromAtomId))
+        XCTAssertEqual(fromAtom.type, .correction)
+    }
+
+    /// Without a `corrects` target text, a `correction` atom must NOT silently
+    /// supersede unrelated active beliefs in the same scope just because they
+    /// share keywords. The supersede flow is opt-in via the `corrects` field;
+    /// otherwise the correction is just a freestanding claim.
+    func testRefreshConversationCorrectionWithoutCorrectsTargetLeavesPriorBeliefAlone() async throws {
+        let capture = PromptSequenceCapture()
+        let mock = QueueMockLLMService(
+            capture: capture,
+            replies: [
+                "- Generic correction without a target.",
+                """
+                {
+                  "facts": [],
+                  "decision_chains": [],
+                  "semantic_atoms": [
+                    {
+                      "type": "correction",
+                      "statement": "Alex revised his thinking on framing in general.",
+                      "evidence_quote": "I have been revising my thinking on framing in general.",
+                      "confidence": 0.65
+                    }
+                  ]
+                }
+                """
+            ]
+        )
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let chat = NousNode(type: .conversation, title: "Generic correction", content: "")
+        try store.insertNode(chat)
+        let userMessage = Message(
+            nodeId: chat.id,
+            role: .user,
+            content: "I have been revising my thinking on framing in general.",
+            timestamp: Date(timeIntervalSince1970: 50)
+        )
+        try store.insertMessage(userMessage)
+
+        let priorBelief = MemoryAtom(
+            type: .belief,
+            statement: "Wow-curve framing of onboarding holds up.",
+            normalizedKey: "belief|wow-curve framing of onboarding holds up.",
+            scope: .conversation,
+            scopeRefId: chat.id,
+            status: .active,
+            confidence: 0.8,
+            eventTime: Date(timeIntervalSince1970: 1),
+            sourceNodeId: chat.id
+        )
+        try store.insertMemoryAtom(priorBelief)
+
+        await service.refreshConversation(nodeId: chat.id, projectId: nil, messages: [userMessage])
+
+        let untouched = try XCTUnwrap(store.fetchMemoryAtom(id: priorBelief.id))
+        XCTAssertEqual(untouched.status, .active)
+        let supersedesEdges = try store.fetchMemoryEdges().filter { $0.type == .supersedes }
+        XCTAssertTrue(supersedesEdges.isEmpty)
+    }
+
+    /// Live extractor must also produce `goal` / `plan` / `rule` / `pattern`
+    /// atoms (same upsert-only lifecycle as preference/belief/correction).
+    /// Without these, planner intents `goalPlanRecall` and `ruleRecall` stay
+    /// permanently empty even though they're already wired through the
+    /// retrieval path. Pattern atoms specifically unlock "what do I keep
+    /// catching myself doing?" recall — a different surface from beliefs.
+    func testRefreshConversationExtractsGoalPlanRuleAndPatternAtoms() async throws {
+        let capture = PromptSequenceCapture()
+        let mock = QueueMockLLMService(
+            capture: capture,
+            replies: [
+                "- Alex stated four durable artefacts.",
+                """
+                {
+                  "facts": [],
+                  "decision_chains": [],
+                  "semantic_atoms": [
+                    {
+                      "type": "goal",
+                      "statement": "Alex wants Nous to feel like a real second brain by Q3.",
+                      "evidence_quote": "I want Nous to feel like a real second brain by Q3.",
+                      "confidence": 0.9
+                    },
+                    {
+                      "type": "plan",
+                      "statement": "Alex plans to ship the Memory Center before adding new agents.",
+                      "evidence_quote": "I plan to ship the Memory Center before adding any new agents.",
+                      "confidence": 0.85
+                    },
+                    {
+                      "type": "rule",
+                      "statement": "Alex writes failing tests before implementation.",
+                      "evidence_quote": "Always write the failing test before implementation.",
+                      "confidence": 0.88
+                    },
+                    {
+                      "type": "pattern",
+                      "statement": "Alex repeatedly underestimates the cost of cross-team coordination.",
+                      "evidence_quote": "I keep underestimating how much cross-team coordination costs.",
+                      "confidence": 0.78
+                    }
+                  ]
+                }
+                """
+            ]
+        )
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let chat = NousNode(type: .conversation, title: "Goals and patterns", content: "")
+        try store.insertNode(chat)
+        let userMessage = Message(
+            nodeId: chat.id,
+            role: .user,
+            content: """
+            I want Nous to feel like a real second brain by Q3. \
+            I plan to ship the Memory Center before adding any new agents. \
+            Always write the failing test before implementation. \
+            I keep underestimating how much cross-team coordination costs.
+            """,
+            timestamp: Date(timeIntervalSince1970: 12)
+        )
+        try store.insertMessage(userMessage)
+
+        await service.refreshConversation(nodeId: chat.id, projectId: nil, messages: [userMessage])
+
+        let atoms = try store.fetchMemoryAtoms()
+        let goal = try XCTUnwrap(atoms.first(where: { $0.type == .goal }))
+        XCTAssertEqual(goal.sourceMessageId, userMessage.id)
+        XCTAssertEqual(goal.eventTime, userMessage.timestamp)
+        XCTAssertEqual(goal.status, .active)
+
+        let plan = try XCTUnwrap(atoms.first(where: { $0.type == .plan }))
+        XCTAssertTrue(plan.statement.contains("Memory Center"))
+        XCTAssertEqual(plan.sourceMessageId, userMessage.id)
+
+        let rule = try XCTUnwrap(atoms.first(where: { $0.type == .rule }))
+        XCTAssertTrue(rule.statement.contains("failing tests"))
+        XCTAssertEqual(rule.sourceMessageId, userMessage.id)
+
+        let pattern = try XCTUnwrap(atoms.first(where: { $0.type == .pattern }))
+        XCTAssertTrue(pattern.statement.contains("cross-team coordination"))
+        XCTAssertEqual(pattern.sourceMessageId, userMessage.id)
+    }
+
+    /// Corrections must be able to retract a prior goal / plan / rule the
+    /// same way they can retract a belief or preference. Otherwise Alex's
+    /// abandoned plans remain "active" forever and recall still surfaces
+    /// them as live commitments. Pattern atoms are intentionally NOT
+    /// supersedable — patterns describe self-observation, not commitment;
+    /// they fade by absence, not by retraction.
+    func testRefreshConversationCorrectionCanSupersedePriorPlan() async throws {
+        let capture = PromptSequenceCapture()
+        let mock = QueueMockLLMService(
+            capture: capture,
+            replies: [
+                "- Alex retracted a prior plan.",
+                """
+                {
+                  "facts": [],
+                  "decision_chains": [],
+                  "semantic_atoms": [
+                    {
+                      "type": "correction",
+                      "statement": "Alex no longer plans to ship the Memory Center first.",
+                      "corrects": "Alex plans to ship the Memory Center before adding new agents.",
+                      "evidence_quote": "I am dropping the Memory Center first plan.",
+                      "confidence": 0.84
+                    }
+                  ]
+                }
+                """
+            ]
+        )
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let chat = NousNode(type: .conversation, title: "Plan shift", content: "")
+        try store.insertNode(chat)
+        let userMessage = Message(
+            nodeId: chat.id,
+            role: .user,
+            content: "I am dropping the Memory Center first plan.",
+            timestamp: Date(timeIntervalSince1970: 60)
+        )
+        try store.insertMessage(userMessage)
+
+        let priorPlan = MemoryAtom(
+            type: .plan,
+            statement: "Alex plans to ship the Memory Center before adding new agents.",
+            normalizedKey: "plan|alex plans to ship the memory center before adding new agents.",
+            scope: .conversation,
+            scopeRefId: chat.id,
+            status: .active,
+            confidence: 0.85,
+            eventTime: Date(timeIntervalSince1970: 1),
+            sourceNodeId: chat.id
+        )
+        try store.insertMemoryAtom(priorPlan)
+
+        await service.refreshConversation(nodeId: chat.id, projectId: nil, messages: [userMessage])
+
+        let updated = try XCTUnwrap(store.fetchMemoryAtom(id: priorPlan.id))
+        XCTAssertEqual(
+            updated.status,
+            .superseded,
+            "Prior plan must be flagged superseded by a correction whose `corrects` matches it."
+        )
+        let supersedesEdges = try store.fetchMemoryEdges()
+            .filter { $0.type == .supersedes && $0.toAtomId == priorPlan.id }
+        XCTAssertEqual(supersedesEdges.count, 1)
+    }
+
+    /// Atoms produced by the live extractor must carry a populated embedding
+    /// when an embedding function is supplied. Without this, the planner's
+    /// vector entry-point can never fire — every recall has to start from
+    /// keyword cues, which means paraphrased queries with no cue word miss
+    /// even when the underlying memory exists. This is the prerequisite for
+    /// the plan's "vector finds the entry → graph traverses" pattern.
+    func testRefreshConversationPopulatesAtomEmbeddings() async throws {
+        let capture = PromptSequenceCapture()
+        let mock = QueueMockLLMService(
+            capture: capture,
+            replies: [
+                "- Alex stated a preference.",
+                """
+                {
+                  "facts": [],
+                  "decision_chains": [],
+                  "semantic_atoms": [
+                    {
+                      "type": "preference",
+                      "statement": "Alex prefers concise outputs.",
+                      "evidence_quote": "Be concise.",
+                      "confidence": 0.9
+                    }
+                  ]
+                }
+                """
+            ]
+        )
+        let stubEmbedding: [Float] = [0.1, 0.2, 0.3, 0.4]
+        let service = UserMemoryService(
+            nodeStore: store,
+            llmServiceProvider: { mock },
+            embedFunction: { _ in stubEmbedding }
+        )
+
+        let chat = NousNode(type: .conversation, title: "Embed test", content: "")
+        try store.insertNode(chat)
+        let userMessage = Message(
+            nodeId: chat.id,
+            role: .user,
+            content: "Be concise.",
+            timestamp: Date(timeIntervalSince1970: 5)
+        )
+        try store.insertMessage(userMessage)
+
+        await service.refreshConversation(nodeId: chat.id, projectId: nil, messages: [userMessage])
+
+        let preference = try XCTUnwrap(
+            try store.fetchMemoryAtoms().first(where: { $0.type == .preference })
+        )
+        XCTAssertEqual(
+            preference.embedding,
+            stubEmbedding,
+            "Atom must persist the embedding produced by the embed function."
+        )
+    }
+
+    /// When no embed function is provided, atoms must still be written —
+    /// just without embeddings. This preserves the current default behavior
+    /// for tests / call-sites that don't wire the embedding service.
+    func testRefreshConversationLeavesEmbeddingNilWhenEmbedFunctionAbsent() async throws {
+        let capture = PromptSequenceCapture()
+        let mock = QueueMockLLMService(
+            capture: capture,
+            replies: [
+                "- Alex stated a preference.",
+                """
+                {
+                  "facts": [],
+                  "decision_chains": [],
+                  "semantic_atoms": [
+                    {
+                      "type": "preference",
+                      "statement": "Alex prefers concise outputs.",
+                      "evidence_quote": "Be concise.",
+                      "confidence": 0.9
+                    }
+                  ]
+                }
+                """
+            ]
+        )
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let chat = NousNode(type: .conversation, title: "No embed test", content: "")
+        try store.insertNode(chat)
+        let userMessage = Message(
+            nodeId: chat.id,
+            role: .user,
+            content: "Be concise.",
+            timestamp: Date(timeIntervalSince1970: 5)
+        )
+        try store.insertMessage(userMessage)
+
+        await service.refreshConversation(nodeId: chat.id, projectId: nil, messages: [userMessage])
+
+        let preference = try XCTUnwrap(
+            try store.fetchMemoryAtoms().first(where: { $0.type == .preference })
+        )
+        XCTAssertNil(preference.embedding)
+    }
+
+    func testCurrentGraphMemoryRecallReturnsPreferenceAtomsAndLogsRecallEvent() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { nil })
+        let sourceChat = NousNode(type: .conversation, title: "Writing preferences", content: "")
+        try store.insertNode(sourceChat)
+        let sourceMessage = Message(
+            nodeId: sourceChat.id,
+            role: .user,
+            content: "Remember that I never want em dashes in final copy.",
+            timestamp: Date(timeIntervalSince1970: 30)
+        )
+        try store.insertMessage(sourceMessage)
+
+        let atom = MemoryAtom(
+            type: .preference,
+            statement: "Alex never wants em dashes in final copy.",
+            scope: .conversation,
+            scopeRefId: sourceChat.id,
+            confidence: 0.93,
+            eventTime: sourceMessage.timestamp,
+            createdAt: Date(timeIntervalSince1970: 30),
+            updatedAt: Date(timeIntervalSince1970: 31),
+            sourceNodeId: sourceChat.id,
+            sourceMessageId: sourceMessage.id
+        )
+        try store.insertMemoryAtom(atom)
+
+        let recall = service.currentGraphMemoryRecall(
+            currentMessage: "你記唔記得我對 em dash 有咩偏好？",
+            projectId: nil,
+            conversationId: UUID()
+        )
+
+        XCTAssertEqual(recall.count, 1)
+        XCTAssertTrue(recall[0].contains("MEMORY_ATOM"))
+        XCTAssertTrue(recall[0].contains("type=preference"))
+        XCTAssertTrue(recall[0].contains("Alex never wants em dashes"))
+        XCTAssertTrue(recall[0].contains("source_quote: Remember that I never want em dashes"))
+
+        let events = try store.fetchMemoryRecallEvents(limit: 10)
+        XCTAssertEqual(events.first?.intent, MemoryQueryIntent.preferenceRecall.rawValue)
+        XCTAssertEqual(events.first?.retrievedAtomIds, [atom.id])
+    }
+
+    func testCurrentGraphMemoryRecallDoesNotPolluteOrdinaryTurns() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { nil })
+        try store.insertMemoryAtom(MemoryAtom(
+            type: .preference,
+            statement: "Alex never wants em dashes in final copy.",
+            scope: .global,
+            confidence: 0.93
+        ))
+
+        let recall = service.currentGraphMemoryRecall(
+            currentMessage: "Help me rewrite this paragraph.",
+            projectId: nil,
+            conversationId: UUID()
+        )
+
+        XCTAssertTrue(recall.isEmpty)
+        XCTAssertTrue(try store.fetchMemoryRecallEvents(limit: 10).isEmpty)
+    }
+
+    func testRefreshConversationDedupesRepeatedDecisionChainAtoms() async throws {
+        let capture = PromptSequenceCapture()
+        let decisionJSON = """
+        {
+          "facts": [],
+          "decision_chains": [
+            {
+              "rejected_proposal":"Build a broad second brain rewrite.",
+              "rejection":"Alex rejected doing a broad rewrite first.",
+              "reasons":["The first slice must stay small."],
+              "replacement":"Ship the graph writer fix first.",
+              "evidence_quote":"Do not do a broad rewrite first. The first slice must stay small.",
+              "confidence":0.88
+            }
+          ]
+        }
+        """
+        let mock = QueueMockLLMService(
+            capture: capture,
+            replies: [
+                "- first summary",
+                decisionJSON,
+                "- second summary",
+                decisionJSON
+            ]
+        )
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let node = NousNode(type: .conversation, title: "Dedup decision chain", content: "")
+        try store.insertNode(node)
+        let message = Message(
+            nodeId: node.id,
+            role: .user,
+            content: "Do not do a broad rewrite first. The first slice must stay small. Ship the graph writer fix first.",
+            timestamp: Date(timeIntervalSince1970: 12)
+        )
+        try store.insertMessage(message)
+
+        await service.refreshConversation(nodeId: node.id, projectId: nil, messages: [message])
+        await service.refreshConversation(nodeId: node.id, projectId: nil, messages: [message])
+
+        let atoms = try store.fetchMemoryAtoms()
+            .filter { $0.scope == .conversation && $0.scopeRefId == node.id }
+        XCTAssertEqual(atoms.count, 4)
+        XCTAssertEqual(atoms.filter { $0.status == .active }.count, 4)
+        XCTAssertEqual(atoms.filter { $0.type == .rejection }.first?.sourceMessageId, message.id)
+        XCTAssertEqual(atoms.filter { $0.type == .rejection }.first?.eventTime, Date(timeIntervalSince1970: 12))
+        XCTAssertEqual(try store.fetchMemoryEdges().count, 3)
     }
 
     func testRefreshConversationSecondFactExtractionArchivesPriorActiveFacts() async throws {
@@ -924,6 +1995,12 @@ final class UserMemoryServiceTests: XCTestCase {
         let archived = allFacts.filter { $0.status == .archived }
         XCTAssertEqual(archived.count, 1)
         XCTAssertEqual(archived.first?.kind, .decision)
+
+        let allAtoms = try store.fetchMemoryAtoms()
+            .filter { $0.scope == .conversation && $0.scopeRefId == node.id }
+        XCTAssertEqual(allAtoms.count, 2, "graph atom history should mirror fact history")
+        XCTAssertEqual(allAtoms.filter { $0.status == .active }.first?.type, .boundary)
+        XCTAssertEqual(allAtoms.filter { $0.status == .archived }.first?.type, .decision)
     }
 
     /// v2.2d: `refreshProject` aggregates child conversation ENTRIES (not the
@@ -1123,6 +2200,29 @@ final class UserMemoryServiceTests: XCTestCase {
 
     // MARK: - v2.2c read-path cutover
 
+    func testMemoryProjectionServiceOwnsEntryReadProjectionWithoutUserMemoryCore() throws {
+        let projection = MemoryProjectionService(nodeStore: store)
+
+        try store.insertMemoryEntry(
+            MemoryEntry(
+                scope: .global,
+                scopeRefId: nil,
+                kind: .identity,
+                stability: .stable,
+                content: "Projection service reads canonical entries directly",
+                sourceNodeIds: [],
+                createdAt: Date(),
+                updatedAt: Date(),
+                lastConfirmedAt: Date()
+            )
+        )
+
+        XCTAssertEqual(
+            projection.currentGlobal(),
+            "Projection service reads canonical entries directly"
+        )
+    }
+
     /// v2.2c: reads must come from the active memory_entries row, not the v2.1
     /// blob. Seeds DIVERGENT blob vs entry content — if the reader returns the
     /// blob value, this test catches it. (Production writes keep content
@@ -1306,6 +2406,58 @@ final class UserMemoryServiceTests: XCTestCase {
         XCTAssertNil(try store.fetchMemoryEntry(id: entry.id))
     }
 
+    func testMemoryFactTrustActionsMutateFactRows() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+        let originalDate = Date(timeIntervalSince1970: 10)
+        let confirmedFact = MemoryFactEntry(
+            scope: .global,
+            kind: .boundary,
+            content: "Do not store hard opt-out turns.",
+            confidence: 0.52,
+            status: .active,
+            stability: .stable,
+            createdAt: originalDate,
+            updatedAt: originalDate
+        )
+        let rejectedFact = MemoryFactEntry(
+            scope: .global,
+            kind: .decision,
+            content: "Old decision.",
+            confidence: 0.88,
+            status: .active,
+            stability: .temporary,
+            createdAt: originalDate,
+            updatedAt: originalDate
+        )
+        let forgottenFact = MemoryFactEntry(
+            scope: .conversation,
+            scopeRefId: UUID(),
+            kind: .constraint,
+            content: "Throwaway constraint.",
+            confidence: 0.7,
+            status: .active,
+            stability: .temporary,
+            createdAt: originalDate,
+            updatedAt: originalDate
+        )
+        try store.insertMemoryFactEntry(confirmedFact)
+        try store.insertMemoryFactEntry(rejectedFact)
+        try store.insertMemoryFactEntry(forgottenFact)
+
+        XCTAssertTrue(service.confirmMemoryFactEntry(id: confirmedFact.id))
+        XCTAssertTrue(service.archiveMemoryFactEntry(id: rejectedFact.id))
+        XCTAssertTrue(service.deleteMemoryFactEntry(id: forgottenFact.id))
+
+        let updatedConfirmed = try store.fetchMemoryFactEntry(id: confirmedFact.id)
+        XCTAssertEqual(updatedConfirmed?.status, .active)
+        XCTAssertGreaterThanOrEqual(updatedConfirmed?.confidence ?? 0, 0.95)
+        XCTAssertGreaterThan(updatedConfirmed?.updatedAt ?? originalDate, originalDate)
+        XCTAssertEqual(try store.fetchMemoryFactEntry(id: rejectedFact.id)?.status, .archived)
+        XCTAssertNil(try store.fetchMemoryFactEntry(id: forgottenFact.id))
+    }
+
     func testSourceSnippetsUseLinkedSourceNodes() throws {
         let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
             MockLLMService(capture: PromptCapture(), reply: "")
@@ -1335,6 +2487,38 @@ final class UserMemoryServiceTests: XCTestCase {
         XCTAssertTrue(snippets.first?.snippet.contains("raw history") == true)
     }
 
+    func testFactSourceSnippetsUseLinkedSourceNodes() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+        let node = NousNode(
+            type: .conversation,
+            title: "Memory boundary",
+            content: "Alex: 不要记住具体内容，只记住这个边界。\n\nNous: 我会尊重呢个边界。"
+        )
+        try store.insertNode(node)
+
+        let fact = MemoryFactEntry(
+            scope: .conversation,
+            scopeRefId: node.id,
+            kind: .boundary,
+            content: "Alex set a memory boundary.",
+            confidence: 0.91,
+            status: .active,
+            stability: .stable,
+            sourceNodeIds: [node.id],
+            createdAt: Date(),
+            updatedAt: Date()
+        )
+        try store.insertMemoryFactEntry(fact)
+
+        let snippets = service.factSourceSnippets(for: fact.id, limit: 2)
+        XCTAssertEqual(snippets.count, 1)
+        XCTAssertEqual(snippets.first?.sourceNodeId, node.id)
+        XCTAssertEqual(snippets.first?.sourceTitle, "Memory boundary")
+        XCTAssertTrue(snippets.first?.snippet.contains("不要记住具体内容") == true)
+    }
+
     func testShouldPersistMemoryReturnsFalseWhenUserOptsOut() throws {
         let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
             MockLLMService(capture: PromptCapture(), reply: "")
@@ -1350,6 +2534,10 @@ final class UserMemoryServiceTests: XCTestCase {
         ]
 
         XCTAssertFalse(service.shouldPersistMemory(messages: messages, projectId: nil))
+        XCTAssertEqual(
+            service.memoryPersistenceDecision(messages: messages, projectId: nil),
+            .suppress(.hardOptOut)
+        )
     }
 
     func testShouldPersistMemoryReturnsFalseForSensitiveContentWhenBoundaryRequiresConsent() throws {
@@ -1381,6 +2569,10 @@ final class UserMemoryServiceTests: XCTestCase {
         ]
 
         XCTAssertFalse(service.shouldPersistMemory(messages: messages, projectId: nil))
+        XCTAssertEqual(
+            service.memoryPersistenceDecision(messages: messages, projectId: nil),
+            .suppress(.sensitiveConsentRequired)
+        )
     }
 
     func testRejectedInferenceIncrementsOverInferenceCounter() async throws {

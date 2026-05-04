@@ -6,9 +6,13 @@ struct GalaxySceneContainer: NSViewRepresentable {
     let scene: GalaxyScene
     let graphNodes: [NousNode]
     let graphEdges: [NodeEdge]
+    let highlightedEdgeIds: Set<UUID>
     let positions: [UUID: GraphPosition]
     let selectedNodeId: UUID?
+    let selectedEdgeId: UUID?
     let onNodeTapped: ((UUID) -> Void)?
+    let onEdgeTapped: ((UUID) -> Void)?
+    let onCanvasTapped: (() -> Void)?
     let onNodeMoved: ((UUID, GraphPosition) -> Void)?
 
     func makeNSView(context: Context) -> InteractiveGalaxySKView {
@@ -30,22 +34,31 @@ struct GalaxySceneContainer: NSViewRepresentable {
     }
 
     private func configure(scene: GalaxyScene, in view: SKView) {
-        let shouldRebuild =
+        let graphChanged =
             scene.graphNodes.map(\.id) != graphNodes.map(\.id) ||
-            scene.graphEdges.map(\.id) != graphEdges.map(\.id) ||
-            scene.selectedNodeId != selectedNodeId
+            scene.graphEdges.map(\.id) != graphEdges.map(\.id)
+        let presentationChanged =
+            scene.highlightedEdgeIds != highlightedEdgeIds ||
+            scene.selectedNodeId != selectedNodeId ||
+            scene.selectedEdgeId != selectedEdgeId
 
         scene.scaleMode = .resizeFill
         scene.size = view.bounds.size
         scene.graphNodes = graphNodes
         scene.graphEdges = graphEdges
+        scene.highlightedEdgeIds = highlightedEdgeIds
         scene.positions = positions
         scene.selectedNodeId = selectedNodeId
+        scene.selectedEdgeId = selectedEdgeId
         scene.onNodeTapped = onNodeTapped
+        scene.onEdgeTapped = onEdgeTapped
+        scene.onCanvasTapped = onCanvasTapped
         scene.onNodeMoved = onNodeMoved
 
-        if shouldRebuild || scene.children.isEmpty {
+        if graphChanged || scene.children.isEmpty {
             scene.rebuildScene()
+        } else if presentationChanged {
+            scene.refreshPresentationState()
         } else {
             scene.syncPositions()
         }
@@ -54,6 +67,7 @@ struct GalaxySceneContainer: NSViewRepresentable {
 
 final class InteractiveGalaxySKView: SKView {
     override var acceptsFirstResponder: Bool { true }
+    override var mouseDownCanMoveWindow: Bool { false }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         true

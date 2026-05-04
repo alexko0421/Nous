@@ -1,19 +1,39 @@
 import Foundation
 
 struct TurnOutcomeFactory: Sendable {
-    private let shouldPersistMemory: @Sendable ([Message], UUID?) -> Bool
-    private let resolveNextQuickActionMode: @Sendable (QuickActionMode?, String) -> QuickActionMode?
+    private let memoryPersistenceDecision: @Sendable ([Message], UUID?) -> MemoryPersistenceDecision
+    private let resolveNextQuickActionMode: @Sendable (QuickActionMode?, String, Int) -> QuickActionMode?
+
+    init(
+        memoryPersistenceDecision: @escaping @Sendable ([Message], UUID?) -> MemoryPersistenceDecision,
+        resolveNextQuickActionMode: @escaping @Sendable (QuickActionMode?, String, Int) -> QuickActionMode? = { currentMode, assistantContent, turnIndex in
+            TurnInteractionPolicy.updatedQuickActionMode(
+                currentMode: currentMode,
+                assistantContent: assistantContent,
+                turnIndex: turnIndex
+            )
+        }
+    ) {
+        self.memoryPersistenceDecision = memoryPersistenceDecision
+        self.resolveNextQuickActionMode = resolveNextQuickActionMode
+    }
 
     init(
         shouldPersistMemory: @escaping @Sendable ([Message], UUID?) -> Bool,
-        resolveNextQuickActionMode: @escaping @Sendable (QuickActionMode?, String) -> QuickActionMode? = { currentMode, assistantContent in
-            guard let currentMode else { return nil }
-            let parsed = ClarificationCardParser.parse(assistantContent)
-            return parsed.keepsQuickActionMode ? currentMode : nil
+        resolveNextQuickActionMode: @escaping @Sendable (QuickActionMode?, String, Int) -> QuickActionMode? = { currentMode, assistantContent, turnIndex in
+            TurnInteractionPolicy.updatedQuickActionMode(
+                currentMode: currentMode,
+                assistantContent: assistantContent,
+                turnIndex: turnIndex
+            )
         }
     ) {
-        self.shouldPersistMemory = shouldPersistMemory
-        self.resolveNextQuickActionMode = resolveNextQuickActionMode
+        self.init(
+            memoryPersistenceDecision: { messages, projectId in
+                shouldPersistMemory(messages, projectId) ? .persist : .suppress(.unspecified)
+            },
+            resolveNextQuickActionMode: resolveNextQuickActionMode
+        )
     }
 
     func makePrepared(from plan: TurnPlan) -> TurnPrepared {
@@ -35,6 +55,10 @@ struct TurnOutcomeFactory: Sendable {
         assistantContent: String,
         stableSystem: String
     ) -> TurnCompletion {
+        let memoryDecision = memoryPersistenceDecision(
+            committed.messagesAfterAssistantAppend,
+            committed.node.projectId
+        )
         let continuationPlan = ContextContinuationPlan(
             turnId: turnId,
             conversationId: committed.node.id,
@@ -44,14 +68,12 @@ struct TurnOutcomeFactory: Sendable {
                 sourceMessageId: committed.assistantMessage.id,
                 conversationId: committed.node.id
             ),
-            memoryRefresh: shouldPersistMemory(
-                committed.messagesAfterAssistantAppend,
-                committed.node.projectId
-            ) ? EnqueueMemoryRefreshRequest(
+            memoryRefresh: memoryDecision.shouldPersist ? EnqueueMemoryRefreshRequest(
                 nodeId: committed.node.id,
                 projectId: committed.node.projectId,
                 messages: committed.messagesAfterAssistantAppend
-            ) : nil
+            ) : nil,
+            memorySuppressionReason: memoryDecision.suppressionReason
         )
         let housekeepingPlan = TurnHousekeepingPlan(
             turnId: turnId,
@@ -71,6 +93,7 @@ struct TurnOutcomeFactory: Sendable {
             )
         )
 
+        let turnIndex = committed.messagesAfterAssistantAppend.lazy.filter { $0.role == .user }.count
         return TurnCompletion(
             turnId: turnId,
             node: committed.node,
@@ -78,7 +101,8 @@ struct TurnOutcomeFactory: Sendable {
             messagesAfterAssistantAppend: committed.messagesAfterAssistantAppend,
             nextQuickActionMode: resolveNextQuickActionMode(
                 nextQuickActionModeIfCompleted,
-                assistantContent
+                assistantContent,
+                turnIndex
             ),
             continuationPlan: continuationPlan,
             housekeepingPlan: housekeepingPlan

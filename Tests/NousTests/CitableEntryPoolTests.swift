@@ -171,6 +171,41 @@ final class CitableEntryPoolTests: XCTestCase {
         XCTAssertNil(match.kind, "reflection claims don't have a MemoryKind")
     }
 
+    func testPoolSkipsReflectionClaimAlreadyOwnedByGlobalIdentityMemory() throws {
+        let globalIdentity = MemoryEntry(
+            scope: .global,
+            kind: .identity,
+            stability: .stable,
+            content: "- Alex is a solo founder.",
+            sourceNodeIds: []
+        )
+        try store.insertMemoryEntry(globalIdentity)
+
+        let (_, duplicate) = try seedReflection(
+            projectId: nil,
+            claim: "Across four conversations this week, Alex is a solo founder.",
+            status: .active
+        )
+        let (_, distinct) = try seedReflection(
+            projectId: nil,
+            claim: "Across four conversations this week, Alex grounded decisions in environment first.",
+            status: .active
+        )
+
+        let pool = try service.citableEntryPool(
+            projectId: nil,
+            conversationId: UUID(),
+            nodeHits: [],
+            capacity: 10,
+            reflectionSeed: 5
+        )
+
+        XCTAssertFalse(pool.contains { $0.id == duplicate.id.uuidString },
+                       "reflection claims should not restate identity already owned by global memory")
+        XCTAssertTrue(pool.contains { $0.id == distinct.id.uuidString })
+        XCTAssertTrue(pool.contains { $0.id == globalIdentity.id.uuidString })
+    }
+
     func testPoolSkipsOrphanedReflectionClaims() throws {
         let (_, orphaned) = try seedReflection(
             projectId: nil,

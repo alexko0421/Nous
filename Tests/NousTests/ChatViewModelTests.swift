@@ -29,6 +29,79 @@ final class SlowStreamingLLMService: LLMService {
     }
 }
 
+@MainActor
+private func waitUntilOnMainActor(
+    timeoutNanoseconds: UInt64 = 1_000_000_000,
+    condition: @MainActor @escaping () -> Bool
+) async throws {
+    let start = DispatchTime.now().uptimeNanoseconds
+    while !condition() {
+        if DispatchTime.now().uptimeNanoseconds - start > timeoutNanoseconds {
+            XCTFail("Timed out waiting for condition.")
+            return
+        }
+        try await Task.sleep(nanoseconds: 10_000_000)
+    }
+}
+
+final class ChatStreamingPresentationTests: XCTestCase {
+    func testKeepsThinkingExpandedWhileAnswerTextStreams() {
+        let startedAt = Date(timeIntervalSince1970: 100)
+        let presentation = StreamingAssistantPresentation(
+            isGenerating: true,
+            currentThinking: "First, identify the actual constraint.",
+            currentThinkingStartedAt: startedAt,
+            currentResponse: "The short answer is",
+            currentAgentTraceIsEmpty: true
+        )
+
+        XCTAssertTrue(presentation.showsAssistantDraft)
+        XCTAssertEqual(presentation.draftThinkingContent, "First, identify the actual constraint.")
+        XCTAssertEqual(presentation.draftThinkingStartedAt, startedAt)
+        XCTAssertTrue(presentation.isDraftThinkingStreaming)
+    }
+
+    func testThinkingAccordionTitleShowsElapsedSecondsWhileStreaming() {
+        let startedAt = Date(timeIntervalSince1970: 100)
+        let now = startedAt.addingTimeInterval(7.4)
+
+        let title = ThinkingAccordion.titleText(
+            isStreaming: true,
+            startedAt: startedAt,
+            now: now
+        )
+
+        XCTAssertEqual(title, "Thinking for 7s")
+    }
+
+    func testShowsThinkingPillWhenAgentTraceArrivesBeforeAnswerText() {
+        let presentation = StreamingAssistantPresentation(
+            isGenerating: true,
+            currentThinking: "",
+            currentThinkingStartedAt: Date(timeIntervalSince1970: 100),
+            currentResponse: "",
+            currentAgentTraceIsEmpty: false
+        )
+
+        XCTAssertTrue(presentation.showsPendingThinking)
+        XCTAssertFalse(presentation.pendingThinkingContent.isEmpty)
+    }
+
+    func testShowsThinkingPillWhileAnswerStreamsWithoutVisibleReasoning() {
+        let presentation = StreamingAssistantPresentation(
+            isGenerating: true,
+            currentThinking: "",
+            currentThinkingStartedAt: Date(timeIntervalSince1970: 100),
+            currentResponse: "Here is the answer",
+            currentAgentTraceIsEmpty: true
+        )
+
+        XCTAssertTrue(presentation.showsAssistantDraft)
+        XCTAssertFalse(presentation.draftThinkingContent?.isEmpty ?? true)
+        XCTAssertTrue(presentation.isDraftThinkingStreaming)
+    }
+}
+
 final class SingleReplyLLMService: LLMService {
     let output: String
 
@@ -37,6 +110,44 @@ final class SingleReplyLLMService: LLMService {
     }
 
     func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
+        let output = self.output
+        return AsyncThrowingStream { continuation in
+            continuation.yield(output)
+            continuation.finish()
+        }
+    }
+}
+
+final class CapturingSingleReplyLLMService: LLMService {
+    private let lock = NSLock()
+    private let output: String
+    private var didCapturePrompt = false
+    private var storedReceivedSystem: String?
+    private var storedReceivedMessages: [LLMMessage] = []
+
+    var receivedSystem: String? {
+        lock.withLock { storedReceivedSystem }
+    }
+
+    var receivedPromptText: String {
+        lock.withLock {
+            ([storedReceivedSystem ?? ""] + storedReceivedMessages.map(\.content))
+                .joined(separator: "\n\n")
+        }
+    }
+
+    init(output: String) {
+        self.output = output
+    }
+
+    func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
+        lock.withLock {
+            if !didCapturePrompt {
+                didCapturePrompt = true
+                storedReceivedSystem = system
+                storedReceivedMessages = messages
+            }
+        }
         let output = self.output
         return AsyncThrowingStream { continuation in
             continuation.yield(output)
@@ -83,6 +194,70 @@ final class ChatViewModelTests: XCTestCase {
         )
 
         XCTAssertNil(vm.activeChatMode)
+    }
+
+    func testStartBlankConversationClearsTurnStateWithoutCreatingANewNode() throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let scratchPadStore = makeScratchPadStore(nodeStore: nodeStore)
+
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { nil },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: scratchPadStore
+        )
+        let node = NousNode(type: .conversation, title: "Arc 1")
+        try nodeStore.insertNode(node)
+        let message = Message(nodeId: node.id, role: .user, content: "old probe")
+
+        vm.currentNode = node
+        vm.messages = [message]
+        vm.inputText = "draft"
+        vm.currentResponse = "partial"
+        vm.currentThinking = "thinking"
+        vm.currentThinkingStartedAt = Date()
+        vm.currentAgentTrace = [
+            AgentTraceRecord(kind: .toolCall, title: "Old tool", detail: "old trace")
+        ]
+        vm.didHitBudgetExhaustion = true
+        vm.citations = [SearchResult(node: node, similarity: 0.9)]
+        vm.activeQuickActionMode = .plan
+        vm.activeChatMode = .strategist
+        vm.lastPromptGovernanceTrace = PromptGovernanceTrace(
+            promptLayers: ["recent_conversations"],
+            evidenceAttached: true,
+            safetyPolicyInvoked: false,
+            highRiskQueryDetected: false
+        )
+        scratchPadStore.activate(conversationId: node.id)
+
+        vm.startBlankConversation()
+
+        XCTAssertNil(vm.currentNode)
+        XCTAssertTrue(vm.messages.isEmpty)
+        XCTAssertTrue(vm.inputText.isEmpty)
+        XCTAssertTrue(vm.currentResponse.isEmpty)
+        XCTAssertTrue(vm.currentThinking.isEmpty)
+        XCTAssertNil(vm.currentThinkingStartedAt)
+        XCTAssertTrue(vm.currentAgentTrace.isEmpty)
+        XCTAssertFalse(vm.didHitBudgetExhaustion)
+        XCTAssertTrue(vm.citations.isEmpty)
+        XCTAssertNil(vm.activeQuickActionMode)
+        XCTAssertNil(vm.activeChatMode)
+        XCTAssertNil(vm.lastPromptGovernanceTrace)
+        XCTAssertNil(scratchPadStore.activeConversationId)
+        XCTAssertEqual(try nodeStore.fetchAllNodes().map(\.id), [node.id])
     }
 
     func testPurgePersistedThinkingFromLoadedMessagesClearsVisibleTraces() throws {
@@ -218,7 +393,51 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertEqual(vm.messages.last?.content, assistantMessage.content)
     }
 
-    func testSendSurfacesPlanningFailureAsVisibleAssistantMessage() async throws {
+    func testRegenerateLatestAssistantReplacesReplyWithoutDuplicatingUser() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let scratchPadStore = await MainActor.run { makeScratchPadStore(nodeStore: nodeStore) }
+        var llm = SingleReplyLLMService(output: "first answer")
+
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { llm },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: scratchPadStore
+        )
+
+        vm.inputText = "Help me think"
+        await vm.send()
+
+        let firstAssistant = try XCTUnwrap(vm.messages.last)
+        XCTAssertTrue(vm.canRegenerateAssistantMessage(firstAssistant.id))
+
+        llm = SingleReplyLLMService(output: "second answer")
+        await vm.regenerateLatestAssistant()
+
+        let nodeId = try XCTUnwrap(vm.currentNode?.id)
+        let storedMessages = try nodeStore.fetchMessages(nodeId: nodeId)
+        let storedNode = try XCTUnwrap(nodeStore.fetchNode(id: nodeId))
+
+        XCTAssertEqual(vm.messages.map(\.role), [.user, .assistant])
+        XCTAssertEqual(storedMessages.map(\.role), [.user, .assistant])
+        XCTAssertEqual(storedMessages.last?.content, "second answer")
+        XCTAssertFalse(storedMessages.contains { $0.content == "first answer" })
+        XCTAssertFalse(storedNode.content.contains("first answer"))
+        XCTAssertTrue(storedNode.content.contains("second answer"))
+    }
+
+    func testSendRecoversRestoredConversationWhenCurrentNodeMissingFromStore() async throws {
         let nodeStore = try NodeStore(path: ":memory:")
         let vectorStore = VectorStore(nodeStore: nodeStore)
         let embeddingService = EmbeddingService()
@@ -240,14 +459,29 @@ final class ChatViewModelTests: XCTestCase {
             scratchPadStore: scratchPadStore
         )
 
-        vm.currentNode = NousNode(type: .conversation, title: "Ghost Chat")
+        let missingNode = NousNode(type: .conversation, title: "Ghost Chat")
+        vm.currentNode = missingNode
+        vm.messages = [
+            Message(nodeId: missingNode.id, role: .assistant, content: "Restored but not stored")
+        ]
+        scratchPadStore.activate(conversationId: missingNode.id)
         vm.inputText = "Why no reply?"
 
         await vm.send()
 
+        let nodeId = try XCTUnwrap(vm.currentNode?.id)
         let assistantMessage = try XCTUnwrap(vm.messages.last)
+        let storedMessages = try nodeStore.fetchMessages(nodeId: nodeId)
+        let storedNode = try XCTUnwrap(nodeStore.fetchNode(id: nodeId))
+
+        XCTAssertNotEqual(nodeId, missingNode.id)
+        XCTAssertEqual(vm.currentNode?.title, "Ghost Chat")
         XCTAssertEqual(assistantMessage.role, .assistant)
-        XCTAssertTrue(assistantMessage.content.hasPrefix("Error:"))
+        XCTAssertEqual(assistantMessage.content, "unused")
+        XCTAssertEqual(storedMessages.map(\.content), ["Restored but not stored", "Why no reply?", "unused"])
+        XCTAssertTrue(storedMessages.allSatisfy { $0.nodeId == nodeId })
+        XCTAssertTrue(storedNode.content.contains("Restored but not stored"))
+        XCTAssertEqual(scratchPadStore.activeConversationId, nodeId)
         XCTAssertTrue(vm.currentResponse.isEmpty)
         XCTAssertFalse(vm.isGenerating)
     }
@@ -321,6 +555,52 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertEqual(vm.currentNode?.projectId, project.id)
     }
 
+    func testQuickActionOpeningUsesTasteSkillsAndSkipsModeSkeleton() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let skillStore = SkillStore(nodeStore: nodeStore)
+        try skillStore.insertSkill(makeSkill(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000201")!,
+            name: "opening-direction-skeleton",
+            kind: .mode,
+            content: "OPENING MODE SKELETON SHOULD NOT APPEAR"
+        ))
+        try skillStore.insertSkill(makeSkill(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000202")!,
+            name: "opening-taste",
+            kind: .always,
+            content: "OPENING TASTE SKILL SHOULD APPEAR"
+        ))
+        let llm = CapturingSingleReplyLLMService(output: "Opening reply")
+
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { llm },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            skillStore: skillStore,
+            skillMatcher: SkillMatcher(),
+            skillTracker: SkillTracker(store: skillStore),
+            scratchPadStore: makeScratchPadStore(nodeStore: nodeStore)
+        )
+
+        await vm.beginQuickActionConversation(.direction)
+
+        let promptText = llm.receivedPromptText
+        XCTAssertTrue(promptText.contains("OPENING TASTE SKILL SHOULD APPEAR"))
+        XCTAssertFalse(promptText.contains("OPENING MODE SKELETON SHOULD NOT APPEAR"))
+        XCTAssertTrue(vm.lastPromptGovernanceTrace?.promptLayers.contains("quick_action_addendum") == true)
+    }
+
     func testQuickActionConversationPromotesHiddenChatTitle() async throws {
         let nodeStore = try NodeStore(path: ":memory:")
         let vectorStore = VectorStore(nodeStore: nodeStore)
@@ -360,6 +640,34 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertFalse(assistant.content.contains("<chat_title>"))
     }
 
+    private func makeSkill(
+        id: UUID,
+        name: String,
+        kind: SkillTrigger.Kind,
+        content: String
+    ) -> Skill {
+        Skill(
+            id: id,
+            userId: "alex",
+            payload: SkillPayload(
+                payloadVersion: 1,
+                name: name,
+                source: .alex,
+                trigger: SkillTrigger(
+                    kind: kind,
+                    modes: [.direction],
+                    priority: 70
+                ),
+                action: SkillAction(kind: .promptFragment, content: content)
+            ),
+            state: .active,
+            firedCount: 0,
+            createdAt: Date(timeIntervalSince1970: 1_000),
+            lastModifiedAt: Date(timeIntervalSince1970: 1_000),
+            lastFiredAt: nil
+        )
+    }
+
     @MainActor
     func testStopGeneratingCancelsMainResponseWithoutPersistingAssistant() async throws {
         let nodeStore = try NodeStore(path: ":memory:")
@@ -385,7 +693,9 @@ final class ChatViewModelTests: XCTestCase {
 
         vm.inputText = "Help me think"
         let sendTask = Task { await vm.send() }
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await waitUntilOnMainActor {
+            vm.currentNode != nil && vm.isGenerating && !vm.currentResponse.isEmpty
+        }
 
         let nodeId = try XCTUnwrap(vm.currentNode?.id)
         XCTAssertTrue(vm.isGenerating)
@@ -426,7 +736,9 @@ final class ChatViewModelTests: XCTestCase {
 
         vm.inputText = "first"
         let sendTask = Task { await vm.send() }
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await waitUntilOnMainActor {
+            vm.currentNode != nil && vm.isGenerating && !vm.currentResponse.isEmpty
+        }
 
         let originalNodeId = try XCTUnwrap(vm.currentNode?.id)
         let otherNode = NousNode(type: .conversation, title: "Other conversation")
@@ -544,7 +856,7 @@ final class ChatViewModelTests: XCTestCase {
     }
 
     func testGovernanceTraceIncludesSummaryOutputPolicyLayer() {
-        let trace = ChatViewModel.governanceTrace(
+        let trace = PromptContextAssembler.governanceTrace(
             globalMemory: nil,
             projectMemory: nil,
             conversationMemory: nil,
@@ -567,7 +879,7 @@ final class ChatViewModelTests: XCTestCase {
     }
 
     func testAssembleContextStableIncludesSummaryInstruction() {
-        let slice = ChatViewModel.assembleContext(
+        let slice = PromptContextAssembler.assembleContext(
             globalMemory: nil,
             projectMemory: nil,
             conversationMemory: nil,
@@ -598,6 +910,52 @@ final class ChatViewModelTests: XCTestCase {
             slice.stable.contains("Do not translate Cantonese into Mandarin"),
             "Stable system prompt must preserve Cantonese titles instead of flattening them into Mandarin."
         )
+    }
+
+    func testUserMessageContentCapsImageAttachmentsAtFive() {
+        let imageAttachments = (1...6).map {
+            AttachedFileContext(name: "Photo \($0).jpeg", extractedText: "image text \($0)")
+        }
+
+        let content = TurnPlanner.userMessageContent(
+            inputText: "Look at these",
+            attachments: imageAttachments
+        )
+
+        XCTAssertTrue(content.contains("Photo 1.jpeg"))
+        XCTAssertTrue(content.contains("Photo 5.jpeg"))
+        XCTAssertFalse(content.contains("Photo 6.jpeg"))
+    }
+
+    func testImageAttachmentCapDoesNotDropNonImageFiles() {
+        let imageAttachments = (1...6).map {
+            AttachedFileContext(name: "Photo \($0).jpeg", extractedText: "image text \($0)")
+        }
+        let document = AttachedFileContext(name: "context.pdf", extractedText: "document text")
+
+        let content = TurnPlanner.userMessageContent(
+            inputText: "Use these",
+            attachments: imageAttachments + [document]
+        )
+
+        XCTAssertFalse(content.contains("Photo 6.jpeg"))
+        XCTAssertTrue(content.contains("context.pdf"))
+    }
+
+    func testDroppedImageContextsIgnoreNonImageFiles() throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nous-drop-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        let imageURL = folder.appendingPathComponent("dragged.png")
+        let textURL = folder.appendingPathComponent("notes.txt")
+        try Data("not real image bytes".utf8).write(to: imageURL)
+        try Data("plain text".utf8).write(to: textURL)
+
+        let contexts = AttachmentExtractor.imageFileContexts(from: [imageURL, textURL])
+
+        XCTAssertEqual(contexts.map(\.name), ["dragged.png"])
     }
 
     @MainActor

@@ -5,6 +5,16 @@ enum MainTab {
     case chat, notes, galaxy, settings
 }
 
+enum GlobalVoicePillPolicy {
+    static func shouldShowStartButton(selectedTab: MainTab) -> Bool {
+        selectedTab == .notes
+    }
+
+    static func canHostCapsule(selectedTab: MainTab) -> Bool {
+        selectedTab != .chat && selectedTab != .galaxy
+    }
+}
+
 struct ContentView: View {
     let env: AppEnvironment
     private static let isRunningUnitTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
@@ -14,15 +24,15 @@ struct ContentView: View {
     @State private var selectedTab: MainTab = .chat
     @State private var selectedSettingsSection: SettingsSection = .profile
     @State private var selectedProjectId: UUID?
+    @State private var selectedGalaxyLens: GalaxyLensFilter = .meaningful
+    @State private var voiceAttachmentResetToken = UUID()
     @State private var isSetupComplete = UserDefaults.standard.bool(forKey: "nous.setup.complete")
+    @State private var voiceFocusObserver = VoiceMainWindowFocusObserver()
+    @State private var voiceNotchPanelController: VoiceNotchPanelController?
     @AppStorage("nous.appearance") private var appearanceMode = "system"
 
     private var preferredScheme: ColorScheme? {
-        switch appearanceMode {
-        case "light": return .light
-        case "dark":  return .dark
-        default:      return nil
-        }
+        AppAppearanceMode.preferredColorScheme(for: appearanceMode)
     }
 
     var body: some View {
@@ -49,125 +59,170 @@ struct ContentView: View {
             }
         }
         .preferredColorScheme(preferredScheme)
+        .background(WindowAppearanceBridge(appearanceMode: appearanceMode))
     }
 
     @ViewBuilder
     private func mainContent(dependencies: AppDependencies) -> some View {
-        HStack(spacing: 12) {
-            if isSidebarVisible && selectedTab != .settings {
-                LeftSidebar(
-                    nodeStore: dependencies.nodeStore,
-                    selectedTab: $selectedTab,
-                    selectedProjectId: $selectedProjectId,
-                    selectedNodeId: currentSidebarNodeId(dependencies: dependencies),
-                    onNodeSelected: { node in navigateToNode(node, dependencies: dependencies) },
-                    onNewChat: {
-                        dependencies.chatVM.stopGenerating()
-                        dependencies.chatVM.currentNode = nil
-                        dependencies.chatVM.messages = []
-                        dependencies.chatVM.citations = []
-                        dependencies.chatVM.currentResponse = ""
-                        dependencies.chatVM.inputText = ""
-                        dependencies.scratchPadStore.activate(conversationId: nil)
-                        selectedTab = .chat
-                    }
-                )
-                .transition(.move(edge: .leading).combined(with: .opacity))
+        mainLayout(dependencies: dependencies)
+            .frame(
+                minWidth: NousMainWindowController.minimumSize.width,
+                minHeight: NousMainWindowController.minimumSize.height
+            )
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 36, style: .continuous)
+                    .fill(AppColor.colaBeige.opacity(0.72))
+                    .shadow(color: .black.opacity(0.12), radius: 24, x: 0, y: 8)
+            )
+            .background(.clear)
+            .overlay(alignment: .bottom) {
+                globalVoicePill(dependencies: dependencies)
             }
-
-            ZStack {
-                switch selectedTab {
-                case .chat:
-                    ChatArea(
-                        vm: dependencies.chatVM,
-                        isSidebarVisible: $isSidebarVisible,
-                        isScratchPadVisible: $isScratchPadVisible,
-                        onNavigateToNode: { node in navigateToNode(node, dependencies: dependencies) }
+            .animation(AppMotion.sidebarPanelSpring.animation, value: isSidebarVisible)
+            .animation(AppMotion.markdownPanelSpring.animation, value: isScratchPadVisible)
+            .onAppear {
+                if voiceNotchPanelController == nil {
+                    voiceNotchPanelController = VoiceNotchPanelController(
+                        voiceController: dependencies.voiceController,
+                        focusObserver: voiceFocusObserver
                     )
-                case .notes:
-                    NoteEditor(
-                        vm: dependencies.noteVM,
-                        onNavigateToNode: { node in navigateToNode(node, dependencies: dependencies) }
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(AppColor.colaBeige)
-                    .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
-                case .galaxy:
-                    GalaxyView(
-                        vm: dependencies.galaxyVM,
-                        onNodeSelected: { node in navigateToNode(node, dependencies: dependencies) }
-                    )
-                case .settings:
-                    SettingsView(
-                        vm: dependencies.settingsVM,
-                        selectedTab: $selectedSettingsSection,
-                        userMemoryService: dependencies.userMemoryService,
-                        telemetry: dependencies.governanceTelemetry,
-                        onBack: { selectedTab = .chat }
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(AppColor.colaBeige)
-                    .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
                 }
             }
-
-            if isScratchPadVisible && selectedTab == .chat {
-                ScratchPadPanel(
-                    isVisible: $isScratchPadVisible,
-                    store: dependencies.scratchPadStore
+            .task {
+                configureVoiceHandlers(dependencies: dependencies)
+                dependencies.chatVM.defaultProjectId = selectedProjectId
+                handleFinderSyncPreferenceChange(dependencies: dependencies, isEnabled: dependencies.settingsVM.finderSyncEnabled)
+                if !Self.isRunningUnitTests {
+                    await dependencies.settingsVM.loadEmbeddingModel()
+                }
+                runBackgroundMaintenanceIfEnabled(dependencies: dependencies)
+            }
+            .onReceive(
+                NotificationCenter.default.publisher(
+                    for: .nousNodesDidChange,
+                    object: dependencies.nodeStore
                 )
-                .transition(.move(edge: .trailing).combined(with: .opacity))
-            }
-        }
-        .frame(minWidth: 800, minHeight: 600)
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 36, style: .continuous)
-                .fill(AppColor.colaBeige.opacity(0.72))
-                .shadow(color: .black.opacity(0.12), radius: 24, x: 0, y: 8)
-        )
-        .background(.clear)
-        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isSidebarVisible)
-        .task {
-            dependencies.chatVM.defaultProjectId = selectedProjectId
-            handleFinderSyncPreferenceChange(dependencies: dependencies, isEnabled: dependencies.settingsVM.finderSyncEnabled)
-            if !Self.isRunningUnitTests {
-                await dependencies.settingsVM.loadEmbeddingModel()
-            }
-            runBackgroundMaintenanceIfEnabled(dependencies: dependencies)
-        }
-        .onReceive(
-            NotificationCenter.default.publisher(
-                for: .nousNodesDidChange,
-                object: dependencies.nodeStore
-            )
-        ) { _ in
-            guard dependencies.settingsVM.finderSyncEnabled else { return }
-            dependencies.finderProjectSync.scheduleSync()
-        }
-        .onChange(of: dependencies.settingsVM.finderSyncEnabled) { _, enabled in
-            handleFinderSyncPreferenceChange(dependencies: dependencies, isEnabled: enabled)
-        }
-        .onChange(of: dependencies.settingsVM.assistantThinkingEnabled) { _, enabled in
-            guard !enabled else { return }
-            dependencies.chatVM.purgePersistedThinkingFromLoadedMessages()
-            if dependencies.settingsVM.finderSyncEnabled {
+            ) { _ in
+                guard dependencies.settingsVM.finderSyncEnabled else { return }
                 dependencies.finderProjectSync.scheduleSync()
             }
-        }
-        .onChange(of: dependencies.settingsVM.geminiHistoryCacheEnabled) { _, enabled in
-            guard !enabled else { return }
-            Task {
-                await dependencies.chatVM.purgeGeminiHistoryCaches()
+            .onChange(of: dependencies.settingsVM.finderSyncEnabled) { _, enabled in
+                handleFinderSyncPreferenceChange(dependencies: dependencies, isEnabled: enabled)
+            }
+            .onChange(of: dependencies.settingsVM.assistantThinkingEnabled) { _, enabled in
+                guard !enabled else { return }
+                dependencies.chatVM.purgePersistedThinkingFromLoadedMessages()
+                if dependencies.settingsVM.finderSyncEnabled {
+                    dependencies.finderProjectSync.scheduleSync()
+                }
+            }
+            .onChange(of: dependencies.settingsVM.geminiHistoryCacheEnabled) { _, enabled in
+                guard !enabled else { return }
+                Task {
+                    await dependencies.chatVM.purgeGeminiHistoryCaches()
+                }
+            }
+            .onChange(of: dependencies.settingsVM.backgroundAnalysisEnabled) { _, enabled in
+                guard enabled else { return }
+                runBackgroundMaintenanceIfEnabled(dependencies: dependencies)
+            }
+            .onChange(of: selectedProjectId) { _, newValue in
+                dependencies.chatVM.defaultProjectId = newValue
+            }
+    }
+
+    @ViewBuilder
+    private func mainLayout(dependencies: AppDependencies) -> some View {
+        HStack(spacing: 12) {
+            if isSidebarVisible && selectedTab != .settings {
+                sidebar(dependencies: dependencies)
+            }
+
+            selectedContent(dependencies: dependencies)
+
+            if isScratchPadVisible && selectedTab == .chat {
+                scratchPad(dependencies: dependencies)
             }
         }
-        .onChange(of: dependencies.settingsVM.backgroundAnalysisEnabled) { _, enabled in
-            guard enabled else { return }
-            runBackgroundMaintenanceIfEnabled(dependencies: dependencies)
+    }
+
+    private func sidebar(dependencies: AppDependencies) -> some View {
+        LeftSidebar(
+            nodeStore: dependencies.nodeStore,
+            selectedTab: $selectedTab,
+            selectedProjectId: $selectedProjectId,
+            selectedNodeId: currentSidebarNodeId(dependencies: dependencies),
+            onNodeSelected: { node in navigateToNode(node, dependencies: dependencies) },
+            onNewChat: {
+                dependencies.chatVM.startBlankConversation()
+                selectedTab = .chat
+            }
+        )
+        .transition(.move(edge: .leading).combined(with: .opacity))
+    }
+
+    @ViewBuilder
+    private func selectedContent(dependencies: AppDependencies) -> some View {
+        ZStack {
+            switch selectedTab {
+            case .chat:
+                ChatArea(
+                    vm: dependencies.chatVM,
+                    voiceController: dependencies.voiceController,
+                    isSidebarVisible: $isSidebarVisible,
+                    isScratchPadVisible: $isScratchPadVisible,
+                    voiceUnavailableReason: dependencies.settingsVM.voiceModeUnavailableReason,
+                    voiceAttachmentResetToken: voiceAttachmentResetToken,
+                    onToggleVoiceMode: {
+                        toggleVoiceMode(dependencies: dependencies)
+                    },
+                    onNavigateToNode: { node in navigateToNode(node, dependencies: dependencies) }
+                )
+            case .notes:
+                NoteEditor(
+                    vm: dependencies.noteVM,
+                    onNavigateToNode: { node in navigateToNode(node, dependencies: dependencies) }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(AppColor.colaBeige)
+                .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
+            case .galaxy:
+                GalaxyView(
+                    vm: dependencies.galaxyVM,
+                    selectedLens: $selectedGalaxyLens,
+                    onNodeSelected: { node in navigateToNode(node, dependencies: dependencies) }
+                )
+            case .settings:
+                SettingsView(
+                    vm: dependencies.settingsVM,
+                    selectedTab: $selectedSettingsSection,
+                    skillStore: dependencies.skillStore,
+                    userMemoryService: dependencies.userMemoryService,
+                    telemetry: dependencies.governanceTelemetry,
+                    galaxyRelationTelemetry: dependencies.galaxyRelationTelemetry,
+                    shadowLearningStore: dependencies.shadowLearningStore,
+                    beadsAgentWorkVM: dependencies.beadsAgentWorkVM,
+                    onBack: { selectedTab = .chat }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(AppColor.colaBeige)
+                .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
+            }
         }
-        .onChange(of: selectedProjectId) { _, newValue in
-            dependencies.chatVM.defaultProjectId = newValue
-        }
+        .overlay(
+            RoundedRectangle(cornerRadius: 36, style: .continuous)
+                .stroke(AppColor.panelStroke.opacity(0.52), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.10), radius: 18, x: 0, y: 8)
+    }
+
+    private func scratchPad(dependencies: AppDependencies) -> some View {
+        ScratchPadPanel(
+            isVisible: $isScratchPadVisible,
+            store: dependencies.scratchPadStore
+        )
+        .transition(.move(edge: .trailing).combined(with: .opacity))
     }
 
     private func currentSidebarNodeId(dependencies: AppDependencies) -> UUID? {
@@ -192,6 +247,225 @@ struct ContentView: View {
         }
     }
 
+    private func navigateWithVoice(to target: VoiceNavigationTarget) {
+        switch target {
+        case .chat:
+            selectedTab = .chat
+        case .notes:
+            selectedTab = .notes
+        case .galaxy:
+            selectedTab = .galaxy
+        case .settings:
+            selectedTab = .settings
+        }
+    }
+
+    private func configureVoiceHandlers(dependencies: AppDependencies) {
+        dependencies.voiceController.setMemoryContextProvider {
+            guard let conversationId = dependencies.chatVM.currentNode?.id else { return nil }
+            return VoiceMemoryContext(
+                projectId: dependencies.chatVM.currentNode?.projectId ?? dependencies.chatVM.defaultProjectId,
+                conversationId: conversationId
+            )
+        }
+
+        dependencies.voiceController.configure(
+            VoiceActionHandlers(
+                navigate: { target in
+                    navigateWithVoice(to: target)
+                },
+                setSidebarVisible: { visible in
+                    withAnimation(AppMotion.sidebarPanelSpring.animation) {
+                        isSidebarVisible = visible
+                    }
+                },
+                setScratchPadVisible: { visible in
+                    withAnimation(AppMotion.markdownPanelSpring.animation) {
+                        isScratchPadVisible = visible
+                        if visible {
+                            selectedTab = .chat
+                        }
+                    }
+                },
+                setComposerText: { text in
+                    dependencies.chatVM.inputText = text
+                    selectedTab = .chat
+                },
+                appendComposerText: { text in
+                    if dependencies.chatVM.inputText.isEmpty {
+                        dependencies.chatVM.inputText = text
+                    } else {
+                        dependencies.chatVM.inputText += "\n" + text
+                    }
+                    selectedTab = .chat
+                },
+                clearComposer: {
+                    dependencies.chatVM.inputText = ""
+                },
+                startNewChat: {
+                    dependencies.chatVM.startBlankConversation()
+                    withAnimation(AppMotion.markdownPanelSpring.animation) {
+                        isScratchPadVisible = false
+                    }
+                    selectedTab = .chat
+                    voiceAttachmentResetToken = UUID()
+                },
+                createNote: { title, body in
+                    createVoiceNote(title: title, body: body, dependencies: dependencies)
+                },
+                setAppearanceMode: { mode in
+                    appearanceMode = mode.rawValue
+                },
+                openSettingsSection: { section in
+                    selectedSettingsSection = settingsSection(for: section)
+                    selectedTab = .settings
+                },
+                appSnapshot: {
+                    voiceAppSnapshot(dependencies: dependencies)
+                }
+            )
+        )
+    }
+
+    private func toggleVoiceMode(dependencies: AppDependencies) {
+        configureVoiceHandlers(dependencies: dependencies)
+
+        switch VoiceModeTogglePolicy.action(
+            isActive: dependencies.voiceController.isActive,
+            isVoiceModeAvailable: dependencies.settingsVM.isVoiceModeAvailable,
+            apiKey: dependencies.settingsVM.openaiApiKey
+        ) {
+        case .stop:
+            dependencies.voiceController.stop()
+
+        case .unavailable(let message):
+            dependencies.voiceController.status = .error(message)
+
+        case .start(let apiKey):
+            let conversationId: UUID
+            do {
+                conversationId = try dependencies.chatVM.ensureConversationForVoice()
+            } catch {
+                print("[ContentView] ensureConversationForVoice failed: \(error)")
+                dependencies.voiceController.status = .error("Could not prepare conversation")
+                return
+            }
+
+            // CRITICAL: bind BEFORE start() runs. start() invokes markListening()
+            // which calls resetTranscript(). resetTranscript() does NOT clear
+            // boundConversationId (rev 5 fix), but the order matters: the
+            // committer's onUserUtteranceFinalized closure reads
+            // boundConversationId at fire time, so it must be set before any
+            // utterance arrives.
+            dependencies.voiceController.boundConversationId = conversationId
+
+            Task {
+                dependencies.voiceController.setConfiguration(
+                    RealtimeVoiceConfiguration(
+                        voice: dependencies.settingsVM.voiceOutputVoice,
+                        language: dependencies.settingsVM.voiceLanguage
+                    )
+                )
+                try? await dependencies.voiceController.start(apiKey: apiKey)
+            }
+        }
+    }
+
+    private func settingsSection(for section: VoiceSettingsSection) -> SettingsSection {
+        switch section {
+        case .profile: return .profile
+        case .general: return .general
+        case .models: return .models
+        case .memory: return .memory
+        }
+    }
+
+    private func voiceAppSnapshot(dependencies: AppDependencies) -> VoiceAppSnapshot {
+        let projectId = dependencies.chatVM.currentNode?.projectId
+            ?? selectedProjectId
+            ?? dependencies.chatVM.defaultProjectId
+        let projectName = projectId.flatMap { id in
+            (try? dependencies.nodeStore.fetchProject(id: id))?.title
+        }
+
+        return VoiceAppSnapshot(
+            currentTab: voiceNavigationTarget(for: selectedTab),
+            settingsSection: selectedTab == .settings ? voiceSettingsSection(for: selectedSettingsSection) : nil,
+            composerText: dependencies.chatVM.inputText,
+            selectedProjectName: projectName,
+            sidebarVisible: isSidebarVisible,
+            scratchpadVisible: isScratchPadVisible,
+            activeConversationTitle: dependencies.chatVM.currentNode?.title
+        )
+    }
+
+    private func voiceNavigationTarget(for tab: MainTab) -> VoiceNavigationTarget {
+        switch tab {
+        case .chat: return .chat
+        case .notes: return .notes
+        case .galaxy: return .galaxy
+        case .settings: return .settings
+        }
+    }
+
+    private func voiceSettingsSection(for section: SettingsSection) -> VoiceSettingsSection? {
+        switch section {
+        case .profile: return .profile
+        case .general: return .general
+        case .models: return .models
+        case .memory: return .memory
+        case .agentWork: return nil
+        }
+    }
+
+    private func createVoiceNote(title: String, body: String, dependencies: AppDependencies) {
+        do {
+            try dependencies.noteVM.createNote(title: title, content: body, projectId: selectedProjectId)
+            selectedTab = .notes
+        } catch {
+            dependencies.voiceController.status = .error("Could not create note")
+        }
+    }
+
+    @ViewBuilder
+    private func globalVoicePill(dependencies: AppDependencies) -> some View {
+        let shouldShowCapsule = GlobalVoicePillPolicy.canHostCapsule(selectedTab: selectedTab) &&
+            VoiceCapsuleVisibilityPolicy.shouldShowCapsule(
+                isVoiceActive: dependencies.voiceController.isActive,
+                status: dependencies.voiceController.status,
+                hasPendingAction: dependencies.voiceController.pendingAction != nil,
+                hasSummaryPreview: dependencies.voiceController.summaryPreview != nil
+            )
+        let shouldShowStartButton = GlobalVoicePillPolicy.shouldShowStartButton(selectedTab: selectedTab)
+
+        if shouldShowCapsule || shouldShowStartButton {
+            HStack(spacing: 8) {
+                if shouldShowCapsule {
+                    VoiceCapsuleView(
+                        status: dependencies.voiceController.status,
+                        subtitleText: dependencies.voiceController.subtitleText,
+                        audioLevel: dependencies.voiceController.audioLevel,
+                        hasPendingConfirmation: dependencies.voiceController.pendingAction != nil,
+                        summaryPreview: dependencies.voiceController.summaryPreview,
+                        onConfirm: dependencies.voiceController.confirmPendingAction,
+                        onCancel: dependencies.voiceController.cancelPendingAction,
+                        onDismissSummary: dependencies.voiceController.dismissSummaryPreview
+                    )
+                }
+
+                if shouldShowStartButton {
+                    VoiceModeButton(
+                        isActive: dependencies.voiceController.isActive,
+                        unavailableReason: dependencies.settingsVM.voiceModeUnavailableReason
+                    ) {
+                        toggleVoiceMode(dependencies: dependencies)
+                    }
+                }
+            }
+            .padding(.bottom, 24)
+        }
+    }
+
     private func handleFinderSyncPreferenceChange(dependencies: AppDependencies, isEnabled: Bool) {
         if isEnabled {
             dependencies.finderProjectSync.scheduleSync()
@@ -208,11 +482,24 @@ struct ContentView: View {
             await dependencies.conversationTitleBackfill.runIfNeeded()
         }
 
+        Task {
+            _ = await dependencies.memoryGraphMessageBackfill.runIfNeeded(maxConversations: 4)
+        }
+
+        Task.detached(priority: .utility) {
+            // Embedding backfill is bounded per launch (default 64 atoms)
+            // so a fresh DB doesn't block on running the embedder
+            // hundreds of times in one go. Subsequent launches pick up.
+            _ = try? dependencies.memoryAtomEmbeddingBackfill.runIfNeeded()
+        }
+
         if let rollover = dependencies.weeklyReflectionRollover {
             Task.detached(priority: .utility) {
                 await rollover()
             }
         }
+
+        dependencies.heartbeatCoordinator.scheduleShadowLearningAfterIdle()
     }
 }
 

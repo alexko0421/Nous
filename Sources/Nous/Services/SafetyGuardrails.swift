@@ -86,12 +86,23 @@ enum SafetyGuardrails {
         "do not remember this",
         "don't store this",
         "do not store this",
+        "don't put this in memory",
+        "do not put this in memory",
         "don't save this",
         "do not save this",
         "keep this off memory",
+        "keep this out of memory",
         "off the record",
         "don't keep this",
         "do not keep this",
+        "这件事不要记",
+        "這件事不要記",
+        "呢件事唔好記",
+        "呢件事唔好记",
+        "别把这个放进 memory",
+        "別把這個放進 memory",
+        "别放进 memory",
+        "別放進 memory",
         "唔好記住",
         "唔好记住",
         "不要記住",
@@ -104,6 +115,14 @@ enum SafetyGuardrails {
         "不要保存",
         "唔好記低",
         "唔好记低",
+        "不要記低",
+        "不要记低",
+        "不要記下來",
+        "不要记下来",
+        "不要放進 memory",
+        "不要放进 memory",
+        "不要放進memory",
+        "不要放进memory",
         "唔好留低",
         "當冇講過",
         "当没说过",
@@ -144,6 +163,12 @@ enum SafetyGuardrails {
 
     static func containsHardMemoryOptOut(_ text: String?) -> Bool {
         containsAnyPhrase(text, phrases: hardMemoryOptOutPhrases)
+    }
+
+    static func matchedHardMemoryOptOutPhrases(in text: String?) -> [String] {
+        let normalized = normalize(text)
+        guard !normalized.isEmpty else { return [] }
+        return hardMemoryOptOutPhrases.filter { normalized.contains($0) }
     }
 
     static func requiresConsentForSensitiveMemory(boundaryLines: [String]) -> Bool {

@@ -85,6 +85,36 @@ final class MemoryFactStoreTests: XCTestCase {
         XCTAssertEqual(fetched, [updated])
     }
 
+    func testFetchAndDeleteMemoryFactEntryById() throws {
+        let kept = MemoryFactEntry(
+            scope: .global,
+            kind: .constraint,
+            content: "Keep this fact.",
+            status: .active,
+            stability: .stable,
+            createdAt: Date(timeIntervalSince1970: 10),
+            updatedAt: Date(timeIntervalSince1970: 10)
+        )
+        let removed = MemoryFactEntry(
+            scope: .conversation,
+            scopeRefId: UUID(),
+            kind: .boundary,
+            content: "Remove this fact.",
+            status: .active,
+            stability: .temporary,
+            createdAt: Date(timeIntervalSince1970: 20),
+            updatedAt: Date(timeIntervalSince1970: 20)
+        )
+        try store.insertMemoryFactEntry(kept)
+        try store.insertMemoryFactEntry(removed)
+
+        XCTAssertEqual(try store.fetchMemoryFactEntry(id: removed.id), removed)
+        try store.deleteMemoryFactEntry(id: removed.id)
+
+        XCTAssertNil(try store.fetchMemoryFactEntry(id: removed.id))
+        XCTAssertEqual(try store.fetchMemoryFactEntries(), [kept])
+    }
+
     func testFetchActiveMemoryFactEntriesFiltersByScopeRefAndKinds() throws {
         let projectId = UUID()
         let otherProjectId = UUID()

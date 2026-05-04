@@ -1,6 +1,6 @@
 import Foundation
 
-enum LLMProvider: String, Codable, CaseIterable {
+enum LLMProvider: String, Codable, CaseIterable, Sendable {
     case local = "Local (MLX)"
     case gemini = "Gemini"
     case claude = "Claude API"
@@ -12,7 +12,45 @@ protocol LLMService {
     func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error>
 }
 
+protocol ToolCallingLLMService {
+    var supportsAgentToolUse: Bool { get }
+
+    func callWithTools(
+        system: String,
+        messages: [AgentLoopMessage],
+        tools: [AgentToolDeclaration],
+        allowToolCalls: Bool
+    ) async throws -> AgentToolLLMResponse
+
+    func callWithTools(
+        systemBlocks: [SystemPromptBlock],
+        messages: [AgentLoopMessage],
+        tools: [AgentToolDeclaration],
+        allowToolCalls: Bool
+    ) async throws -> AgentToolLLMResponse
+}
+
+extension ToolCallingLLMService {
+    func callWithTools(
+        systemBlocks: [SystemPromptBlock],
+        messages: [AgentLoopMessage],
+        tools: [AgentToolDeclaration],
+        allowToolCalls: Bool
+    ) async throws -> AgentToolLLMResponse {
+        try await callWithTools(
+            system: TurnSystemSlice(blocks: systemBlocks).combinedString,
+            messages: messages,
+            tools: tools,
+            allowToolCalls: allowToolCalls
+        )
+    }
+}
+
 typealias ThinkingDeltaHandler = @MainActor (String) async -> Void
+
+protocol ThinkingDeltaConfigurableLLMService: LLMService {
+    func withThinkingDeltaHandler(_ handler: @escaping ThinkingDeltaHandler) -> any LLMService
+}
 
 struct LLMMessage {
     let role: String // "user" or "assistant"
@@ -83,27 +121,14 @@ enum OpenRouterSSEParser {
             return []
         }
 
+        #if DEBUG
+        NSLog("[NousSSE] delta keys=%@", Array(delta.keys).sorted().description)
+        #endif
+
         var events: [ReasoningStreamEvent] = []
-        if let reasoningDetails = delta["reasoning_details"] as? [[String: Any]] {
-            for detail in reasoningDetails {
-                guard let type = detail["type"] as? String else { continue }
-                switch type {
-                case "reasoning.text":
-                    if let text = detail["text"] as? String, !text.isEmpty {
-                        events.append(.thinkingDelta(text))
-                    }
-                case "reasoning.summary":
-                    if let summary = detail["summary"] as? String, !summary.isEmpty {
-                        events.append(.thinkingDelta(summary))
-                    }
-                default:
-                    continue
-                }
-            }
-        } else if let reasoning = delta["reasoning"] as? String, !reasoning.isEmpty {
-            events.append(.thinkingDelta(reasoning))
-        } else if let reasoning = delta["reasoning_content"] as? String, !reasoning.isEmpty {
-            events.append(.thinkingDelta(reasoning))
+        let thinking = OpenRouterReasoningExtractor.visibleThinking(in: delta)
+        if !thinking.isEmpty {
+            events.append(.thinkingDelta(thinking))
         }
 
         if let text = delta["content"] as? String, !text.isEmpty {
@@ -114,11 +139,49 @@ enum OpenRouterSSEParser {
     }
 }
 
+enum OpenRouterReasoningExtractor {
+    static func visibleThinking(in payload: [String: Any]) -> String {
+        var pieces: [String] = []
+        if let reasoningDetails = payload["reasoning_details"] as? [[String: Any]] {
+            pieces.append(contentsOf: visibleThinkingPieces(in: reasoningDetails))
+        }
+
+        if pieces.isEmpty {
+            if let reasoning = payload["reasoning"] as? String, !reasoning.isEmpty {
+                pieces.append(reasoning)
+            } else if let reasoning = payload["reasoning_content"] as? String, !reasoning.isEmpty {
+                pieces.append(reasoning)
+            }
+        }
+
+        return pieces.joined()
+    }
+
+    private static func visibleThinkingPieces(in reasoningDetails: [[String: Any]]) -> [String] {
+        reasoningDetails.compactMap { detail in
+            guard let type = detail["type"] as? String else { return nil }
+            switch type {
+            case "reasoning.text":
+                return nonEmptyString(detail["text"])
+            case "reasoning.summary":
+                return nonEmptyString(detail["summary"])
+            default:
+                return nil
+            }
+        }
+    }
+
+    private static func nonEmptyString(_ value: Any?) -> String? {
+        guard let string = value as? String, !string.isEmpty else { return nil }
+        return string
+    }
+}
+
 // MARK: - Claude API
 
 struct ClaudeLLMService: LLMService {
     let apiKey: String
-    var model: String = "claude-sonnet-4-6-20250414"
+    var model: String = "claude-sonnet-4-6"
     var thinkingBudgetTokens: Int? = nil
     var onThinkingDelta: ThinkingDeltaHandler? = nil
     /// Slow-changing system prefix (e.g. anchor.md + persisted memories) that
@@ -253,6 +316,15 @@ struct ClaudeLLMService: LLMService {
     }
 }
 
+extension ClaudeLLMService: ThinkingDeltaConfigurableLLMService {
+    func withThinkingDeltaHandler(_ handler: @escaping ThinkingDeltaHandler) -> any LLMService {
+        var copy = self
+        copy.thinkingBudgetTokens = copy.thinkingBudgetTokens ?? 1024
+        copy.onThinkingDelta = handler
+        return copy
+    }
+}
+
 // MARK: - OpenAI API
 
 struct OpenAILLMService: LLMService {
@@ -328,6 +400,7 @@ struct OpenAILLMService: LLMService {
 struct OpenRouterLLMService: LLMService {
     let apiKey: String
     var model: String = "anthropic/claude-sonnet-4.6"
+    var webSearchEnabled: Bool = false
     var reasoningBudgetTokens: Int? = nil
     var onThinkingDelta: ThinkingDeltaHandler? = nil
 
@@ -340,23 +413,13 @@ struct OpenRouterLLMService: LLMService {
         request.setValue("https://nous.app", forHTTPHeaderField: "HTTP-Referer")
         request.setValue("Nous", forHTTPHeaderField: "X-Title")
 
-        var allMessages: [[String: String]] = []
-        if let system {
-            allMessages.append(["role": "system", "content": system])
-        }
-        allMessages.append(contentsOf: messages.map { ["role": $0.role, "content": $0.content] })
-
-        let body: [String: Any] = [
-            "model": model,
-            "stream": true,
-            "messages": allMessages
-        ]
-        var requestBody = body
-        if let reasoningBudgetTokens {
-            requestBody["reasoning"] = [
-                "max_tokens": reasoningBudgetTokens
-            ]
-        }
+        let requestBody = try Self.buildStreamingRequestBody(
+            model: model,
+            system: system,
+            messages: messages,
+            includeWebSearch: webSearchEnabled,
+            reasoningBudgetTokens: reasoningBudgetTokens
+        )
 
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
         let capturedOnThinkingDelta = onThinkingDelta
@@ -396,6 +459,341 @@ struct OpenRouterLLMService: LLMService {
                 producer.cancel()
             }
         }
+    }
+}
+
+extension OpenRouterLLMService: ThinkingDeltaConfigurableLLMService {
+    func withThinkingDeltaHandler(_ handler: @escaping ThinkingDeltaHandler) -> any LLMService {
+        var copy = self
+        copy.reasoningBudgetTokens = copy.reasoningBudgetTokens ?? 1024
+        copy.onThinkingDelta = handler
+        return copy
+    }
+}
+
+extension OpenRouterLLMService: ToolCallingLLMService {
+    var supportsAgentToolUse: Bool {
+        model == "anthropic/claude-sonnet-4.6"
+    }
+
+    func callWithTools(
+        system: String,
+        messages: [AgentLoopMessage],
+        tools: [AgentToolDeclaration],
+        allowToolCalls: Bool
+    ) async throws -> AgentToolLLMResponse {
+        let url = URL(string: "https://openrouter.ai/api/v1/chat/completions")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("https://nous.app", forHTTPHeaderField: "HTTP-Referer")
+        request.setValue("Nous", forHTTPHeaderField: "X-Title")
+
+        let requestBody = try Self.buildToolRequestBody(
+            model: model,
+            system: system,
+            messages: messages,
+            tools: tools,
+            allowToolCalls: allowToolCalls,
+            includeWebSearch: webSearchEnabled,
+            reasoningBudgetTokens: reasoningBudgetTokens
+        )
+        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw LLMError.invalidResponse
+        }
+        guard httpResponse.statusCode == 200 else {
+            throw LLMError.httpError(httpResponse.statusCode)
+        }
+        return try Self.parseToolResponse(data)
+    }
+
+    func callWithTools(
+        systemBlocks: [SystemPromptBlock],
+        messages: [AgentLoopMessage],
+        tools: [AgentToolDeclaration],
+        allowToolCalls: Bool
+    ) async throws -> AgentToolLLMResponse {
+        let url = URL(string: "https://openrouter.ai/api/v1/chat/completions")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("https://nous.app", forHTTPHeaderField: "HTTP-Referer")
+        request.setValue("Nous", forHTTPHeaderField: "X-Title")
+
+        let requestBody = try Self.buildToolRequestBody(
+            model: model,
+            systemBlocks: systemBlocks,
+            messages: messages,
+            tools: tools,
+            allowToolCalls: allowToolCalls,
+            includeWebSearch: webSearchEnabled,
+            reasoningBudgetTokens: reasoningBudgetTokens
+        )
+        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw LLMError.invalidResponse
+        }
+        guard httpResponse.statusCode == 200 else {
+            throw LLMError.httpError(httpResponse.statusCode)
+        }
+        return try Self.parseToolResponse(data)
+    }
+
+    static func buildToolRequestBody(
+        model: String,
+        system: String,
+        messages: [AgentLoopMessage],
+        tools: [AgentToolDeclaration],
+        allowToolCalls: Bool,
+        includeWebSearch: Bool = false,
+        reasoningBudgetTokens: Int? = nil
+    ) throws -> [String: Any] {
+        var serializedTools = try Self.serializeToolDeclarations(tools)
+        if includeWebSearch {
+            serializedTools.append(Self.webSearchServerTool())
+        }
+
+        var requestBody: [String: Any] = [
+            "model": model,
+            "stream": false,
+            "messages": Self.serializeAgentMessages(system: system, messages: messages),
+            "tools": serializedTools,
+            "tool_choice": allowToolCalls ? "auto" : "none"
+        ]
+        if let reasoningBudgetTokens {
+            requestBody["reasoning"] = Self.reasoningRequestBody(maxTokens: reasoningBudgetTokens)
+        }
+        return requestBody
+    }
+
+    static func buildToolRequestBody(
+        model: String,
+        systemBlocks: [SystemPromptBlock],
+        messages: [AgentLoopMessage],
+        tools: [AgentToolDeclaration],
+        allowToolCalls: Bool,
+        includeWebSearch: Bool = false,
+        reasoningBudgetTokens: Int? = nil
+    ) throws -> [String: Any] {
+        var serializedTools = try Self.serializeToolDeclarations(tools)
+        if includeWebSearch {
+            serializedTools.append(Self.webSearchServerTool())
+        }
+
+        var requestBody: [String: Any] = [
+            "model": model,
+            "stream": false,
+            "messages": Self.serializeAgentMessages(systemBlocks: systemBlocks, messages: messages),
+            "tools": serializedTools,
+            "tool_choice": allowToolCalls ? "auto" : "none"
+        ]
+        if let reasoningBudgetTokens {
+            requestBody["reasoning"] = Self.reasoningRequestBody(maxTokens: reasoningBudgetTokens)
+        }
+        return requestBody
+    }
+
+    static func buildStreamingRequestBody(
+        model: String,
+        system: String?,
+        messages: [LLMMessage],
+        includeWebSearch: Bool,
+        reasoningBudgetTokens: Int? = nil
+    ) throws -> [String: Any] {
+        var allMessages: [[String: String]] = []
+        if let system {
+            allMessages.append(["role": "system", "content": system])
+        }
+        allMessages.append(contentsOf: messages.map { ["role": $0.role, "content": $0.content] })
+
+        var requestBody: [String: Any] = [
+            "model": model,
+            "stream": true,
+            "messages": allMessages
+        ]
+        if includeWebSearch {
+            requestBody["tools"] = [Self.webSearchServerTool()]
+        }
+        if let reasoningBudgetTokens {
+            requestBody["reasoning"] = Self.reasoningRequestBody(maxTokens: reasoningBudgetTokens)
+        }
+        return requestBody
+    }
+
+    private static func reasoningRequestBody(maxTokens: Int) -> [String: Any] {
+        [
+            "max_tokens": maxTokens,
+            "enabled": true,
+            "exclude": false
+        ]
+    }
+
+    static func webSearchServerTool() -> [String: Any] {
+        [
+            "type": "openrouter:web_search",
+            "parameters": [
+                "engine": "auto",
+                "max_results": 5,
+                "max_total_results": 10,
+                "search_context_size": "low"
+            ]
+        ]
+    }
+
+    static func serializeAgentMessages(
+        system: String,
+        messages: [AgentLoopMessage]
+    ) -> [[String: Any]] {
+        var serialized: [[String: Any]] = []
+        if !system.isEmpty {
+            serialized.append(["role": "system", "content": system])
+        }
+        serialized.append(contentsOf: messages.map(serializeAgentMessage))
+        return serialized
+    }
+
+    static func serializeAgentMessages(
+        systemBlocks: [SystemPromptBlock],
+        messages: [AgentLoopMessage]
+    ) -> [[String: Any]] {
+        var serialized: [[String: Any]] = []
+        let systemContent = serializeSystemPromptBlocks(systemBlocks)
+        if !systemContent.isEmpty {
+            serialized.append(["role": "system", "content": systemContent])
+        }
+        serialized.append(contentsOf: messages.map(serializeAgentMessage))
+        return serialized
+    }
+
+    static func serializeSystemPromptBlocks(_ blocks: [SystemPromptBlock]) -> [[String: Any]] {
+        blocks.compactMap { block in
+            guard !block.content.isEmpty else { return nil }
+            var payload: [String: Any] = [
+                "type": "text",
+                "text": block.content
+            ]
+            if block.cacheControl == .ephemeral {
+                payload["cache_control"] = ["type": "ephemeral"]
+            }
+            return payload
+        }
+    }
+
+    static func serializeAgentMessage(_ message: AgentLoopMessage) -> [String: Any] {
+        switch message {
+        case .text(let role, let content):
+            return ["role": role, "content": content]
+        case .assistantToolCalls(let content, let toolCalls, let reasoningContent, let reasoningDetailsJSON):
+            var payload: [String: Any] = [
+                "role": "assistant",
+                "tool_calls": toolCalls.map(serializeToolCall)
+            ]
+            payload["content"] = content ?? ""
+            if let reasoningContent = nonEmptyString(reasoningContent) {
+                payload["reasoning"] = reasoningContent
+            }
+            if let reasoningDetailsJSON,
+               let reasoningDetails = jsonObject(fromJSONString: reasoningDetailsJSON) {
+                payload["reasoning_details"] = reasoningDetails
+            }
+            return payload
+        case .toolResult(let toolCallId, let name, let content, _):
+            return [
+                "role": "tool",
+                "tool_call_id": toolCallId,
+                "name": name,
+                "content": content
+            ]
+        }
+    }
+
+    static func serializeToolCall(_ toolCall: AgentToolCall) -> [String: Any] {
+        [
+            "id": toolCall.id,
+            "type": "function",
+            "function": [
+                "name": toolCall.name,
+                "arguments": toolCall.argumentsJSON
+            ]
+        ]
+    }
+
+    static func serializeToolDeclarations(_ tools: [AgentToolDeclaration]) throws -> [[String: Any]] {
+        let data = try JSONEncoder().encode(tools)
+        guard let array = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            throw LLMError.invalidResponse
+        }
+        return array
+    }
+
+    static func parseToolResponse(_ data: Data) throws -> AgentToolLLMResponse {
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let choices = json["choices"] as? [[String: Any]],
+              let first = choices.first,
+              let message = first["message"] as? [String: Any] else {
+            throw LLMError.invalidResponse
+        }
+
+        let text = message["content"] as? String ?? ""
+        let reasoningContent = nonEmptyString(message["reasoning"])
+            ?? nonEmptyString(message["reasoning_content"])
+        let reasoningDetailsJSON = jsonString(fromJSONObject: message["reasoning_details"])
+        let thinkingContent = OpenRouterReasoningExtractor.visibleThinking(in: message)
+        let toolCalls = (message["tool_calls"] as? [[String: Any]] ?? []).compactMap(parseToolCall)
+        let assistantMessage: AgentLoopMessage = toolCalls.isEmpty
+            ? .text(role: "assistant", content: text)
+            : .assistantToolCalls(
+                content: text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : text,
+                toolCalls: toolCalls,
+                reasoningContent: reasoningContent,
+                reasoningDetailsJSON: reasoningDetailsJSON
+            )
+        return AgentToolLLMResponse(
+            text: text,
+            assistantMessage: assistantMessage,
+            toolCalls: toolCalls,
+            thinkingContent: thinkingContent.isEmpty ? nil : thinkingContent,
+            reasoningContent: reasoningContent,
+            reasoningDetailsJSON: reasoningDetailsJSON
+        )
+    }
+
+    private static func parseToolCall(_ payload: [String: Any]) -> AgentToolCall? {
+        guard let id = payload["id"] as? String,
+              let function = payload["function"] as? [String: Any],
+              let name = function["name"] as? String else {
+            return nil
+        }
+        let arguments = function["arguments"] as? String ?? "{}"
+        return AgentToolCall(id: id, name: name, argumentsJSON: arguments)
+    }
+
+    private static func jsonString(fromJSONObject value: Any?) -> String? {
+        guard let value, JSONSerialization.isValidJSONObject(value),
+              let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) else {
+            return nil
+        }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private static func jsonObject(fromJSONString string: String) -> Any? {
+        guard let data = string.data(using: .utf8) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data)
+    }
+
+    private static func nonEmptyString(_ value: Any?) -> String? {
+        guard let string = value as? String,
+              !string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return string
     }
 }
 
@@ -755,6 +1153,15 @@ struct GeminiLLMService: LLMService {
         formatter.formatOptions = [.withInternetDateTime]
         return formatter
     }()
+}
+
+extension GeminiLLMService: ThinkingDeltaConfigurableLLMService {
+    func withThinkingDeltaHandler(_ handler: @escaping ThinkingDeltaHandler) -> any LLMService {
+        var copy = self
+        copy.thinkingBudgetTokens = copy.thinkingBudgetTokens ?? 1024
+        copy.onThinkingDelta = handler
+        return copy
+    }
 }
 
 // MARK: - Errors

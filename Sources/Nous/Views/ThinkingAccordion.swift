@@ -3,28 +3,26 @@ import SwiftUI
 struct ThinkingAccordion: View {
     let content: String
     let isStreaming: Bool
+    let startedAt: Date?
 
     @State private var isExpanded: Bool
+    private let motion = DisclosurePillMotion()
 
-    init(content: String, isStreaming: Bool) {
+    init(content: String, isStreaming: Bool, startedAt: Date? = nil) {
         self.content = content
         self.isStreaming = isStreaming
+        self.startedAt = startedAt
         // 如果一出世就系 Streaming 状态，预设展开
         self._isExpanded = State(initialValue: isStreaming)
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: motion.contentSpacing(isExpanded: isExpanded)) {
             pill
-            if isExpanded {
-                Text(content)
-                    .font(.system(size: 12))
-                    .foregroundStyle(AppColor.secondaryText)
-                    .lineSpacing(3)
-                    .textSelection(.enabled)
-                    .padding(.leading, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                .zIndex(1)
+
+            DisclosurePillContent(isExpanded: isExpanded, motion: motion) {
+                contentText
             }
         }
         .onChange(of: isStreaming) { _, newValue in
@@ -39,6 +37,16 @@ struct ThinkingAccordion: View {
         .animation(.easeOut(duration: 0.15), value: content)
     }
 
+    private var contentText: some View {
+        Text(content)
+            .font(.system(size: 12))
+            .foregroundStyle(AppColor.secondaryText)
+            .lineSpacing(3)
+            .textSelection(.enabled)
+            .padding(.leading, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private var pill: some View {
         Button {
             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
@@ -47,9 +55,7 @@ struct ThinkingAccordion: View {
         } label: {
             HStack(spacing: 8) {
                 FrameSpinner(isAnimating: isStreaming)
-                Text(isStreaming ? "Thinking…" : "Thinking")
-                    .font(.system(size: 11))
-                    .foregroundStyle(AppColor.secondaryText)
+                title
                 Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                     .font(.system(size: 9, weight: .medium))
                     .foregroundStyle(AppColor.secondaryText)
@@ -62,6 +68,28 @@ struct ThinkingAccordion: View {
             )
         }
         .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var title: some View {
+        if isStreaming, let startedAt {
+            TimelineView(.periodic(from: startedAt, by: 1)) { context in
+                Text(Self.titleText(isStreaming: isStreaming, startedAt: startedAt, now: context.date))
+                    .font(.system(size: 11))
+                    .foregroundStyle(AppColor.secondaryText)
+            }
+        } else {
+            Text(Self.titleText(isStreaming: isStreaming, startedAt: startedAt, now: Date()))
+                .font(.system(size: 11))
+                .foregroundStyle(AppColor.secondaryText)
+        }
+    }
+
+    static func titleText(isStreaming: Bool, startedAt: Date?, now: Date) -> String {
+        guard isStreaming else { return "Thinking" }
+        guard let startedAt else { return "Thinking…" }
+        let elapsed = max(0, Int(now.timeIntervalSince(startedAt)))
+        return "Thinking for \(elapsed)s"
     }
 }
 

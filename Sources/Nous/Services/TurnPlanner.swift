@@ -9,15 +9,15 @@ struct TurnPlanningError: LocalizedError {
 }
 
 final class TurnPlanner {
-    private let nodeStore: NodeStore
-    private let vectorStore: VectorStore
-    private let embeddingService: EmbeddingService
-    private let memoryProjectionService: MemoryProjectionService
-    private let contradictionMemoryService: ContradictionMemoryService
+    private let memoryContextBuilder: TurnMemoryContextBuilder
     private let currentProviderProvider: () -> LLMProvider
     private let judgeLLMServiceFactory: () -> (any LLMService)?
     private let provocationJudgeFactory: (any LLMService) -> any Judging
     private let governanceTelemetry: GovernanceTelemetryStore
+    private let quickActionAddendumResolver: QuickActionAddendumResolver
+    private let shadowPatternPromptProvider: (any ShadowPatternPromptProviding)?
+    private let slowCognitionArtifactProvider: (any SlowCognitionArtifactProviding)?
+    private let agentLoopProviderSupportsToolUse: (LLMProvider) -> Bool
     private let runJudge: (@escaping () async throws -> JudgeVerdict) async throws -> JudgeVerdict
 
     init(
@@ -30,24 +30,45 @@ final class TurnPlanner {
         judgeLLMServiceFactory: @escaping () -> (any LLMService)?,
         provocationJudgeFactory: @escaping (any LLMService) -> any Judging = { ProvocationJudge(llmService: $0) },
         governanceTelemetry: GovernanceTelemetryStore = GovernanceTelemetryStore(),
+        skillStore: (any SkillStoring)? = nil,
+        skillMatcher: any SkillMatching = SkillMatcher(),
+        skillTracker: (any SkillTracking)? = nil,
+        shadowPatternPromptProvider: (any ShadowPatternPromptProviding)? = nil,
+        slowCognitionArtifactProvider: (any SlowCognitionArtifactProviding)? = nil,
+        agentLoopProviderSupportsToolUse: @escaping (LLMProvider) -> Bool = { $0 == .openrouter },
         runJudge: @escaping (@escaping () async throws -> JudgeVerdict) async throws -> JudgeVerdict = { operation in
             try await operation()
         }
     ) {
-        self.nodeStore = nodeStore
-        self.vectorStore = vectorStore
-        self.embeddingService = embeddingService
-        self.memoryProjectionService = memoryProjectionService
-        self.contradictionMemoryService = contradictionMemoryService
+        self.memoryContextBuilder = TurnMemoryContextBuilder(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            memoryProjectionService: memoryProjectionService,
+            contradictionMemoryService: contradictionMemoryService
+        )
         self.currentProviderProvider = currentProviderProvider
         self.judgeLLMServiceFactory = judgeLLMServiceFactory
         self.provocationJudgeFactory = provocationJudgeFactory
         self.governanceTelemetry = governanceTelemetry
+        self.quickActionAddendumResolver = QuickActionAddendumResolver(
+            skillStore: skillStore,
+            skillMatcher: skillMatcher,
+            skillTracker: skillTracker
+        )
+        self.shadowPatternPromptProvider = shadowPatternPromptProvider
+        self.slowCognitionArtifactProvider = slowCognitionArtifactProvider
+        self.agentLoopProviderSupportsToolUse = agentLoopProviderSupportsToolUse
         self.runJudge = runJudge
     }
 
     @MainActor
-    func plan(from prepared: PreparedTurnSession, request: TurnRequest) async throws -> TurnPlan {
+    func plan(
+        from prepared: PreparedTurnSession,
+        request: TurnRequest,
+        stewardship: TurnStewardDecision,
+        judgeThinkingHandler: ThinkingDeltaHandler? = nil
+    ) async throws -> TurnPlan {
         let promptQuery = Self.normalizedPromptQuery(
             inputText: request.inputText,
             attachments: request.attachments
@@ -55,68 +76,71 @@ final class TurnPlanner {
         let attachmentNames = request.attachments.map(\.name)
         let retrievalQuery = ([promptQuery] + attachmentNames).joined(separator: "\n")
 
-        let citations = try retrieveCitations(
-            retrievalQuery: retrievalQuery,
-            excludingId: prepared.node.id
-        )
-        let projectGoal = try projectGoal(for: prepared.node.projectId)
-        let recentConversations = try nodeStore.fetchRecentConversationMemories(
-            limit: 2,
-            excludingId: prepared.node.id
-        )
-
-        let globalMemory = memoryProjectionService.currentGlobal()
-        let essentialStory = memoryProjectionService.currentEssentialStory(
-            projectId: prepared.node.projectId,
-            excludingConversationId: prepared.node.id
-        )
-        let userModel = memoryProjectionService.currentUserModel(
-            projectId: prepared.node.projectId,
-            conversationId: prepared.node.id
-        )
-        let memoryEvidence = memoryProjectionService.currentBoundedEvidence(
-            projectId: prepared.node.projectId,
-            excludingConversationId: prepared.node.id
-        )
-        let projectMemory = prepared.node.projectId.flatMap {
-            memoryProjectionService.currentProject(projectId: $0)
+        let explicitQuickActionMode = request.snapshot.activeQuickActionMode
+        let inferredQuickActionMode = explicitQuickActionMode == nil
+            ? stewardship.route.quickActionMode
+            : nil
+        let planningQuickActionMode = explicitQuickActionMode ?? inferredQuickActionMode
+        let shadowLearningHints = (try? shadowPatternPromptProvider?.promptHints(
+            userId: "alex",
+            currentInput: promptQuery,
+            activeQuickActionMode: planningQuickActionMode,
+            now: request.now
+        )) ?? []
+        let planningAgent: (any QuickActionAgent)? = planningQuickActionMode?.agent()
+        let basePolicy: QuickActionMemoryPolicy = if let explicitQuickActionMode {
+            explicitQuickActionMode.agent().memoryPolicy()
+        } else {
+            QuickActionMemoryPolicy.fromStewardPreset(stewardship.memoryPolicy)
         }
-        let conversationMemory = memoryProjectionService.currentConversation(nodeId: prepared.node.id)
+        let policy = basePolicy
+            .applyingChallengeStance(stewardship.challengeStance)
+            .applyingJudgePolicy(stewardship.judgePolicy)
 
-        let nodeHits = citations.map { $0.node.id }
-        let hardRecallFacts = try contradictionMemoryService.contradictionRecallFacts(
-            projectId: prepared.node.projectId,
-            conversationId: prepared.node.id
+        let memoryContext = try memoryContextBuilder.build(
+            retrievalQuery: retrievalQuery,
+            promptQuery: promptQuery,
+            node: prepared.node,
+            policy: policy,
+            includeGraphPromptRecall: planningQuickActionMode != nil,
+            now: request.now
         )
-        let contradictionCandidateIds = Set(
-            contradictionMemoryService
-                .annotateContradictionCandidates(
-                    currentMessage: promptQuery,
-                    facts: hardRecallFacts
-                )
-                .filter(\.isContradictionCandidate)
-                .map { $0.fact.id.uuidString }
-        )
-        let citablePool = try contradictionMemoryService.citableEntryPool(
-            projectId: prepared.node.projectId,
-            conversationId: prepared.node.id,
-            nodeHits: nodeHits,
-            hardRecallFacts: hardRecallFacts,
-            contradictionCandidateIds: contradictionCandidateIds
-        )
+        let citations = memoryContext.citations
+        let projectGoal = memoryContext.projectGoal
+        let recentConversations = memoryContext.recentConversations
+        let globalMemory = memoryContext.globalMemory
+        let essentialStory = memoryContext.essentialStory
+        let userModel = memoryContext.userModel
+        let memoryEvidence = memoryContext.memoryEvidence
+        let memoryGraphRecall = memoryContext.memoryGraphRecall
+        let projectMemory = memoryContext.projectMemory
+        let conversationMemory = memoryContext.conversationMemory
+        let contradictionCandidateIds = memoryContext.contradictionCandidateIds
+        let citablePool = memoryContext.citablePool
 
         let provider = currentProviderProvider()
-        let feedbackLoop = buildJudgeFeedbackLoop(now: request.now)
+        let isSilentJudgeFraming = stewardship.judgePolicy == .silentFraming
+        let feedbackLoop = policy.includeJudgeFocus ? buildJudgeFeedbackLoop(now: request.now) : nil
         let judgeEventId = UUID()
         var verdictForLog: JudgeVerdict?
         var fallbackReason: JudgeFallbackReason = .ok
         var profile: BehaviorProfile = .supportive
         var focusBlock: String?
+        var focusMemoryText: String?
         var inferredMode: ChatMode?
 
-        if provider == .local {
+        if !policy.includeJudgeFocus {
+            // Quick-action agents that opt out of judge focus (e.g. Brainstorm `.lean`)
+            // run without provocation analysis so the divergent contract is not biased
+            // by judge-derived focus or inferred-mode shifts.
+            fallbackReason = .judgeUnavailable
+        } else if provider == .local {
             fallbackReason = .providerLocal
         } else if let judgeLLM = judgeLLMServiceFactory() {
+            let judgeLLM = Self.configuredJudgeLLMService(
+                judgeLLM,
+                thinkingHandler: isSilentJudgeFraming ? nil : judgeThinkingHandler
+            )
             let judge = provocationJudgeFactory(judgeLLM)
             do {
                 let verdict = try await runJudge {
@@ -134,8 +158,13 @@ final class TurnPlanner {
                 if verdict.shouldProvoke, let entryId = verdict.entryId {
                     if let matched = citablePool.first(where: { $0.id == entryId }),
                        !matched.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        profile = .provocative
-                        focusBlock = Self.buildFocusBlock(entryId: matched.id, rawText: matched.text)
+                        if !isSilentJudgeFraming {
+                            profile = .provocative
+                        }
+                        focusMemoryText = matched.text
+                        focusBlock = isSilentJudgeFraming
+                            ? Self.buildSilentFramingBlock(entryId: matched.id, rawText: matched.text)
+                            : Self.buildFocusBlock(entryId: matched.id, rawText: matched.text)
                     } else {
                         fallbackReason = .unknownEntryId
                     }
@@ -154,46 +183,136 @@ final class TurnPlanner {
         }
 
         let effectiveMode = inferredMode ?? (request.snapshot.activeChatMode ?? .companion)
-        let shouldAllowInteractiveClarification = ChatViewModel.shouldAllowInteractiveClarification(
-            activeQuickActionMode: request.snapshot.activeQuickActionMode,
+        let shouldAllowInteractiveClarification = TurnInteractionPolicy.shouldAllowInteractiveClarification(
+            activeQuickActionMode: explicitQuickActionMode,
             messages: prepared.messagesAfterUserAppend
         )
-        let turnSlice = ChatViewModel.assembleContext(
+
+        let agentTurnIndex = Self.agentTurnIndex(
+            explicitMode: explicitQuickActionMode,
+            stewardship: stewardship,
+            messagesAfterUserAppend: prepared.messagesAfterUserAppend
+        )
+        #if DEBUG
+        if planningAgent != nil {
+            DebugAblation.logActiveFlags(context: "quick-mode-turn:\(planningAgent.map { String(describing: $0.mode) } ?? "?"):\(agentTurnIndex)")
+        }
+        #endif
+        let quickActionResolution = quickActionAddendumResolver.resolution(
+            mode: planningQuickActionMode,
+            agent: planningAgent,
+            turnIndex: agentTurnIndex,
+            conversationID: prepared.node.id
+        )
+        let resolvedQuickActionAddendum = quickActionResolution.addendum
+        let quickActionModeSupportsAgentLoop = planningQuickActionMode?.agent().useAgentLoop == true
+        let canUseAgentLoop = quickActionModeSupportsAgentLoop
+            && agentLoopProviderSupportsToolUse(provider)
+        let allowSkillIndex = canUseAgentLoop
+        let indexedSkillIds = PromptContextAssembler.indexedSkillIds(
+            matchedSkills: quickActionResolution.matchedSkills,
+            loadedSkills: quickActionResolution.loadedSkills,
+            activeQuickActionMode: planningQuickActionMode,
+            allowSkillIndex: allowSkillIndex
+        )
+        let agentLoopMode = Self.agentLoopMode(
+            explicitMode: explicitQuickActionMode,
+            planningMode: planningQuickActionMode,
+            indexedSkillIds: indexedSkillIds,
+            canUseAgentLoop: canUseAgentLoop
+        )
+        let agentCoordinationTrace = Self.agentCoordinationTrace(
+            explicitMode: explicitQuickActionMode,
+            planningMode: planningQuickActionMode,
+            quickActionModeSupportsAgentLoop: quickActionModeSupportsAgentLoop,
+            canUseAgentLoop: canUseAgentLoop,
+            agentLoopMode: agentLoopMode,
+            indexedSkillCount: indexedSkillIds.count,
+            provider: provider
+        )
+        let turnGuidanceBlock = Self.turnGuidanceBlock(for: stewardship)
+        let quickActionContextBlocks = [resolvedQuickActionAddendum, turnGuidanceBlock]
+            .compactMap { block -> String? in
+                guard let block,
+                      !block.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                else { return nil }
+                return block
+            }
+        let quickActionContext = quickActionContextBlocks.isEmpty
+            ? nil
+            : quickActionContextBlocks.joined(separator: "\n\n")
+        let promptMemoryGraphRecall = Self.memoryGraphRecall(
+            memoryGraphRecall,
+            removingDuplicateFocusText: focusMemoryText
+        )
+        let slowCognitionArtifacts = policy.includeSlowCognition
+            ? (try? slowCognitionArtifactProvider?.artifacts(
+                userId: "alex",
+                currentInput: promptQuery,
+                currentNode: prepared.node,
+                projectId: prepared.node.projectId,
+                now: request.now
+            )) ?? []
+            : []
+
+        let turnSlice = PromptContextAssembler.assembleContext(
             chatMode: effectiveMode,
             currentUserInput: promptQuery,
+            operatingContext: memoryContext.operatingContext,
             globalMemory: globalMemory,
             essentialStory: essentialStory,
             userModel: userModel,
             memoryEvidence: memoryEvidence,
+            memoryGraphRecall: promptMemoryGraphRecall,
             projectMemory: projectMemory,
             conversationMemory: conversationMemory,
             recentConversations: recentConversations,
             citations: citations,
             projectGoal: projectGoal,
             attachments: request.attachments,
-            activeQuickActionMode: request.snapshot.activeQuickActionMode,
+            activeQuickActionMode: planningQuickActionMode,
+            loadedSkills: quickActionResolution.loadedSkills,
+            matchedSkills: quickActionResolution.matchedSkills,
+            quickActionAddendum: quickActionContext,
+            allowSkillIndex: allowSkillIndex,
             allowInteractiveClarification: shouldAllowInteractiveClarification,
+            shadowLearningHints: shadowLearningHints,
+            slowCognitionArtifacts: slowCognitionArtifacts,
             now: request.now
         )
-        let promptTrace = ChatViewModel.governanceTrace(
+        let promptTrace = PromptContextAssembler.governanceTrace(
             chatMode: effectiveMode,
             currentUserInput: promptQuery,
+            operatingContext: memoryContext.operatingContext,
             globalMemory: globalMemory,
             essentialStory: essentialStory,
             userModel: userModel,
             memoryEvidence: memoryEvidence,
+            memoryGraphRecall: promptMemoryGraphRecall,
             projectMemory: projectMemory,
             conversationMemory: conversationMemory,
             recentConversations: recentConversations,
             citations: citations,
             projectGoal: projectGoal,
             attachments: request.attachments,
-            activeQuickActionMode: request.snapshot.activeQuickActionMode,
+            activeQuickActionMode: planningQuickActionMode,
+            quickActionAddendum: quickActionContext,
             allowInteractiveClarification: shouldAllowInteractiveClarification,
+            turnSteward: stewardship.trace,
+            agentCoordination: agentCoordinationTrace,
+            shadowLearningHints: shadowLearningHints,
+            slowCognitionArtifacts: slowCognitionArtifacts,
             now: request.now
         )
 
-        var volatilePartsForTurn: [String] = [turnSlice.volatile, profile.contextBlock]
+        var volatilePartsForTurn: [String] = [turnSlice.volatile]
+        if policy.includeBehaviorProfile {
+            // BehaviorProfile.contextBlock contains memory-related instructions
+            // ("Use retrieved memory silently" etc) that contradict a no-memory turn.
+            // Skip it under .lean so Brainstorm runs anchor + chatMode + ACTIVE QUICK MODE
+            // marker + agent addendum only.
+            volatilePartsForTurn.append(profile.contextBlock)
+        }
         if let focusBlock {
             volatilePartsForTurn.append(focusBlock)
         }
@@ -203,7 +322,7 @@ final class TurnPlanner {
         )
 
         if var verdictForLog {
-            verdictForLog.provocationKind = ChatViewModel.deriveProvocationKind(
+            verdictForLog.provocationKind = TurnInteractionPolicy.deriveProvocationKind(
                 verdict: verdictForLog,
                 contradictionCandidateIds: contradictionCandidateIds
             )
@@ -213,7 +332,8 @@ final class TurnPlanner {
                 citations: citations,
                 promptTrace: promptTrace,
                 effectiveMode: effectiveMode,
-                nextQuickActionModeIfCompleted: request.snapshot.activeQuickActionMode,
+                nextQuickActionModeIfCompleted: explicitQuickActionMode,
+                agentLoopMode: agentLoopMode,
                 judgeEventDraft: makeJudgeEvent(
                     id: judgeEventId,
                     nodeId: prepared.node.id,
@@ -225,7 +345,8 @@ final class TurnPlanner {
                 turnSlice: plannedSlice,
                 transcriptMessages: transcriptMessages(from: prepared.messagesAfterUserAppend),
                 focusBlock: focusBlock,
-                provider: provider
+                provider: provider,
+                indexedSkillIds: indexedSkillIds
             )
         }
 
@@ -235,7 +356,8 @@ final class TurnPlanner {
             citations: citations,
             promptTrace: promptTrace,
             effectiveMode: effectiveMode,
-            nextQuickActionModeIfCompleted: request.snapshot.activeQuickActionMode,
+            nextQuickActionModeIfCompleted: explicitQuickActionMode,
+            agentLoopMode: agentLoopMode,
             judgeEventDraft: makeJudgeEvent(
                 id: judgeEventId,
                 nodeId: prepared.node.id,
@@ -247,41 +369,173 @@ final class TurnPlanner {
             turnSlice: plannedSlice,
             transcriptMessages: transcriptMessages(from: prepared.messagesAfterUserAppend),
             focusBlock: focusBlock,
-            provider: provider
+            provider: provider,
+            indexedSkillIds: indexedSkillIds
+        )
+    }
+
+    private static func agentLoopMode(
+        explicitMode: QuickActionMode?,
+        planningMode: QuickActionMode?,
+        indexedSkillIds: Set<UUID>,
+        canUseAgentLoop: Bool
+    ) -> QuickActionMode? {
+        guard canUseAgentLoop else { return nil }
+        guard let mode = explicitMode ?? (!indexedSkillIds.isEmpty ? planningMode : nil),
+              mode.agent().useAgentLoop else { return nil }
+        return mode
+    }
+
+    private static func agentCoordinationTrace(
+        explicitMode: QuickActionMode?,
+        planningMode: QuickActionMode?,
+        quickActionModeSupportsAgentLoop: Bool,
+        canUseAgentLoop: Bool,
+        agentLoopMode: QuickActionMode?,
+        indexedSkillCount: Int,
+        provider: LLMProvider
+    ) -> AgentCoordinationTrace {
+        if let agentLoopMode {
+            let reason: AgentCoordinationReason = explicitMode != nil
+                ? .explicitQuickActionToolLoop
+                : .inferredQuickActionLazySkill
+            return AgentCoordinationTrace(
+                executionMode: .toolLoop,
+                quickActionMode: agentLoopMode,
+                provider: provider,
+                reason: reason,
+                indexedSkillCount: indexedSkillCount
+            )
+        }
+
+        let reason: AgentCoordinationReason
+        if planningMode == nil {
+            reason = .ordinaryChatSingleShot
+        } else if !quickActionModeSupportsAgentLoop {
+            reason = .modeSingleShotByContract
+        } else if !canUseAgentLoop {
+            reason = .providerCannotUseToolLoop
+        } else {
+            reason = .inferredModeNoToolNeed
+        }
+
+        return AgentCoordinationTrace(
+            executionMode: .singleShot,
+            quickActionMode: planningMode,
+            provider: provider,
+            reason: reason,
+            indexedSkillCount: indexedSkillCount
         )
     }
 
     static func userMessageContent(inputText: String, attachments: [AttachedFileContext]) -> String {
-        let promptQuery = normalizedPromptQuery(inputText: inputText, attachments: attachments)
-        let attachmentNames = attachments.map(\.name)
+        let limitedAttachments = AttachmentLimitPolicy.limitingImageAttachments(attachments)
+        let promptQuery = normalizedPromptQuery(inputText: inputText, attachments: limitedAttachments)
+        let attachmentNames = limitedAttachments.map(\.name)
         guard !attachmentNames.isEmpty else { return promptQuery }
         return "\(promptQuery)\n\nFiles: \(attachmentNames.joined(separator: ", "))"
     }
 
-    private func retrieveCitations(retrievalQuery: String, excludingId: UUID) throws -> [SearchResult] {
-        guard embeddingService.isLoaded else { return [] }
-        do {
-            let queryEmbedding = try embeddingService.embed(retrievalQuery)
-            return try vectorStore.searchForChatCitations(
-                query: queryEmbedding,
-                queryText: retrievalQuery,
-                topK: 5,
-                excludeIds: [excludingId]
-            )
-        } catch {
-            throw TurnPlanningError(message: "Failed to build retrieval context: \(error.localizedDescription)")
+    private static func configuredJudgeLLMService(
+        _ service: any LLMService,
+        thinkingHandler: ThinkingDeltaHandler?
+    ) -> any LLMService {
+        if let thinkingHandler,
+           let configurable = service as? any ThinkingDeltaConfigurableLLMService {
+            return configurable.withThinkingDeltaHandler(thinkingHandler)
+        }
+        return configuredJudgeThinkingBudgetOnly(service)
+    }
+
+    private static func configuredJudgeThinkingBudgetOnly(_ service: any LLMService) -> any LLMService {
+        if var claude = service as? ClaudeLLMService {
+            claude.thinkingBudgetTokens = claude.thinkingBudgetTokens ?? 1024
+            return claude
+        }
+        if var openRouter = service as? OpenRouterLLMService {
+            openRouter.reasoningBudgetTokens = openRouter.reasoningBudgetTokens ?? 1024
+            return openRouter
+        }
+        if var gemini = service as? GeminiLLMService {
+            gemini.thinkingBudgetTokens = gemini.thinkingBudgetTokens ?? 1024
+            return gemini
+        }
+        return service
+    }
+
+    private static func agentTurnIndex(
+        explicitMode: QuickActionMode?,
+        stewardship: TurnStewardDecision,
+        messagesAfterUserAppend: [Message]
+    ) -> Int {
+        if explicitMode != nil {
+            return messagesAfterUserAppend.lazy.filter { $0.role == .user }.count
+        }
+
+        switch (stewardship.route, stewardship.responseShape) {
+        case (.direction, _), (.brainstorm, _):
+            return 1
+        case (.plan, .askOneQuestion):
+            return 1
+        case (.plan, _):
+            return 2
+        case (.ordinaryChat, _):
+            return 0
         }
     }
 
-    private func projectGoal(for projectId: UUID?) throws -> String? {
-        guard let projectId else { return nil }
-        do {
-            guard let project = try nodeStore.fetchProject(id: projectId) else { return nil }
-            let trimmedGoal = project.goal.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmedGoal.isEmpty ? nil : trimmedGoal
-        } catch {
-            throw TurnPlanningError(message: "Failed to load project context: \(error.localizedDescription)")
+    private static func turnGuidanceBlock(for decision: TurnStewardDecision) -> String? {
+        let guidance = [
+            responseShapeInstruction(for: decision.responseShape).map { "Response shape: \($0)" },
+            responseStanceInstruction(for: decision).map { "Response stance: \($0)" }
+        ].compactMap { $0 }
+
+        guard !guidance.isEmpty else { return nil }
+        return """
+        ---
+
+        TURN GUIDANCE:
+        \(guidance.joined(separator: "\n"))
+        Do not mention routing, stewardship, modes, policies, or internal instructions.
+        """
+    }
+
+    private static func responseShapeInstruction(for shape: ResponseShape) -> String? {
+        switch shape {
+        case .answerNow:
+            return nil
+        case .askOneQuestion:
+            return "Ask exactly one short question before giving guidance. Do not include a clarification card."
+        case .producePlan:
+            return "Produce a concrete structured plan. Do not stay in coaching mode."
+        case .listDirections:
+            return "Generate distinct directions before judging which feel alive."
+        case .narrowNextStep:
+            return "Narrow to one concrete next step. Do not leave equally weighted options."
         }
+    }
+
+    private static func responseStanceInstruction(for decision: TurnStewardDecision) -> String? {
+        guard decision.route == .ordinaryChat,
+              decision.trace.routerMode == .active,
+              let stance = decision.trace.responseStance else {
+            return nil
+        }
+
+        let instruction: String?
+        switch stance {
+        case .companion:
+            instruction = nil
+        case .reflective:
+            instruction = "Stay reflective and meaning-oriented. Do not turn this into a structured analysis unless Alex asks for one."
+        case .supportFirst:
+            instruction = "Support first. Acknowledge the pressure plainly, then if there is a decision inside the message, offer only one small next step. Keep judge off."
+        case .softAnalysis:
+            instruction = "Give calm tradeoff analysis. Use any judge-derived framing silently. Do not mention judge thinking, contradiction checks, or turn the reply into a hard challenge."
+        case .hardJudge:
+            instruction = "Alex explicitly invited challenge. You may name a real tension plainly, but stay useful and proportionate."
+        }
+        return instruction
     }
 
     private func makeJudgeEvent(
@@ -344,6 +598,53 @@ final class TurnPlanner {
         Quote one specific line from the memory faithfully if there is one to quote; otherwise paraphrase tightly.
         Do not reword the memory into a summary and pretend you remembered it differently.
         """
+    }
+
+    private static func buildSilentFramingBlock(entryId: String, rawText: String) -> String {
+        """
+        PRIVATE FRAMING NOTE (id=\(entryId)):
+        \(rawText)
+
+        Use this only to make the answer more grounded and proportionate.
+        Do not quote this memory, name a tension, mention judge analysis, or turn the reply into a hard challenge.
+        """
+    }
+
+    private static func memoryGraphRecall(
+        _ recalls: [String],
+        removingDuplicateFocusText focusText: String?
+    ) -> [String] {
+        guard let focusText else { return recalls }
+        let focusClaims = normalizedMemoryClaims(in: focusText)
+        guard !focusClaims.isEmpty else { return recalls }
+
+        return recalls.filter { recall in
+            let normalizedRecall = normalizedMemoryText(recall)
+            return !focusClaims.contains { normalizedRecall.contains($0) }
+        }
+    }
+
+    private static func normalizedMemoryClaims(in text: String) -> [String] {
+        text
+            .split(whereSeparator: \.isNewline)
+            .map { line in
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.replacingOccurrences(
+                    of: #"^\s*[-*]?\s*(statement:|content:)?\s*"#,
+                    with: "",
+                    options: .regularExpression
+                )
+            }
+            .map(normalizedMemoryText)
+            .filter { $0.count >= 12 }
+    }
+
+    private static func normalizedMemoryText(_ text: String) -> String {
+        text
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
     }
 
     private func buildJudgeFeedbackLoop(limit: Int = 24, now: Date) -> JudgeFeedbackLoop? {

@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Nous - A private second brain for Mac</title>
+    <meta
+      name="description"
+      content="Nous is a macOS-native second brain where conversations, notes, projects, and memory become one connected Galaxy."
+    >
+    <link rel="icon" href="assets/images/nous_logo_transparent.png" type="image/png">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header">
+      <nav class="site-nav" aria-label="Primary navigation">
+        <a class="brand" href="#top" aria-label="Nous home">
+          <img src="assets/images/nous_logo_transparent.png" alt="" class="brand-image">
+          <span>NOUS</span>
+        </a>
+        <div class="nav-links" aria-label="Page sections">
+          <a href="#product">Product</a>
+          <a href="#project">Project</a>
+          <a href="#memory">Memory</a>
+          <a href="#galaxy">Galaxy</a>
+        </div>
+        <a class="nav-cta" href="#product">
+          <span class="cta-full">See the product</span>
+          <span class="cta-short">Product</span>
+        </a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="hero" id="top" aria-labelledby="hero-title">
+        <canvas id="heroGalaxy" aria-hidden="true"></canvas>
+        <div class="hero-inner product-hero-grid" id="product">
+          <div class="hero-copy-panel">
+            <p class="eyebrow">Private thinking companion for Mac</p>
+            <h1 id="hero-title">NOUS</h1>
+            <p class="hero-kicker">
+              Chat, write, and remember in one quiet workspace.
+            </p>
+            <p class="hero-copy">
+              Nous gives your conversations and notes a shared memory. Ask a
+              question, write a thought, gather a project, and the app brings
+              back the context that helps you keep moving.
+            </p>
+            <div class="hero-actions" aria-label="Primary page actions">
+              <a class="button primary" href="#project">See the workspace</a>
+              <a class="button ghost" href="#memory">Explore memory</a>
+            </div>
+            <dl class="hero-facts" aria-label="Nous facts">
+              <div>
+                <dt>Capture</dt>
+                <dd>Chat and notes together</dd>
+              </div>
+              <div>
+                <dt>Recall</dt>
+                <dd>The right context returns</dd>
+              </div>
+              <div>
+                <dt>Discover</dt>
+                <dd>Hidden connections surface</dd>
+              </div>
+            </dl>
+          </div>
+
+          <div class="hero-product-card" aria-label="Product preview of Nous">
+            <div class="product-window hero-window">
+              <div class="window-rail">
+                <span></span>
+                <span></span>
+                <span></span>
+                <strong>NOUS</strong>
+              </div>
+              <div class="window-body hero-window-body">
+                <aside class="mock-sidebar">
+                  <p>PROJECT</p>
+                  <strong>Launch Nous</strong>
+                  <span>Chat</span>
+                  <span>Notes</span>
+                  <span>Galaxy</span>
+                </aside>
+                <div class="mock-chat">
+                  <div class="thought user">What am I missing from the last few weeks?</div>
+                  <div class="thought assistant">
+                    Three threads keep pointing at the same thing: memory needs
+                    a place, not another inbox.
+                  </div>
+                  <div class="memory-stack" aria-label="Related memory cards">
+                    <div>
+                      <span>Related note</span>
+                      <strong>Project vs Galaxy</strong>
+                    </div>
+                    <div>
+                      <span>Earlier thought</span>
+                      <strong>Show the product first</strong>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section intro-section" id="philosophy" aria-labelledby="philosophy-title">
+        <div class="section-label">What it is</div>
+        <div class="intro-grid">
+          <h2 id="philosophy-title">
+            <span class="underline">Turn scattered thoughts into a clear throughline.</span>
+          </h2>
+          <div class="copy-stack">
+            <p class="concept-note">连点成线 / connect the points</p>
+            <p>
+              Nous is for the moments when your thinking is spread across
+              conversations, notes, half-decisions, and project fragments.
+            </p>
+            <p>
+              It keeps those pieces in one place and helps them find each
+              other, so a new thought can build on the context you already
+              earned.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section dark-feature" id="project" aria-labelledby="project-title">
+        <div class="feature-copy">
+          <p class="section-label dark-label">Project mode</p>
+          <h2 id="project-title">Project keeps the next move visible.</h2>
+          <p>
+            Use Project when you are trying to make something happen. The goal,
+            chat, notes, and useful context stay close enough that you can move
+            without reassembling your mind every time.
+          </p>
+          <a class="button on-dark" href="#memory">Follow the memory</a>
+        </div>
+        <div class="product-window" aria-label="Illustration of the Nous project workspace">
+          <div class="window-rail">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+          <div class="window-body">
+            <aside class="mock-sidebar">
+              <p>PROJECT</p>
+              <strong>Launch Nous</strong>
+              <span>Galaxy</span>
+              <span>Memory</span>
+              <span>Notes</span>
+            </aside>
+            <div class="mock-chat">
+              <div class="thought user">What should I do next?</div>
+              <div class="thought assistant">
+                Start with the promise, show the workspace, then explain how
+                memory helps the next decision.
+              </div>
+              <div class="related-strip">
+                <span>Related thought</span>
+                <strong>The website should feel like the product</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section card-section" id="memory" aria-labelledby="memory-title">
+        <div class="section-heading-row">
+          <div>
+            <p class="section-label">Memory</p>
+            <h2 id="memory-title">It remembers the context you would otherwise lose.</h2>
+          </div>
+          <p>
+            Not everything deserves to become a task, doc, or folder. Nous
+            keeps useful fragments close: decisions, questions, notes, and
+            themes that keep coming back.
+          </p>
+        </div>
+        <div class="card-grid">
+          <article class="info-card">
+            <p class="meta-label">01 / CAPTURE</p>
+            <h3>Everything can start as a thought.</h3>
+            <p>
+              Chat with the assistant, write a note, or collect project context
+              without deciding where it belongs before you begin.
+            </p>
+          </article>
+          <article class="info-card oat">
+            <p class="meta-label">02 / RECALL</p>
+            <h3>Ask from where you are.</h3>
+            <p>
+              When a question needs history, Nous brings back related notes and
+              past conversations without making you search first.
+            </p>
+          </article>
+          <article class="info-card">
+            <p class="meta-label">03 / REFLECT</p>
+            <h3>See what keeps returning.</h3>
+            <p>
+              Repeated patterns, old decisions, and quiet contradictions become
+              easier to notice before they disappear into the day.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section dark-feature galaxy-feature" id="galaxy" aria-labelledby="galaxy-title">
+        <div class="feature-copy">
+          <p class="section-label dark-label">Galaxy view</p>
+          <h2 id="galaxy-title">Galaxy reveals the shape of your thinking.</h2>
+          <p>
+            Project helps you push forward. Galaxy lets you zoom out. Related
+            notes and conversations gather into constellations, turning
+            forgotten fragments into visible connections.
+          </p>
+          <a class="button on-dark" href="#benefits">See what changes</a>
+        </div>
+        <div class="galaxy-panel" aria-label="Animated connection map preview">
+          <canvas id="featureGalaxy" aria-hidden="true"></canvas>
+          <div class="galaxy-caption">
+            <span>ideas</span>
+            <span>notes</span>
+            <span>projects</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="section stack-section" id="benefits" aria-labelledby="benefits-title">
+        <div class="section-label">Why it matters</div>
+        <h2 id="benefits-title">
+          Less filing. More thinking.
+        </h2>
+        <div class="stack-list">
+          <article>
+            <p class="meta-label">Start</p>
+            <h3>One place to begin.</h3>
+            <p>Open a chat, write a note, or continue a project without changing tools.</p>
+          </article>
+          <article>
+            <p class="meta-label">Return</p>
+            <h3>Context comes back.</h3>
+            <p>Past thoughts resurface when they help the question in front of you.</p>
+          </article>
+          <article>
+            <p class="meta-label">Focus</p>
+            <h3>Projects stay alive.</h3>
+            <p>Goals keep their relevant conversations and notes nearby instead of scattered.</p>
+          </article>
+          <article>
+            <p class="meta-label">Trust</p>
+            <h3>Your thinking stays yours.</h3>
+            <p>A personal mind tool should feel private, quiet, and under your control.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section closing-section" aria-labelledby="closing-title">
+        <p class="section-label">For serious solo work</p>
+        <h2 id="closing-title">A calmer way to carry your mind forward.</h2>
+        <p>
+          Nous is for builders, students, writers, and anyone whose important
+          thoughts are spread across too many unfinished places. It gives those
+          thoughts a home, then helps them become useful again.
+        </p>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <span>NOUS</span>
+      <span>Private memory. Native Mac. Turn scattered thoughts into a throughline.</span>
+    </footer>
+
+    <script src="script.js"></script>
+  </body>
+</html>

@@ -19,6 +19,7 @@ final class NoteViewModel {
     private let vectorStore: VectorStore
     private let embeddingService: EmbeddingService
     private let graphEngine: GraphEngine
+    private let relationRefinementQueue: GalaxyRelationRefinementQueue?
 
     // MARK: - Debounce
 
@@ -30,12 +31,14 @@ final class NoteViewModel {
         nodeStore: NodeStore,
         vectorStore: VectorStore,
         embeddingService: EmbeddingService,
-        graphEngine: GraphEngine
+        graphEngine: GraphEngine,
+        relationRefinementQueue: GalaxyRelationRefinementQueue? = nil
     ) {
         self.nodeStore = nodeStore
         self.vectorStore = vectorStore
         self.embeddingService = embeddingService
         self.graphEngine = graphEngine
+        self.relationRefinementQueue = relationRefinementQueue
     }
 
     // MARK: - Note Management
@@ -49,6 +52,20 @@ final class NoteViewModel {
         try nodeStore.insertNode(node)
         loadNotes()
         openNote(node)
+    }
+
+    func createNote(title: String, content: String, projectId: UUID? = nil) throws {
+        let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let node = NousNode(
+            type: .note,
+            title: cleanTitle.isEmpty ? "Untitled" : cleanTitle,
+            content: content,
+            projectId: projectId
+        )
+        try nodeStore.insertNode(node)
+        loadNotes()
+        openNote(node)
+        scheduleEmbedding()
     }
 
     func openNote(_ node: NousNode) {
@@ -107,6 +124,7 @@ final class NoteViewModel {
         if var updatedNode = try? nodeStore.fetchNode(id: note.id) {
             updatedNode.embedding = embedding
             try? graphEngine.regenerateEdges(for: updatedNode)
+            relationRefinementQueue?.enqueue(nodeId: note.id)
             let refreshedNode = updatedNode
             await MainActor.run {
                 self.currentNote = refreshedNode

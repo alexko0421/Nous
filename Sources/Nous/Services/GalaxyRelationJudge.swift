@@ -1,0 +1,562 @@
+import Foundation
+
+struct GalaxyRelationVerdict: Equatable {
+    let relationKind: GalaxyRelationKind
+    let confidence: Float
+    let explanation: String
+    let sourceEvidence: String
+    let targetEvidence: String
+    let sourceAtomId: UUID?
+    let targetAtomId: UUID?
+
+    init(
+        relationKind: GalaxyRelationKind,
+        confidence: Float,
+        explanation: String,
+        sourceEvidence: String,
+        targetEvidence: String,
+        sourceAtomId: UUID? = nil,
+        targetAtomId: UUID? = nil
+    ) {
+        self.relationKind = relationKind
+        self.confidence = confidence
+        self.explanation = explanation
+        self.sourceEvidence = sourceEvidence
+        self.targetEvidence = targetEvidence
+        self.sourceAtomId = sourceAtomId
+        self.targetAtomId = targetAtomId
+    }
+}
+
+final class GalaxyRelationJudge {
+    private enum LLMVerdictError: Error {
+        case invalidResponse
+    }
+
+    private let minimumTopicSimilarity: Float
+    private let llmServiceProvider: (() -> (any LLMService)?)?
+    private let telemetry: GalaxyRelationTelemetry?
+    private let backgroundTelemetry: (any BackgroundAIJobTelemetryRecording)?
+
+    init(
+        minimumTopicSimilarity: Float = GalaxyRelationTuning.semanticThreshold,
+        telemetry: GalaxyRelationTelemetry? = nil,
+        backgroundTelemetry: (any BackgroundAIJobTelemetryRecording)? = nil,
+        llmServiceProvider: (() -> (any LLMService)?)? = nil
+    ) {
+        self.minimumTopicSimilarity = minimumTopicSimilarity
+        self.telemetry = telemetry
+        self.backgroundTelemetry = backgroundTelemetry
+        self.llmServiceProvider = llmServiceProvider
+    }
+
+    func judge(
+        source: NousNode,
+        target: NousNode,
+        similarity: Float,
+        sourceAtoms: [MemoryAtom] = [],
+        targetAtoms: [MemoryAtom] = []
+    ) -> GalaxyRelationVerdict? {
+        if let atomVerdict = judgeAtomRelationship(
+            similarity: similarity,
+            sourceAtoms: sourceAtoms,
+            targetAtoms: targetAtoms
+        ) {
+            telemetry?.record(.localVerdict)
+            return atomVerdict
+        }
+
+        guard similarity >= minimumTopicSimilarity else {
+            telemetry?.record(.localNil)
+            return nil
+        }
+
+        telemetry?.record(.localVerdict)
+        return GalaxyRelationVerdict(
+            relationKind: .topicSimilarity,
+            confidence: similarity,
+            explanation: "这只是语义相似，不是强结论；需要更多证据才能判断真正关系。",
+            sourceEvidence: evidenceExcerpt(from: source),
+            targetEvidence: evidenceExcerpt(from: target)
+        )
+    }
+
+    func judgeRefined(
+        source: NousNode,
+        target: NousNode,
+        similarity: Float,
+        sourceAtoms: [MemoryAtom] = [],
+        targetAtoms: [MemoryAtom] = []
+    ) async -> GalaxyRelationVerdict? {
+        let localVerdict = judge(
+            source: source,
+            target: target,
+            similarity: similarity,
+            sourceAtoms: sourceAtoms,
+            targetAtoms: targetAtoms
+        )
+
+        guard similarity >= minimumTopicSimilarity, let llm = llmServiceProvider?() else {
+            return localVerdict
+        }
+
+        let startedAt = Date()
+        do {
+            let verdict = try await llmVerdict(
+                llm: llm,
+                source: source,
+                target: target,
+                similarity: similarity,
+                sourceAtoms: sourceAtoms,
+                targetAtoms: targetAtoms
+            )
+            telemetry?.record(verdict == nil ? .llmNil : .llmVerdict)
+            recordBackgroundRun(
+                status: .completed,
+                startedAt: startedAt,
+                outputCount: verdict == nil ? 0 : 1,
+                detail: verdict.map { "relation=\($0.relationKind.rawValue)" } ?? "relation=none"
+            )
+            return verdict
+        } catch {
+            telemetry?.record(.llmFallback)
+            recordBackgroundRun(
+                status: .failed,
+                startedAt: startedAt,
+                outputCount: 0,
+                detail: "llm_fallback"
+            )
+            return localVerdict
+        }
+    }
+
+    private func recordBackgroundRun(
+        status: BackgroundAIJobStatus,
+        startedAt: Date,
+        outputCount: Int,
+        detail: String
+    ) {
+        backgroundTelemetry?.record(BackgroundAIJobRunRecord(
+            id: UUID(),
+            jobId: .galaxyRelationRefinement,
+            status: status,
+            startedAt: startedAt,
+            endedAt: Date(),
+            inputCount: 2,
+            outputCount: outputCount,
+            detail: detail,
+            costCents: nil
+        ))
+    }
+
+    private func judgeAtomRelationship(
+        similarity: Float,
+        sourceAtoms: [MemoryAtom],
+        targetAtoms: [MemoryAtom]
+    ) -> GalaxyRelationVerdict? {
+        let sourceCandidates = sourceAtoms.filter { $0.status == .active }
+        let targetCandidates = targetAtoms.filter { $0.status == .active }
+        guard !sourceCandidates.isEmpty, !targetCandidates.isEmpty else { return nil }
+
+        var best: GalaxyRelationVerdict?
+
+        for sourceAtom in sourceCandidates {
+            for targetAtom in targetCandidates {
+                guard let relationKind = relationKind(sourceAtom: sourceAtom, targetAtom: targetAtom) else {
+                    continue
+                }
+
+                let overlap = lexicalOverlap(sourceAtom.statement, targetAtom.statement)
+                let atomConfidence = Float((sourceAtom.confidence + targetAtom.confidence) / 2)
+                let confidence = min(
+                    GalaxyRelationTuning.maximumAtomConfidence,
+                    max(similarity, atomConfidence) + Float(overlap) * GalaxyRelationTuning.atomOverlapConfidenceBoost
+                )
+
+                guard confidence >= GalaxyRelationTuning.minimumAtomConfidence || overlap > 0 else { continue }
+
+                let verdict = GalaxyRelationVerdict(
+                    relationKind: relationKind,
+                    confidence: confidence,
+                    explanation: explanation(for: relationKind),
+                    sourceEvidence: sourceAtom.statement,
+                    targetEvidence: targetAtom.statement,
+                    sourceAtomId: sourceAtom.id,
+                    targetAtomId: targetAtom.id
+                )
+
+                if best.map({ verdict.confidence > $0.confidence }) ?? true {
+                    best = verdict
+                }
+            }
+        }
+
+        return best
+    }
+
+    private func relationKind(sourceAtom: MemoryAtom, targetAtom: MemoryAtom) -> GalaxyRelationKind? {
+        let pair = (sourceAtom.type, targetAtom.type)
+
+        if sourceAtom.type == .pattern || targetAtom.type == .pattern {
+            return .samePattern
+        }
+
+        if isTensionPair(pair) || isTensionPair((pair.1, pair.0)) {
+            return .tension
+        }
+
+        if isSupportPair(pair) || isSupportPair((pair.1, pair.0)) {
+            return .supports
+        }
+
+        if isCauseEffectPair(pair) || isCauseEffectPair((pair.1, pair.0)) {
+            return .causeEffect
+        }
+
+        if isContradictionPair(pair) || isContradictionPair((pair.1, pair.0)) {
+            return .contradicts
+        }
+
+        return nil
+    }
+
+    private func isTensionPair(_ pair: (MemoryAtomType, MemoryAtomType)) -> Bool {
+        switch pair {
+        case (.boundary, .goal), (.boundary, .plan), (.boundary, .proposal),
+             (.constraint, .goal), (.constraint, .plan), (.constraint, .proposal),
+             (.rejection, .proposal), (.correction, .belief):
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func isSupportPair(_ pair: (MemoryAtomType, MemoryAtomType)) -> Bool {
+        switch pair {
+        case (.reason, .decision), (.reason, .rejection),
+             (.insight, .decision), (.belief, .decision),
+             (.rule, .decision), (.constraint, .decision):
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func isCauseEffectPair(_ pair: (MemoryAtomType, MemoryAtomType)) -> Bool {
+        switch pair {
+        case (.event, .insight), (.event, .decision),
+             (.reason, .plan), (.goal, .plan):
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func isContradictionPair(_ pair: (MemoryAtomType, MemoryAtomType)) -> Bool {
+        switch pair {
+        case (.rejection, .belief), (.rejection, .goal),
+             (.correction, .decision), (.boundary, .decision):
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func explanation(for relationKind: GalaxyRelationKind) -> String {
+        switch relationKind {
+        case .samePattern:
+            return "这两段可能在不同话题下重复同一种行为或判断模式。"
+        case .tension:
+            return "这两段可能互相拉扯：一边是边界或限制，另一边是目标、计划或提议。"
+        case .supports:
+            return "其中一段像是在给另一段提供理由、规则或洞察。"
+        case .contradicts:
+            return "这两段可能互相冲突，值得放在一起重新检查。"
+        case .causeEffect:
+            return "这两段可能构成一条原因到结果的线索。"
+        case .topicSimilarity:
+            return "这只是语义相似，不是强结论；需要更多证据才能判断真正关系。"
+        }
+    }
+
+    private func lexicalOverlap(_ lhs: String, _ rhs: String) -> Int {
+        let left = Set(significantTerms(lhs))
+        let right = Set(significantTerms(rhs))
+        return left.intersection(right).count
+    }
+
+    private func significantTerms(_ text: String) -> [String] {
+        let latinTerms = text
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { $0.count >= 4 }
+            .filter { !Self.stopWords.contains($0) }
+
+        return latinTerms + cjkPhraseTerms(from: text)
+    }
+
+    private func cjkPhraseTerms(from text: String) -> [String] {
+        var terms: [String] = []
+        var chunk: [Character] = []
+
+        func flushChunk() {
+            guard chunk.count >= 2 else {
+                chunk.removeAll()
+                return
+            }
+
+            for width in 2...min(3, chunk.count) {
+                guard chunk.count >= width else { continue }
+                for index in 0...(chunk.count - width) {
+                    terms.append(String(chunk[index..<(index + width)]))
+                }
+            }
+            chunk.removeAll()
+        }
+
+        for character in text {
+            if character.unicodeScalars.contains(where: Self.isCJKScalar) {
+                chunk.append(character)
+            } else {
+                flushChunk()
+            }
+        }
+        flushChunk()
+
+        return terms
+    }
+
+    private static func isCJKScalar(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x3400...0x4DBF, 0x4E00...0x9FFF, 0xF900...0xFAFF:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func evidenceExcerpt(from node: NousNode) -> String {
+        let content = node.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        if content.isEmpty {
+            return node.title
+        }
+        return String(content.prefix(220))
+    }
+
+    private func llmVerdict(
+        llm: any LLMService,
+        source: NousNode,
+        target: NousNode,
+        similarity: Float,
+        sourceAtoms: [MemoryAtom],
+        targetAtoms: [MemoryAtom]
+    ) async throws -> GalaxyRelationVerdict? {
+        let prompt = """
+        Decide whether these two Nous nodes have a useful knowledge-graph relationship.
+
+        Allowed relation values:
+        same_pattern, tension, supports, contradicts, cause_effect, topic_similarity, none
+
+        Bar:
+        - same_pattern means different surface topics express the same underlying behavior, constraint, or decision pattern.
+        - tension means one node pulls against a boundary, constraint, value, or prior decision in the other.
+        - topic_similarity is allowed only when they are merely about the same topic.
+        - A shared word, person, object, activity, or shopping/purchase context is not enough for same_pattern or tension.
+        - For any relation stronger than topic_similarity, the explanation must say why SOURCE and TARGET relate through a concrete mechanism.
+        - source_evidence and target_evidence must be Chinese evidence summaries grounded in the corresponding side.
+        - Do not copy English source text into evidence fields. Translate or tightly paraphrase it into Chinese.
+        - If you cannot name the mechanism using evidence from both sides, return none.
+        - If you cannot produce faithful Chinese evidence summaries for both sides, return none.
+        - none means the link would not help Alex think.
+
+        Return strict JSON only:
+        {
+          "relation": "same_pattern|tension|supports|contradicts|cause_effect|topic_similarity|none",
+          "confidence": 0.0,
+          "explanation": "中文一句话，具体说明 SOURCE 和 TARGET 为什么有关系；不要写泛泛的'值得留意'",
+          "source_evidence": "中文短句，紧贴 SOURCE 的具体证据；不要输出英文",
+          "target_evidence": "中文短句，紧贴 TARGET 的具体证据；不要输出英文",
+          "source_atom_id": "UUID from SOURCE atoms if one supports this relation, otherwise null",
+          "target_atom_id": "UUID from TARGET atoms if one supports this relation, otherwise null"
+        }
+
+        Vector similarity: \(String(format: "%.3f", similarity))
+
+        SOURCE
+        Title: \(source.title)
+        Type: \(source.type.rawValue)
+        Atoms:
+        \(atomBlock(sourceAtoms))
+        Content:
+        \(contentExcerpt(from: source))
+
+        TARGET
+        Title: \(target.title)
+        Type: \(target.type.rawValue)
+        Atoms:
+        \(atomBlock(targetAtoms))
+        Content:
+        \(contentExcerpt(from: target))
+        """
+
+        let stream = try await llm.generate(
+            messages: [LLMMessage(role: "user", content: prompt)],
+            system: "You are a strict knowledge-graph relation judge for Nous. Prefer none over weak links. Return JSON only. explanation 用中文; evidence 用中文，不要输出英文证据。"
+        )
+        var output = ""
+        for try await chunk in stream {
+            output += chunk
+        }
+        return try Self.decodeLLMVerdict(
+            output,
+            sourceAtomIds: Set(sourceAtoms.map(\.id)),
+            targetAtomIds: Set(targetAtoms.map(\.id))
+        )
+    }
+
+    private func atomBlock(_ atoms: [MemoryAtom]) -> String {
+        let activeAtoms = atoms
+            .filter { $0.status == .active }
+            .prefix(8)
+            .map { "- id: \($0.id.uuidString) | type: \($0.type.rawValue) | statement: \($0.statement)" }
+            .joined(separator: "\n")
+        return activeAtoms.isEmpty ? "none" : activeAtoms
+    }
+
+    private func contentExcerpt(from node: NousNode) -> String {
+        let content = node.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !content.isEmpty else { return node.title }
+        return String(content.prefix(1200))
+    }
+
+    private static func decodeLLMVerdict(
+        _ raw: String,
+        sourceAtomIds: Set<UUID>,
+        targetAtomIds: Set<UUID>
+    ) throws -> GalaxyRelationVerdict? {
+        guard
+            let jsonText = extractJSONObject(from: raw),
+            let data = jsonText.data(using: .utf8),
+            let payload = try? JSONDecoder().decode(LLMRelationPayload.self, from: data)
+        else {
+            throw LLMVerdictError.invalidResponse
+        }
+
+        guard payload.confidence >= GalaxyRelationTuning.minimumLLMConfidence else { return nil }
+        guard payload.relation != .none else { return nil }
+
+        let explanation = payload.explanation.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sourceEvidence = payload.sourceEvidence.trimmingCharacters(in: .whitespacesAndNewlines)
+        let targetEvidence = payload.targetEvidence.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sourceAtomId = validAtomId(payload.sourceAtomId, allowedIds: sourceAtomIds)
+        let targetAtomId = validAtomId(payload.targetAtomId, allowedIds: targetAtomIds)
+        guard !explanation.isEmpty, !sourceEvidence.isEmpty, !targetEvidence.isEmpty else {
+            throw LLMVerdictError.invalidResponse
+        }
+        guard
+            GalaxyExplanationQuality.containsCJK(sourceEvidence),
+            GalaxyExplanationQuality.containsCJK(targetEvidence)
+        else {
+            return nil
+        }
+        guard payload.relation == .topicSimilarity || GalaxyExplanationQuality.hasUsefulChineseExplanation(explanation) else {
+            return nil
+        }
+
+        return GalaxyRelationVerdict(
+            relationKind: payload.relation.relationKind,
+            confidence: Float(min(max(payload.confidence, 0), 1)),
+            explanation: explanation,
+            sourceEvidence: sourceEvidence,
+            targetEvidence: targetEvidence,
+            sourceAtomId: sourceAtomId,
+            targetAtomId: targetAtomId
+        )
+    }
+
+    private static func validAtomId(_ raw: String?, allowedIds: Set<UUID>) -> UUID? {
+        guard
+            let raw,
+            !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            let id = UUID(uuidString: raw),
+            allowedIds.contains(id)
+        else {
+            return nil
+        }
+
+        return id
+    }
+
+    private static func extractJSONObject(from raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("{"), trimmed.hasSuffix("}") {
+            return trimmed
+        }
+
+        guard
+            let start = trimmed.firstIndex(of: "{"),
+            let end = trimmed.lastIndex(of: "}"),
+            start <= end
+        else {
+            return nil
+        }
+
+        return String(trimmed[start...end])
+    }
+
+    private struct LLMRelationPayload: Decodable {
+        let relation: LLMRelationKind
+        let confidence: Double
+        let explanation: String
+        let sourceEvidence: String
+        let targetEvidence: String
+        let sourceAtomId: String?
+        let targetAtomId: String?
+
+        enum CodingKeys: String, CodingKey {
+            case relation
+            case confidence
+            case explanation
+            case sourceEvidence = "source_evidence"
+            case targetEvidence = "target_evidence"
+            case sourceAtomId = "source_atom_id"
+            case targetAtomId = "target_atom_id"
+        }
+    }
+
+    private enum LLMRelationKind: String, Decodable {
+        case samePattern = "same_pattern"
+        case tension
+        case supports
+        case contradicts
+        case causeEffect = "cause_effect"
+        case topicSimilarity = "topic_similarity"
+        case none
+
+        var relationKind: GalaxyRelationKind {
+            switch self {
+            case .samePattern:
+                return .samePattern
+            case .tension:
+                return .tension
+            case .supports:
+                return .supports
+            case .contradicts:
+                return .contradicts
+            case .causeEffect:
+                return .causeEffect
+            case .topicSimilarity:
+                return .topicSimilarity
+            case .none:
+                return .topicSimilarity
+            }
+        }
+    }
+
+    private static let stopWords: Set<String> = [
+        "about", "after", "again", "also", "because", "been", "being", "from",
+        "have", "into", "more", "need", "only", "over", "same", "should",
+        "that", "their", "them", "then", "there", "these", "they", "this",
+        "through", "what", "when", "where", "which", "with", "would", "your"
+    ]
+}

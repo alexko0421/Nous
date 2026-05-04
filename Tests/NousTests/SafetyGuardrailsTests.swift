@@ -16,8 +16,11 @@ final class SafetyGuardrailsTests: XCTestCase {
 
     func testHardMemoryOptOutRecognizesCantoneseAndChinesePhrases() {
         XCTAssertTrue(SafetyGuardrails.containsHardMemoryOptOut("呢段唔好記住。"))
+        XCTAssertTrue(SafetyGuardrails.containsHardMemoryOptOut("这件事不要记。"))
+        XCTAssertTrue(SafetyGuardrails.containsHardMemoryOptOut("别把这个放进 memory。"))
         XCTAssertTrue(SafetyGuardrails.containsHardMemoryOptOut("这个不要保存。"))
         XCTAssertTrue(SafetyGuardrails.containsHardMemoryOptOut("當冇講過。"))
+        XCTAssertTrue(SafetyGuardrails.containsHardMemoryOptOut("Please don't put this in memory."))
     }
 
     func testConsentBoundaryRecognizesChinesePhrases() {

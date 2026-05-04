@@ -23,7 +23,8 @@ final class TurnExecutor {
 
     func execute(
         plan: TurnPlan,
-        sink: TurnSequencedEventSink
+        sink: TurnSequencedEventSink,
+        captureThinking: Bool = true
     ) async throws -> TurnExecutionResult? {
         guard let latestMessage = plan.transcriptMessages.last, latestMessage.role == "user" else {
             throw TurnExecutionFailure.invalidPlan(
@@ -62,7 +63,7 @@ final class TurnExecutor {
                 from: configuredGeminiService(from: llm, cacheEntry: resolvedCacheEntry),
                 sink: sink,
                 state: state,
-                captureThinking: true,
+                captureThinking: captureThinking,
                 cacheableSystemPrefix: resolvedCacheEntry == nil ? plan.turnSlice.stable : nil
             ).generate(
                 messages: requestMessages,
@@ -93,7 +94,7 @@ final class TurnExecutor {
             streamedText = "(I ran out of thinking budget on that one. Try asking again, maybe a touch simpler.)"
         }
         let persistedThinking: String?
-        if shouldPersistAssistantThinking() {
+        if captureThinking && shouldPersistAssistantThinking() {
             persistedThinking = await state.persistedThinking
         } else {
             persistedThinking = nil
@@ -111,16 +112,13 @@ final class TurnExecutor {
         persistedThinking: String?,
         didHitBudgetExhaustion: Bool
     ) -> TurnExecutionResult {
-        let assistantContent = ClarificationCardParser.stripChatTitle(from: rawAssistantContent)
-        let conversationTitle = Self.sanitizedConversationTitle(
-            from: ClarificationCardParser.extractChatTitle(from: rawAssistantContent)
-        )
+        let normalized = AssistantTurnNormalizer.normalize(rawAssistantContent)
 
         return TurnExecutionResult(
-            rawAssistantContent: rawAssistantContent,
-            assistantContent: assistantContent,
+            rawAssistantContent: normalized.rawAssistantContent,
+            assistantContent: normalized.assistantContent,
             persistedThinking: persistedThinking,
-            conversationTitle: conversationTitle,
+            conversationTitle: normalized.conversationTitle,
             didHitBudgetExhaustion: didHitBudgetExhaustion
         )
     }
@@ -194,41 +192,54 @@ final class TurnExecutor {
             gemini.onUsageMetadata = { [recordGeminiUsage] usage in
                 recordGeminiUsage(usage)
             }
+            gemini.thinkingBudgetTokens = 2000
+            gemini.onBudgetExhausted = {
+                await state.markBudgetExhausted()
+            }
 
             guard captureThinking else { return gemini }
 
-            gemini.thinkingBudgetTokens = 2000
             gemini.onThinkingDelta = { delta in
-                await state.appendThinking(delta)
-                await sink.emit(.thinkingDelta(delta))
-            }
-            gemini.onBudgetExhausted = {
-                await state.markBudgetExhausted()
+                if let displayDelta = await state.appendThinking(
+                    delta,
+                    title: ThinkingTraceTitles.assistant
+                ) {
+                    await sink.emit(.thinkingDelta(displayDelta))
+                }
             }
             return gemini
         }
 
         if var claude = llm as? ClaudeLLMService {
             claude.cacheableSystemPrefix = cacheableSystemPrefix
-            guard captureThinking else { return claude }
             claude.thinkingBudgetTokens = 1024
+            guard captureThinking else { return claude }
             claude.onThinkingDelta = { delta in
-                await state.appendThinking(delta)
-                await sink.emit(.thinkingDelta(delta))
+                if let displayDelta = await state.appendThinking(
+                    delta,
+                    title: ThinkingTraceTitles.assistant
+                ) {
+                    await sink.emit(.thinkingDelta(displayDelta))
+                }
             }
             return claude
         }
 
-        guard captureThinking else { return llm }
-
         if var openRouter = llm as? OpenRouterLLMService {
             openRouter.reasoningBudgetTokens = 1024
+            guard captureThinking else { return openRouter }
             openRouter.onThinkingDelta = { delta in
-                await state.appendThinking(delta)
-                await sink.emit(.thinkingDelta(delta))
+                if let displayDelta = await state.appendThinking(
+                    delta,
+                    title: ThinkingTraceTitles.assistant
+                ) {
+                    await sink.emit(.thinkingDelta(displayDelta))
+                }
             }
             return openRouter
         }
+
+        guard captureThinking else { return llm }
 
         return llm
     }
@@ -252,45 +263,19 @@ final class TurnExecutor {
         """
     }
 
-    private static func sanitizedConversationTitle(from raw: String?) -> String? {
-        guard var title = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else {
-            return nil
-        }
-
-        title = title
-            .replacingOccurrences(of: "\n", with: " ")
-            .replacingOccurrences(of: "\t", with: " ")
-        while title.contains("  ") {
-            title = title.replacingOccurrences(of: "  ", with: " ")
-        }
-
-        while let first = title.first, first == "#" || first == "-" || first == "*" || first.isWhitespace {
-            title.removeFirst()
-        }
-
-        title = title.trimmingCharacters(in: CharacterSet(charactersIn: "\"'`“”‘’"))
-        title = title.trimmingCharacters(in: CharacterSet(charactersIn: ".!?,;:。！？、，；："))
-
-        let filteredScalars = title.unicodeScalars.filter { scalar in
-            !CharacterSet(charactersIn: "<>|/\\").contains(scalar)
-        }
-        title = String(String.UnicodeScalarView(filteredScalars))
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        if title.count > 48 {
-            title = String(title.prefix(48)).trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-
-        return title.isEmpty ? nil : title
-    }
 }
 
 actor TurnExecutionStreamState {
     private var thinking: String = ""
+    private var thinkingTrace = ThinkingTraceAccumulator()
     private(set) var didHitBudgetExhaustion: Bool = false
 
-    func appendThinking(_ delta: String) {
-        thinking.append(delta)
+    func appendThinking(_ delta: String, title: String) -> String? {
+        guard let displayDelta = thinkingTrace.append(delta, title: title) else {
+            return nil
+        }
+        thinking.append(displayDelta)
+        return displayDelta
     }
 
     func markBudgetExhausted() {

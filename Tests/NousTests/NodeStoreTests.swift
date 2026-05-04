@@ -27,6 +27,173 @@ final class NodeStoreTests: XCTestCase {
         NousNode(type: type, title: title, content: content, projectId: projectId, isFavorite: isFavorite)
     }
 
+    private func temporaryDatabasePath() -> String {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NousNodeStoreTests-\(UUID().uuidString)")
+            .appendingPathExtension("sqlite")
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(atPath: url.path + "-shm")
+            try? FileManager.default.removeItem(atPath: url.path + "-wal")
+        }
+        return url.path
+    }
+
+    private func validSkillPayloadJSON() -> String {
+        """
+        {
+          "payloadVersion": 1,
+          "name": "test-skill",
+          "source": "alex",
+          "trigger": {
+            "kind": "always",
+            "modes": ["direction"],
+            "priority": 50
+          },
+          "action": {
+            "kind": "promptFragment",
+            "content": "Use concrete language."
+          },
+          "antiPatternExamples": []
+        }
+        """
+    }
+
+    private func insertRawSkillRow(
+        into database: Database,
+        id: UUID = UUID(),
+        payload: String,
+        state: String = "active"
+    ) throws {
+        let stmt = try database.prepare("""
+            INSERT INTO skills (id, user_id, payload, state, created_at, last_modified_at)
+            VALUES (?, 'alex', ?, ?, 1000.25, 1001.5);
+        """)
+        try stmt.bind(id.uuidString, at: 1)
+        try stmt.bind(payload, at: 2)
+        try stmt.bind(state, at: 3)
+        try stmt.step()
+    }
+
+    private func tableExists(_ table: String, in database: Database) throws -> Bool {
+        let stmt = try database.prepare("""
+            SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?;
+        """)
+        try stmt.bind(table, at: 1)
+        return try stmt.step()
+    }
+
+    private func columnTypes(for table: String, in database: Database) throws -> [String: String] {
+        let stmt = try database.prepare("PRAGMA table_info(\(table));")
+        var types: [String: String] = [:]
+        while try stmt.step() {
+            guard let name = stmt.text(at: 1),
+                  let type = stmt.text(at: 2) else {
+                continue
+            }
+            types[name] = type
+        }
+        return types
+    }
+
+    // MARK: - Schema Tests
+
+    func testSkillSchemaMigrationIsIdempotent() throws {
+        let path = temporaryDatabasePath()
+        _ = try NodeStore(path: path)
+
+        let migratedAgain = try NodeStore(path: path)
+
+        XCTAssertTrue(try tableExists("skills", in: migratedAgain.rawDatabase))
+    }
+
+    func testSkillsTableRejectsTypoState() throws {
+        XCTAssertTrue(try tableExists("skills", in: store.rawDatabase))
+        try insertRawSkillRow(into: store.rawDatabase, payload: validSkillPayloadJSON())
+
+        XCTAssertThrowsError(
+            try insertRawSkillRow(
+                into: store.rawDatabase,
+                payload: validSkillPayloadJSON(),
+                state: "actve"
+            )
+        )
+    }
+
+    func testSkillsTableRejectsCorruptPayloadJSON() throws {
+        XCTAssertTrue(try tableExists("skills", in: store.rawDatabase))
+
+        XCTAssertThrowsError(
+            try insertRawSkillRow(
+                into: store.rawDatabase,
+                payload: "{not json}"
+            )
+        )
+    }
+
+    func testSkillsDateColumnsUseRealStorage() throws {
+        let types = try columnTypes(for: "skills", in: store.rawDatabase)
+
+        XCTAssertEqual(types["created_at"]?.uppercased(), "REAL")
+        XCTAssertEqual(types["last_modified_at"]?.uppercased(), "REAL")
+        XCTAssertEqual(types["last_fired_at"]?.uppercased(), "REAL")
+    }
+
+    func testOperatingContextSchemaUsesSingleGlobalRowWithRealTimestamp() throws {
+        XCTAssertTrue(try tableExists("operating_context", in: store.rawDatabase))
+        let types = try columnTypes(for: "operating_context", in: store.rawDatabase)
+
+        XCTAssertEqual(types["id"]?.uppercased(), "INTEGER")
+        XCTAssertEqual(types["identity"]?.uppercased(), "TEXT")
+        XCTAssertEqual(types["currentWork"]?.uppercased(), "TEXT")
+        XCTAssertEqual(types["communicationStyle"]?.uppercased(), "TEXT")
+        XCTAssertEqual(types["boundaries"]?.uppercased(), "TEXT")
+        XCTAssertEqual(types["updatedAt"]?.uppercased(), "REAL")
+    }
+
+    func testSaveAndFetchOperatingContextTrimsManualFields() throws {
+        let now = Date(timeIntervalSince1970: 1_234)
+        let context = OperatingContext(
+            identity: "  Solo founder on F-1  ",
+            currentWork: "\nShip Nous memory trust\n",
+            communicationStyle: "  Be direct, warm, and concise.  ",
+            boundaries: "  Ask before storing sensitive info.  ",
+            updatedAt: now
+        )
+
+        try store.saveOperatingContext(context, now: now)
+
+        XCTAssertEqual(
+            try store.fetchOperatingContext(),
+            OperatingContext(
+                identity: "Solo founder on F-1",
+                currentWork: "Ship Nous memory trust",
+                communicationStyle: "Be direct, warm, and concise.",
+                boundaries: "Ask before storing sensitive info.",
+                updatedAt: now
+            )
+        )
+    }
+
+    func testSaveOperatingContextUpdatesSingleGlobalRow() throws {
+        let firstDate = Date(timeIntervalSince1970: 10)
+        let secondDate = Date(timeIntervalSince1970: 20)
+
+        try store.saveOperatingContext(
+            OperatingContext(identity: "Old", currentWork: "", communicationStyle: "", boundaries: "", updatedAt: firstDate),
+            now: firstDate
+        )
+        try store.saveOperatingContext(
+            OperatingContext(identity: "", currentWork: "New work", communicationStyle: "", boundaries: "", updatedAt: secondDate),
+            now: secondDate
+        )
+
+        let fetched = try XCTUnwrap(store.fetchOperatingContext())
+        XCTAssertEqual(fetched.identity, "")
+        XCTAssertEqual(fetched.currentWork, "New work")
+        XCTAssertEqual(fetched.updatedAt, secondDate)
+    }
+
     // MARK: - Node Tests
 
     func testInsertAndFetchNode() throws {
@@ -585,8 +752,36 @@ final class NodeStoreTests: XCTestCase {
         let nodeB = makeNode(title: "B")
         try store.insertNode(nodeA)
         try store.insertNode(nodeB)
+        let sourceAtom = MemoryAtom(
+            type: .pattern,
+            statement: "source evidence",
+            scope: .conversation,
+            scopeRefId: nodeA.id,
+            sourceNodeId: nodeA.id
+        )
+        let targetAtom = MemoryAtom(
+            type: .insight,
+            statement: "target evidence",
+            scope: .conversation,
+            scopeRefId: nodeB.id,
+            sourceNodeId: nodeB.id
+        )
+        try store.insertMemoryAtom(sourceAtom)
+        try store.insertMemoryAtom(targetAtom)
 
-        let edge = NodeEdge(sourceId: nodeA.id, targetId: nodeB.id, strength: 0.9, type: .semantic)
+        let edge = NodeEdge(
+            sourceId: nodeA.id,
+            targetId: nodeB.id,
+            strength: 0.9,
+            type: .semantic,
+            relationKind: .samePattern,
+            confidence: 0.86,
+            explanation: "Same pattern through different topics.",
+            sourceEvidence: "source evidence",
+            targetEvidence: "target evidence",
+            sourceAtomId: sourceAtom.id,
+            targetAtomId: targetAtom.id
+        )
         try store.insertEdge(edge)
 
         let edgesForA = try store.fetchEdges(nodeId: nodeA.id)
@@ -594,6 +789,13 @@ final class NodeStoreTests: XCTestCase {
         XCTAssertEqual(edgesForA.first?.sourceId, nodeA.id)
         XCTAssertEqual(edgesForA.first?.targetId, nodeB.id)
         XCTAssertEqual(Double(edgesForA.first?.strength ?? 0), 0.9, accuracy: 0.001)
+        XCTAssertEqual(edgesForA.first?.relationKind, .samePattern)
+        XCTAssertEqual(Double(edgesForA.first?.confidence ?? 0), 0.86, accuracy: 0.001)
+        XCTAssertEqual(edgesForA.first?.explanation, "Same pattern through different topics.")
+        XCTAssertEqual(edgesForA.first?.sourceEvidence, "source evidence")
+        XCTAssertEqual(edgesForA.first?.targetEvidence, "target evidence")
+        XCTAssertEqual(edgesForA.first?.sourceAtomId, sourceAtom.id)
+        XCTAssertEqual(edgesForA.first?.targetAtomId, targetAtom.id)
 
         // fetchEdges also matches targetId
         let edgesForB = try store.fetchEdges(nodeId: nodeB.id)
@@ -613,6 +815,97 @@ final class NodeStoreTests: XCTestCase {
 
         let remaining = try store.fetchEdges(nodeId: nodeA.id)
         XCTAssertTrue(remaining.isEmpty)
+    }
+
+    func testUpsertEdgeReplacesOnlyMatchingPairAndType() throws {
+        let nodeA = makeNode(title: "A")
+        let nodeB = makeNode(title: "B")
+        let nodeC = makeNode(title: "C")
+        try store.insertNode(nodeA)
+        try store.insertNode(nodeB)
+        try store.insertNode(nodeC)
+
+        try store.insertEdge(NodeEdge(
+            sourceId: nodeA.id,
+            targetId: nodeB.id,
+            strength: 0.75,
+            type: .semantic,
+            relationKind: .topicSimilarity,
+            confidence: 0.75,
+            explanation: "old"
+        ))
+        try store.insertEdge(NodeEdge(
+            sourceId: nodeA.id,
+            targetId: nodeB.id,
+            strength: 0.3,
+            type: .shared,
+            confidence: 0.3,
+            explanation: "same project"
+        ))
+        try store.insertEdge(NodeEdge(
+            sourceId: nodeA.id,
+            targetId: nodeC.id,
+            strength: 0.8,
+            type: .semantic,
+            relationKind: .topicSimilarity,
+            confidence: 0.8,
+            explanation: "unrelated pair"
+        ))
+
+        try store.upsertEdge(NodeEdge(
+            sourceId: nodeB.id,
+            targetId: nodeA.id,
+            strength: 0.92,
+            type: .semantic,
+            relationKind: .samePattern,
+            confidence: 0.9,
+            explanation: "new"
+        ))
+
+        let edges = try store.fetchEdges(nodeId: nodeA.id)
+        let semanticAB = edges.filter {
+            $0.type == .semantic &&
+            Set([$0.sourceId, $0.targetId]) == Set([nodeA.id, nodeB.id])
+        }
+        XCTAssertEqual(semanticAB.count, 1)
+        XCTAssertEqual(semanticAB.first?.relationKind, .samePattern)
+        XCTAssertEqual(semanticAB.first?.explanation, "new")
+        XCTAssertEqual(edges.filter { $0.type == .shared }.count, 1)
+        XCTAssertEqual(edges.filter { $0.targetId == nodeC.id }.count, 1)
+    }
+
+    func testAtomBackedEdgesCanBeFetchedAndInvalidated() throws {
+        let nodeA = makeNode(title: "A")
+        let nodeB = makeNode(title: "B")
+        try store.insertNode(nodeA)
+        try store.insertNode(nodeB)
+        var atom = MemoryAtom(
+            type: .pattern,
+            statement: "Alex repeats the same shipping pattern.",
+            scope: .conversation,
+            scopeRefId: nodeA.id,
+            sourceNodeId: nodeA.id
+        )
+        try store.insertMemoryAtom(atom)
+
+        try store.insertEdge(NodeEdge(
+            sourceId: nodeA.id,
+            targetId: nodeB.id,
+            strength: 0.9,
+            type: .semantic,
+            relationKind: .samePattern,
+            confidence: 0.9,
+            explanation: "supported by atom",
+            sourceEvidence: atom.statement,
+            sourceAtomId: atom.id
+        ))
+
+        XCTAssertEqual(try store.fetchEdgesSupportedByMemoryAtom(id: atom.id).count, 1)
+
+        atom.statement = "Alex changed this atom, so old relation evidence is stale."
+        try store.updateMemoryAtom(atom)
+
+        XCTAssertTrue(try store.fetchEdgesSupportedByMemoryAtom(id: atom.id).isEmpty)
     }
 
     // MARK: - Memory Entry Reverse Lookup Tests
@@ -662,5 +955,208 @@ final class NodeStoreTests: XCTestCase {
 
         let allHits = try store.fetchMemoryEntries(withSourceNodeId: nodeA, activeOnly: false)
         XCTAssertEqual(allHits.count, 1)
+    }
+
+    // MARK: - Memory Atom SQL Filter
+
+    /// SQL-level `fetchMemoryAtoms(...)` overload must filter by type / status /
+    /// scope / scopeRefId / eventTime in the WHERE clause so the existing
+    /// indexes (idx_memory_atoms_type_status_time, idx_memory_atoms_scope) can
+    /// be used. Currently MemoryGraphStore loads every atom and Swift-filters,
+    /// which won't scale beyond a few hundred rows. This test pins the new
+    /// signature: it must return only atoms matching every predicate.
+    func testFetchMemoryAtomsByPredicateReturnsOnlyMatchingRows() throws {
+        let scopeId = UUID()
+        let inWindow = MemoryAtom(
+            type: .rejection,
+            statement: "Rejected plan A",
+            scope: .conversation,
+            scopeRefId: scopeId,
+            status: .active,
+            eventTime: Date(timeIntervalSince1970: 150)
+        )
+        let outsideWindow = MemoryAtom(
+            type: .rejection,
+            statement: "Rejected old plan",
+            scope: .conversation,
+            scopeRefId: scopeId,
+            status: .active,
+            eventTime: Date(timeIntervalSince1970: 50)
+        )
+        let wrongType = MemoryAtom(
+            type: .reason,
+            statement: "Reason in same window",
+            scope: .conversation,
+            scopeRefId: scopeId,
+            status: .active,
+            eventTime: Date(timeIntervalSince1970: 150)
+        )
+        let archived = MemoryAtom(
+            type: .rejection,
+            statement: "Archived rejection",
+            scope: .conversation,
+            scopeRefId: scopeId,
+            status: .archived,
+            eventTime: Date(timeIntervalSince1970: 150)
+        )
+        let wrongScopeRef = MemoryAtom(
+            type: .rejection,
+            statement: "Rejection in another conversation",
+            scope: .conversation,
+            scopeRefId: UUID(),
+            status: .active,
+            eventTime: Date(timeIntervalSince1970: 150)
+        )
+        try [inWindow, outsideWindow, wrongType, archived, wrongScopeRef]
+            .forEach(store.insertMemoryAtom)
+
+        let results = try store.fetchMemoryAtoms(
+            types: [.rejection],
+            statuses: [.active],
+            scope: .conversation,
+            scopeRefId: scopeId,
+            eventTimeStart: Date(timeIntervalSince1970: 100),
+            eventTimeEnd: Date(timeIntervalSince1970: 200),
+            limit: nil
+        )
+
+        XCTAssertEqual(results.map(\.id), [inWindow.id])
+    }
+
+    /// Limit must be applied at SQL level so very large memory tables don't
+    /// stream every row into Swift before truncation.
+    func testFetchMemoryAtomsLimitCapsResults() throws {
+        for index in 0..<5 {
+            let atom = MemoryAtom(
+                type: .rejection,
+                statement: "Rejection \(index)",
+                scope: .global,
+                status: .active,
+                eventTime: Date(timeIntervalSince1970: TimeInterval(100 + index))
+            )
+            try store.insertMemoryAtom(atom)
+        }
+
+        let limited = try store.fetchMemoryAtoms(
+            types: [.rejection],
+            statuses: [.active],
+            scope: nil,
+            scopeRefId: nil,
+            eventTimeStart: nil,
+            eventTimeEnd: nil,
+            limit: 2
+        )
+
+        XCTAssertEqual(limited.count, 2)
+    }
+
+    /// Vector entry-point: fetch atoms nearest to a query embedding by
+    /// cosine similarity. Atoms without embeddings must be skipped — they
+    /// are not yet embeddable. Status filter applies so superseded /
+    /// archived atoms don't leak into vector recall. This is the
+    /// foundation for the plan's "vector finds the entry → graph
+    /// traverses" retrieval pattern.
+    func testFetchMemoryAtomsNearestRanksByCosineSimilarity() throws {
+        let atomA = MemoryAtom(
+            type: .preference,
+            statement: "A",
+            scope: .global,
+            status: .active,
+            embedding: [1.0, 0.0, 0.0]
+        )
+        let atomB = MemoryAtom(
+            type: .preference,
+            statement: "B",
+            scope: .global,
+            status: .active,
+            embedding: [0.0, 1.0, 0.0]
+        )
+        let atomC = MemoryAtom(
+            type: .preference,
+            statement: "C",
+            scope: .global,
+            status: .active,
+            embedding: [0.0, 0.0, 1.0]
+        )
+        let atomD = MemoryAtom(
+            type: .preference,
+            statement: "D no embedding",
+            scope: .global,
+            status: .active
+        )
+        try [atomA, atomB, atomC, atomD].forEach(store.insertMemoryAtom)
+
+        let results = try store.fetchMemoryAtomsNearest(
+            embedding: [0.9, 0.1, 0.0],
+            topK: 2,
+            statuses: [.active]
+        )
+
+        XCTAssertEqual(results.count, 2)
+        XCTAssertEqual(results.first?.id, atomA.id, "Closest to [1,0,0].")
+        XCTAssertFalse(
+            results.contains(where: { $0.id == atomD.id }),
+            "Atoms without embeddings must be excluded."
+        )
+    }
+
+    /// Status filter on vector search must drop superseded/archived rows so
+    /// stale memory doesn't surface in vector recall.
+    func testFetchMemoryAtomsNearestFiltersByStatus() throws {
+        let active = MemoryAtom(
+            type: .preference,
+            statement: "active",
+            scope: .global,
+            status: .active,
+            embedding: [1.0, 0.0]
+        )
+        let superseded = MemoryAtom(
+            type: .preference,
+            statement: "superseded",
+            scope: .global,
+            status: .superseded,
+            embedding: [1.0, 0.0]
+        )
+        try [active, superseded].forEach(store.insertMemoryAtom)
+
+        let results = try store.fetchMemoryAtomsNearest(
+            embedding: [1.0, 0.0],
+            topK: 5,
+            statuses: [.active]
+        )
+
+        XCTAssertEqual(results.map(\.id), [active.id])
+    }
+
+    /// When no predicates are provided, the overload must behave like the
+    /// existing zero-arg `fetchMemoryAtoms()` so call sites can opt in
+    /// gradually.
+    func testFetchMemoryAtomsWithoutPredicatesReturnsAll() throws {
+        let atomA = MemoryAtom(
+            type: .decision,
+            statement: "Decision A",
+            scope: .global,
+            status: .active
+        )
+        let atomB = MemoryAtom(
+            type: .reason,
+            statement: "Reason B",
+            scope: .global,
+            status: .archived
+        )
+        try store.insertMemoryAtom(atomA)
+        try store.insertMemoryAtom(atomB)
+
+        let all = try store.fetchMemoryAtoms(
+            types: [],
+            statuses: [],
+            scope: nil,
+            scopeRefId: nil,
+            eventTimeStart: nil,
+            eventTimeEnd: nil,
+            limit: nil
+        )
+
+        XCTAssertEqual(Set(all.map(\.id)), Set([atomA.id, atomB.id]))
     }
 }

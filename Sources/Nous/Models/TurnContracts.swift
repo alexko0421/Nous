@@ -2,16 +2,107 @@ import Foundation
 
 typealias PreparedTurnSession = PreparedConversationTurn
 
-/// Output of prompt assembly, split into the slow-changing prefix that can ride
-/// the Gemini prompt cache and the per-turn block that must refresh every
-/// request. `combined` reconstructs the original single-string layout for
-/// non-cache callers.
+enum ThinkingTraceTitles {
+    static let judge = "Gemini judge thought summary"
+    static let assistant = "Assistant reasoning"
+    static let agentLoop = "Sonnet tool-loop reasoning"
+}
+
+struct ThinkingTraceAccumulator: Sendable {
+    private var startedTitles: Set<String> = []
+    private var hasContent = false
+
+    mutating func append(_ delta: String, title: String) -> String? {
+        guard !delta.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+
+        if startedTitles.insert(title).inserted {
+            let separator = hasContent ? "\n\n" : ""
+            hasContent = true
+            return "\(separator)\(title)\n\(delta)"
+        }
+
+        hasContent = true
+        return delta
+    }
+}
+
+actor ThinkingTraceStore {
+    private var accumulator = ThinkingTraceAccumulator()
+    private var content = ""
+
+    func append(_ delta: String, title: String) -> String? {
+        guard let displayDelta = accumulator.append(delta, title: title) else {
+            return nil
+        }
+        content.append(displayDelta)
+        return displayDelta
+    }
+
+    var persistedThinking: String? {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : content
+    }
+}
+
+enum SystemPromptBlockID: Equatable {
+    case anchorAndPolicies
+    case slowMemory
+    case activeSkills
+    case skillIndex
+    case volatile
+}
+
+enum CacheControlMarker: Equatable {
+    case ephemeral
+}
+
+struct SystemPromptBlock: Equatable {
+    let id: SystemPromptBlockID
+    let content: String
+    let cacheControl: CacheControlMarker?
+}
+
+/// Output of prompt assembly, represented as ordered prompt blocks while
+/// preserving the previous stable/volatile string accessors.
 struct TurnSystemSlice: Equatable {
-    let stable: String
-    let volatile: String
+    let blocks: [SystemPromptBlock]
+
+    init(blocks: [SystemPromptBlock]) {
+        self.blocks = blocks
+    }
+
+    init(stable: String, volatile: String) {
+        self.blocks = [
+            SystemPromptBlock(id: .anchorAndPolicies, content: stable, cacheControl: .ephemeral),
+            SystemPromptBlock(id: .volatile, content: volatile, cacheControl: nil)
+        ]
+    }
+
+    var stable: String {
+        blocks
+            .filter { $0.id != .volatile && !$0.content.isEmpty }
+            .map(\.content)
+            .joined(separator: "\n\n")
+    }
+
+    var volatile: String {
+        blocks
+            .filter { $0.id == .volatile && !$0.content.isEmpty }
+            .map(\.content)
+            .joined(separator: "\n\n")
+    }
 
     var combined: String {
-        [stable, volatile].filter { !$0.isEmpty }.joined(separator: "\n\n")
+        combinedString
+    }
+
+    var combinedString: String {
+        blocks
+            .map(\.content)
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
     }
 }
 
@@ -43,12 +134,50 @@ struct EnqueueMemoryRefreshRequest {
     let messages: [Message]
 }
 
+enum MemorySuppressionReason: String, Codable, Equatable, Sendable {
+    case hardOptOut = "hard_opt_out"
+    case sensitiveConsentRequired = "sensitive_consent_required"
+    case unspecified
+}
+
+enum MemoryPersistenceDecision: Equatable, Sendable {
+    case persist
+    case suppress(MemorySuppressionReason)
+
+    var shouldPersist: Bool {
+        if case .persist = self { return true }
+        return false
+    }
+
+    var suppressionReason: MemorySuppressionReason? {
+        guard case let .suppress(reason) = self else { return nil }
+        return reason
+    }
+}
+
 struct ContextContinuationPlan {
     let turnId: UUID
     let conversationId: UUID
     let assistantMessageId: UUID
     let scratchpadIngest: ScratchpadIngestRequest?
     let memoryRefresh: EnqueueMemoryRefreshRequest?
+    let memorySuppressionReason: MemorySuppressionReason?
+
+    init(
+        turnId: UUID,
+        conversationId: UUID,
+        assistantMessageId: UUID,
+        scratchpadIngest: ScratchpadIngestRequest?,
+        memoryRefresh: EnqueueMemoryRefreshRequest?,
+        memorySuppressionReason: MemorySuppressionReason? = nil
+    ) {
+        self.turnId = turnId
+        self.conversationId = conversationId
+        self.assistantMessageId = assistantMessageId
+        self.scratchpadIngest = scratchpadIngest
+        self.memoryRefresh = memoryRefresh
+        self.memorySuppressionReason = memorySuppressionReason
+    }
 }
 
 struct GeminiCacheRefreshRequest {
@@ -85,6 +214,13 @@ struct TurnPrepared {
     let effectiveMode: ChatMode
 }
 
+struct TurnUserMessageAppended {
+    let turnId: UUID
+    let node: NousNode
+    let userMessage: Message
+    let messagesAfterUserAppend: [Message]
+}
+
 enum TurnAbortReason {
     case cancelledByUser
     case supersededByNewTurn
@@ -114,8 +250,10 @@ struct TurnCompletion {
 }
 
 enum TurnEvent {
+    case userMessageAppended(TurnUserMessageAppended)
     case prepared(TurnPrepared)
     case thinkingDelta(String)
+    case agentTraceDelta(AgentTraceRecord)
     case textDelta(String)
     case completed(TurnCompletion)
     case aborted(TurnAbortReason)
@@ -164,6 +302,23 @@ struct TurnExecutionResult {
     let persistedThinking: String?
     let conversationTitle: String?
     let didHitBudgetExhaustion: Bool
+    let agentTraceJson: String?
+
+    init(
+        rawAssistantContent: String,
+        assistantContent: String,
+        persistedThinking: String?,
+        conversationTitle: String?,
+        didHitBudgetExhaustion: Bool,
+        agentTraceJson: String? = nil
+    ) {
+        self.rawAssistantContent = rawAssistantContent
+        self.assistantContent = assistantContent
+        self.persistedThinking = persistedThinking
+        self.conversationTitle = conversationTitle
+        self.didHitBudgetExhaustion = didHitBudgetExhaustion
+        self.agentTraceJson = agentTraceJson
+    }
 }
 
 struct TurnPlan {
@@ -173,9 +328,41 @@ struct TurnPlan {
     let promptTrace: PromptGovernanceTrace
     let effectiveMode: ChatMode
     let nextQuickActionModeIfCompleted: QuickActionMode?
+    let agentLoopMode: QuickActionMode?
     let judgeEventDraft: JudgeEvent?
     let turnSlice: TurnSystemSlice
     let transcriptMessages: [LLMMessage]
     let focusBlock: String?
     let provider: LLMProvider
+    let indexedSkillIds: Set<UUID>
+
+    init(
+        turnId: UUID,
+        prepared: PreparedTurnSession,
+        citations: [SearchResult],
+        promptTrace: PromptGovernanceTrace,
+        effectiveMode: ChatMode,
+        nextQuickActionModeIfCompleted: QuickActionMode?,
+        agentLoopMode: QuickActionMode? = nil,
+        judgeEventDraft: JudgeEvent?,
+        turnSlice: TurnSystemSlice,
+        transcriptMessages: [LLMMessage],
+        focusBlock: String?,
+        provider: LLMProvider,
+        indexedSkillIds: Set<UUID> = []
+    ) {
+        self.turnId = turnId
+        self.prepared = prepared
+        self.citations = citations
+        self.promptTrace = promptTrace
+        self.effectiveMode = effectiveMode
+        self.nextQuickActionModeIfCompleted = nextQuickActionModeIfCompleted
+        self.agentLoopMode = agentLoopMode
+        self.judgeEventDraft = judgeEventDraft
+        self.turnSlice = turnSlice
+        self.transcriptMessages = transcriptMessages
+        self.focusBlock = focusBlock
+        self.provider = provider
+        self.indexedSkillIds = indexedSkillIds
+    }
 }

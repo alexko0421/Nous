@@ -49,6 +49,7 @@ final class SettingsViewModelTests: XCTestCase {
         vm.geminiApiKey = "  gemini-key  "
         vm.claudeApiKey = ""
         vm.openaiApiKey = "openai-key"
+        vm.openRouterWebSearchEnabled = false
         vm.finderSyncEnabled = true
         vm.backgroundAnalysisEnabled = true
         vm.geminiHistoryCacheEnabled = true
@@ -63,6 +64,7 @@ final class SettingsViewModelTests: XCTestCase {
         XCTAssertTrue(defaults.bool(forKey: "nous.background.analysis.enabled"))
         XCTAssertTrue(defaults.bool(forKey: "nous.gemini.history.cache.enabled"))
         XCTAssertTrue(defaults.bool(forKey: "nous.assistant.thinking.enabled"))
+        XCTAssertEqual(defaults.object(forKey: "nous.openrouter.websearch.enabled") as? Bool, false)
         XCTAssertEqual(defaults.string(forKey: "nous.local.modelid"), "local-model")
         XCTAssertEqual(defaults.string(forKey: "nous.embedding.modelid"), "embed-model")
         XCTAssertNil(defaults.string(forKey: "nous.gemini.apikey"))
@@ -71,6 +73,56 @@ final class SettingsViewModelTests: XCTestCase {
         XCTAssertEqual(secretStore.values["nous.gemini.apikey"], "gemini-key")
         XCTAssertNil(secretStore.values["nous.claude.apikey"])
         XCTAssertEqual(secretStore.values["nous.openai.apikey"], "openai-key")
+    }
+
+    func testOpenRouterWebSearchPreferenceDefaultsOnAndPersists() {
+        let vm = makeViewModel()
+        XCTAssertTrue(vm.openRouterWebSearchEnabled)
+
+        vm.openRouterWebSearchEnabled = false
+        vm.savePreferences()
+
+        let reloaded = makeViewModel()
+        XCTAssertFalse(reloaded.openRouterWebSearchEnabled)
+    }
+
+    func testLoadsOperatingContextFromNodeStore() throws {
+        let stored = OperatingContext(
+            identity: "Alex is building Nous.",
+            currentWork: "Operating Context V1",
+            communicationStyle: "Use Cantonese naturally.",
+            boundaries: "Ask before storing sensitive facts.",
+            updatedAt: Date(timeIntervalSince1970: 99)
+        )
+        try nodeStore.saveOperatingContext(stored, now: stored.updatedAt)
+
+        let vm = makeViewModel()
+
+        XCTAssertEqual(vm.operatingContextIdentity, "Alex is building Nous.")
+        XCTAssertEqual(vm.operatingContextCurrentWork, "Operating Context V1")
+        XCTAssertEqual(vm.operatingContextCommunicationStyle, "Use Cantonese naturally.")
+        XCTAssertEqual(vm.operatingContextBoundaries, "Ask before storing sensitive facts.")
+    }
+
+    func testSaveOperatingContextTrimsAndPersistsManualProfile() throws {
+        let vm = makeViewModel()
+        vm.operatingContextIdentity = "  Alex is a solo founder.  "
+        vm.operatingContextCurrentWork = "\nShip Operating Context\n"
+        vm.operatingContextCommunicationStyle = "  Push back when needed.  "
+        vm.operatingContextBoundaries = "  Do not store visa details unless explicitly confirmed.  "
+
+        try vm.saveOperatingContext(now: Date(timeIntervalSince1970: 123))
+
+        XCTAssertEqual(
+            try nodeStore.fetchOperatingContext(),
+            OperatingContext(
+                identity: "Alex is a solo founder.",
+                currentWork: "Ship Operating Context",
+                communicationStyle: "Push back when needed.",
+                boundaries: "Do not store visa details unless explicitly confirmed.",
+                updatedAt: Date(timeIntervalSince1970: 123)
+            )
+        )
     }
 
     func testLoadPreferencesClearsPersistedThinkingWhenDisabled() throws {
@@ -103,6 +155,7 @@ final class SettingsViewModelTests: XCTestCase {
     func testRuntimeModelSummariesShowOpenRouterForegroundAndJudgeModels() {
         let vm = makeViewModel()
         vm.selectedProvider = .openrouter
+        vm.openrouterApiKey = "openrouter-key"
 
         XCTAssertEqual(
             vm.runtimeModelSummaries,
@@ -114,8 +167,8 @@ final class SettingsViewModelTests: XCTestCase {
                 ),
                 .init(
                     label: "Judge tasks",
-                    model: "Disabled",
-                    detail: "Judge tasks are temporarily disabled on OpenRouter so slow judge calls cannot block the main reply."
+                    model: "anthropic/claude-sonnet-4.6",
+                    detail: "Uses OpenRouter Sonnet 4.6 for judge checks while OpenRouter handles foreground chat."
                 ),
                 .init(
                     label: "Weekly reflections",
@@ -126,12 +179,83 @@ final class SettingsViewModelTests: XCTestCase {
         )
     }
 
-    func testMakeJudgeLLMServiceReturnsNilForOpenRouter() {
+    func testRuntimeModelSummariesShowOpenRouterJudgeTargetWhenOpenRouterKeyMissing() {
+        let vm = makeViewModel()
+        vm.selectedProvider = .openrouter
+
+        let judge = vm.runtimeModelSummaries.first { $0.label == "Judge tasks" }
+
+        XCTAssertEqual(judge?.model, "anthropic/claude-sonnet-4.6")
+        XCTAssertEqual(
+            judge?.detail,
+            "Missing OpenRouter API key; judge checks are currently skipped."
+        )
+    }
+
+    func testSupplementalGeminiKeyFieldShowsWhenForegroundProviderIsNotGemini() {
+        let vm = makeViewModel()
+
+        vm.selectedProvider = .openrouter
+        XCTAssertTrue(vm.shouldShowSupplementalGeminiKeyField)
+
+        vm.selectedProvider = .local
+        XCTAssertTrue(vm.shouldShowSupplementalGeminiKeyField)
+
+        vm.selectedProvider = .gemini
+        XCTAssertFalse(vm.shouldShowSupplementalGeminiKeyField)
+    }
+
+    func testMakeJudgeLLMServiceUsesOpenRouterSonnet46ForOpenRouterWhenOpenRouterKeyExists() {
         let vm = makeViewModel()
         vm.selectedProvider = .openrouter
         vm.openrouterApiKey = "test-key"
 
+        let service = vm.makeJudgeLLMService()
+        let openRouter = service as? OpenRouterLLMService
+        XCTAssertEqual(openRouter?.model, "anthropic/claude-sonnet-4.6")
+        XCTAssertEqual(openRouter?.webSearchEnabled, false)
+    }
+
+    func testMakeJudgeLLMServiceReturnsNilForOpenRouterWhenOpenRouterKeyMissing() {
+        let vm = makeViewModel()
+        vm.selectedProvider = .openrouter
+
         XCTAssertNil(vm.makeJudgeLLMService())
+    }
+
+    func testMakeJudgeLLMServiceUsesSonnet46ForClaudeWhenClaudeKeyExists() {
+        let vm = makeViewModel()
+        vm.selectedProvider = .claude
+        vm.claudeApiKey = "test-key"
+
+        let service = vm.makeJudgeLLMService()
+        let claude = service as? ClaudeLLMService
+        XCTAssertEqual(claude?.model, "claude-sonnet-4-6")
+    }
+
+    func testMakeLLMServiceConfiguresOpenRouterWebSearch() {
+        let vm = makeViewModel()
+        vm.selectedProvider = .openrouter
+        vm.openrouterApiKey = "test-key"
+        vm.openRouterWebSearchEnabled = true
+
+        let enabled = vm.makeLLMService() as? OpenRouterLLMService
+        XCTAssertEqual(enabled?.webSearchEnabled, true)
+
+        vm.openRouterWebSearchEnabled = false
+        let disabled = vm.makeLLMService() as? OpenRouterLLMService
+        XCTAssertEqual(disabled?.webSearchEnabled, false)
+    }
+
+    func testMakeLLMServiceCanDisableOpenRouterWebSearchForBackgroundTasks() {
+        let vm = makeViewModel()
+        vm.selectedProvider = .openrouter
+        vm.openrouterApiKey = "test-key"
+        vm.openRouterWebSearchEnabled = true
+
+        let service = vm.makeLLMService(openRouterWebSearchEnabled: false) as? OpenRouterLLMService
+
+        XCTAssertEqual(service?.webSearchEnabled, false)
     }
 
     func testRuntimeModelSummariesShowLocalJudgeDisabledAndLoadState() {
@@ -161,13 +285,71 @@ final class SettingsViewModelTests: XCTestCase {
         )
     }
 
-    private func makeViewModel() -> SettingsViewModel {
+    func testVoiceModeAvailabilityRequiresOpenAIKey() {
+        let vm = makeViewModel()
+
+        XCTAssertFalse(vm.isVoiceModeAvailable)
+        XCTAssertEqual(vm.voiceModeUnavailableReason, "Add an OpenAI API key to use Voice Mode.")
+
+        vm.openaiApiKey = "  openai-key  "
+
+        XCTAssertTrue(vm.isVoiceModeAvailable)
+        XCTAssertNil(vm.voiceModeUnavailableReason)
+    }
+
+    func testVoicePreferencesPersistInUserDefaults() {
+        let vm = makeViewModel()
+        vm.voiceOutputVoice = .marin
+        vm.voiceLanguage = .mandarin
+
+        vm.savePreferences()
+
+        let reloaded = makeViewModel()
+        XCTAssertEqual(reloaded.voiceOutputVoice, .marin)
+        XCTAssertEqual(reloaded.voiceLanguage, .mandarin)
+        XCTAssertEqual(defaults.string(forKey: "nous.voice.outputVoice"), "marin")
+        XCTAssertEqual(defaults.string(forKey: "nous.voice.language"), "mandarin")
+    }
+
+    func testVoiceLanguageOptionsDoNotIncludeTaiwaneseMandarin() {
+        XCTAssertEqual(
+            VoiceLanguage.allCases.map(\.rawValue),
+            ["automatic", "cantonese", "mandarin", "english"]
+        )
+        XCTAssertFalse(VoiceLanguage.allCases.map(\.displayName).contains("台式普通話"))
+    }
+
+    func testLegacyTaiwaneseMandarinPreferenceFallsBackToAutomatic() {
+        defaults.set("taiwanese_mandarin", forKey: "nous.voice.language")
+
+        let vm = makeViewModel()
+
+        XCTAssertEqual(vm.voiceLanguage, .automatic)
+    }
+
+    func testPreviewVoiceUsesSelectedVoiceLanguageAndOpenAIKey() async {
+        let previewer = FakeVoicePreviewer()
+        let vm = makeViewModel(voicePreviewer: previewer)
+        vm.openaiApiKey = "  openai-key  "
+        vm.voiceOutputVoice = .verse
+        vm.voiceLanguage = .cantonese
+
+        await vm.previewSelectedVoice()
+
+        XCTAssertEqual(previewer.requests, [
+            .init(apiKey: "openai-key", voice: .verse, language: .cantonese)
+        ])
+        XCTAssertNil(vm.voicePreviewError)
+    }
+
+    private func makeViewModel(voicePreviewer: VoicePreviewing = NullVoicePreviewer()) -> SettingsViewModel {
         SettingsViewModel(
             embeddingService: EmbeddingService(),
             localLLM: LocalLLMService(),
             nodeStore: nodeStore,
             defaults: defaults,
-            secretStore: secretStore
+            secretStore: secretStore,
+            voicePreviewer: voicePreviewer
         )
     }
 }
@@ -187,4 +369,22 @@ private final class InMemorySecretStore: SecretStore {
             values.removeValue(forKey: account)
         }
     }
+}
+
+private final class FakeVoicePreviewer: VoicePreviewing {
+    struct Request: Equatable {
+        let apiKey: String
+        let voice: VoiceOutputVoice
+        let language: VoiceLanguage
+    }
+
+    var requests: [Request] = []
+
+    func preview(apiKey: String, voice: VoiceOutputVoice, language: VoiceLanguage) async throws {
+        requests.append(.init(apiKey: apiKey, voice: voice, language: language))
+    }
+}
+
+private struct NullVoicePreviewer: VoicePreviewing {
+    func preview(apiKey: String, voice: VoiceOutputVoice, language: VoiceLanguage) async throws {}
 }

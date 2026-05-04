@@ -13,10 +13,10 @@ final class SettingsViewModel {
 
     private enum ModelCatalog {
         static let geminiForeground = "gemini-2.5-pro"
-        static let geminiJudge = "gemini-2.5-flash-lite"
+        static let geminiJudge = "gemini-2.5-pro"
         static let geminiReflection = "gemini-2.5-pro"
-        static let claudeForeground = "claude-sonnet-4-6-20250414"
-        static let claudeJudge = "claude-haiku-4-5-20251001"
+        static let claudeForeground = "claude-sonnet-4-6"
+        static let claudeJudge = "claude-sonnet-4-6"
         static let openAIForeground = "gpt-4o"
         static let openAIJudge = "gpt-4o-mini"
         static let openRouterForeground = "anthropic/claude-sonnet-4.6"
@@ -34,8 +34,18 @@ final class SettingsViewModel {
     var openrouterApiKey: String = ""
     var finderSyncEnabled: Bool = false
     var backgroundAnalysisEnabled: Bool = false
+    var openRouterWebSearchEnabled: Bool = true
     var geminiHistoryCacheEnabled: Bool = false
     var assistantThinkingEnabled: Bool = false
+    var voiceOutputVoice: VoiceOutputVoice = .cedar
+    var voiceLanguage: VoiceLanguage = .automatic
+    var isPreviewingVoice: Bool = false
+    var voicePreviewError: String?
+    var operatingContextIdentity: String = ""
+    var operatingContextCurrentWork: String = ""
+    var operatingContextCommunicationStyle: String = ""
+    var operatingContextBoundaries: String = ""
+    var operatingContextSaveError: String?
 
     // MARK: - Model identifiers
 
@@ -61,9 +71,22 @@ final class SettingsViewModel {
     let nodeStore: NodeStore
     private let defaults: UserDefaults
     private let secretStore: any SecretStore
+    private let voicePreviewer: any VoicePreviewing
 
     var credentialStorageDescription: String {
         secretStore.storageDescription
+    }
+
+    var isVoiceModeAvailable: Bool {
+        !openaiApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var shouldShowSupplementalGeminiKeyField: Bool {
+        selectedProvider != .gemini
+    }
+
+    var voiceModeUnavailableReason: String? {
+        isVoiceModeAvailable ? nil : "Add an OpenAI API key to use Voice Mode."
     }
 
     var runtimeModelSummaries: [RuntimeModelSummary] {
@@ -98,8 +121,11 @@ final class SettingsViewModel {
         static let embedModelId = "nous.embedding.modelid"
         static let finderSyncEnabled = "nous.finder.sync.enabled"
         static let backgroundAnalysisEnabled = "nous.background.analysis.enabled"
+        static let openRouterWebSearchEnabled = "nous.openrouter.websearch.enabled"
         static let geminiHistoryCacheEnabled = "nous.gemini.history.cache.enabled"
         static let assistantThinkingEnabled = "nous.assistant.thinking.enabled"
+        static let voiceOutputVoice = "nous.voice.outputVoice"
+        static let voiceLanguage = "nous.voice.language"
     }
 
     // MARK: - Init
@@ -109,14 +135,17 @@ final class SettingsViewModel {
         localLLM: LocalLLMService,
         nodeStore: NodeStore,
         defaults: UserDefaults = .standard,
-        secretStore: any SecretStore = SettingsViewModel.defaultSecretStore()
+        secretStore: any SecretStore = SettingsViewModel.defaultSecretStore(),
+        voicePreviewer: any VoicePreviewing = OpenAIVoicePreviewService()
     ) {
         self.embeddingService = embeddingService
         self.localLLM = localLLM
         self.nodeStore = nodeStore
         self.defaults = defaults
         self.secretStore = secretStore
+        self.voicePreviewer = voicePreviewer
         loadPreferences()
+        loadOperatingContext()
         syncModelState()
     }
 
@@ -133,6 +162,7 @@ final class SettingsViewModel {
         openrouterApiKey = loadSecret(account: Keys.openrouterApiKey)
         finderSyncEnabled = defaults.bool(forKey: Keys.finderSyncEnabled)
         backgroundAnalysisEnabled = defaults.bool(forKey: Keys.backgroundAnalysisEnabled)
+        openRouterWebSearchEnabled = defaults.object(forKey: Keys.openRouterWebSearchEnabled) as? Bool ?? true
         geminiHistoryCacheEnabled = defaults.bool(forKey: Keys.geminiHistoryCacheEnabled)
         assistantThinkingEnabled = defaults.bool(forKey: Keys.assistantThinkingEnabled)
         if let id = defaults.string(forKey: Keys.localModelId) {
@@ -141,6 +171,14 @@ final class SettingsViewModel {
         if let id = defaults.string(forKey: Keys.embedModelId) {
             embeddingModelId = id
         }
+        if let raw = defaults.string(forKey: Keys.voiceOutputVoice),
+           let voice = VoiceOutputVoice(rawValue: raw) {
+            voiceOutputVoice = voice
+        }
+        if let raw = defaults.string(forKey: Keys.voiceLanguage),
+           let language = VoiceLanguage(rawValue: raw) {
+            voiceLanguage = language
+        }
         enforcePrivacyPreferences()
     }
 
@@ -148,15 +186,70 @@ final class SettingsViewModel {
         defaults.set(selectedProvider.rawValue, forKey: Keys.provider)
         defaults.set(finderSyncEnabled, forKey: Keys.finderSyncEnabled)
         defaults.set(backgroundAnalysisEnabled, forKey: Keys.backgroundAnalysisEnabled)
+        defaults.set(openRouterWebSearchEnabled, forKey: Keys.openRouterWebSearchEnabled)
         defaults.set(geminiHistoryCacheEnabled, forKey: Keys.geminiHistoryCacheEnabled)
         defaults.set(assistantThinkingEnabled, forKey: Keys.assistantThinkingEnabled)
         defaults.set(localModelId, forKey: Keys.localModelId)
         defaults.set(embeddingModelId, forKey: Keys.embedModelId)
+        defaults.set(voiceOutputVoice.rawValue, forKey: Keys.voiceOutputVoice)
+        defaults.set(voiceLanguage.rawValue, forKey: Keys.voiceLanguage)
         persistSecret(geminiApiKey, account: Keys.geminiApiKey)
         persistSecret(claudeApiKey, account: Keys.claudeApiKey)
         persistSecret(openaiApiKey, account: Keys.openaiApiKey)
         persistSecret(openrouterApiKey, account: Keys.openrouterApiKey)
         enforcePrivacyPreferences()
+    }
+
+    func loadOperatingContext() {
+        let context = (try? nodeStore.fetchOperatingContext()) ?? OperatingContext()
+        operatingContextIdentity = context.identity
+        operatingContextCurrentWork = context.currentWork
+        operatingContextCommunicationStyle = context.communicationStyle
+        operatingContextBoundaries = context.boundaries
+        operatingContextSaveError = nil
+    }
+
+    func saveOperatingContext(now: Date = Date()) throws {
+        let context = OperatingContext(
+            identity: operatingContextIdentity,
+            currentWork: operatingContextCurrentWork,
+            communicationStyle: operatingContextCommunicationStyle,
+            boundaries: operatingContextBoundaries,
+            updatedAt: now
+        )
+        try nodeStore.saveOperatingContext(context, now: now)
+        loadOperatingContext()
+    }
+
+    func saveOperatingContextFromSettings() {
+        do {
+            try saveOperatingContext()
+        } catch {
+            operatingContextSaveError = "Could not save operating context."
+        }
+    }
+
+    @MainActor
+    func previewSelectedVoice() async {
+        let apiKey = openaiApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !apiKey.isEmpty else {
+            voicePreviewError = "Add OpenAI Realtime API key first."
+            return
+        }
+
+        isPreviewingVoice = true
+        voicePreviewError = nil
+        defer { isPreviewingVoice = false }
+
+        do {
+            try await voicePreviewer.preview(
+                apiKey: apiKey,
+                voice: voiceOutputVoice,
+                language: voiceLanguage
+            )
+        } catch {
+            voicePreviewError = "Could not preview voice."
+        }
     }
 
     // MARK: - Model loading
@@ -189,7 +282,7 @@ final class SettingsViewModel {
 
     // MARK: - LLM factory
 
-    func makeLLMService() -> (any LLMService)? {
+    func makeLLMService(openRouterWebSearchEnabled webSearchOverride: Bool? = nil) -> (any LLMService)? {
         switch selectedProvider {
         case .local:
             guard localLLM.isLoaded else { return nil }
@@ -205,7 +298,11 @@ final class SettingsViewModel {
             return OpenAILLMService(apiKey: openaiApiKey, model: ModelCatalog.openAIForeground)
         case .openrouter:
             guard !openrouterApiKey.isEmpty else { return nil }
-            return OpenRouterLLMService(apiKey: openrouterApiKey, model: ModelCatalog.openRouterForeground)
+            return OpenRouterLLMService(
+                apiKey: openrouterApiKey,
+                model: ModelCatalog.openRouterForeground,
+                webSearchEnabled: webSearchOverride ?? openRouterWebSearchEnabled
+            )
         }
     }
 
@@ -223,7 +320,12 @@ final class SettingsViewModel {
             guard !openaiApiKey.isEmpty else { return nil }
             return OpenAILLMService(apiKey: openaiApiKey, model: ModelCatalog.openAIJudge)
         case .openrouter:
-            return nil
+            guard !openrouterApiKey.isEmpty else { return nil }
+            return OpenRouterLLMService(
+                apiKey: openrouterApiKey,
+                model: ModelCatalog.openRouterForeground,
+                webSearchEnabled: false
+            )
         }
     }
 
@@ -272,7 +374,7 @@ final class SettingsViewModel {
         case .openai:
             return ModelCatalog.openAIJudge
         case .openrouter:
-            return "Disabled"
+            return ModelCatalog.openRouterForeground
         }
     }
 
@@ -281,13 +383,19 @@ final class SettingsViewModel {
         case .local:
             return "Judge tasks are skipped on Local because the structured-output path is disabled there."
         case .gemini:
+            if geminiApiKey.isEmpty {
+                return "Missing Gemini API key; judge checks are currently skipped."
+            }
             return "Separate lightweight judge model for retrieval and provocation decisions."
         case .claude:
             return "Separate lightweight judge model for retrieval and provocation decisions."
         case .openai:
             return "Separate lightweight judge model for retrieval and provocation decisions."
         case .openrouter:
-            return "Judge tasks are temporarily disabled on OpenRouter so slow judge calls cannot block the main reply."
+            if openrouterApiKey.isEmpty {
+                return "Missing OpenRouter API key; judge checks are currently skipped."
+            }
+            return "Uses OpenRouter Sonnet 4.6 for judge checks while OpenRouter handles foreground chat."
         }
     }
 

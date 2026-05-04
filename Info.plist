@@ -24,6 +24,8 @@
 	<string>1</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>26.0</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Nous uses the microphone only while Voice Mode is active so you can speak commands and draft messages.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

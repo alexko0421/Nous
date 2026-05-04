@@ -22,41 +22,87 @@ final class ConversationTitleBackfillService {
 
     private let nodeStore: NodeStore
     private let llmServiceProvider: () -> (any LLMService)?
+    private let backgroundTelemetry: (any BackgroundAIJobTelemetryRecording)?
     private let runLock = NSLock()
     private var isRunning = false
 
     init(
         nodeStore: NodeStore,
-        llmServiceProvider: @escaping () -> (any LLMService)?
+        llmServiceProvider: @escaping () -> (any LLMService)?,
+        backgroundTelemetry: (any BackgroundAIJobTelemetryRecording)? = nil
     ) {
         self.nodeStore = nodeStore
         self.llmServiceProvider = llmServiceProvider
+        self.backgroundTelemetry = backgroundTelemetry
     }
 
     func runIfNeeded() async {
-        guard beginRun() else { return }
+        let startedAt = Date()
+        guard beginRun() else {
+            recordBackgroundRun(
+                status: .skipped,
+                startedAt: startedAt,
+                inputCount: 0,
+                outputCount: 0,
+                detail: "already_running"
+            )
+            return
+        }
         defer { endRun() }
 
         do {
-            guard try readVersion() == nil else { return }
+            guard try readVersion() == nil else {
+                recordBackgroundRun(
+                    status: .skipped,
+                    startedAt: startedAt,
+                    inputCount: 0,
+                    outputCount: 0,
+                    detail: "already_migrated"
+                )
+                return
+            }
 
             let candidates = try fetchCandidates()
             guard !candidates.isEmpty else {
                 try writeVersion(Self.targetVersion)
+                recordBackgroundRun(
+                    status: .completed,
+                    startedAt: startedAt,
+                    inputCount: 0,
+                    outputCount: 0,
+                    detail: "updated_titles=0"
+                )
                 return
             }
 
             let llm = llmServiceProvider()
+            var updatedCount = 0
             for candidate in candidates {
                 if Task.isCancelled { return }
                 guard let title = await resolvedTitle(for: candidate, llm: llm) else { continue }
-                try apply(title: title, to: candidate.node)
+                if try apply(title: title, to: candidate.node) {
+                    updatedCount += 1
+                }
             }
 
             if try fetchCandidates().isEmpty {
                 try writeVersion(Self.targetVersion)
             }
+            recordBackgroundRun(
+                status: .completed,
+                startedAt: startedAt,
+                inputCount: candidates.count,
+                outputCount: updatedCount,
+                detail: "updated_titles=\(updatedCount)"
+            )
         } catch {
+            recordBackgroundRun(
+                status: .failed,
+                startedAt: startedAt,
+                inputCount: 0,
+                outputCount: 0,
+                detail: "error=\(String(describing: type(of: error)))"
+            )
             #if DEBUG
             print("[ConversationTitleBackfillService] failed: \(error)")
             #endif
@@ -103,12 +149,33 @@ final class ConversationTitleBackfillService {
             }
     }
 
-    private func apply(title: String, to node: NousNode) throws {
-        guard node.title != title else { return }
+    private func apply(title: String, to node: NousNode) throws -> Bool {
+        guard node.title != title else { return false }
         var updated = node
         updated.title = title
         updated.updatedAt = Date()
         try nodeStore.updateNode(updated)
+        return true
+    }
+
+    private func recordBackgroundRun(
+        status: BackgroundAIJobStatus,
+        startedAt: Date,
+        inputCount: Int,
+        outputCount: Int,
+        detail: String
+    ) {
+        backgroundTelemetry?.record(BackgroundAIJobRunRecord(
+            id: UUID(),
+            jobId: .conversationTitleBackfill,
+            status: status,
+            startedAt: startedAt,
+            endedAt: Date(),
+            inputCount: inputCount,
+            outputCount: outputCount,
+            detail: detail,
+            costCents: nil
+        ))
     }
 
     private func readVersion() throws -> String? {

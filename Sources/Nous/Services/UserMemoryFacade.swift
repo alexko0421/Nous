@@ -9,12 +9,12 @@ final class UserMemoryService: MemorySynthesizing, @unchecked Sendable {
     typealias PersonalInferenceDisposition = UserMemoryCore.PersonalInferenceDisposition
     typealias AnnotatedContradictionFact = UserMemoryCore.AnnotatedContradictionFact
 
-    static let globalBudget = UserMemoryCore.globalBudget
-    static let essentialStoryBudget = UserMemoryCore.essentialStoryBudget
-    static let projectBudget = UserMemoryCore.projectBudget
-    static let conversationBudget = UserMemoryCore.conversationBudget
-    static let evidenceSnippetBudget = UserMemoryCore.evidenceSnippetBudget
-    static let userModelFacetLimit = UserMemoryCore.userModelFacetLimit
+    static let globalBudget = MemoryProjectionService.globalBudget
+    static let essentialStoryBudget = MemoryProjectionService.essentialStoryBudget
+    static let projectBudget = MemoryProjectionService.projectBudget
+    static let conversationBudget = MemoryProjectionService.conversationBudget
+    static let evidenceSnippetBudget = MemoryProjectionService.evidenceSnippetBudget
+    static let userModelFacetLimit = MemoryProjectionService.userModelFacetLimit
     static let contradictionFactKinds = UserMemoryCore.contradictionFactKinds
 
     private let core: UserMemoryCore
@@ -37,15 +37,17 @@ final class UserMemoryService: MemorySynthesizing, @unchecked Sendable {
     init(
         nodeStore: NodeStore,
         llmServiceProvider: @escaping () -> (any LLMService)?,
-        governanceTelemetry: GovernanceTelemetryStore? = nil
+        governanceTelemetry: GovernanceTelemetryStore? = nil,
+        embedFunction: @escaping (String) -> [Float]? = { _ in nil }
     ) {
         let core = UserMemoryCore(
             nodeStore: nodeStore,
             llmServiceProvider: llmServiceProvider,
-            governanceTelemetry: governanceTelemetry
+            governanceTelemetry: governanceTelemetry,
+            embedFunction: embedFunction
         )
         self.core = core
-        self.projectionService = MemoryProjectionService(core: core)
+        self.projectionService = MemoryProjectionService(nodeStore: nodeStore)
         self.contradictionService = ContradictionMemoryService(core: core)
         self.synthesisService = MemorySynthesisService(core: core)
     }
@@ -104,8 +106,46 @@ final class UserMemoryService: MemorySynthesizing, @unchecked Sendable {
         projectionService.currentUserModel(projectId: projectId, conversationId: conversationId)
     }
 
+    func currentDecisionGraphRecall(
+        currentMessage: String,
+        projectId: UUID?,
+        conversationId: UUID,
+        limit: Int = 3,
+        now: Date = Date()
+    ) -> [String] {
+        projectionService.currentDecisionGraphRecall(
+            currentMessage: currentMessage,
+            projectId: projectId,
+            conversationId: conversationId,
+            limit: limit,
+            now: now
+        )
+    }
+
+    func currentGraphMemoryRecall(
+        currentMessage: String,
+        projectId: UUID?,
+        conversationId: UUID,
+        limit: Int = 4,
+        queryEmbedding: [Float]? = nil,
+        now: Date = Date()
+    ) -> [String] {
+        projectionService.currentGraphMemoryRecall(
+            currentMessage: currentMessage,
+            projectId: projectId,
+            conversationId: conversationId,
+            limit: limit,
+            queryEmbedding: queryEmbedding,
+            now: now
+        )
+    }
+
     func shouldPersistMemory(messages: [Message], projectId: UUID?) -> Bool {
         projectionService.shouldPersistMemory(messages: messages, projectId: projectId)
+    }
+
+    func memoryPersistenceDecision(messages: [Message], projectId: UUID?) -> MemoryPersistenceDecision {
+        projectionService.memoryPersistenceDecision(messages: messages, projectId: projectId)
     }
 
     func allMemoryEntries() -> [MemoryEntry] {
@@ -114,6 +154,10 @@ final class UserMemoryService: MemorySynthesizing, @unchecked Sendable {
 
     func sourceSnippets(for entryId: UUID, limit: Int = 3) -> [MemoryEvidenceSnippet] {
         core.sourceSnippets(for: entryId, limit: limit)
+    }
+
+    func factSourceSnippets(for factId: UUID, limit: Int = 3) -> [MemoryEvidenceSnippet] {
+        core.factSourceSnippets(for: factId, limit: limit)
     }
 
     @discardableResult
@@ -129,6 +173,21 @@ final class UserMemoryService: MemorySynthesizing, @unchecked Sendable {
     @discardableResult
     func deleteMemoryEntry(id: UUID) -> Bool {
         core.deleteMemoryEntry(id: id)
+    }
+
+    @discardableResult
+    func confirmMemoryFactEntry(id: UUID) -> Bool {
+        core.confirmMemoryFactEntry(id: id)
+    }
+
+    @discardableResult
+    func archiveMemoryFactEntry(id: UUID) -> Bool {
+        core.archiveMemoryFactEntry(id: id)
+    }
+
+    @discardableResult
+    func deleteMemoryFactEntry(id: UUID) -> Bool {
+        core.deleteMemoryFactEntry(id: id)
     }
 
     func contradictionRecallFacts(projectId: UUID?, conversationId: UUID) throws -> [MemoryFactEntry] {

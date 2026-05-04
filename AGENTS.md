@@ -106,6 +106,20 @@ xcodebuild test -project Nous.xcodeproj -scheme NousTests -destination 'platform
 
 Tests use `NodeStore(path: ":memory:")` for in-memory SQLite.
 
+## Agent engineering memory
+
+This repo uses Beads (`bd`) as the shared engineering task graph and memory for coding agents. Beads is for repo-specific engineering lessons, blockers, handoffs, and discovered follow-up work. Nous remains the source of truth for Alex's product, semantic, and personal memory.
+
+At session start:
+
+```bash
+scripts/beads_agent_workflow.sh start
+```
+
+For non-trivial code or docs work, claim or create a bead before editing. Use `scripts/beads_agent_workflow.sh finish <id> "<verification summary>"` before the final response, and include `Bead: <id> closed` or the remaining blocker in that response. Use `bd remember` only for stable engineering lessons that should guide future coding agents. Do not store Alex's values, product strategy, design taste, or one-off discussion notes in Beads. See `docs/beads-agent-memory.md` for the full protocol.
+
+For agent delegation decisions, follow `docs/agentic-engineering-workflow.md`: default to one lead agent, use the Context Boundary Card before delegating, and keep agent teams deferred unless Alex explicitly requests them. Non-trivial work needs concrete verification; use a separate Verifier/Gatekeeper only when false-green risk justifies the extra context boundary.
+
 ## Rules
 
 ### Before you build anything, ask:
