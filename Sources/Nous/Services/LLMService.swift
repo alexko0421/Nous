@@ -1,6 +1,6 @@
 import Foundation
 
-enum LLMProvider: String, Codable, CaseIterable {
+enum LLMProvider: String, Codable, CaseIterable, Sendable {
     case local = "Local (MLX)"
     case gemini = "Gemini"
     case claude = "Claude API"

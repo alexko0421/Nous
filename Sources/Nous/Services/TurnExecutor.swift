@@ -192,10 +192,13 @@ final class TurnExecutor {
             gemini.onUsageMetadata = { [recordGeminiUsage] usage in
                 recordGeminiUsage(usage)
             }
+            gemini.thinkingBudgetTokens = 2000
+            gemini.onBudgetExhausted = {
+                await state.markBudgetExhausted()
+            }
 
             guard captureThinking else { return gemini }
 
-            gemini.thinkingBudgetTokens = 2000
             gemini.onThinkingDelta = { delta in
                 if let displayDelta = await state.appendThinking(
                     delta,
@@ -204,16 +207,13 @@ final class TurnExecutor {
                     await sink.emit(.thinkingDelta(displayDelta))
                 }
             }
-            gemini.onBudgetExhausted = {
-                await state.markBudgetExhausted()
-            }
             return gemini
         }
 
         if var claude = llm as? ClaudeLLMService {
             claude.cacheableSystemPrefix = cacheableSystemPrefix
-            guard captureThinking else { return claude }
             claude.thinkingBudgetTokens = 1024
+            guard captureThinking else { return claude }
             claude.onThinkingDelta = { delta in
                 if let displayDelta = await state.appendThinking(
                     delta,
@@ -225,10 +225,9 @@ final class TurnExecutor {
             return claude
         }
 
-        guard captureThinking else { return llm }
-
         if var openRouter = llm as? OpenRouterLLMService {
             openRouter.reasoningBudgetTokens = 1024
+            guard captureThinking else { return openRouter }
             openRouter.onThinkingDelta = { delta in
                 if let displayDelta = await state.appendThinking(
                     delta,
@@ -239,6 +238,8 @@ final class TurnExecutor {
             }
             return openRouter
         }
+
+        guard captureThinking else { return llm }
 
         return llm
     }

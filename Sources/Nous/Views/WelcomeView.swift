@@ -31,6 +31,8 @@ struct WelcomeView: View {
     @State private var isImageDropTargeted = false
     @State private var isActionMenuExpanded = false
     @FocusState private var isComposerFocused: Bool
+    @Namespace private var composerPrimaryActionNamespace
+    private let composerActionMotion = ComposerPrimaryActionMotion()
     
     private var greeting: String {
         let hour = Calendar.current.component(.hour, from: Date())
@@ -50,6 +52,14 @@ struct WelcomeView: View {
 
     private var canSend: Bool {
         !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty
+    }
+
+    private var shouldSeparateComposerPrimaryAction: Bool {
+        ComposerSeparationPolicy.shouldSeparate(
+            inputText: inputText,
+            hasAttachments: !attachments.isEmpty,
+            isGenerating: false
+        )
     }
     
     var body: some View {
@@ -167,12 +177,13 @@ struct WelcomeView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, 16)
+            .padding(.leading, 16)
+            .padding(.trailing, 16)
             .padding(.vertical, 10)
             .background(
                 NativeGlassPanel(
                     cornerRadius: 18,
-                    tintColor: AppColor.glassTint
+                    tintColor: AppColor.composerGlassTint
                 ) { EmptyView() }
             )
             .overlay(
@@ -181,27 +192,15 @@ struct WelcomeView: View {
             )
             .shadow(color: .black.opacity(0.04), radius: 10, x: 0, y: 3)
 
-            Button(action: onSend) {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundColor(.white)
+            if shouldSeparateComposerPrimaryAction {
+                primaryActionButton(isSeparated: true)
+                    .transition(.scale(scale: 0.72, anchor: .leading).combined(with: .opacity))
             }
-            .buttonStyle(.plain)
-            .frame(width: 34, height: 34)
-            .background(
-                NativeGlassPanel(
-                    cornerRadius: 17,
-                    tintColor: canSend 
-                        ? NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.88)
-                        : NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.18)
-                ) { EmptyView() }
-            )
-            .overlay(
-                Circle()
-                    .stroke(canSend ? Color.white.opacity(0.18) : AppColor.panelStroke, lineWidth: 1)
-            )
-            .disabled(!canSend)
         }
+        .animation(
+            .timingCurve(0.68, -0.6, 0.32, 1.6, duration: 0.42),
+            value: shouldSeparateComposerPrimaryAction
+        )
     }
 
     private var welcomeComposerControls: some View {
@@ -258,6 +257,76 @@ struct WelcomeView: View {
         }
         .buttonStyle(.plain)
     }
+
+    private func primaryActionButton(isSeparated: Bool) -> some View {
+        Button(action: onSend) {
+            Image(systemName: "arrow.up")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundColor(isSeparated ? .white : AppColor.secondaryText)
+                .opacity(composerActionMotion.iconOpacity(isSeparated: isSeparated))
+        }
+        .buttonStyle(.plain)
+        .frame(width: 34, height: 34)
+        .background(
+            primaryActionBackground(isSeparated: isSeparated)
+        )
+        .overlay(
+            primaryActionStroke(isSeparated: isSeparated)
+        )
+        .shadow(
+            color: AppColor.colaOrange.opacity(composerActionMotion.glowOpacity(
+                isSeparated: isSeparated,
+                canAct: canSend
+            )),
+            radius: isSeparated ? 8 : 0,
+            x: 0,
+            y: isSeparated ? 2 : 0
+        )
+        .matchedGeometryEffect(id: "welcomePrimaryAction", in: composerPrimaryActionNamespace)
+        .disabled(!canSend)
+        .help("Send")
+    }
+
+    private func primaryActionBackground(isSeparated: Bool) -> some View {
+        Group {
+            if isSeparated {
+                ZStack {
+                    Circle()
+                        .fill(AppColor.colaOrange.opacity(composerActionMotion.fillOpacity(
+                            isSeparated: isSeparated,
+                            canAct: canSend
+                        )))
+
+                    NativeGlassPanel(
+                        cornerRadius: 17,
+                        tintColor: primaryActionTint(isSeparated: isSeparated)
+                    ) { EmptyView() }
+                    .opacity(canSend ? 0.52 : 0.9)
+                }
+            } else {
+                Circle()
+                    .fill(Color.clear)
+            }
+        }
+    }
+
+    private func primaryActionStroke(isSeparated: Bool) -> some View {
+        Group {
+            if isSeparated {
+                Circle()
+                    .stroke(canSend ? Color.white.opacity(0.18) : AppColor.panelStroke, lineWidth: 1)
+            } else {
+                Circle()
+                    .stroke(Color.clear, lineWidth: 1)
+            }
+        }
+    }
+
+    private func primaryActionTint(isSeparated: Bool) -> NSColor {
+        let alpha = composerActionMotion.tintAlpha(isSeparated: isSeparated, canAct: canSend)
+        return NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: alpha)
+    }
+
 }
 struct QuickActionButton: View {
     let action: QuickActionMode

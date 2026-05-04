@@ -118,7 +118,7 @@ scripts/beads_agent_workflow.sh start
 
 For non-trivial code or docs work, claim or create a bead before editing. Use `scripts/beads_agent_workflow.sh finish <id> "<verification summary>"` before the final response, and include `Bead: <id> closed` or the remaining blocker in that response. Use `bd remember` only for stable engineering lessons that should guide future coding agents. Do not store Alex's values, product strategy, design taste, or one-off discussion notes in Beads. See `docs/beads-agent-memory.md` for the full protocol.
 
-When deciding whether to stay single-agent, spawn read-only explorers, use worker agents, or defer agent teams, follow `docs/agentic-engineering-workflow.md`. Non-trivial work should use that decision tree and must end with concrete verification or an explicit residual-risk note.
+For agent delegation decisions, follow `docs/agentic-engineering-workflow.md`: default to one lead agent, use the Context Boundary Card before delegating, and keep agent teams deferred unless Alex explicitly requests them. Non-trivial work needs concrete verification; use a separate Verifier/Gatekeeper only when false-green risk justifies the extra context boundary.
 
 ## Rules
 

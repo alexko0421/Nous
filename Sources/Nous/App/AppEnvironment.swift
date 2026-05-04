@@ -66,6 +66,8 @@ enum AppBootstrapError: LocalizedError {
 final class AppEnvironment {
     var state: AppBootstrapState = .initializing
     private static let bootstrapLock = NSLock()
+    static let databasePathOverrideKey = "NOUS_DATABASE_PATH"
+    static let databaseProfileKey = "NOUS_DATABASE_PROFILE"
 
     @MainActor
     init() {
@@ -241,7 +243,14 @@ final class AppEnvironment {
             relationRefinementQueue: relationRefinementQueue
         )
         let galaxyVM = GalaxyViewModel(nodeStore: nodeStore, graphEngine: graphEngine)
-        let beadsAgentWorkVM = BeadsAgentWorkViewModel()
+        let beadsAgentWorkVM = BeadsAgentWorkViewModel(
+            service: BeadsAgentWorkService(
+                runtimeHarnessLoader: RuntimeHarnessService(
+                    telemetry: governanceTelemetry,
+                    nodeStore: nodeStore
+                )
+            )
+        )
 
         // WeeklyReflectionService rollover closure. Called once per app launch
         // from ContentView.onAppear; idempotent via existsReflectionRun so
@@ -310,19 +319,76 @@ final class AppEnvironment {
         )
     }
 
-    private static func databasePath() throws -> String {
-        guard let appSupport = FileManager.default
+    static func databasePath(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default,
+        applicationSupportURL: URL? = nil
+    ) throws -> String {
+        if let overridePath = normalizedEnvironmentValue(environment[databasePathOverrideKey]) {
+            return try prepareDatabaseFile(
+                at: URL(fileURLWithPath: overridePath).standardizedFileURL,
+                fileManager: fileManager
+            )
+        }
+
+        guard let appSupport = applicationSupportURL ?? fileManager
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first else {
             throw AppBootstrapError.applicationSupportDirectoryUnavailable
         }
 
-        let nousDir = appSupport.appendingPathComponent("Nous", isDirectory: true)
+        let nousDir = appSupport
+            .appendingPathComponent("Nous", isDirectory: true)
+            .appendingDatabaseProfileDirectory(environment[databaseProfileKey])
+
+        return try prepareDatabaseFile(
+            at: nousDir.appendingPathComponent("nous.db", isDirectory: false),
+            fileManager: fileManager
+        )
+    }
+
+    private static func prepareDatabaseFile(
+        at databaseURL: URL,
+        fileManager: FileManager
+    ) throws -> String {
+        let directoryURL = databaseURL.deletingLastPathComponent()
         do {
-            try FileManager.default.createDirectory(at: nousDir, withIntermediateDirectories: true)
+            try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         } catch {
-            throw AppBootstrapError.createDirectoryFailed(path: nousDir.path, underlying: error)
+            throw AppBootstrapError.createDirectoryFailed(path: directoryURL.path, underlying: error)
         }
-        return nousDir.appendingPathComponent("nous.db").path
+        return databaseURL.path
+    }
+
+    private static func normalizedEnvironmentValue(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+private extension URL {
+    func appendingDatabaseProfileDirectory(_ rawProfile: String?) -> URL {
+        guard let profile = AppEnvironment.sanitizedDatabaseProfile(rawProfile) else {
+            return self
+        }
+        return appendingPathComponent("Profiles", isDirectory: true)
+            .appendingPathComponent(profile, isDirectory: true)
+    }
+}
+
+extension AppEnvironment {
+    static func sanitizedDatabaseProfile(_ rawProfile: String?) -> String? {
+        guard let rawProfile = normalizedEnvironmentValue(rawProfile) else { return nil }
+
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
+        let scalars = rawProfile.unicodeScalars.map { scalar -> Character in
+            allowed.contains(scalar) ? Character(scalar) : "-"
+        }
+        let collapsed = String(scalars)
+            .split(separator: "-", omittingEmptySubsequences: true)
+            .joined(separator: "-")
+            .trimmingCharacters(in: CharacterSet(charactersIn: ".-_"))
+
+        return collapsed.isEmpty ? nil : collapsed
     }
 }

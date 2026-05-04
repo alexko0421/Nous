@@ -7,6 +7,21 @@ The default is simple: keep one lead agent responsible for context, judgment,
 implementation, verification, and the final handoff. Add parallel agents only
 when they protect context or create real independent progress.
 
+## Anti-Agent-Sickness Rule
+
+Multi-agent work is a coordination cost, not a maturity signal. Start from one
+lead agent and add agents only when the task earns one of three reasons:
+context protection, true parallelization, or specialization.
+
+Never split work by role labels like planner / implementer / tester when those
+roles need the same deep context. That creates a telephone game. Design around
+context boundaries, not org charts.
+
+A separate Verifier / Gatekeeper is not the default second agent. Non-trivial
+work needs evidence; it does not automatically need another agent. Add an
+independent verifier only when false-green risk is high enough to justify the
+extra context boundary.
+
 ## Default Posture
 
 - Start with one agent. A well-scoped single thread beats a noisy team.
@@ -25,6 +40,20 @@ Before adding any extra agent, ask:
 
 If any answer is no, stay single-agent.
 
+## Context Boundary Card
+
+Before spawning any subagent, write the boundary in the prompt:
+
+- **Task objective:** the exact question or change the subagent owns.
+- **Context needed:** the files, docs, logs, or concepts it should inspect.
+- **Context excluded:** what it should ignore so it does not duplicate the lead.
+- **Expected output:** the format the lead needs for synthesis or integration.
+- **Stop condition:** when it should stop exploring or editing.
+- **Verification evidence:** commands, file references, or checks required before
+  claiming the subtask is ready.
+
+If the card cannot be filled clearly, keep the work in the lead thread.
+
 ## Delegation Decision Tree
 
 Use one of these paths.
@@ -34,6 +63,8 @@ Use one of these paths.
 | Small fix, focused doc edit, or one coherent implementation | Single lead agent | Do the work locally. Do not delegate. |
 | Need to find where behavior lives, inspect logs, compare docs, or map code paths | Explorer subagent | Read-only. Return concise findings with file references. |
 | Need independent review after changes | Reviewer subagent or fresh session | Read-only. Focus on correctness, regressions, security, and tests. |
+| Need final evidence check before finish, especially with dirty worktree, scripts, tests, or Beads scope risk | Verifier / Gatekeeper | Conditional and read-only by default. Confirm scope, Bead, commands, acceptance evidence, and residual risk. |
+| Need to decide whether something belongs in Beads, Nous memory, prompt context, or nowhere | Memory Steward | Read-only by default. Protect Beads/Nous/anchor boundaries and recommend the narrowest durable memory action. |
 | Need parallel implementation | Worker subagent | Only when write sets are disjoint and ownership is explicit. |
 | Need peer negotiation, shared task list, or long-running cross-agent coordination | Agent team | Defer unless the user explicitly asks and the task is valuable enough for the overhead. |
 
@@ -49,6 +80,24 @@ For coding tasks, do not split "implement feature" and "write its tests" into
 different agents unless the test task can be specified from a stable public
 interface. The implementer usually has the context needed to write the focused
 tests.
+
+Verifier / Gatekeeper is a role, not a second implementer and not a ritual.
+For ordinary work, the lead runs verification locally. Invoke a separate
+verifier only when a false green would be expensive: release handoff,
+non-trivial scripts, dirty worktree, flaky verification, Bead ambiguity, or any
+claim that depends on a specific command having run. It should not rewrite the
+work. It should say what evidence is sufficient, what is missing, and whether
+the task is ready to finish.
+
+Memory Steward is also read-only by default. Invoke it when work touches memory
+boundaries: `bd remember`, Beads issues, prompt assembly, RAG context, product
+strategy, Alex's personal/semantic memory, or `anchor.md`. It should keep stable
+engineering lessons in Beads, product/semantic/personal memory in Nous, and
+one-off notes out of durable memory. It must never edit `anchor.md`.
+
+These roles do not mean "always spawn more agents." The lead agent may perform
+the role locally for small tasks. Use a fresh thread/subagent only when
+independent attention materially reduces risk.
 
 ## Context Hygiene
 
@@ -69,7 +118,7 @@ or one-off conversation notes in `bd remember`.
 ## Verification Loop
 
 Every non-trivial task needs a concrete completion check before it is called
-done.
+done. That means evidence, not necessarily a second agent.
 
 Use the narrowest verification that proves the change:
 
@@ -83,6 +132,19 @@ Use the narrowest verification that proves the change:
 
 If verification cannot run, say why and leave a clear residual risk. Do not
 replace verification with confidence.
+
+Use a separate Verifier / Gatekeeper before finishing only when any of these
+are true:
+
+- The task changed scripts, build/test gates, project config, or prompt/memory
+  assembly.
+- The worktree is dirty and task scope depends on path-limited checks.
+- The final claim depends on a specific command, manual acceptance check, or
+  Bead state.
+- A previous review found a false OK, false PASS, or misleading handoff.
+
+For lower-risk tasks, the lead should perform the same checks locally and
+report the evidence directly.
 
 ## Beads + Memory Boundary
 
@@ -105,6 +167,15 @@ semantic knowledge, values, and strategy belong in Nous, not Beads.
 See `docs/beads-agent-memory.md` and `docs/memory-jurisdiction.md` for the
 full boundary.
 
+Use Memory Steward before writing durable memory when any of these are true:
+
+- The lesson might be about Alex, product strategy, tone, values, or design
+  taste rather than repo engineering.
+- The task touches prompt context, RAG, Galaxy semantics, memory extraction, or
+  Beads integration.
+- You are unsure whether to create a Bead, use `bd remember`, update docs, or
+  leave the information ephemeral.
+
 ## Automation
 
 The lightweight automation layer is intentionally advisory first:
@@ -121,6 +192,22 @@ The lightweight automation layer is intentionally advisory first:
 - Hooks or CI gates are deferred until the workflow proves useful without
   blocking legitimate local work.
 
+## Measuring Whether This Helps
+
+Static checks prove documentation completeness and workflow visibility only.
+They do not prove agent behavior has improved.
+
+When using this playbook on the next 5-10 non-trivial tasks, track:
+
+- Whether delegation happened only after a Context Boundary Card.
+- Unnecessary delegation count.
+- Scope leaks, write-set conflicts, or duplicate investigations.
+- False-green or rework incidents after the first handoff.
+- Whether a verifier found concrete missing evidence when one was justified.
+
+Until those case studies exist, describe results as documentation completeness
+or workflow visibility, not as measured agent-quality improvement.
+
 Run the check after task verification and before closing the Bead:
 
 ```bash
@@ -136,18 +223,24 @@ scripts/beads_agent_workflow.sh finish <id> "<verification summary>"
 Read-only exploration:
 
 ```text
-Explore this code path without editing files. Find the entry points, data flow,
-and likely files involved. Return concise findings with file references and
-open questions only.
+Context Boundary Card:
+- Task objective: Explore <area/question>.
+- Context needed: Inspect only <files/modules/logs>.
+- Context excluded: Do not inspect or propose changes outside <excluded area>.
+- Expected output: Concise findings with file references and open questions.
+- Stop condition: Stop after mapping entry points, data flow, and likely files.
+- Verification evidence: Cite the exact files/lines or commands inspected.
+
+Do not edit files.
 ```
 
 Parallel explorer split:
 
 ```text
 Spawn one read-only explorer per area: <area A>, <area B>, <area C>. Each
-explorer should inspect only its area, avoid proposing fixes unless necessary
-to explain a risk, and return a short summary with file references. Wait for
-all results before synthesizing.
+explorer must include a Context Boundary Card, inspect only its assigned area,
+avoid proposing fixes unless necessary to explain a risk, and return a short
+summary with file references. Wait for all results before synthesizing.
 ```
 
 Worker implementation:
@@ -155,8 +248,9 @@ Worker implementation:
 ```text
 You are responsible only for <files/modules>. Other agents may be editing
 elsewhere. Do not revert or overwrite changes you did not make. Implement the
-requested behavior, run the specified verification, and report changed files,
-commands run, and remaining risks.
+requested behavior, write or update the focused tests for your change, run the
+specified verification, and report changed files, commands run, evidence seen,
+and remaining risks.
 ```
 
 Fresh review:
@@ -165,6 +259,27 @@ Fresh review:
 Review this diff like an owner. Prioritize correctness, behavior regressions,
 security/privacy risks, and missing tests. Lead with concrete findings tied to
 files and lines. Skip style-only comments unless they hide a real bug.
+```
+
+Verifier / Gatekeeper:
+
+```text
+Act as Verifier / Gatekeeper for this task. Do not edit files. Check whether
+the claimed scope, Bead, changed files, verification commands, and acceptance
+evidence prove the task is ready to finish. Look for false OK/PASS paths,
+dirty-worktree leakage, missing commands, and residual risks. Name the concrete
+commands, files, diffs, or outputs you inspected. Return only findings, required
+fixes, or "ready to finish" with the evidence you relied on.
+```
+
+Memory Steward:
+
+```text
+Act as Memory Steward for this task. Do not edit files. Decide what belongs in
+Beads, what belongs in Nous product/semantic/personal memory, what belongs in
+docs, and what should remain ephemeral. Protect `anchor.md`: it is frozen.
+Return the recommended memory action, boundary risks, and any wording that
+should or should not be stored.
 ```
 
 Handoff:

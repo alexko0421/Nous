@@ -73,6 +73,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
     var telemetry: GovernanceTelemetryStore!
     var llm: CannedLLMService!
     var judge: StubJudge!
+    var shadowStore: ShadowLearningStore!
     var viewModel: ChatViewModel!
 
     private func makeScratchPadStore() -> ScratchPadStore {
@@ -93,6 +94,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
         )
         llm = CannedLLMService()
         judge = StubJudge()
+        shadowStore = ShadowLearningStore(nodeStore: store)
         let vectorStore = VectorStore(nodeStore: store)
         let memoryService = UserMemoryService(nodeStore: store, llmServiceProvider: { self.llm })
         viewModel = ChatViewModel(
@@ -110,12 +112,14 @@ final class ProvocationOrchestrationTests: XCTestCase {
             skillMatcher: SkillMatcher(),
             skillTracker: nil,
             governanceTelemetry: telemetry,
-            scratchPadStore: makeScratchPadStore()
+            scratchPadStore: makeScratchPadStore(),
+            shadowLearningSignalRecorder: ShadowLearningSignalRecorder(store: shadowStore),
+            shadowPatternPromptProvider: ShadowPatternPromptProvider(store: shadowStore)
         )
     }
 
     override func tearDown() {
-        viewModel = nil; judge = nil; llm = nil; telemetry = nil; skillStore = nil; store = nil
+        viewModel = nil; shadowStore = nil; judge = nil; llm = nil; telemetry = nil; skillStore = nil; store = nil
         super.tearDown()
     }
 
@@ -1014,6 +1018,144 @@ final class ProvocationOrchestrationTests: XCTestCase {
         XCTAssertNil(updated?.userFeedback)
         XCTAssertNil(updated?.feedbackReason)
         XCTAssertNil(updated?.feedbackNote)
+    }
+
+    @MainActor
+    func testDownvoteFeedbackDetailRecordsResponseBehaviorLearningPattern() async throws {
+        let entryId = UUID()
+        try store.insertMemoryEntry(MemoryEntry(
+            id: entryId, scope: .global, kind: .preference, stability: .stable,
+            content: "don't compete on price", sourceNodeIds: []
+        ))
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: true,
+            userState: .deciding,
+            shouldProvoke: true,
+            entryId: entryId.uuidString,
+            reason: "conflict",
+            inferredMode: .companion
+        )
+        viewModel.inputText = "what is my next step if I am going cheap?"
+        await viewModel.send()
+
+        let assistantMessage = try XCTUnwrap(viewModel.messages.last(where: { $0.role == .assistant }))
+        viewModel.recordFeedbackDetail(
+            forMessageId: assistantMessage.id,
+            feedback: .down,
+            reason: .tooForceful,
+            note: "too sharp"
+        )
+
+        let pattern = try XCTUnwrap(shadowStore.fetchPattern(
+            userId: "alex",
+            kind: .responseBehavior,
+            label: "feedback_proportionate_pushback"
+        ))
+        XCTAssertEqual(pattern.status, .soft)
+        XCTAssertTrue(pattern.evidenceMessageIds.contains(assistantMessage.id))
+        XCTAssertTrue(pattern.promptFragment.contains("Keep pushback proportionate"))
+    }
+
+    @MainActor
+    func testChangingFeedbackReasonClearsPreviousResponseBehaviorLearningPattern() async throws {
+        let entryId = UUID()
+        try store.insertMemoryEntry(MemoryEntry(
+            id: entryId, scope: .global, kind: .preference, stability: .stable,
+            content: "don't compete on price", sourceNodeIds: []
+        ))
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: true,
+            userState: .deciding,
+            shouldProvoke: true,
+            entryId: entryId.uuidString,
+            reason: "conflict",
+            inferredMode: .companion
+        )
+        viewModel.inputText = "what is my next step if I am going cheap?"
+        await viewModel.send()
+
+        let assistantMessage = try XCTUnwrap(viewModel.messages.last(where: { $0.role == .assistant }))
+        viewModel.recordFeedbackDetail(
+            forMessageId: assistantMessage.id,
+            feedback: .down,
+            reason: .tooForceful,
+            note: "too sharp"
+        )
+
+        viewModel.recordFeedbackDetail(
+            forMessageId: assistantMessage.id,
+            feedback: .down,
+            reason: .wrongMemory,
+            note: "memory did not apply"
+        )
+
+        let oldPattern = try XCTUnwrap(shadowStore.fetchPattern(
+            userId: "alex",
+            kind: .responseBehavior,
+            label: "feedback_proportionate_pushback"
+        ))
+        XCTAssertEqual(oldPattern.status, .fading)
+        XCTAssertFalse(oldPattern.evidenceMessageIds.contains(assistantMessage.id))
+
+        let newPattern = try XCTUnwrap(shadowStore.fetchPattern(
+            userId: "alex",
+            kind: .responseBehavior,
+            label: "feedback_memory_precision"
+        ))
+        XCTAssertEqual(newPattern.status, .soft)
+        XCTAssertTrue(newPattern.evidenceMessageIds.contains(assistantMessage.id))
+    }
+
+    @MainActor
+    func testReapplyingClearedFeedbackRevivesResponseBehaviorLearningPattern() async throws {
+        let entryId = UUID()
+        try store.insertMemoryEntry(MemoryEntry(
+            id: entryId, scope: .global, kind: .preference, stability: .stable,
+            content: "don't compete on price", sourceNodeIds: []
+        ))
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: true,
+            userState: .deciding,
+            shouldProvoke: true,
+            entryId: entryId.uuidString,
+            reason: "conflict",
+            inferredMode: .companion
+        )
+        viewModel.inputText = "what is my next step if I am going cheap?"
+        await viewModel.send()
+
+        let assistantMessage = try XCTUnwrap(viewModel.messages.last(where: { $0.role == .assistant }))
+        viewModel.recordFeedbackDetail(
+            forMessageId: assistantMessage.id,
+            feedback: .down,
+            reason: .tooForceful,
+            note: "too sharp"
+        )
+        viewModel.clearFeedback(forMessageId: assistantMessage.id)
+
+        let clearedPattern = try XCTUnwrap(shadowStore.fetchPattern(
+            userId: "alex",
+            kind: .responseBehavior,
+            label: "feedback_proportionate_pushback"
+        ))
+        XCTAssertEqual(clearedPattern.status, .fading)
+        XCTAssertFalse(clearedPattern.evidenceMessageIds.contains(assistantMessage.id))
+
+        viewModel.recordFeedbackDetail(
+            forMessageId: assistantMessage.id,
+            feedback: .down,
+            reason: .tooForceful,
+            note: "still too sharp"
+        )
+
+        let revivedPattern = try XCTUnwrap(shadowStore.fetchPattern(
+            userId: "alex",
+            kind: .responseBehavior,
+            label: "feedback_proportionate_pushback"
+        ))
+        XCTAssertEqual(revivedPattern.status, .soft)
+        XCTAssertTrue(revivedPattern.evidenceMessageIds.contains(assistantMessage.id))
+        XCTAssertNil(revivedPattern.activeUntil)
     }
 
     @MainActor

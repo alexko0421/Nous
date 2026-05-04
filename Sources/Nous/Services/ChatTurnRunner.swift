@@ -15,6 +15,7 @@ final class ChatTurnRunner {
     private let outcomeFactory: TurnOutcomeFactory
     private let shadowLearningSignalRecorder: ShadowLearningSignalRecorder?
     private let cognitionReviewer: (any CognitionReviewing)?
+    private let shouldSurfaceThinkingTraces: () -> Bool
     private let onPlanReady: (TurnPlan) -> Void
     private let onReviewArtifact: (CognitionArtifact) -> Void
     private let onTurnCognitionSnapshot: (TurnCognitionSnapshot) -> Void
@@ -28,6 +29,7 @@ final class ChatTurnRunner {
         outcomeFactory: TurnOutcomeFactory,
         shadowLearningSignalRecorder: ShadowLearningSignalRecorder? = nil,
         cognitionReviewer: (any CognitionReviewing)? = nil,
+        shouldSurfaceThinkingTraces: @escaping () -> Bool = { true },
         onPlanReady: @escaping (TurnPlan) -> Void = { _ in },
         onReviewArtifact: @escaping (CognitionArtifact) -> Void = { _ in },
         onTurnCognitionSnapshot: @escaping (TurnCognitionSnapshot) -> Void = { _ in }
@@ -40,6 +42,7 @@ final class ChatTurnRunner {
         self.outcomeFactory = outcomeFactory
         self.shadowLearningSignalRecorder = shadowLearningSignalRecorder
         self.cognitionReviewer = cognitionReviewer
+        self.shouldSurfaceThinkingTraces = shouldSurfaceThinkingTraces
         self.onPlanReady = onPlanReady
         self.onReviewArtifact = onReviewArtifact
         self.onTurnCognitionSnapshot = onTurnCognitionSnapshot
@@ -108,21 +111,28 @@ final class ChatTurnRunner {
         }
 
         var plan: TurnPlan
+        let shouldCaptureThinking = shouldSurfaceThinkingTraces()
         let judgeThinkingTrace = ThinkingTraceStore()
+        let judgeThinkingHandler: ThinkingDeltaHandler?
+        if shouldCaptureThinking {
+            judgeThinkingHandler = { delta in
+                if let displayDelta = await judgeThinkingTrace.append(
+                    delta,
+                    title: ThinkingTraceTitles.judge
+                ) {
+                    await sink.emit(.thinkingDelta(displayDelta))
+                }
+            }
+        } else {
+            judgeThinkingHandler = nil
+        }
         do {
             Self.debugLog("planning start turn=\(request.turnId)")
             plan = try await turnPlanner.plan(
                 from: prepared,
                 request: request,
                 stewardship: stewardship,
-                judgeThinkingHandler: { delta in
-                    if let displayDelta = await judgeThinkingTrace.append(
-                        delta,
-                        title: ThinkingTraceTitles.judge
-                    ) {
-                        await sink.emit(.thinkingDelta(displayDelta))
-                    }
-                }
+                judgeThinkingHandler: judgeThinkingHandler
             )
             Self.debugLog("planning ready turn=\(request.turnId) provider=\(plan.provider) fallback=\(plan.judgeEventDraft?.fallbackReason.rawValue ?? "none")")
         } catch is CancellationError {
@@ -170,7 +180,8 @@ final class ChatTurnRunner {
                         plan: plan,
                         request: request,
                         sink: sink,
-                        context: Self.makeAgentToolContext(plan: plan, request: request)
+                        context: Self.makeAgentToolContext(plan: plan, request: request),
+                        captureThinking: shouldCaptureThinking
                     ) else {
                         Self.debugLog("agent execute nil turn=\(request.turnId) abort=\(abortReason())")
                         await sink.emit(.aborted(abortReason()))
@@ -182,7 +193,11 @@ final class ChatTurnRunner {
                         "Agent tool loop is unavailable for a turn that rendered lazy skills."
                     )
                 } else {
-                    guard let result = try await turnExecutor.execute(plan: plan, sink: sink) else {
+                    guard let result = try await turnExecutor.execute(
+                        plan: plan,
+                        sink: sink,
+                        captureThinking: shouldCaptureThinking
+                    ) else {
                         Self.debugLog("execute nil turn=\(request.turnId) abort=\(abortReason())")
                         await sink.emit(.aborted(abortReason()))
                         return nil
@@ -190,7 +205,11 @@ final class ChatTurnRunner {
                     executionResult = result
                 }
             } else {
-                guard let result = try await turnExecutor.execute(plan: plan, sink: sink) else {
+                guard let result = try await turnExecutor.execute(
+                    plan: plan,
+                    sink: sink,
+                    captureThinking: shouldCaptureThinking
+                ) else {
                     Self.debugLog("execute nil turn=\(request.turnId) abort=\(abortReason())")
                     await sink.emit(.aborted(abortReason()))
                     return nil
@@ -210,7 +229,7 @@ final class ChatTurnRunner {
             return nil
         }
         executionResult = executionResult.withPersistedThinkingPrefix(
-            await judgeThinkingTrace.persistedThinking
+            shouldCaptureThinking ? await judgeThinkingTrace.persistedThinking : nil
         )
 
         do {

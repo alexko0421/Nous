@@ -7,6 +7,10 @@ struct NousApp: App {
 
     init() {
         WindowRestorationPolicy.disablePersistentWindowRestoration()
+        guard !AppRuntimeContext.isRunningUnitTests else { return }
+        Task { @MainActor in
+            NousMainWindowLifecycle.shared.start()
+        }
     }
 
     var body: some Scene {
@@ -21,11 +25,24 @@ struct NousApp: App {
 /// hides Nous; clicking the dock icon brings it back.
 @MainActor
 final class NousAppDelegate: NSObject, NSApplicationDelegate {
-    private var environment: AppEnvironment?
-    private var mainWindowController: NousMainWindowController?
-
     func applicationDidFinishLaunching(_ notification: Notification) {
-        showMainWindow()
+        guard shouldRunMainWindowLifecycle else { return }
+        NousMainWindowLifecycle.shared.start()
+    }
+
+    func applicationWillBecomeActive(_ notification: Notification) {
+        guard shouldRunMainWindowLifecycle else { return }
+        NousMainWindowLifecycle.shared.recoverMainWindowIfNeeded()
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        guard shouldRunMainWindowLifecycle else { return }
+        NousMainWindowLifecycle.shared.recoverMainWindowIfNeeded()
+    }
+
+    func applicationDidUnhide(_ notification: Notification) {
+        guard shouldRunMainWindowLifecycle else { return }
+        NousMainWindowLifecycle.shared.recoverMainWindowIfNeeded()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -33,7 +50,8 @@ final class NousAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        showMainWindow()
+        guard shouldRunMainWindowLifecycle else { return true }
+        NousMainWindowLifecycle.shared.showMainWindow()
         return true
     }
 
@@ -41,7 +59,93 @@ final class NousAppDelegate: NSObject, NSApplicationDelegate {
         false
     }
 
-    private func showMainWindow() {
+    func applicationWillTerminate(_ notification: Notification) {
+        NousMainWindowLifecycle.shared.stop()
+    }
+
+    private var shouldRunMainWindowLifecycle: Bool {
+        !AppRuntimeContext.isRunningUnitTests
+    }
+}
+
+enum AppRuntimeContext {
+    static var isRunningUnitTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    }
+}
+
+@MainActor
+final class NousMainWindowLifecycle {
+    static let shared = NousMainWindowLifecycle()
+
+    private var environment: AppEnvironment?
+    private var mainWindowController: NousMainWindowController?
+    private var workspaceActivationObserver: NSObjectProtocol?
+    private var appUpdateObserver: NSObjectProtocol?
+    private var didStart = false
+
+    func start() {
+        if didStart {
+            recoverMainWindowIfNeeded()
+            return
+        }
+
+        didStart = true
+        NSApp.setActivationPolicy(.regular)
+        installMainWindowRecoveryObservers()
+        showMainWindow()
+    }
+
+    func stop() {
+        if let workspaceActivationObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(workspaceActivationObserver)
+        }
+        if let appUpdateObserver {
+            NotificationCenter.default.removeObserver(appUpdateObserver)
+        }
+        workspaceActivationObserver = nil
+        appUpdateObserver = nil
+        didStart = false
+    }
+
+    private func installMainWindowRecoveryObservers() {
+        guard workspaceActivationObserver == nil else { return }
+        workspaceActivationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            let frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+            guard frontPID == ProcessInfo.processInfo.processIdentifier else { return }
+            Task { @MainActor [weak self] in
+                self?.recoverMainWindowIfNeeded()
+            }
+        }
+
+        appUpdateObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didUpdateNotification,
+            object: NSApp,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.recoverMissingMainSurfaceIfNeeded()
+            }
+        }
+    }
+
+    func recoverMainWindowIfNeeded() {
+        if mainWindowController?.isVisible != true {
+            showMainWindow()
+        }
+    }
+
+    private func recoverMissingMainSurfaceIfNeeded() {
+        guard !NSApp.isHidden else { return }
+        guard mainWindowController?.needsMissingSurfaceRecovery != false else { return }
+        showMainWindow()
+    }
+
+    func showMainWindow() {
         let environment = environment ?? AppEnvironment()
         self.environment = environment
 

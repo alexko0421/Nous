@@ -22,7 +22,7 @@ enum ShadowPatternDebugFormatting {
                     kind: pattern.kind.rawValue,
                     status: pattern.status.rawValue,
                     weight: String(format: "%.2f", pattern.weight),
-                    confidence: String(format: "%.2f", pattern.confidence),
+                    confidence: String(format: "%.0f%%", (pattern.confidence * 100).rounded()),
                     evidenceCount: "\(pattern.evidenceMessageIds.count)",
                     summary: pattern.summary
                 )
@@ -54,6 +54,107 @@ enum ShadowPatternDebugFormatting {
         case .retired:
             return 4
         }
+    }
+}
+
+struct MemoryFactDebugRow: Equatable, Identifiable {
+    let id: UUID
+    let kind: String
+    let status: String
+    let stability: String
+    let confidence: String
+    let scope: String
+    let source: String
+    let content: String
+    let updatedAt: Date
+}
+
+enum MemoryFactDebugFormatting {
+    static func rows(
+        from facts: [MemoryFactEntry],
+        nodeTitles: [UUID: String],
+        projectTitles: [UUID: String]
+    ) -> [MemoryFactDebugRow] {
+        facts
+            .sorted(by: ordering)
+            .map { fact in
+                MemoryFactDebugRow(
+                    id: fact.id,
+                    kind: display(fact.kind.rawValue),
+                    status: display(fact.status.rawValue),
+                    stability: display(fact.stability.rawValue),
+                    confidence: String(format: "%.0f%%", (fact.confidence * 100).rounded()),
+                    scope: scopeLabel(for: fact, nodeTitles: nodeTitles, projectTitles: projectTitles),
+                    source: sourceLabel(for: fact, nodeTitles: nodeTitles),
+                    content: fact.content.trimmingCharacters(in: .whitespacesAndNewlines),
+                    updatedAt: fact.updatedAt
+                )
+            }
+    }
+
+    private static func ordering(_ lhs: MemoryFactEntry, _ rhs: MemoryFactEntry) -> Bool {
+        let lhsRank = statusRank(lhs.status)
+        let rhsRank = statusRank(rhs.status)
+        if lhsRank != rhsRank {
+            return lhsRank < rhsRank
+        }
+        if lhs.confidence != rhs.confidence {
+            return lhs.confidence > rhs.confidence
+        }
+        return lhs.updatedAt > rhs.updatedAt
+    }
+
+    private static func statusRank(_ status: MemoryStatus) -> Int {
+        switch status {
+        case .active:
+            return 0
+        case .conflicted:
+            return 1
+        case .expired:
+            return 2
+        case .archived:
+            return 3
+        case .superseded:
+            return 4
+        }
+    }
+
+    private static func scopeLabel(
+        for fact: MemoryFactEntry,
+        nodeTitles: [UUID: String],
+        projectTitles: [UUID: String]
+    ) -> String {
+        switch fact.scope {
+        case .global:
+            return "Long-term"
+        case .project:
+            guard let scopeRefId = fact.scopeRefId else { return "Project" }
+            return "Project · \(projectTitles[scopeRefId] ?? "Unknown")"
+        case .conversation:
+            guard let scopeRefId = fact.scopeRefId else { return "Thread" }
+            return "Thread · \(nodeTitles[scopeRefId] ?? "Untitled")"
+        case .selfReflection:
+            return "Self-reflection"
+        }
+    }
+
+    private static func sourceLabel(for fact: MemoryFactEntry, nodeTitles: [UUID: String]) -> String {
+        guard !fact.sourceNodeIds.isEmpty else { return "No linked source" }
+
+        let titles = fact.sourceNodeIds.compactMap { nodeTitles[$0] }.prefix(2)
+        if titles.isEmpty {
+            return "\(fact.sourceNodeIds.count) linked source\(fact.sourceNodeIds.count == 1 ? "" : "s")"
+        }
+
+        let joined = titles.joined(separator: ", ")
+        if fact.sourceNodeIds.count > titles.count {
+            return "\(joined) +\(fact.sourceNodeIds.count - titles.count) more"
+        }
+        return joined
+    }
+
+    private static func display(_ raw: String) -> String {
+        raw.replacingOccurrences(of: "_", with: " ").capitalized
     }
 }
 
@@ -109,6 +210,7 @@ struct MemoryDebugInspector: View {
     }
 
     @State private var entries: [MemoryEntry] = []
+    @State private var factEntries: [MemoryFactEntry] = []
     @State private var skills: [Skill] = []
     @State private var shadowPatterns: [ShadowLearningPattern] = []
     @State private var learningEvents: [LearningEvent] = []
@@ -119,10 +221,13 @@ struct MemoryDebugInspector: View {
     @State private var skillSort: SkillSort = .firedCount
     @State private var selectedEntryId: UUID?
     @State private var sourceSnippetsByEntryId: [UUID: [MemoryEvidenceSnippet]] = [:]
+    @State private var sourceSnippetsByFactId: [UUID: [MemoryEvidenceSnippet]] = [:]
     @State private var actingEntryId: UUID?
+    @State private var actingFactId: UUID?
     @State private var loadError: String?
     @State private var showAdvancedTools = false
     @State private var pendingDeleteEntry: MemoryEntry?
+    @State private var pendingDeleteFact: MemoryFactEntry?
 
     var body: some View {
         ScrollView {
@@ -130,6 +235,7 @@ struct MemoryDebugInspector: View {
                 header
                 overviewCard
                 browseCard
+                factMemoryCard
                 #if DEBUG
                 skillsCard
                 shadowLearningCard
@@ -154,14 +260,14 @@ struct MemoryDebugInspector: View {
             advancedToolsSheet
         }
         .confirmationDialog(
-            "Delete this memory row?",
+            "Forget this memory row?",
             isPresented: Binding(
                 get: { pendingDeleteEntry != nil },
                 set: { if $0 == false { pendingDeleteEntry = nil } }
             ),
             presenting: pendingDeleteEntry
         ) { entry in
-            Button("Delete Row", role: .destructive) {
+            Button("Forget Row", role: .destructive) {
                 let entryId = entry.id
                 pendingDeleteEntry = nil
                 mutate(entryId, failureMessage: "Failed to delete memory.") {
@@ -173,6 +279,27 @@ struct MemoryDebugInspector: View {
             }
         } message: { _ in
             Text("Nous will stop using this memory. The original chat or note stays untouched.")
+        }
+        .confirmationDialog(
+            "Forget this fact row?",
+            isPresented: Binding(
+                get: { pendingDeleteFact != nil },
+                set: { if $0 == false { pendingDeleteFact = nil } }
+            ),
+            presenting: pendingDeleteFact
+        ) { fact in
+            Button("Forget Row", role: .destructive) {
+                let factId = fact.id
+                pendingDeleteFact = nil
+                mutateFact(factId, failureMessage: "Failed to forget fact.") {
+                    userMemoryService.deleteMemoryFactEntry(id: factId)
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteFact = nil
+            }
+        } message: { _ in
+            Text("Nous will remove this extracted fact from the active memory path. The original chat or note stays untouched.")
         }
     }
 
@@ -252,6 +379,49 @@ struct MemoryDebugInspector: View {
                         selection: selectedFocus,
                         onSelect: { selectedFocus = $0 }
                     )
+                }
+            }
+        }
+    }
+
+    private var factMemoryCard: some View {
+        card {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        sectionLabel("Fact Memory")
+                        Text("Typed decisions, boundaries, and constraints that can change how Nous answers later.")
+                            .font(.system(size: 12, design: .rounded))
+                            .foregroundColor(AppColor.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Spacer()
+
+                    statPill(title: "Active", value: "\(activeFactEntries.count)")
+                    statPill(title: "Review", value: "\(factEntries.filter { $0.status != .active }.count)")
+                }
+
+                let rows = filteredFactRows
+                if rows.isEmpty {
+                    Text("No extracted fact memory matches this view yet.")
+                        .font(.system(size: 13, design: .rounded))
+                        .foregroundColor(AppColor.secondaryText)
+                        .padding(.vertical, 8)
+                } else {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(rows.prefix(12)) { row in
+                            if let fact = factEntries.first(where: { $0.id == row.id }) {
+                                factRow(row, fact: fact)
+                            }
+                        }
+                    }
+
+                    if rows.count > 12 {
+                        Text("\(rows.count - 12) more fact row\(rows.count - 12 == 1 ? "" : "s") match this filter.")
+                            .font(.system(size: 11, design: .rounded))
+                            .foregroundColor(AppColor.secondaryText)
+                    }
                 }
             }
         }
@@ -447,6 +617,27 @@ struct MemoryDebugInspector: View {
         }
     }
 
+    private var factRows: [MemoryFactDebugRow] {
+        MemoryFactDebugFormatting.rows(
+            from: factEntries,
+            nodeTitles: nodeTitles,
+            projectTitles: projectTitles
+        )
+    }
+
+    private var filteredFactRows: [MemoryFactDebugRow] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return factRows }
+        let normalizedQuery = query.lowercased()
+        return factRows.filter { row in
+            row.content.lowercased().contains(normalizedQuery) ||
+            row.scope.lowercased().contains(normalizedQuery) ||
+            row.source.lowercased().contains(normalizedQuery) ||
+            row.kind.lowercased().contains(normalizedQuery) ||
+            row.status.lowercased().contains(normalizedQuery)
+        }
+    }
+
     #if DEBUG
     private var sortedSkills: [Skill] {
         skills.sorted { lhs, rhs in
@@ -473,6 +664,10 @@ struct MemoryDebugInspector: View {
 
     private var activeEntries: [MemoryEntry] {
         sortedEntries.filter { $0.status == .active }
+    }
+
+    private var activeFactEntries: [MemoryFactEntry] {
+        factEntries.filter { $0.status == .active }
     }
 
     private var reviewEntries: [MemoryEntry] {
@@ -657,7 +852,7 @@ struct MemoryDebugInspector: View {
             HStack(spacing: 10) {
                 if entry.status == .active {
                     smallActionButton(
-                        title: "Keep Using",
+                        title: "Confirm",
                         tint: AppColor.colaOrange.opacity(0.15),
                         textColor: AppColor.colaDarkText
                     ) {
@@ -670,7 +865,7 @@ struct MemoryDebugInspector: View {
 
                 if entry.status != .archived {
                     smallActionButton(
-                        title: "Archive",
+                        title: "Reject",
                         tint: AppColor.surfaceSecondary,
                         textColor: AppColor.colaDarkText
                     ) {
@@ -682,7 +877,7 @@ struct MemoryDebugInspector: View {
                 }
 
                 smallActionButton(
-                    title: "Delete",
+                    title: "Forget",
                     tint: Color.red.opacity(0.12),
                     textColor: .red
                 ) {
@@ -727,6 +922,126 @@ struct MemoryDebugInspector: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func factRow(_ row: MemoryFactDebugRow, fact: MemoryFactEntry) -> some View {
+        let isBusy = actingFactId == row.id
+        let snippetsLoaded = sourceSnippetsByFactId[row.id] != nil
+        let snippets = sourceSnippetsByFactId[row.id] ?? []
+
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(row.content)
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundColor(AppColor.colaDarkText)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Text("\(row.scope) · \(row.source) · Updated \(Self.relative(row.updatedAt))")
+                        .font(.system(size: 11, design: .rounded))
+                        .foregroundColor(AppColor.secondaryText)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 12)
+
+                badge(
+                    text: row.status,
+                    tint: statusTint(fact.status),
+                    textColor: statusTextColor(fact.status)
+                )
+            }
+
+            HStack(spacing: 8) {
+                badge(
+                    text: row.kind,
+                    tint: AppColor.surfacePrimary,
+                    textColor: AppColor.colaDarkText.opacity(0.78)
+                )
+                badge(
+                    text: row.stability,
+                    tint: AppColor.surfacePrimary,
+                    textColor: AppColor.secondaryText
+                )
+                badge(
+                    text: "\(row.confidence) confidence",
+                    tint: AppColor.colaOrange.opacity(0.12),
+                    textColor: AppColor.colaDarkText
+                )
+
+                Spacer(minLength: 0)
+
+                if fact.status == .active {
+                    smallActionButton(
+                        title: "Confirm",
+                        tint: AppColor.colaOrange.opacity(0.15),
+                        textColor: AppColor.colaDarkText
+                    ) {
+                        mutateFact(row.id, failureMessage: "Failed to confirm fact.") {
+                            userMemoryService.confirmMemoryFactEntry(id: row.id)
+                        }
+                    }
+                    .disabled(isBusy)
+                }
+
+                if fact.status != .archived {
+                    smallActionButton(
+                        title: "Reject",
+                        tint: AppColor.surfaceSecondary,
+                        textColor: AppColor.colaDarkText
+                    ) {
+                        mutateFact(row.id, failureMessage: "Failed to reject fact.") {
+                            userMemoryService.archiveMemoryFactEntry(id: row.id)
+                        }
+                    }
+                    .disabled(isBusy)
+                }
+
+                smallActionButton(
+                    title: "Forget",
+                    tint: Color.red.opacity(0.12),
+                    textColor: .red
+                ) {
+                    pendingDeleteFact = fact
+                }
+                .disabled(isBusy)
+
+                if isBusy {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+
+            if snippetsLoaded {
+                sourceSnippetSection(snippets: snippets)
+            } else if !fact.sourceNodeIds.isEmpty {
+                HStack {
+                    smallActionButton(
+                        title: "Inspect Source",
+                        tint: AppColor.surfacePrimary,
+                        textColor: AppColor.colaDarkText
+                    ) {
+                        ensureSourceSnippets(for: fact)
+                    }
+                    Spacer()
+                }
+            } else {
+                Text("No linked source snippet is available for this fact yet.")
+                    .font(.system(size: 12, design: .rounded))
+                    .foregroundColor(AppColor.secondaryText)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(statusBackground(fact.status))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(statusBorder(fact.status), lineWidth: 1)
+        )
     }
 
     #if DEBUG
@@ -836,7 +1151,7 @@ struct MemoryDebugInspector: View {
                     textColor: AppColor.colaDarkText
                 )
                 badge(
-                    text: "c \(row.confidence)",
+                    text: "\(row.confidence) confidence",
                     tint: AppColor.surfacePrimary,
                     textColor: AppColor.secondaryText
                 )
@@ -1129,6 +1444,7 @@ struct MemoryDebugInspector: View {
     private func reload() {
         do {
             entries = userMemoryService.allMemoryEntries()
+            factEntries = try nodeStore.fetchMemoryFactEntries()
             #if DEBUG
             skills = try skillStore.fetchAllSkills(userId: "alex")
             if let shadowLearningStore {
@@ -1146,6 +1462,8 @@ struct MemoryDebugInspector: View {
 
             let validIds = Set(entries.map(\.id))
             sourceSnippetsByEntryId = sourceSnippetsByEntryId.filter { validIds.contains($0.key) }
+            let validFactIds = Set(factEntries.map(\.id))
+            sourceSnippetsByFactId = sourceSnippetsByFactId.filter { validFactIds.contains($0.key) }
             loadError = nil
             syncSelectedEntry()
         } catch {
@@ -1156,6 +1474,12 @@ struct MemoryDebugInspector: View {
     private func ensureSourceSnippets(for entry: MemoryEntry) {
         if sourceSnippetsByEntryId[entry.id] == nil {
             sourceSnippetsByEntryId[entry.id] = userMemoryService.sourceSnippets(for: entry.id, limit: 3)
+        }
+    }
+
+    private func ensureSourceSnippets(for fact: MemoryFactEntry) {
+        if sourceSnippetsByFactId[fact.id] == nil {
+            sourceSnippetsByFactId[fact.id] = userMemoryService.factSourceSnippets(for: fact.id, limit: 3)
         }
     }
 
@@ -1187,6 +1511,23 @@ struct MemoryDebugInspector: View {
         actingEntryId = entryId
         let succeeded = action()
         actingEntryId = nil
+
+        if succeeded {
+            loadError = nil
+            reload()
+        } else {
+            loadError = failureMessage
+        }
+    }
+
+    private func mutateFact(
+        _ factId: UUID,
+        failureMessage: String,
+        action: () -> Bool
+    ) {
+        actingFactId = factId
+        let succeeded = action()
+        actingFactId = nil
 
         if succeeded {
             loadError = nil
@@ -2090,7 +2431,7 @@ struct ReflectionClaimsTab: View {
     }
 
     private func confidenceBadge(_ confidence: Double) -> some View {
-        Text("conf \(String(format: "%.2f", confidence))")
+        Text("\(Int((confidence * 100).rounded()))% confidence")
             .font(.system(size: 11, weight: .semibold, design: .rounded))
             .foregroundColor(AppColor.secondaryText)
             .padding(.horizontal, 9)

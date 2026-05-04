@@ -29,6 +29,21 @@ final class SlowStreamingLLMService: LLMService {
     }
 }
 
+@MainActor
+private func waitUntilOnMainActor(
+    timeoutNanoseconds: UInt64 = 1_000_000_000,
+    condition: @MainActor @escaping () -> Bool
+) async throws {
+    let start = DispatchTime.now().uptimeNanoseconds
+    while !condition() {
+        if DispatchTime.now().uptimeNanoseconds - start > timeoutNanoseconds {
+            XCTFail("Timed out waiting for condition.")
+            return
+        }
+        try await Task.sleep(nanoseconds: 10_000_000)
+    }
+}
+
 final class ChatStreamingPresentationTests: XCTestCase {
     func testKeepsThinkingExpandedWhileAnswerTextStreams() {
         let startedAt = Date(timeIntervalSince1970: 100)
@@ -179,6 +194,70 @@ final class ChatViewModelTests: XCTestCase {
         )
 
         XCTAssertNil(vm.activeChatMode)
+    }
+
+    func testStartBlankConversationClearsTurnStateWithoutCreatingANewNode() throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let scratchPadStore = makeScratchPadStore(nodeStore: nodeStore)
+
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { nil },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: scratchPadStore
+        )
+        let node = NousNode(type: .conversation, title: "Arc 1")
+        try nodeStore.insertNode(node)
+        let message = Message(nodeId: node.id, role: .user, content: "old probe")
+
+        vm.currentNode = node
+        vm.messages = [message]
+        vm.inputText = "draft"
+        vm.currentResponse = "partial"
+        vm.currentThinking = "thinking"
+        vm.currentThinkingStartedAt = Date()
+        vm.currentAgentTrace = [
+            AgentTraceRecord(kind: .toolCall, title: "Old tool", detail: "old trace")
+        ]
+        vm.didHitBudgetExhaustion = true
+        vm.citations = [SearchResult(node: node, similarity: 0.9)]
+        vm.activeQuickActionMode = .plan
+        vm.activeChatMode = .strategist
+        vm.lastPromptGovernanceTrace = PromptGovernanceTrace(
+            promptLayers: ["recent_conversations"],
+            evidenceAttached: true,
+            safetyPolicyInvoked: false,
+            highRiskQueryDetected: false
+        )
+        scratchPadStore.activate(conversationId: node.id)
+
+        vm.startBlankConversation()
+
+        XCTAssertNil(vm.currentNode)
+        XCTAssertTrue(vm.messages.isEmpty)
+        XCTAssertTrue(vm.inputText.isEmpty)
+        XCTAssertTrue(vm.currentResponse.isEmpty)
+        XCTAssertTrue(vm.currentThinking.isEmpty)
+        XCTAssertNil(vm.currentThinkingStartedAt)
+        XCTAssertTrue(vm.currentAgentTrace.isEmpty)
+        XCTAssertFalse(vm.didHitBudgetExhaustion)
+        XCTAssertTrue(vm.citations.isEmpty)
+        XCTAssertNil(vm.activeQuickActionMode)
+        XCTAssertNil(vm.activeChatMode)
+        XCTAssertNil(vm.lastPromptGovernanceTrace)
+        XCTAssertNil(scratchPadStore.activeConversationId)
+        XCTAssertEqual(try nodeStore.fetchAllNodes().map(\.id), [node.id])
     }
 
     func testPurgePersistedThinkingFromLoadedMessagesClearsVisibleTraces() throws {
@@ -614,7 +693,9 @@ final class ChatViewModelTests: XCTestCase {
 
         vm.inputText = "Help me think"
         let sendTask = Task { await vm.send() }
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await waitUntilOnMainActor {
+            vm.currentNode != nil && vm.isGenerating && !vm.currentResponse.isEmpty
+        }
 
         let nodeId = try XCTUnwrap(vm.currentNode?.id)
         XCTAssertTrue(vm.isGenerating)
@@ -655,7 +736,9 @@ final class ChatViewModelTests: XCTestCase {
 
         vm.inputText = "first"
         let sendTask = Task { await vm.send() }
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await waitUntilOnMainActor {
+            vm.currentNode != nil && vm.isGenerating && !vm.currentResponse.isEmpty
+        }
 
         let originalNodeId = try XCTUnwrap(vm.currentNode?.id)
         let otherNode = NousNode(type: .conversation, title: "Other conversation")

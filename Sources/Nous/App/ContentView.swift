@@ -5,6 +5,16 @@ enum MainTab {
     case chat, notes, galaxy, settings
 }
 
+enum GlobalVoicePillPolicy {
+    static func shouldShowStartButton(selectedTab: MainTab) -> Bool {
+        selectedTab == .notes
+    }
+
+    static func canHostCapsule(selectedTab: MainTab) -> Bool {
+        selectedTab != .chat && selectedTab != .galaxy
+    }
+}
+
 struct ContentView: View {
     let env: AppEnvironment
     private static let isRunningUnitTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
@@ -145,13 +155,7 @@ struct ContentView: View {
             selectedNodeId: currentSidebarNodeId(dependencies: dependencies),
             onNodeSelected: { node in navigateToNode(node, dependencies: dependencies) },
             onNewChat: {
-                dependencies.chatVM.stopGenerating()
-                dependencies.chatVM.currentNode = nil
-                dependencies.chatVM.messages = []
-                dependencies.chatVM.citations = []
-                dependencies.chatVM.currentResponse = ""
-                dependencies.chatVM.inputText = ""
-                dependencies.scratchPadStore.activate(conversationId: nil)
+                dependencies.chatVM.startBlankConversation()
                 selectedTab = .chat
             }
         )
@@ -299,13 +303,7 @@ struct ContentView: View {
                     dependencies.chatVM.inputText = ""
                 },
                 startNewChat: {
-                    dependencies.chatVM.stopGenerating()
-                    dependencies.chatVM.currentNode = nil
-                    dependencies.chatVM.messages = []
-                    dependencies.chatVM.citations = []
-                    dependencies.chatVM.currentResponse = ""
-                    dependencies.chatVM.inputText = ""
-                    dependencies.scratchPadStore.activate(conversationId: nil)
+                    dependencies.chatVM.startBlankConversation()
                     withAnimation(AppMotion.markdownPanelSpring.animation) {
                         isScratchPadVisible = false
                     }
@@ -431,14 +429,18 @@ struct ContentView: View {
 
     @ViewBuilder
     private func globalVoicePill(dependencies: AppDependencies) -> some View {
-        if selectedTab != .chat && selectedTab != .galaxy {
+        let shouldShowCapsule = GlobalVoicePillPolicy.canHostCapsule(selectedTab: selectedTab) &&
+            VoiceCapsuleVisibilityPolicy.shouldShowCapsule(
+                isVoiceActive: dependencies.voiceController.isActive,
+                status: dependencies.voiceController.status,
+                hasPendingAction: dependencies.voiceController.pendingAction != nil,
+                hasSummaryPreview: dependencies.voiceController.summaryPreview != nil
+            )
+        let shouldShowStartButton = GlobalVoicePillPolicy.shouldShowStartButton(selectedTab: selectedTab)
+
+        if shouldShowCapsule || shouldShowStartButton {
             HStack(spacing: 8) {
-                if VoiceCapsuleVisibilityPolicy.shouldShowCapsule(
-                    isVoiceActive: dependencies.voiceController.isActive,
-                    status: dependencies.voiceController.status,
-                    hasPendingAction: dependencies.voiceController.pendingAction != nil,
-                    hasSummaryPreview: dependencies.voiceController.summaryPreview != nil
-                ) {
+                if shouldShowCapsule {
                     VoiceCapsuleView(
                         status: dependencies.voiceController.status,
                         subtitleText: dependencies.voiceController.subtitleText,
@@ -451,11 +453,13 @@ struct ContentView: View {
                     )
                 }
 
-                VoiceModeButton(
-                    isActive: dependencies.voiceController.isActive,
-                    unavailableReason: dependencies.settingsVM.voiceModeUnavailableReason
-                ) {
-                    toggleVoiceMode(dependencies: dependencies)
+                if shouldShowStartButton {
+                    VoiceModeButton(
+                        isActive: dependencies.voiceController.isActive,
+                        unavailableReason: dependencies.settingsVM.voiceModeUnavailableReason
+                    ) {
+                        toggleVoiceMode(dependencies: dependencies)
+                    }
                 }
             }
             .padding(.bottom, 24)

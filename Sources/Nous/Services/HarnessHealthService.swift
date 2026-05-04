@@ -178,6 +178,7 @@ final class HarnessHealthService: HarnessHealthLoading {
 final class RuntimeHarnessService: RuntimeHarnessLoading {
     private let telemetry: GovernanceTelemetryStore
     private let repoURL: URL
+    private let nodeStore: NodeStore?
 
     private struct SycophancyHistoryRow {
         let runId: String
@@ -186,10 +187,12 @@ final class RuntimeHarnessService: RuntimeHarnessLoading {
 
     init(
         telemetry: GovernanceTelemetryStore = GovernanceTelemetryStore(),
+        nodeStore: NodeStore? = nil,
         repoURL: URL? = RuntimeHarnessService.defaultRepoURL(),
         fileManager: FileManager = .default
     ) {
         self.telemetry = telemetry
+        self.nodeStore = nodeStore
         self.repoURL = repoURL ?? URL(fileURLWithPath: fileManager.currentDirectoryPath)
     }
 
@@ -201,8 +204,17 @@ final class RuntimeHarnessService: RuntimeHarnessLoading {
             reviewerCoverageRate: summary.reviewCoverageRate,
             riskFlagCounts: summary.reviewRiskFlagCounts,
             lastRiskFlags: summary.lastSnapshot?.reviewRiskFlags ?? [],
-            sycophancyFixtureTrend: sycophancyFixtureTrend()
+            sycophancyFixtureTrend: sycophancyFixtureTrend(),
+            agentToolReliability: agentToolReliabilitySummary()
         )
+    }
+
+    private func agentToolReliabilitySummary() -> AgentToolReliabilitySummary {
+        guard let nodeStore,
+              let records = try? nodeStore.fetchRecentAgentTraceRecords(limit: 50) else {
+            return .empty
+        }
+        return AgentToolReliabilitySummary.summarize(records: records)
     }
 
     private func sycophancyFixtureTrend() -> String {

@@ -38,8 +38,16 @@ final class GalaxyViewModelTests: XCTestCase {
         target.embedding = [0.9, 0.1, 0.0]
         try nodeStore.insertNode(source)
         try nodeStore.insertNode(target)
-        try graphEngine.generateSemanticEdges(for: source)
-        let originalEdge = try XCTUnwrap(nodeStore.fetchEdges(nodeId: source.id).first)
+        let originalEdge = NodeEdge(
+            sourceId: source.id,
+            targetId: target.id,
+            strength: 0.9,
+            type: .semantic,
+            relationKind: .topicSimilarity,
+            confidence: 0.9,
+            explanation: "这只是语义相似，不是强结论；需要更多证据才能判断真正关系。"
+        )
+        try nodeStore.insertEdge(originalEdge)
 
         let viewModel = GalaxyViewModel(nodeStore: nodeStore, graphEngine: graphEngine)
         viewModel.nodes = [source, target]

@@ -31,7 +31,11 @@ print_agentic_workflow_gate() {
 
 Agentic workflow:
 - Default to one lead agent; use read-only explorers for noisy investigation.
+- Use the Context Boundary Card before delegating.
+- Do not split planner / implementer / tester roles when context overlaps.
 - Worker agents require explicit ownership and disjoint write sets.
+- Agent teams remain deferred unless explicitly requested.
+- Use a separate Verifier only for meaningful false-green risk; use Memory Steward for memory boundaries.
 - After verification, run scripts/agentic_workflow_check.sh --bead <id> --path <task-file>... before finish.
 - Playbook: docs/agentic-engineering-workflow.md
 EOF

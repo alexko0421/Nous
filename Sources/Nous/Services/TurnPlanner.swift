@@ -258,6 +258,7 @@ final class TurnPlanner {
         let turnSlice = PromptContextAssembler.assembleContext(
             chatMode: effectiveMode,
             currentUserInput: promptQuery,
+            operatingContext: memoryContext.operatingContext,
             globalMemory: globalMemory,
             essentialStory: essentialStory,
             userModel: userModel,
@@ -282,6 +283,7 @@ final class TurnPlanner {
         let promptTrace = PromptContextAssembler.governanceTrace(
             chatMode: effectiveMode,
             currentUserInput: promptQuery,
+            operatingContext: memoryContext.operatingContext,
             globalMemory: globalMemory,
             essentialStory: essentialStory,
             userModel: userModel,
@@ -438,11 +440,27 @@ final class TurnPlanner {
         _ service: any LLMService,
         thinkingHandler: ThinkingDeltaHandler?
     ) -> any LLMService {
-        guard let thinkingHandler,
-              let configurable = service as? any ThinkingDeltaConfigurableLLMService else {
-            return service
+        if let thinkingHandler,
+           let configurable = service as? any ThinkingDeltaConfigurableLLMService {
+            return configurable.withThinkingDeltaHandler(thinkingHandler)
         }
-        return configurable.withThinkingDeltaHandler(thinkingHandler)
+        return configuredJudgeThinkingBudgetOnly(service)
+    }
+
+    private static func configuredJudgeThinkingBudgetOnly(_ service: any LLMService) -> any LLMService {
+        if var claude = service as? ClaudeLLMService {
+            claude.thinkingBudgetTokens = claude.thinkingBudgetTokens ?? 1024
+            return claude
+        }
+        if var openRouter = service as? OpenRouterLLMService {
+            openRouter.reasoningBudgetTokens = openRouter.reasoningBudgetTokens ?? 1024
+            return openRouter
+        }
+        if var gemini = service as? GeminiLLMService {
+            gemini.thinkingBudgetTokens = gemini.thinkingBudgetTokens ?? 1024
+            return gemini
+        }
+        return service
     }
 
     private static func agentTurnIndex(

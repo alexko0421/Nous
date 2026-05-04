@@ -40,6 +40,69 @@ final class TurnPlannerSkillIntegrationTests: XCTestCase {
         XCTAssertFalse(plan.turnSlice.combinedString.contains("INFERRED DIRECTION SKILL"))
     }
 
+    func testPlannerInjectsSavedOperatingContextIntoStablePromptAndTrace() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let skillStore = SkillStore(nodeStore: nodeStore)
+        let updatedAt = Date(timeIntervalSince1970: 1_234)
+        let operatingContext = OperatingContext(
+            identity: "Alex is testing the wiring.",
+            currentWork: "Connect Operating Context end to end.",
+            communicationStyle: "Be direct.",
+            boundaries: "Ask before storing sensitive facts.",
+            updatedAt: updatedAt
+        )
+        try nodeStore.saveOperatingContext(operatingContext, now: updatedAt)
+
+        let node = NousNode(type: .conversation, title: "Operating Context wiring")
+        try nodeStore.insertNode(node)
+        let message = Message(
+            nodeId: node.id,
+            role: .user,
+            content: "Check whether the profile is connected."
+        )
+        let prepared = PreparedConversationTurn(
+            node: node,
+            userMessage: message,
+            messagesAfterUserAppend: [message]
+        )
+        let request = TurnRequest(
+            turnId: UUID(),
+            snapshot: TurnSessionSnapshot(
+                currentNode: node,
+                messages: [message],
+                defaultProjectId: nil,
+                activeChatMode: nil,
+                activeQuickActionMode: nil
+            ),
+            inputText: message.content,
+            attachments: [],
+            now: Date(timeIntervalSince1970: 7_000)
+        )
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .lean,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "test operating context wiring"
+        )
+
+        let planner = makePlanner(nodeStore: nodeStore, skillStore: skillStore)
+        let plan = try await planner.plan(
+            from: prepared,
+            request: request,
+            stewardship: stewardship
+        )
+
+        XCTAssertTrue(plan.turnSlice.stable.contains("USER-AUTHORED OPERATING CONTEXT"))
+        XCTAssertTrue(plan.turnSlice.stable.contains("Identity:\n- Alex is testing the wiring."))
+        XCTAssertTrue(plan.turnSlice.stable.contains("Current Work / Goals:\n- Connect Operating Context end to end."))
+        XCTAssertTrue(plan.turnSlice.stable.contains("Communication Style:\n- Be direct."))
+        XCTAssertTrue(plan.turnSlice.stable.contains("Hard Boundaries:\n- Ask before storing sensitive facts."))
+        XCTAssertTrue(plan.promptTrace.promptLayers.contains("operating_context"))
+        XCTAssertTrue(plan.promptTrace.hasMemorySignal)
+    }
+
     private func makePlanner(
         nodeStore: NodeStore,
         skillStore: SkillStore

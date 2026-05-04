@@ -9,7 +9,7 @@ struct ActionMenuSeparationMotion {
     init(
         sourceYOffset: CGFloat = 46,
         collapsedScale: CGSize = CGSize(width: 0.24, height: 0.68),
-        openingDelayStep: Double = 0.035,
+        openingDelayStep: Double = 0.018,
         closingDelayStep: Double = 0.018
     ) {
         self.sourceYOffset = sourceYOffset
@@ -53,5 +53,64 @@ struct ActionMenuSeparationMotion {
         }
 
         return Double(max(itemCount - safeIndex - 1, 0)) * closingDelayStep
+    }
+}
+
+enum ComposerSeparationPolicy {
+    static func shouldSeparate(inputText: String, hasAttachments: Bool, isGenerating: Bool) -> Bool {
+        let hasDraft = !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return hasDraft || hasAttachments || isGenerating
+    }
+}
+
+struct ComposerPrimaryActionMotion {
+    let joinedIconOpacity: Double
+    let separatedIconOpacity: Double
+    let separatedTintAlpha: CGFloat
+    let disabledSeparatedTintAlpha: CGFloat
+    let separatedFillOpacity: Double
+    let disabledSeparatedFillOpacity: Double
+    let separatedGlowOpacity: Double
+
+    init(
+        joinedIconOpacity: Double = 0,
+        separatedIconOpacity: Double = 1,
+        separatedTintAlpha: CGFloat = 0.88,
+        disabledSeparatedTintAlpha: CGFloat = 0.18,
+        separatedFillOpacity: Double = 0.82,
+        disabledSeparatedFillOpacity: Double = 0.16,
+        separatedGlowOpacity: Double = 0.1
+    ) {
+        self.joinedIconOpacity = joinedIconOpacity
+        self.separatedIconOpacity = separatedIconOpacity
+        self.separatedTintAlpha = separatedTintAlpha
+        self.disabledSeparatedTintAlpha = disabledSeparatedTintAlpha
+        self.separatedFillOpacity = separatedFillOpacity
+        self.disabledSeparatedFillOpacity = disabledSeparatedFillOpacity
+        self.separatedGlowOpacity = separatedGlowOpacity
+    }
+
+    func tintAlpha(isSeparated: Bool, canAct: Bool) -> CGFloat {
+        guard isSeparated else {
+            return 0
+        }
+
+        return canAct ? separatedTintAlpha : disabledSeparatedTintAlpha
+    }
+
+    func iconOpacity(isSeparated: Bool) -> Double {
+        isSeparated ? separatedIconOpacity : joinedIconOpacity
+    }
+
+    func fillOpacity(isSeparated: Bool, canAct: Bool) -> Double {
+        guard isSeparated else {
+            return 0
+        }
+
+        return canAct ? separatedFillOpacity : disabledSeparatedFillOpacity
+    }
+
+    func glowOpacity(isSeparated: Bool, canAct: Bool) -> Double {
+        isSeparated && canAct ? separatedGlowOpacity : 0
     }
 }

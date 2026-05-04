@@ -137,6 +137,61 @@ struct SettingsView: View {
                 }
 
                 settingsCard {
+                    sectionLabel("Operating Context")
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Manual context")
+                            .font(.system(size: 16, weight: .semibold, design: .rounded))
+                            .foregroundColor(AppColor.colaDarkText)
+                        Text("Used as a global profile before every chat. It stays separate from learned memory.")
+                            .font(.system(size: 13, design: .rounded))
+                            .foregroundColor(AppColor.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    operatingContextField(
+                        title: "Identity",
+                        description: "Stable facts Nous should know about you.",
+                        text: $vm.operatingContextIdentity
+                    )
+                    operatingContextField(
+                        title: "Current Work / Goals",
+                        description: "What you are actively trying to move forward.",
+                        text: $vm.operatingContextCurrentWork
+                    )
+                    operatingContextField(
+                        title: "Communication Style",
+                        description: "How Nous should think and talk with you.",
+                        text: $vm.operatingContextCommunicationStyle
+                    )
+                    operatingContextField(
+                        title: "Hard Boundaries",
+                        description: "Things Nous should not do or store without explicit consent.",
+                        text: $vm.operatingContextBoundaries
+                    )
+
+                    HStack(spacing: 12) {
+                        if let error = vm.operatingContextSaveError {
+                            Text(error)
+                                .font(.system(size: 12, design: .rounded))
+                                .foregroundColor(.red)
+                        }
+                        Spacer()
+                        Button(action: { vm.saveOperatingContextFromSettings() }) {
+                            Label("Save Context", systemImage: "checkmark.circle.fill")
+                                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                        .background(AppColor.colaOrange)
+                        .clipShape(Capsule())
+                    }
+
+                    helperCopy("Boundaries are treated as hard constraints. The other fields guide tone, priorities, and tradeoffs.")
+                }
+
+                settingsCard {
                     sectionLabel("Appearance")
                     HStack(alignment: .center, spacing: 16) {
                         VStack(alignment: .leading, spacing: 4) {
@@ -414,6 +469,38 @@ struct SettingsView: View {
             .font(.system(size: 12, design: .rounded))
             .foregroundColor(AppColor.secondaryText)
             .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder
+    private func operatingContextField(
+        title: String,
+        description: String,
+        text: Binding<String>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundColor(AppColor.colaDarkText)
+                Text(description)
+                    .font(.system(size: 12, design: .rounded))
+                    .foregroundColor(AppColor.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            TextEditor(text: text)
+                .font(.system(size: 13, design: .rounded))
+                .foregroundColor(AppColor.colaDarkText)
+                .scrollContentBackground(.hidden)
+                .frame(minHeight: 64)
+                .padding(10)
+                .background(AppColor.surfacePrimary)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(AppColor.panelStroke, lineWidth: 1)
+                )
+        }
     }
 
     @ViewBuilder

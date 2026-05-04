@@ -939,6 +939,128 @@ final class UserMemoryServiceTests: XCTestCase {
         XCTAssertTrue(prompts[1].contains(userTurn))
     }
 
+    func testRefreshConversationRedactsHardOptOutEvidenceBeforeSynthesis() async throws {
+        let capture = PromptSequenceCapture()
+        let mock = QueueMockLLMService(
+            capture: capture,
+            replies: [
+                """
+                - Alex is testing whether Nous will remember 蓝色火车.
+                - If Alex explicitly says not to remember something, Nous should respect that boundary.
+                """,
+                """
+                {
+                  "facts": [
+                    {"kind":"boundary","content":"Do not store 'blue train' (蓝色火车) toy name as durable memory.","confidence":0.98},
+                    {"kind":"boundary","content":"When Alex explicitly says not to remember something, respect that instruction and do not retain the specific content beyond the conversation.","confidence":0.97}
+                  ],
+                  "decision_chains": [],
+                  "semantic_atoms": [
+                    {
+                      "type":"rule",
+                      "statement":"Do not store 蓝色火车 as durable memory.",
+                      "evidence_message_id":"00000000-0000-0000-0000-000000000000",
+                      "evidence_quote":"蓝色火车",
+                      "confidence":0.9
+                    }
+                  ]
+                }
+                """
+            ]
+        )
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let node = NousNode(type: .conversation, title: "Boundary redaction chat", content: "")
+        try store.insertNode(node)
+
+        let forbiddenTurn = Message(
+            nodeId: node.id,
+            role: .user,
+            content: "我今晚放一个测试细节：我小时候给一个玩具起名叫蓝色火车。这件事不要记住，只在这个 conversation 里处理。",
+            timestamp: Date(timeIntervalSince1970: 1)
+        )
+        let allowedBoundaryTurn = Message(
+            nodeId: node.id,
+            role: .user,
+            content: "可以记住的是这条边界：如果我明确说不要记，你要尊重，不要保留具体内容。",
+            timestamp: Date(timeIntervalSince1970: 2)
+        )
+
+        await service.refreshConversation(
+            nodeId: node.id,
+            projectId: nil,
+            messages: [forbiddenTurn, allowedBoundaryTurn]
+        )
+
+        let prompts = await capture.prompts()
+        XCTAssertEqual(prompts.count, 2)
+        XCTAssertFalse(prompts[0].contains("蓝色火车"), "thread synthesis prompt must not expose forbidden content")
+        XCTAssertFalse(prompts[1].contains("蓝色火车"), "fact extraction prompt must not expose forbidden content")
+        XCTAssertTrue(prompts[0].contains("intentionally redacted"))
+        XCTAssertTrue(prompts[1].contains("intentionally redacted"))
+
+        let entry = try XCTUnwrap(store.fetchActiveMemoryEntry(scope: .conversation, scopeRefId: node.id))
+        XCTAssertFalse(entry.content.contains("蓝色火车"), "thread memory must redact forbidden content even if the model echoes it")
+
+        let facts = try store.fetchActiveMemoryFactEntries(
+            scope: .conversation,
+            scopeRefId: node.id,
+            kinds: [.boundary]
+        )
+        XCTAssertEqual(facts.count, 1)
+        XCTAssertFalse(facts.contains { $0.content.contains("蓝色火车") })
+        XCTAssertTrue(facts.first?.content.contains("explicitly says not to remember") == true)
+
+        let atoms = try store.fetchMemoryAtoms()
+        XCTAssertFalse(atoms.contains { $0.statement.contains("蓝色火车") })
+    }
+
+    func testRefreshConversationKeepsUnchangedFactActiveWithoutArchivedDuplicates() async throws {
+        let capture = PromptSequenceCapture()
+        let factPayload = """
+        {
+          "facts": [
+            {"kind":"boundary","content":"When Alex explicitly says not to remember something, respect that instruction and do not retain the specific content beyond the conversation.","confidence":0.97}
+          ],
+          "decision_chains": [],
+          "semantic_atoms": []
+        }
+        """
+        let mock = QueueMockLLMService(
+            capture: capture,
+            replies: [
+                "- first summary",
+                factPayload,
+                "- second summary",
+                factPayload
+            ]
+        )
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let node = NousNode(type: .conversation, title: "Fact duplicate chat", content: "")
+        try store.insertNode(node)
+
+        let message = Message(
+            nodeId: node.id,
+            role: .user,
+            content: "If I explicitly say not to remember something, respect that boundary and do not keep the specific content.",
+            timestamp: Date(timeIntervalSince1970: 1)
+        )
+
+        await service.refreshConversation(nodeId: node.id, projectId: nil, messages: [message])
+        await service.refreshConversation(nodeId: node.id, projectId: nil, messages: [message])
+
+        let allFacts = try store.fetchMemoryFactEntries()
+            .filter { $0.scope == .conversation && $0.scopeRefId == node.id }
+        XCTAssertEqual(allFacts.count, 1, "unchanged facts should update in place, not create archived duplicate rows")
+        XCTAssertEqual(allFacts.first?.status, .active)
+
+        let atoms = try store.fetchMemoryAtoms()
+            .filter { $0.scope == .conversation && $0.scopeRefId == node.id }
+        XCTAssertEqual(atoms.count, 1, "unchanged fact atoms should upsert in place")
+        XCTAssertEqual(atoms.first?.status, .active)
+    }
+
     func testRefreshConversationInvalidFactJSONFailsClosed() async throws {
         let capture = PromptSequenceCapture()
         let mock = QueueMockLLMService(
@@ -2284,6 +2406,58 @@ final class UserMemoryServiceTests: XCTestCase {
         XCTAssertNil(try store.fetchMemoryEntry(id: entry.id))
     }
 
+    func testMemoryFactTrustActionsMutateFactRows() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+        let originalDate = Date(timeIntervalSince1970: 10)
+        let confirmedFact = MemoryFactEntry(
+            scope: .global,
+            kind: .boundary,
+            content: "Do not store hard opt-out turns.",
+            confidence: 0.52,
+            status: .active,
+            stability: .stable,
+            createdAt: originalDate,
+            updatedAt: originalDate
+        )
+        let rejectedFact = MemoryFactEntry(
+            scope: .global,
+            kind: .decision,
+            content: "Old decision.",
+            confidence: 0.88,
+            status: .active,
+            stability: .temporary,
+            createdAt: originalDate,
+            updatedAt: originalDate
+        )
+        let forgottenFact = MemoryFactEntry(
+            scope: .conversation,
+            scopeRefId: UUID(),
+            kind: .constraint,
+            content: "Throwaway constraint.",
+            confidence: 0.7,
+            status: .active,
+            stability: .temporary,
+            createdAt: originalDate,
+            updatedAt: originalDate
+        )
+        try store.insertMemoryFactEntry(confirmedFact)
+        try store.insertMemoryFactEntry(rejectedFact)
+        try store.insertMemoryFactEntry(forgottenFact)
+
+        XCTAssertTrue(service.confirmMemoryFactEntry(id: confirmedFact.id))
+        XCTAssertTrue(service.archiveMemoryFactEntry(id: rejectedFact.id))
+        XCTAssertTrue(service.deleteMemoryFactEntry(id: forgottenFact.id))
+
+        let updatedConfirmed = try store.fetchMemoryFactEntry(id: confirmedFact.id)
+        XCTAssertEqual(updatedConfirmed?.status, .active)
+        XCTAssertGreaterThanOrEqual(updatedConfirmed?.confidence ?? 0, 0.95)
+        XCTAssertGreaterThan(updatedConfirmed?.updatedAt ?? originalDate, originalDate)
+        XCTAssertEqual(try store.fetchMemoryFactEntry(id: rejectedFact.id)?.status, .archived)
+        XCTAssertNil(try store.fetchMemoryFactEntry(id: forgottenFact.id))
+    }
+
     func testSourceSnippetsUseLinkedSourceNodes() throws {
         let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
             MockLLMService(capture: PromptCapture(), reply: "")
@@ -2311,6 +2485,38 @@ final class UserMemoryServiceTests: XCTestCase {
         XCTAssertEqual(snippets.count, 1)
         XCTAssertEqual(snippets.first?.sourceNodeId, node.id)
         XCTAssertTrue(snippets.first?.snippet.contains("raw history") == true)
+    }
+
+    func testFactSourceSnippetsUseLinkedSourceNodes() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+        let node = NousNode(
+            type: .conversation,
+            title: "Memory boundary",
+            content: "Alex: 不要记住具体内容，只记住这个边界。\n\nNous: 我会尊重呢个边界。"
+        )
+        try store.insertNode(node)
+
+        let fact = MemoryFactEntry(
+            scope: .conversation,
+            scopeRefId: node.id,
+            kind: .boundary,
+            content: "Alex set a memory boundary.",
+            confidence: 0.91,
+            status: .active,
+            stability: .stable,
+            sourceNodeIds: [node.id],
+            createdAt: Date(),
+            updatedAt: Date()
+        )
+        try store.insertMemoryFactEntry(fact)
+
+        let snippets = service.factSourceSnippets(for: fact.id, limit: 2)
+        XCTAssertEqual(snippets.count, 1)
+        XCTAssertEqual(snippets.first?.sourceNodeId, node.id)
+        XCTAssertEqual(snippets.first?.sourceTitle, "Memory boundary")
+        XCTAssertTrue(snippets.first?.snippet.contains("不要记住具体内容") == true)
     }
 
     func testShouldPersistMemoryReturnsFalseWhenUserOptsOut() throws {

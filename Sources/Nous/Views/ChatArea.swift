@@ -25,10 +25,12 @@ struct ChatArea: View {
     @State private var downvoteFeedbackReason: JudgeFeedbackReason?
     @State private var downvoteFeedbackNote: String = ""
     @FocusState private var isComposerFocused: Bool
+    @Namespace private var composerPrimaryActionNamespace
 
     private let bottomScrollAnchor = "chat-bottom-anchor"
     private let bottomVisibleSpacing: CGFloat = 53
     private let composerMaxWidth: CGFloat = 820
+    private let composerActionMotion = ComposerPrimaryActionMotion()
     
     private var isWelcomeState: Bool {
         vm.messages.isEmpty && vm.currentNode == nil
@@ -43,6 +45,14 @@ struct ChatArea: View {
 
     private var canPrimaryAction: Bool {
         vm.isGenerating || canSend
+    }
+
+    private var shouldSeparateComposerPrimaryAction: Bool {
+        ComposerSeparationPolicy.shouldSeparate(
+            inputText: vm.inputText,
+            hasAttachments: !attachments.isEmpty,
+            isGenerating: vm.isGenerating
+        )
     }
 
     private var remainingImageAttachmentSlots: Int {
@@ -399,15 +409,17 @@ struct ChatArea: View {
                                         .foregroundColor(AppColor.colaDarkText)
                                         .lineLimit(1...6)
                                         .fixedSize(horizontal: false, vertical: true)
-                                        .padding(.horizontal, 18)
+                                        .padding(.leading, 18)
+                                        .padding(.trailing, 18)
                                         .padding(.vertical, 10)
                                         .frame(minHeight: 36)
                                         .onSubmit(sendCurrentInput)
                                 }
+                                .frame(maxWidth: .infinity, alignment: .leading)
                                 .background(
                                     NativeGlassPanel(
                                         cornerRadius: 18,
-                                        tintColor: AppColor.glassTint
+                                        tintColor: AppColor.composerGlassTint
                                     ) { EmptyView() }
                                 )
                                 .overlay(
@@ -416,27 +428,15 @@ struct ChatArea: View {
                                 )
                                 .shadow(color: .black.opacity(0.04), radius: 6, x: 0, y: 2)
 
-                                Button(action: handlePrimaryAction) {
-                                    Image(systemName: vm.isGenerating ? "stop.fill" : "arrow.up")
-                                        .font(.system(size: 13, weight: .bold))
-                                        .foregroundColor(.white)
+                                if shouldSeparateComposerPrimaryAction {
+                                    primaryActionButton(isSeparated: true)
+                                        .transition(.scale(scale: 0.72, anchor: .leading).combined(with: .opacity))
                                 }
-                                .buttonStyle(.plain)
-                                .frame(width: 36, height: 36)
-                                .background(
-                                    NativeGlassPanel(
-                                        cornerRadius: 18,
-                                        tintColor: canPrimaryAction
-                                            ? NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.88)
-                                            : NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.18)
-                                    ) { EmptyView() }
-                                )
-                                .overlay(
-                                    Circle()
-                                        .stroke(canPrimaryAction ? Color.white.opacity(0.18) : AppColor.panelStroke, lineWidth: 1)
-                                )
-                                .disabled(!canPrimaryAction)
                         }
+                        .animation(
+                            .timingCurve(0.68, -0.6, 0.32, 1.6, duration: 0.42),
+                            value: shouldSeparateComposerPrimaryAction
+                        )
                         .overlay(alignment: .bottomLeading) {
                             ActionMenuCapsule(
                                 isExpanded: isActionMenuExpanded,
@@ -601,6 +601,78 @@ struct ChatArea: View {
             return
         }
         sendCurrentInput()
+    }
+
+    private func primaryActionButton(isSeparated: Bool) -> some View {
+        Button(action: handlePrimaryAction) {
+            Image(systemName: vm.isGenerating ? "stop.fill" : "arrow.up")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundColor(isSeparated ? .white : AppColor.secondaryText)
+                .opacity(composerActionMotion.iconOpacity(isSeparated: isSeparated))
+        }
+        .buttonStyle(.plain)
+        .frame(width: 36, height: 36)
+        .background(
+            primaryActionBackground(isSeparated: isSeparated)
+        )
+        .overlay(
+            primaryActionStroke(isSeparated: isSeparated)
+        )
+        .shadow(
+            color: AppColor.colaOrange.opacity(composerActionMotion.glowOpacity(
+                isSeparated: isSeparated,
+                canAct: canPrimaryAction
+            )),
+            radius: isSeparated ? 8 : 0,
+            x: 0,
+            y: isSeparated ? 2 : 0
+        )
+        .matchedGeometryEffect(id: "chatPrimaryAction", in: composerPrimaryActionNamespace)
+        .disabled(!canPrimaryAction)
+        .help(vm.isGenerating ? "Stop generating" : "Send")
+    }
+
+    private func primaryActionBackground(isSeparated: Bool) -> some View {
+        Group {
+            if isSeparated {
+                ZStack {
+                    Circle()
+                        .fill(AppColor.colaOrange.opacity(composerActionMotion.fillOpacity(
+                            isSeparated: isSeparated,
+                            canAct: canPrimaryAction
+                        )))
+
+                    NativeGlassPanel(
+                        cornerRadius: 18,
+                        tintColor: primaryActionTint(isSeparated: isSeparated)
+                    ) { EmptyView() }
+                    .opacity(canPrimaryAction ? 0.52 : 0.9)
+                }
+            } else {
+                Circle()
+                    .fill(Color.clear)
+            }
+        }
+    }
+
+    private func primaryActionStroke(isSeparated: Bool) -> some View {
+        Group {
+            if isSeparated {
+                Circle()
+                    .stroke(canPrimaryAction ? Color.white.opacity(0.18) : AppColor.panelStroke, lineWidth: 1)
+            } else {
+                Circle()
+                    .stroke(Color.clear, lineWidth: 1)
+            }
+        }
+    }
+
+    private func primaryActionTint(isSeparated: Bool) -> NSColor {
+        let alpha = composerActionMotion.tintAlpha(
+            isSeparated: isSeparated,
+            canAct: canPrimaryAction
+        )
+        return NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: alpha)
     }
 
     private func sendClarificationOption(_ option: String) {

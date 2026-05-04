@@ -241,6 +241,7 @@ final class GalaxyPresentationTests: XCTestCase {
         )
 
         XCTAssertEqual(summary.body, "两段都在问同一个问题：未来选择要从真实兴趣出发，而不是只追一个外部看起来正确的身份。")
+        XCTAssertEqual(summary.connectionText, "连接节点：「未来方向」↔「文科选择」")
         XCTAssertFalse(summary.detailItems.contains { $0.text == summary.body })
     }
 
@@ -355,13 +356,16 @@ final class GalaxyPresentationTests: XCTestCase {
             edge: edge
         )
 
-        XCTAssertEqual(summary.body, "这只是语义相似，不是强结论。先把它当成待验证的线索。")
+        XCTAssertEqual(summary.relationTitle, "待验证")
+        XCTAssertEqual(summary.lineKind, .candidate)
+        XCTAssertEqual(summary.connectionText, "连接节点：「Visa planning」↔「Class schedule」")
+        XCTAssertEqual(summary.body, "虚线代表待验证：这只是语义相似，不是强结论。先把它当成可以回头检查的线索。")
         XCTAssertEqual(summary.detailItems, [
             GalaxyJournalDetailItem(label: "已选线索", text: "Visa planning"),
             GalaxyJournalDetailItem(label: "关联线索", text: "Class schedule"),
             GalaxyJournalDetailItem(label: "证据等级", text: "内容摘录 + 向量相似")
         ])
-        XCTAssertEqual(summary.caveat, "这条线不能自动说明因果、支持或矛盾，只说明两段内容在表达上接近。")
+        XCTAssertEqual(summary.caveat, "虚线不能自动说明因果、支持或矛盾；它只说明两段内容在表达上接近。")
     }
 
     func testGalaxySidebarUsesExistingChatSidebarWidth() {

@@ -41,6 +41,11 @@ final class SettingsViewModel {
     var voiceLanguage: VoiceLanguage = .automatic
     var isPreviewingVoice: Bool = false
     var voicePreviewError: String?
+    var operatingContextIdentity: String = ""
+    var operatingContextCurrentWork: String = ""
+    var operatingContextCommunicationStyle: String = ""
+    var operatingContextBoundaries: String = ""
+    var operatingContextSaveError: String?
 
     // MARK: - Model identifiers
 
@@ -140,6 +145,7 @@ final class SettingsViewModel {
         self.secretStore = secretStore
         self.voicePreviewer = voicePreviewer
         loadPreferences()
+        loadOperatingContext()
         syncModelState()
     }
 
@@ -192,6 +198,35 @@ final class SettingsViewModel {
         persistSecret(openaiApiKey, account: Keys.openaiApiKey)
         persistSecret(openrouterApiKey, account: Keys.openrouterApiKey)
         enforcePrivacyPreferences()
+    }
+
+    func loadOperatingContext() {
+        let context = (try? nodeStore.fetchOperatingContext()) ?? OperatingContext()
+        operatingContextIdentity = context.identity
+        operatingContextCurrentWork = context.currentWork
+        operatingContextCommunicationStyle = context.communicationStyle
+        operatingContextBoundaries = context.boundaries
+        operatingContextSaveError = nil
+    }
+
+    func saveOperatingContext(now: Date = Date()) throws {
+        let context = OperatingContext(
+            identity: operatingContextIdentity,
+            currentWork: operatingContextCurrentWork,
+            communicationStyle: operatingContextCommunicationStyle,
+            boundaries: operatingContextBoundaries,
+            updatedAt: now
+        )
+        try nodeStore.saveOperatingContext(context, now: now)
+        loadOperatingContext()
+    }
+
+    func saveOperatingContextFromSettings() {
+        do {
+            try saveOperatingContext()
+        } catch {
+            operatingContextSaveError = "Could not save operating context."
+        }
     }
 
     @MainActor

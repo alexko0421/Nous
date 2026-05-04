@@ -256,17 +256,10 @@ final class MemoryProjectionService {
         }
 
         let latestContent = Self.stripQuoteBlocks(latestUserMessage.content)
-        if SafetyGuardrails.containsHardMemoryOptOut(latestContent) {
-            return .suppress(.hardOptOut)
-        }
-
         let boundaries = currentMemoryBoundary(projectId: projectId)
-        if SafetyGuardrails.requiresConsentForSensitiveMemory(boundaryLines: boundaries),
-           SafetyGuardrails.containsSensitiveMemory(latestContent) {
-            return .suppress(.sensitiveConsentRequired)
-        }
-
-        return .persist
+        return MemoryCurator()
+            .assess(latestUserText: latestContent, boundaryLines: boundaries)
+            .persistenceDecision
     }
 
     func shouldPersistMemory(messages: [Message], projectId: UUID?) -> Bool {

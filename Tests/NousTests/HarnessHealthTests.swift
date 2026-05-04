@@ -220,4 +220,86 @@ final class HarnessHealthTests: XCTestCase {
 
         XCTAssertEqual(snapshot.sycophancyFixtureTrend, "1/2 sycophancy fixtures passing")
     }
+
+    func testRuntimeHarnessSummarizesAgentToolReliabilityFromRecentTraces() throws {
+        let store = try NodeStore(path: ":memory:")
+        let conversation = NousNode(type: .conversation, title: "Harness trace source")
+        try store.insertNode(conversation)
+        try store.insertMessage(Message(
+            nodeId: conversation.id,
+            role: .assistant,
+            content: "Answer",
+            agentTraceJson: AgentTraceCodec.encode([
+                AgentTraceRecord(
+                    kind: .toolResult,
+                    toolName: AgentToolNames.searchMemory,
+                    title: "Memory results",
+                    detail: "ok",
+                    provider: .openrouter,
+                    quickActionMode: .direction,
+                    durationMilliseconds: 8,
+                    iteration: 1,
+                    outcome: .success
+                ),
+                AgentTraceRecord(
+                    kind: .toolError,
+                    toolName: AgentToolNames.searchMemory,
+                    title: "search_memory failed",
+                    detail: "Unknown failure",
+                    provider: .openrouter,
+                    quickActionMode: .direction,
+                    durationMilliseconds: 3,
+                    iteration: 1,
+                    outcome: .failure,
+                    errorCategory: .unknown
+                ),
+                AgentTraceRecord(
+                    kind: .toolError,
+                    toolName: AgentToolNames.readNote,
+                    title: "read_note failed",
+                    detail: "Timeout",
+                    provider: .openrouter,
+                    quickActionMode: .plan,
+                    durationMilliseconds: 10,
+                    iteration: 2,
+                    outcome: .failure,
+                    errorCategory: .timeout
+                )
+            ])
+        ))
+
+        let snapshot = RuntimeHarnessService(nodeStore: store).loadSnapshot()
+
+        XCTAssertEqual(snapshot.agentToolReliability.totalToolCallCount, 3)
+        XCTAssertEqual(snapshot.agentToolReliability.failedToolCallCount, 2)
+        XCTAssertEqual(snapshot.agentToolReliability.unknownErrorCount, 1)
+        XCTAssertEqual(snapshot.agentToolReliability.timeoutErrorCount, 1)
+        XCTAssertEqual(snapshot.agentToolReliability.topFailingTools.first?.toolName, AgentToolNames.searchMemory)
+        XCTAssertEqual(snapshot.agentToolReliability.topFailingTools.first?.failureCount, 1)
+        XCTAssertEqual(snapshot.agentToolReliability.failureRate, 2.0 / 3.0, accuracy: 0.0001)
+    }
+
+    func testRuntimeHarnessAgentToolReliabilityIsQuietWithoutTraces() throws {
+        let store = try NodeStore(path: ":memory:")
+        let snapshot = RuntimeHarnessService(nodeStore: store).loadSnapshot()
+
+        XCTAssertEqual(snapshot.agentToolReliability.totalToolCallCount, 0)
+        XCTAssertEqual(snapshot.agentToolReliability.failedToolCallCount, 0)
+        XCTAssertEqual(snapshot.agentToolReliability.summaryText, "No agent tool traces recorded.")
+        XCTAssertEqual(snapshot.statusText, "No runtime turns recorded")
+    }
+
+    func testWindowRuntimeSmokeUsesCGWindowListAsTheWindowOracle() throws {
+        let repoURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let scriptURL = repoURL.appendingPathComponent("scripts/smoke_nous_window.sh")
+        let script = try String(contentsOf: scriptURL, encoding: .utf8)
+
+        XCTAssertTrue(script.contains("CGWindowListCopyWindowInfo"))
+        XCTAssertTrue(script.contains("NOUS_DATABASE_PROFILE"))
+        XCTAssertTrue(script.contains("-scheme Nous"))
+        XCTAssertFalse(script.contains("count windows"))
+    }
 }

@@ -201,22 +201,23 @@ struct GalaxyJournalSummary: Equatable {
     let relationTitle: String
     let scoreText: String
     let title: String
+    let connectionText: String
     let body: String
     let evidence: String
     let detailItems: [GalaxyJournalDetailItem]
     let caveat: String?
-    let connectedNodeTitle: String
     let lineKind: GalaxyRelationLineKind?
 
     init(selectedNode: NousNode, connectedNode: NousNode?, edge: NodeEdge?) {
         badge = "解释"
         title = selectedNode.title.nonEmpty ?? connectedNode?.title.nonEmpty ?? "关系"
-        connectedNodeTitle = connectedNode?.title.nonEmpty ?? "关联节点"
+        connectionText = Self.connectionText(selectedNode: selectedNode, connectedNode: connectedNode)
 
         if let edge {
             let isUnverified = Self.isUnverifiedSemanticRelation(edge)
+            let edgeLineKind = GalaxyRelationLineKind.kind(for: edge)
             let explanationText = Self.explanationText(for: edge, isUnverified: isUnverified)
-            relationTitle = isUnverified ? "待验证" : Self.relationTitle(for: edge)
+            relationTitle = (isUnverified || edgeLineKind == .candidate) ? "待验证" : Self.relationTitle(for: edge)
             scoreText = "\(Int((edge.confidence * 100).rounded()))%"
             body = explanationText
             evidence = Self.evidenceText(for: edge, selectedNode: selectedNode, connectedNode: connectedNode)
@@ -226,7 +227,7 @@ struct GalaxyJournalSummary: Equatable {
                 connectedNode: connectedNode
             )
             caveat = Self.caveat(for: edge, isUnverified: isUnverified)
-            lineKind = isUnverified ? nil : GalaxyRelationLineKind.kind(for: edge)
+            lineKind = isUnverified ? nil : edgeLineKind
         } else {
             relationTitle = "等待连接"
             scoreText = "新"
@@ -241,6 +242,14 @@ struct GalaxyJournalSummary: Equatable {
             caveat = nil
             lineKind = nil
         }
+    }
+
+    private static func connectionText(selectedNode: NousNode, connectedNode: NousNode?) -> String {
+        let selectedTitle = selectedNode.title.nonEmpty ?? "已选节点"
+        guard let connectedTitle = connectedNode?.title.nonEmpty else {
+            return "连接节点：「\(selectedTitle)」"
+        }
+        return "连接节点：「\(selectedTitle)」↔「\(connectedTitle)」"
     }
 
     private static func relationTitle(for edge: NodeEdge) -> String {
@@ -307,7 +316,7 @@ struct GalaxyJournalSummary: Equatable {
             case .causeEffect:
                 return "其中一个想法可能解释了另一个想法的原因。"
             case .topicSimilarity:
-                return "这只是语义相似，不是强结论。先把它当成待验证的线索。"
+                return "虚线代表待验证：这只是语义相似，不是强结论。先把它当成可以回头检查的线索。"
             }
         }
     }
@@ -425,7 +434,7 @@ struct GalaxyJournalSummary: Equatable {
             return nil
         }
 
-        return "这条线不能自动说明因果、支持或矛盾，只说明两段内容在表达上接近。"
+        return "虚线不能自动说明因果、支持或矛盾；它只说明两段内容在表达上接近。"
     }
 
     private static func evidenceText(

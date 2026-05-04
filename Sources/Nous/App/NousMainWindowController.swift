@@ -9,6 +9,14 @@ final class NousMainWindowController {
     private let window: NSWindow
     private var didCenterWindow = false
 
+    var isVisible: Bool {
+        window.isVisible && !window.isMiniaturized
+    }
+
+    var needsMissingSurfaceRecovery: Bool {
+        !window.isVisible && !window.isMiniaturized
+    }
+
     convenience init(environment: AppEnvironment) {
         self.init(
             rootView: ContentView(env: environment)
@@ -22,6 +30,11 @@ final class NousMainWindowController {
 
     init<Root: View>(rootView: Root, window: NSWindow) {
         self.window = window
+        if let mainWindow = window as? NousMainWindow {
+            mainWindow.onClose = {
+                NSApp.hide(nil)
+            }
+        }
         install(rootView: rootView, in: window)
     }
 
@@ -37,12 +50,20 @@ final class NousMainWindowController {
     }
 
     func show() {
+        if NSApp.isHidden {
+            NSApp.unhide(nil)
+        }
+
         if !didCenterWindow {
             window.center()
             didCenterWindow = true
         }
 
+        if window.isMiniaturized {
+            window.deminiaturize(nil)
+        }
         window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
         NotificationCenter.default.post(name: .nousMainWindowConfigured, object: window)
     }
@@ -53,6 +74,7 @@ final class NousMainWindowController {
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = false
+        window.isReleasedWhenClosed = false
         window.isRestorable = false
         window.restorationClass = nil
         window.identifier = nil
@@ -83,8 +105,15 @@ final class NousMainWindowController {
 }
 
 final class NousMainWindow: NSWindow {
+    var onClose: (() -> Void)?
+
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+
+    override func close() {
+        orderOut(nil)
+        onClose?()
+    }
 }
 
 final class NousMainHostingView<Content: View>: NSHostingView<Content> {

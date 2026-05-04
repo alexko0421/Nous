@@ -103,6 +103,58 @@ final class ChatTurnRunnerShadowLearningTests: XCTestCase {
         XCTAssertLessThan(try XCTUnwrap(thinkingIndex), try XCTUnwrap(preparedIndex))
     }
 
+    func testRunnerSuppressesThinkingWhenSurfaceThinkingDisabled() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let judgeLLM = ThinkingFixedLLMService(
+            output: """
+            {"tension_exists":false,"user_state":"exploring","should_provoke":false,
+             "entry_id":null,"reason":"no tension","inferred_mode":"strategist"}
+            """,
+            thinkingDelta: "I checked whether retrieved memory creates tension."
+        )
+        let runner = ChatTurnRunner(
+            conversationSessionStore: ConversationSessionStore(nodeStore: nodeStore),
+            turnPlanner: makePlanner(nodeStore: nodeStore, judgeLLMServiceFactory: { judgeLLM }),
+            turnExecutor: TurnExecutor(
+                llmServiceProvider: {
+                    FixedLLMService(output: "Done\n<chat_title>Hidden thinking</chat_title>")
+                },
+                shouldUseGeminiHistoryCache: { false },
+                shouldPersistAssistantThinking: { true }
+            ),
+            outcomeFactory: TurnOutcomeFactory(shouldPersistMemory: { _, _ in false }),
+            shouldSurfaceThinkingTraces: { false }
+        )
+        let request = TurnRequest(
+            turnId: UUID(),
+            snapshot: TurnSessionSnapshot(
+                currentNode: nil,
+                messages: [],
+                defaultProjectId: nil,
+                activeChatMode: nil,
+                activeQuickActionMode: nil
+            ),
+            inputText: "Help me decide the next step",
+            attachments: [],
+            now: Date(timeIntervalSince1970: 5_000)
+        )
+        let capture = RecordingTurnEventSink()
+        let sink = TurnSequencedEventSink(turnId: request.turnId, sink: capture)
+
+        let completion = await runner.run(
+            request: request,
+            sink: sink,
+            abortReason: { .unexpectedCancellation }
+        )
+
+        let events = await capture.events()
+        XCTAssertFalse(events.contains { envelope in
+            if case .thinkingDelta = envelope.event { return true }
+            return false
+        })
+        XCTAssertNil(completion?.assistantMessage.thinkingContent)
+    }
+
     func testRunnerEmitsSilentReviewerArtifactAfterPlanExecution() async throws {
         let nodeStore = try NodeStore(path: ":memory:")
         let reviewer = RecordingCognitionReviewer()

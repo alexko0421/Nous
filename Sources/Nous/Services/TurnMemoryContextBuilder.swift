@@ -2,6 +2,7 @@ import Foundation
 
 struct TurnMemoryContext {
     let citations: [SearchResult]
+    let operatingContext: OperatingContext?
     let projectGoal: String?
     let recentConversations: [(title: String, memory: String)]
     let globalMemory: String?
@@ -22,19 +23,22 @@ final class TurnMemoryContextBuilder {
     private let embeddingService: EmbeddingService
     private let memoryProjectionService: MemoryProjectionService
     private let contradictionMemoryService: ContradictionMemoryService
+    private let contextEvidenceSteward: ContextEvidenceSteward
 
     init(
         nodeStore: NodeStore,
         vectorStore: VectorStore,
         embeddingService: EmbeddingService,
         memoryProjectionService: MemoryProjectionService,
-        contradictionMemoryService: ContradictionMemoryService
+        contradictionMemoryService: ContradictionMemoryService,
+        contextEvidenceSteward: ContextEvidenceSteward = ContextEvidenceSteward()
     ) {
         self.nodeStore = nodeStore
         self.vectorStore = vectorStore
         self.embeddingService = embeddingService
         self.memoryProjectionService = memoryProjectionService
         self.contradictionMemoryService = contradictionMemoryService
+        self.contextEvidenceSteward = contextEvidenceSteward
     }
 
     func build(
@@ -48,6 +52,7 @@ final class TurnMemoryContextBuilder {
         let citations = policy.includeCitations
             ? try retrieveCitations(retrievalQuery: retrievalQuery, excludingId: node.id)
             : []
+        let operatingContext = try? nodeStore.fetchOperatingContext()
         let projectGoal = policy.includeProjectGoal
             ? try projectGoal(for: node.projectId)
             : nil
@@ -76,6 +81,12 @@ final class TurnMemoryContextBuilder {
                 excludingConversationId: node.id
             )
             : []
+        let filteredRecentConversations = contextEvidenceSteward
+            .filterRecentConversations(recentConversations, promptQuery: promptQuery)
+            .kept
+        let filteredMemoryEvidence = contextEvidenceSteward
+            .filterMemoryEvidence(memoryEvidence, promptQuery: promptQuery)
+            .kept
         let queryEmbedding: [Float]? = {
             guard policy.includeContradictionRecall,
                   includeGraphPromptRecall,
@@ -131,12 +142,13 @@ final class TurnMemoryContextBuilder {
 
         return TurnMemoryContext(
             citations: citations,
+            operatingContext: operatingContext,
             projectGoal: projectGoal,
-            recentConversations: recentConversations,
+            recentConversations: filteredRecentConversations,
             globalMemory: globalMemory,
             essentialStory: essentialStory,
             userModel: userModel,
-            memoryEvidence: memoryEvidence,
+            memoryEvidence: filteredMemoryEvidence,
             memoryGraphRecall: memoryGraphRecall,
             projectMemory: projectMemory,
             conversationMemory: conversationMemory,

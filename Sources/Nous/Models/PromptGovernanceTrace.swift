@@ -54,6 +54,7 @@ struct SlowCognitionPromptTrace: Equatable, Codable {
 
 struct PromptGovernanceTrace: Equatable, Codable {
     private static let memorySignalLayers: Set<String> = [
+        "operating_context",
         "global_memory",
         "essential_story",
         "project_memory",

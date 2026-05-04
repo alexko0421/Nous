@@ -249,6 +249,72 @@ final class RAGPipelineTests: XCTestCase {
                        "identity facet should not duplicate when global memory is already present")
     }
 
+    func testMemoryPromptPacketPlacesOperatingContextBeforeDerivedMemory() {
+        let packet = MemoryPromptPacket(
+            operatingContext: OperatingContext(
+                identity: "Alex is a solo founder.",
+                currentWork: "Ship Operating Context V1.",
+                communicationStyle: "Be direct and warm.",
+                boundaries: "Do not store sensitive facts without explicit consent."
+            ),
+            globalMemory: "- Learned memory should stay separate.",
+            essentialStory: nil,
+            userModel: UserModel(
+                identity: ["Derived identity"],
+                goals: ["Derived goal"],
+                workStyle: ["Derived style"],
+                memoryBoundary: ["Derived boundary"]
+            ),
+            memoryEvidence: [],
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            projectGoal: nil
+        )
+
+        let context = packet.stableBlocks.joined(separator: "\n\n")
+
+        XCTAssertTrue(context.contains("USER-AUTHORED OPERATING CONTEXT"))
+        XCTAssertTrue(context.contains("Identity:\n- Alex is a solo founder."))
+        XCTAssertTrue(context.contains("Current Work / Goals:\n- Ship Operating Context V1."))
+        XCTAssertTrue(context.contains("Communication Style:\n- Be direct and warm."))
+        XCTAssertTrue(context.contains("Hard Boundaries:\n- Do not store sensitive facts without explicit consent."))
+        let operatingContextIndex = context.distance(
+            from: context.startIndex,
+            to: context.range(of: "USER-AUTHORED OPERATING CONTEXT")!.lowerBound
+        )
+        let globalMemoryIndex = context.distance(
+            from: context.startIndex,
+            to: context.range(of: "LONG-TERM MEMORY ABOUT ALEX")!.lowerBound
+        )
+        let userModelIndex = context.distance(
+            from: context.startIndex,
+            to: context.range(of: "DERIVED USER MODEL")!.lowerBound
+        )
+        XCTAssertLessThan(
+            operatingContextIndex,
+            globalMemoryIndex
+        )
+        XCTAssertLessThan(
+            operatingContextIndex,
+            userModelIndex
+        )
+    }
+
+    func testEmptyOperatingContextIsOmittedFromPrompt() {
+        let context = PromptContextAssembler.assembleContext(
+            operatingContext: OperatingContext(),
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        ).combined
+
+        XCTAssertFalse(context.contains("USER-AUTHORED OPERATING CONTEXT"))
+    }
+
     func testMemoryPromptPacketDoesNotDuplicateProjectGoalInsideUserModelGoals() {
         let packet = MemoryPromptPacket(
             globalMemory: nil,
@@ -648,6 +714,11 @@ final class RAGPipelineTests: XCTestCase {
 
         XCTAssertTrue(context.contains("older cross-time connection"))
         XCTAssertTrue(context.contains("LONG-GAP CONNECTION CUE"))
+        XCTAssertTrue(context.contains("Temporal memory trigger"))
+        XCTAssertTrue(context.contains("not emotional calibration"))
+        XCTAssertTrue(context.contains("tension, repetition, drift, decision, or pattern"))
+        XCTAssertTrue(context.contains("Do not use old memory as pressure"))
+        XCTAssertTrue(context.contains("End with one usable rule, judgment test, or next action"))
         XCTAssertTrue(context.contains("Name the line directly and clearly"))
         XCTAssertTrue(context.contains("Do not mention retrieval, citations"))
     }
@@ -675,6 +746,7 @@ final class RAGPipelineTests: XCTestCase {
         ).combined
 
         XCTAssertTrue(context.contains("LONG-GAP CONNECTION CUE"))
+        XCTAssertTrue(context.contains("Temporal memory trigger"))
         XCTAssertTrue(context.contains("Keep it gentle and hypothesis-led"))
         XCTAssertFalse(context.contains("Name the line directly and clearly"))
     }

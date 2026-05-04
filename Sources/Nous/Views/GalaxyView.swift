@@ -135,10 +135,10 @@ struct GalaxyView: View {
                             .foregroundStyle(GalaxyPalette.primaryText)
                             .lineLimit(3)
 
-                        Text(summary.connectedNodeTitle)
+                        Text(summary.connectionText)
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(GalaxyPalette.tertiaryText)
-                            .lineLimit(2)
+                            .lineLimit(3)
                     }
 
                     Text(summary.body)

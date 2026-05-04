@@ -58,11 +58,21 @@ struct NativeGlassPanel<Content: View>: NSViewRepresentable {
     }
 }
 
+enum AppWindowLookup {
+    static func mainWindow(in windows: [NSWindow], keyWindow: NSWindow?) -> NSWindow? {
+        windows.first(where: { $0 is NousMainWindow })
+            ?? windows.first(where: { $0.titleVisibility == .hidden && $0.canBecomeMain })
+            ?? keyWindow
+            ?? windows.first
+    }
+}
+
 // Helper for window controls
 func getAppWindow() -> NSWindow? {
-    NSApplication.shared.windows.first(where: { $0.titleVisibility == .hidden }) 
-        ?? NSApplication.shared.keyWindow 
-        ?? NSApplication.shared.windows.first
+    AppWindowLookup.mainWindow(
+        in: NSApplication.shared.windows,
+        keyWindow: NSApplication.shared.keyWindow
+    )
 }
 
 // Galaxy Icon - clean port of the React reference
@@ -184,9 +194,7 @@ struct MacOSTrafficLights: View {
                 icon: "xmark",
                 iconSize: 7,
                 action: { 
-                    getAppWindow()?.close() 
-                    // Safely exit app if it's the only window
-                    NSApplication.shared.terminate(nil)
+                    getAppWindow()?.close()
                 }
             )
             

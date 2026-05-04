@@ -289,6 +289,153 @@ final class ShadowLearningSignalRecorderTests: XCTestCase {
         XCTAssertTrue(try store.fetchRecentEvents(userId: "alex", limit: 10).isEmpty)
     }
 
+    func testChangingFeedbackReasonClearsConflictingResponseBehaviorPattern() throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let store = ShadowLearningStore(nodeStore: nodeStore)
+        let recorder = ShadowLearningSignalRecorder(store: store)
+        let messageId = UUID(uuidString: "00000000-0000-0000-0000-000000003031")!
+        let now = Date(timeIntervalSince1970: 4_000)
+        let assistantMessage = Message(
+            id: messageId,
+            nodeId: UUID(uuidString: "00000000-0000-0000-0000-000000003131")!,
+            role: .assistant,
+            content: "ok",
+            timestamp: now
+        )
+        try persist([assistantMessage], in: nodeStore)
+
+        try recorder.recordFeedbackSignal(
+            feedback: .down,
+            reason: .tooForceful,
+            note: "too sharp",
+            sourceMessageId: messageId,
+            now: now
+        )
+        try recorder.recordFeedbackSignal(
+            feedback: .down,
+            reason: .wrongMemory,
+            note: "memory did not apply",
+            sourceMessageId: messageId,
+            now: now.addingTimeInterval(1)
+        )
+
+        let oldPattern = try XCTUnwrap(store.fetchPattern(
+            userId: "alex",
+            kind: .responseBehavior,
+            label: "feedback_proportionate_pushback"
+        ))
+        XCTAssertEqual(oldPattern.status, .fading)
+        XCTAssertFalse(oldPattern.evidenceMessageIds.contains(messageId))
+
+        let newPattern = try XCTUnwrap(store.fetchPattern(
+            userId: "alex",
+            kind: .responseBehavior,
+            label: "feedback_memory_precision"
+        ))
+        XCTAssertEqual(newPattern.status, .soft)
+        XCTAssertTrue(newPattern.evidenceMessageIds.contains(messageId))
+    }
+
+    func testChangingFeedbackReasonBackReactivatesPreviousResponseBehaviorPattern() throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let store = ShadowLearningStore(nodeStore: nodeStore)
+        let recorder = ShadowLearningSignalRecorder(store: store)
+        let messageId = UUID(uuidString: "00000000-0000-0000-0000-000000003032")!
+        let now = Date(timeIntervalSince1970: 4_100)
+        let assistantMessage = Message(
+            id: messageId,
+            nodeId: UUID(uuidString: "00000000-0000-0000-0000-000000003132")!,
+            role: .assistant,
+            content: "ok",
+            timestamp: now
+        )
+        try persist([assistantMessage], in: nodeStore)
+
+        try recorder.recordFeedbackSignal(
+            feedback: .down,
+            reason: .tooForceful,
+            sourceMessageId: messageId,
+            now: now
+        )
+        try recorder.recordFeedbackSignal(
+            feedback: .down,
+            reason: .wrongMemory,
+            sourceMessageId: messageId,
+            now: now.addingTimeInterval(1)
+        )
+        try recorder.recordFeedbackSignal(
+            feedback: .down,
+            reason: .tooForceful,
+            sourceMessageId: messageId,
+            now: now.addingTimeInterval(2)
+        )
+
+        let reactivatedPattern = try XCTUnwrap(store.fetchPattern(
+            userId: "alex",
+            kind: .responseBehavior,
+            label: "feedback_proportionate_pushback"
+        ))
+        XCTAssertEqual(reactivatedPattern.status, .soft)
+        XCTAssertTrue(reactivatedPattern.evidenceMessageIds.contains(messageId))
+
+        let oldPattern = try XCTUnwrap(store.fetchPattern(
+            userId: "alex",
+            kind: .responseBehavior,
+            label: "feedback_memory_precision"
+        ))
+        XCTAssertEqual(oldPattern.status, .fading)
+        XCTAssertFalse(oldPattern.evidenceMessageIds.contains(messageId))
+    }
+
+    func testClearingEvidenceDemotesStrongFeedbackPatternWhenThresholdNoLongerQualifies() throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let store = ShadowLearningStore(nodeStore: nodeStore)
+        let recorder = ShadowLearningSignalRecorder(store: store)
+        let now = Date(timeIntervalSince1970: 4_200)
+        let messages = (0..<4).map { index in
+            Message(
+                id: UUID(uuidString: "00000000-0000-0000-0000-00000000304\(index)")!,
+                nodeId: UUID(uuidString: "00000000-0000-0000-0000-000000003140")!,
+                role: .assistant,
+                content: "ok \(index)",
+                timestamp: now.addingTimeInterval(TimeInterval(index))
+            )
+        }
+        try persist(messages, in: nodeStore)
+
+        for message in messages {
+            try recorder.recordFeedbackSignal(
+                feedback: .down,
+                reason: .tooForceful,
+                sourceMessageId: message.id,
+                now: message.timestamp
+            )
+        }
+
+        let strongPattern = try XCTUnwrap(store.fetchPattern(
+            userId: "alex",
+            kind: .responseBehavior,
+            label: "feedback_proportionate_pushback"
+        ))
+        XCTAssertEqual(strongPattern.status, .strong)
+
+        try recorder.clearFeedbackSignal(
+            feedback: .down,
+            reason: .tooForceful,
+            sourceMessageId: messages[0].id,
+            now: now.addingTimeInterval(10)
+        )
+
+        let demotedPattern = try XCTUnwrap(store.fetchPattern(
+            userId: "alex",
+            kind: .responseBehavior,
+            label: "feedback_proportionate_pushback"
+        ))
+        XCTAssertEqual(demotedPattern.evidenceMessageIds.count, 3)
+        XCTAssertFalse(demotedPattern.evidenceMessageIds.contains(messages[0].id))
+        XCTAssertEqual(demotedPattern.status, .soft)
+    }
+
     private func userMessage(id: String, content: String, timestamp: TimeInterval) -> Message {
         Message(
             id: UUID(uuidString: id)!,

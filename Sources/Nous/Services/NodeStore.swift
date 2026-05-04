@@ -215,6 +215,17 @@ final class NodeStore {
             );
         """)
 
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS operating_context (
+                id                 INTEGER PRIMARY KEY CHECK (id = 1),
+                identity           TEXT NOT NULL DEFAULT '',
+                currentWork        TEXT NOT NULL DEFAULT '',
+                communicationStyle TEXT NOT NULL DEFAULT '',
+                boundaries         TEXT NOT NULL DEFAULT '',
+                updatedAt          REAL NOT NULL
+            );
+        """)
+
         // Three scopes for cross-chat memory (v2.1).
         // Old single `user_memory` table is created only by pre-v2.1 binaries;
         // MemoryV2Migrator copy-and-drops it during the upgrade boot.
@@ -570,6 +581,46 @@ final class NodeStore {
 
     /// Direct access for migrator (transaction control, table-exists probing).
     var rawDatabase: Database { db }
+
+    // MARK: - Operating Context
+
+    func fetchOperatingContext() throws -> OperatingContext? {
+        let stmt = try db.prepare("""
+            SELECT identity, currentWork, communicationStyle, boundaries, updatedAt
+            FROM operating_context
+            WHERE id = 1
+            LIMIT 1;
+        """)
+        guard try stmt.step() else { return nil }
+        return OperatingContext(
+            identity: stmt.text(at: 0) ?? "",
+            currentWork: stmt.text(at: 1) ?? "",
+            communicationStyle: stmt.text(at: 2) ?? "",
+            boundaries: stmt.text(at: 3) ?? "",
+            updatedAt: Date(timeIntervalSince1970: stmt.double(at: 4))
+        )
+    }
+
+    func saveOperatingContext(_ context: OperatingContext, now: Date = Date()) throws {
+        let normalized = context.normalized(updatedAt: now)
+        let stmt = try db.prepare("""
+            INSERT INTO operating_context
+              (id, identity, currentWork, communicationStyle, boundaries, updatedAt)
+            VALUES (1, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              identity = excluded.identity,
+              currentWork = excluded.currentWork,
+              communicationStyle = excluded.communicationStyle,
+              boundaries = excluded.boundaries,
+              updatedAt = excluded.updatedAt;
+        """)
+        try stmt.bind(normalized.identity, at: 1)
+        try stmt.bind(normalized.currentWork, at: 2)
+        try stmt.bind(normalized.communicationStyle, at: 3)
+        try stmt.bind(normalized.boundaries, at: 4)
+        try stmt.bind(normalized.updatedAt.timeIntervalSince1970, at: 5)
+        try stmt.step()
+    }
 
     private func ensureColumnExists(table: String, column: String, alterSQL: String) throws {
         let stmt = try db.prepare("PRAGMA table_info(\(table));")
@@ -929,6 +980,24 @@ final class NodeStore {
         return results
     }
 
+    func fetchRecentAgentTraceRecords(limit: Int = 50) throws -> [AgentTraceRecord] {
+        guard limit > 0 else { return [] }
+        let stmt = try db.prepare("""
+            SELECT agent_trace_json
+            FROM messages
+            WHERE agent_trace_json IS NOT NULL
+              AND agent_trace_json != ''
+            ORDER BY timestamp DESC
+            LIMIT ?;
+        """)
+        try stmt.bind(limit, at: 1)
+        var records: [AgentTraceRecord] = []
+        while try stmt.step() {
+            records.append(contentsOf: AgentTraceCodec.decode(stmt.text(at: 0)))
+        }
+        return records
+    }
+
     func clearAllMessageThinkingContent() throws {
         let stmt = try db.prepare("""
             UPDATE messages
@@ -1270,6 +1339,28 @@ final class NodeStore {
     func deleteMemoryEntry(id: UUID) throws {
         let stmt = try db.prepare("""
             DELETE FROM memory_entries
+            WHERE id = ?;
+        """)
+        try stmt.bind(id.uuidString, at: 1)
+        try stmt.step()
+    }
+
+    func fetchMemoryFactEntry(id: UUID) throws -> MemoryFactEntry? {
+        let stmt = try db.prepare("""
+            SELECT id, scope, scopeRefId, kind, content, confidence, status, stability,
+                   sourceNodeIds, createdAt, updatedAt
+            FROM memory_fact_entries
+            WHERE id = ?
+            LIMIT 1;
+        """)
+        try stmt.bind(id.uuidString, at: 1)
+        guard try stmt.step() else { return nil }
+        return memoryFactEntryFrom(stmt)
+    }
+
+    func deleteMemoryFactEntry(id: UUID) throws {
+        let stmt = try db.prepare("""
+            DELETE FROM memory_fact_entries
             WHERE id = ?;
         """)
         try stmt.bind(id.uuidString, at: 1)

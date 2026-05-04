@@ -86,6 +86,45 @@ final class SettingsViewModelTests: XCTestCase {
         XCTAssertFalse(reloaded.openRouterWebSearchEnabled)
     }
 
+    func testLoadsOperatingContextFromNodeStore() throws {
+        let stored = OperatingContext(
+            identity: "Alex is building Nous.",
+            currentWork: "Operating Context V1",
+            communicationStyle: "Use Cantonese naturally.",
+            boundaries: "Ask before storing sensitive facts.",
+            updatedAt: Date(timeIntervalSince1970: 99)
+        )
+        try nodeStore.saveOperatingContext(stored, now: stored.updatedAt)
+
+        let vm = makeViewModel()
+
+        XCTAssertEqual(vm.operatingContextIdentity, "Alex is building Nous.")
+        XCTAssertEqual(vm.operatingContextCurrentWork, "Operating Context V1")
+        XCTAssertEqual(vm.operatingContextCommunicationStyle, "Use Cantonese naturally.")
+        XCTAssertEqual(vm.operatingContextBoundaries, "Ask before storing sensitive facts.")
+    }
+
+    func testSaveOperatingContextTrimsAndPersistsManualProfile() throws {
+        let vm = makeViewModel()
+        vm.operatingContextIdentity = "  Alex is a solo founder.  "
+        vm.operatingContextCurrentWork = "\nShip Operating Context\n"
+        vm.operatingContextCommunicationStyle = "  Push back when needed.  "
+        vm.operatingContextBoundaries = "  Do not store visa details unless explicitly confirmed.  "
+
+        try vm.saveOperatingContext(now: Date(timeIntervalSince1970: 123))
+
+        XCTAssertEqual(
+            try nodeStore.fetchOperatingContext(),
+            OperatingContext(
+                identity: "Alex is a solo founder.",
+                currentWork: "Ship Operating Context",
+                communicationStyle: "Push back when needed.",
+                boundaries: "Do not store visa details unless explicitly confirmed.",
+                updatedAt: Date(timeIntervalSince1970: 123)
+            )
+        )
+    }
+
     func testLoadPreferencesClearsPersistedThinkingWhenDisabled() throws {
         let node = NousNode(type: .conversation, title: "Chat")
         try nodeStore.insertNode(node)

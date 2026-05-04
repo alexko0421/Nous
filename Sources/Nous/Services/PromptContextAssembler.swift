@@ -1,6 +1,7 @@
 import Foundation
 
 struct MemoryPromptPacket {
+    var operatingContext: OperatingContext? = nil
     var globalMemory: String?
     var essentialStory: String?
     var userModel: UserModel?
@@ -52,6 +53,10 @@ struct MemoryPromptPacket {
 
     var stableBlocks: [String] {
         var blocks: [String] = []
+
+        if let operatingContextBlock = operatingContext?.promptBlock() {
+            blocks.append("---\n\n\(operatingContextBlock)")
+        }
 
         if let globalMemory, !globalMemory.isEmpty {
             blocks.append("---\n\nLONG-TERM MEMORY ABOUT ALEX:\n\(globalMemory)")
@@ -213,6 +218,27 @@ enum PromptContextAssembler {
     Respect memory boundaries: if Alex asks not to store something, or asked for consent before sensitive storage, do not silently turn that into durable memory.
     """
 
+    private static let userAddressPolicy = """
+    ---
+
+    USER ADDRESS POLICY:
+    Internal memory, source labels, and system context may refer to Alex in third person.
+    In visible replies, Alex is the person you are speaking to. Address him as "你" / "you" / "我哋" naturally, matching the language of the conversation.
+    Do not write phrases like "Alex 会觉得", "Alex 最多", or "Alex should..." in direct chat unless you are explicitly quoting a source, showing a debug label, or Alex asked for third-person copy.
+    Translate internal third-person memory wording into second-person user-facing wording without calling attention to this policy.
+    """
+
+    private static let answerClosurePolicy = """
+    ---
+
+    ANSWER CLOSURE POLICY:
+    When you give Alex an insight, recommendation, tradeoff, or judgment, end with one usable rule, one judgment test, or one next action.
+
+    A question is not the default closing move. If a missing detail would materially change the judgment, first deliver the best current judgment, then ask at most one focused question.
+
+    Do not force a checklist onto pure emotional support, style demonstrations, or open reflection. In those cases, keep the ending human and grounded, but still avoid mechanical interview-style follow-up questions.
+    """
+
     private static let stoicGroundingPolicy = """
     ---
 
@@ -299,17 +325,364 @@ enum PromptContextAssembler {
     the conversation.
 
     Do not interview by default. If Alex has already given enough signal for a useful
-    take, answer. Ask one more question only when the missing detail would change the
-    judgment materially.
+    take, answer. Question is not the default CTA in quick mode.
+    End with a usable rule, test, or next action. Ask at most one question only after
+    delivering the current best guidance, and only when the missing detail would
+    change the judgment materially.
+    """
+
+    private static let teachingExplanationFidelityPolicy = """
+    ---
+
+    TEACHING EXPLANATION FIDELITY CHECK:
+    This is quiet guidance for learning, explanation, and simplification turns.
+    If Alex asks to learn, distinguish concepts, or says the explanation was too complex,
+    simplify without becoming lossy.
+
+    Keep the domain's exact distinction intact. Use exact terms lightly when they prevent
+    confusion, then translate them into Alex's language.
+
+    Do not collapse a nuanced concept into a dry equation unless you immediately explain
+    what each side means. Acknowledge Alex's simpler framing when it is directionally
+    right, then calibrate it instead of over-agreeing.
+
+    Prefer one concrete example tied to Alex's actual context over a generic worksheet
+    example. Keep Nous's surface voice human: short, warm, and specific, not a worksheet.
+
+    If the learning request is mixed with shame, fatigue, frustration, or low mood,
+    support the feeling before teaching. Keep the explanation shorter, and skip the Feynman-style check
+    unless Alex explicitly asks for it.
+
+    When helpful, add a light Feynman-style check: invite Alex to explain it back
+    in his own words, or ask him to make one tiny example from his real day. This
+    is not a mandatory study ritual; skip it when it would feel forced or slow down
+    a natural conversation.
+
+    Do not expose method names. Let the behavior feel natural; avoid saying
+    "Feynman method", "learning technique", "check", or "exercise" unless Alex
+    names the method first.
+    """
+
+    private static let softHardCalibrationPolicy = """
+    ---
+
+    SOFT-HARD CALIBRATION CHECK:
+    Alex may be pushing back on tone, harshness, defensiveness, or over-agreement.
+    Do not swing from sycophancy into stubbornness.
+
+    First repair tone before defending the point.
+    Do not use "my original point still stands" as a shortcut.
+    Name exactly which part of Alex's pushback is right.
+
+    Keep only evidence-backed tension: preserve a judgment only when the current
+    turn, memory, or clear reasoning supports it.
+    If the original claim was weak, soften or retract it.
+
+    Prefer wording like: "You are right that my wording was too hard. The narrower
+    point I still trust is..."
+    Avoid sounding like you need to win the exchange.
+    """
+
+    private static let directJudgmentContractPolicy = """
+    ---
+
+    DIRECT JUDGMENT CONTRACT:
+    Alex is asking for a call, tradeoff, choice, or decision rather than an interview.
+
+    Give the provisional judgment first. Do not lead with a clarification question.
+    If details are missing, make the smallest honest assumption.
+    State the assumption you are using, then give the call.
+    After the call, name the flip condition instead of ending with a question if it truly matters.
+
+    Ask a clarification question first only when answering would be unsafe, legally/visa/medical/financial high-stakes, require current facts you do not have, or the missing detail would completely invert the answer.
+    A question is not the default CTA.
+    Do not use "need more context" as a default escape hatch.
+    """
+
+    private static let realityConstraintProbeContractPolicy = """
+    ---
+
+    REALITY CONSTRAINT PROBE CONTRACT:
+    Alex is asking what his known real-world constraints imply, not asking for
+    current legal or school-rule advice.
+
+    Use the available memory and answer from the known constraint first.
+    Do not lead by asking which decision. If the exact decision is missing,
+    name the strongest relevant constraint anyway, then say what detail could
+    change the advice.
+
+    If the constraint involves visa, school, immigration, money, deadlines, or
+    current rules, Do not turn this into a legal conclusion. Say it is a
+    must-not-ignore reality constraint and that current rules should be verified
+    outside Nous before acting.
+    """
+
+    private static let supportBoundaryProbeContractPolicy = """
+    ---
+
+    SUPPORT BOUNDARY PROBE CONTRACT:
+    Alex is asking whether he needs comfort or correction. Choose the stance instead of asking Alex to choose.
+
+    Default shape: one steadying line that lowers the emotional temperature,
+    then name the likely thinking error, missing fact, or distorted frame if
+    the evidence supports one. If there is not enough evidence to identify an
+    error, say that and give the next grounded move.
+
+    Use relevant memory about Alex's support preference naturally. Do not
+    diagnose, dramatize, or over-soften. Warmth first; honesty immediately after.
+    """
+
+    private static let styleDemonstrationContractPolicy = """
+    ---
+
+    STYLE DEMONSTRATION CONTRACT:
+    Alex is asking for the voice itself. Do not explain the style principles.
+    Do not list rules, criteria, or a meta description.
+
+    Answer as a sample message in the voice Nous should use with Alex. Match Alex's mixed Cantonese / Mandarin / English surface when he writes that way:
+    Cantonese warmth, Mandarin clarity when natural, technical terms in English.
+    Keep it direct, warm, and concrete.
+    """
+
+    private static let memoryBoundaryAnswerContractPolicy = """
+    ---
+
+    MEMORY BOUNDARY ANSWER CONTRACT:
+    Alex is asking whether something he marked "do not remember" was stored as durable / long-term memory.
+
+    Answer the storage question directly first. Do not answer with a generic claim that Nous has long-term memory.
+    Separate three things clearly:
+    - current chat transcript / visible context
+    - durable memory or fact memory that may be reused later
+    - the boundary itself, which may be remembered without retaining the protected detail
+
+    If the protected detail is not present in durable memory context, say you do not see evidence that it entered durable memory. Do not ask Alex to repeat the protected detail.
+    If there is uncertainty, say what can be checked in the Memory UI and suggest forgetting/rejecting the durable item if it appears.
+    Never repeat or reconstruct the do-not-remember detail in the reply.
+    """
+
+    private static let memorySynthesisJudgmentContractPolicy = """
+    ---
+
+    MEMORY SYNTHESIS JUDGMENT CONTRACT:
+    Alex is asking Nous to reconcile tension across remembered context, identify the current meaning, or judge whether two remembered things share a real pattern.
+
+    Use the relevant memory first, but do not overclaim. Do not flatten the answer into "both are valid" unless that is the actual judgment.
+
+    For contradictions or corrections: the latest explicit correction wins. Treat the older statement as historical context, not the current truth.
+    For tensions: name the distinction that makes the tension intelligible, then say which behavior should change in practice.
+    For project continuity: state the current real goal first, then name directions that have drifted.
+    For Galaxy-style connection probes: decide whether the shared mechanism is real or only surface similarity, and cite evidence from both sides if available.
+    For UI / taste probes: translate remembered taste into concrete product direction, not generic AI-app principles.
     """
 
     private static func activeChatModeBlock(_ chatMode: ChatMode) -> String {
         "---\n\nACTIVE CHAT MODE: \(chatMode.label)\n\(chatMode.contextBlock)"
     }
 
+    private static func needsDirectJudgmentGuard(_ input: String?) -> Bool {
+        guard let input = input?.lowercased(),
+              !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+
+        let explicitDirectCues = [
+            "直接判断", "直接判斷", "直接俾判断", "直接俾判斷",
+            "直接给判断", "直接給判斷", "你直接判断", "你直接判斷",
+            "你直接帮我判断", "你直接幫我判斷", "俾个判断", "俾個判斷",
+            "给个判断", "給個判斷", "帮我判断", "幫我判斷",
+            "帮我决定", "幫我決定", "帮我做决定", "幫我做決定",
+            "direct judgment", "give me your call", "make the call",
+            "tell me whether", "decide for me"
+        ]
+        if explicitDirectCues.contains(where: { input.contains($0) }) {
+            return true
+        }
+
+        let decisionCues = [
+            "应唔应该", "應唔應該", "该不该", "該不該",
+            "应该唔应该", "應該唔應該", "should i", "which should",
+            "do i", "should we", "which one should"
+        ]
+        let cjkChoiceCues = ["定系", "还是", "還是", "先"]
+        let hasEnglishChoiceCue = input.range(
+            of: #"\b(or|vs|versus)\b"#,
+            options: .regularExpression
+        ) != nil
+        let hasChoiceCue = cjkChoiceCues.contains(where: { input.contains($0) }) || hasEnglishChoiceCue
+
+        return decisionCues.contains(where: { input.contains($0) })
+            && hasChoiceCue
+    }
+
+    private static func needsTeachingExplanationGuard(_ input: String?) -> Bool {
+        guard let input = input?.lowercased(),
+              !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+
+        let explanationCues = [
+            "解释", "解釋", "讲清楚", "講清楚", "点分", "點分", "区别", "區別",
+            "差别", "差別", "搞乱", "搞亂", "唔明", "不明白", "太复杂", "太複雜",
+            "简单方法", "簡單方法", "简单啲", "簡單啲", "例子",
+            "explain", "difference", "distinguish", "what does",
+            "define", "too complex", "simpler", "confusing", "confused"
+        ]
+
+        return explanationCues.contains { input.contains($0) }
+    }
+
+    private static func needsSoftHardCalibrationGuard(_ input: String?) -> Bool {
+        guard let input = input?.lowercased(),
+              !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+
+        let calibrationCues = [
+            "太 harsh", "太硬", "太重", "语气", "語氣", "讲法", "講法",
+            "为咗反对而反对", "為咗反對而反對", "反对而反对", "反對而反對",
+            "唔好咁硬", "不要这么硬", "不要這麼硬", "爹味",
+            "太顺我", "太順我", "太软", "太軟", "顺住我", "順住我",
+            "讨好", "討好", "太迎合",
+            "too harsh", "harsh", "too hard", "defensive", "pushback",
+            "over-agree", "over agree", "too agreeable", "too soft"
+        ]
+
+        return calibrationCues.contains { input.contains($0) }
+    }
+
+    private static func needsRealityConstraintProbeGuard(_ input: String?) -> Bool {
+        guard let input = input?.lowercased(),
+              !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+
+        let constraintCues = [
+            "现实约束", "現實約束", "真实约束", "真實約束",
+            "现实限制", "現實限制", "real constraint", "real-world constraint",
+            "constraints you know", "based on what you know"
+        ]
+        let ignoreCues = [
+            "最不能忽略", "最唔可以忽略", "不能忽略什么", "不能忽略什麼",
+            "唔可以忽略咩", "不可以忽略", "不要忽略",
+            "must not ignore", "can't ignore", "cannot ignore"
+        ]
+
+        return constraintCues.contains { input.contains($0) }
+            && ignoreCues.contains { input.contains($0) }
+    }
+
+    private static func needsSupportBoundaryProbeGuard(_ input: String?) -> Bool {
+        guard let input = input?.lowercased(),
+              !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+
+        let comfortCues = ["安慰", "陪伴", "哄我", "comfort", "reassure", "support me"]
+        let correctionCues = [
+            "指出", "想错", "想錯", "哪里错", "邊度错", "邊度錯",
+            "哪里想错", "哪裡想錯", "point out", "where i'm wrong",
+            "what i'm missing", "call me out"
+        ]
+
+        return comfortCues.contains { input.contains($0) }
+            && correctionCues.contains { input.contains($0) }
+    }
+
+    private static func needsStyleDemonstrationGuard(_ input: String?) -> Bool {
+        guard let input = input?.lowercased(),
+              !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+
+        let styleCues = ["语气", "語氣", "口吻", "tone", "voice", "style"]
+        let demoCues = [
+            "示范", "示範", "示例", "直接讲", "直接講", "直接说", "直接說",
+            "不要讲原则", "不要講原則", "唔好讲原则", "唔好講原則",
+            "demo", "example", "sample", "don't explain", "not principles"
+        ]
+
+        return styleCues.contains { input.contains($0) }
+            && demoCues.contains { input.contains($0) }
+    }
+
+    private static func needsMemoryBoundaryAnswerGuard(_ input: String?) -> Bool {
+        guard let input = input?.lowercased(),
+              !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+
+        let storageCues = [
+            "记忆", "記憶", "长期记忆", "長期記憶", "长期", "長期",
+            "long-term memory", "durable memory", "fact memory",
+            "memory", "remember", "store", "stored"
+        ]
+        let optOutCues = [
+            "不要记", "不要記", "唔好记", "唔好記", "别记", "別記",
+            "不要记住", "不要記住", "不要记低", "不要記低",
+            "do not remember", "don't remember", "dont remember",
+            "do not store", "don't store", "dont store",
+            "not remember", "not store"
+        ]
+        let auditCues = [
+            "有没有", "有冇", "有沒有", "是不是", "系咪", "是否",
+            "把", "当成", "當成", "进入", "進入", "存",
+            "did you", "have you", "whether", "if"
+        ]
+
+        return storageCues.contains { input.contains($0) }
+            && optOutCues.contains { input.contains($0) }
+            && auditCues.contains { input.contains($0) }
+    }
+
+    private static func needsMemorySynthesisJudgmentGuard(_ input: String?) -> Bool {
+        guard let input = input?.lowercased(),
+              !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+
+        let hasEnglishOrChoiceCue = input.range(
+            of: #"\bor\b"#,
+            options: .regularExpression
+        ) != nil
+        let tensionQuestion =
+            (input.contains("到底") || input.contains("actually") || input.contains("really"))
+            && (input.contains("还是") || input.contains("還是") || input.contains("定系") || hasEnglishOrChoiceCue)
+
+        let fastSlowQuestion =
+            (input.contains("什么时候") || input.contains("幾時") || input.contains("when"))
+            && (input.contains("快") || input.contains("fast"))
+            && (input.contains("慢") || input.contains("slow"))
+
+        let supersessionQuestion =
+            (input.contains("之前说过") || input.contains("之前講過") || input.contains("previously said") || input.contains("before"))
+            && (input.contains("后来") || input.contains("後來") || input.contains("改成") || input.contains("changed to") || input.contains("now"))
+
+        let galaxyPatternQuestion =
+            (input.contains("共同模式") || input.contains("common pattern") || input.contains("共同 pattern"))
+            || ((input.contains("表面相似") || input.contains("surface similarity") || input.contains("surface similar"))
+                && (input.contains("两个") || input.contains("兩個") || input.contains("two")))
+
+        let projectContinuityQuestion =
+            (input.contains("真正目标") || input.contains("真正目標") || input.contains("real goal") || input.contains("actual goal"))
+            && (input.contains("偏") || input.contains("drift") || input.contains("off-track") || input.contains("off track"))
+
+        let tasteDirectionQuestion =
+            (input.contains("像 nous") || input.contains("feel like nous") || input.contains("普通 ai app"))
+            && (input.contains("ui") || input.contains("界面") || input.contains("方向") || input.contains("direction"))
+
+        return tensionQuestion
+            || fastSlowQuestion
+            || supersessionQuestion
+            || galaxyPatternQuestion
+            || projectContinuityQuestion
+            || tasteDirectionQuestion
+    }
+
     static func assembleContext(
         chatMode: ChatMode = .companion,
         currentUserInput: String? = nil,
+        operatingContext: OperatingContext? = nil,
         globalMemory: String?,
         essentialStory: String? = nil,
         userModel: UserModel? = nil,
@@ -349,12 +722,15 @@ enum PromptContextAssembler {
         #endif
         anchorAndPolicies.append(memoryInterpretationPolicy)
         anchorAndPolicies.append(coreSafetyPolicy)
+        anchorAndPolicies.append(userAddressPolicy)
+        anchorAndPolicies.append(answerClosurePolicy)
         anchorAndPolicies.append(stoicGroundingPolicy)
         anchorAndPolicies.append(realWorldDecisionPolicy)
         anchorAndPolicies.append(summaryOutputPolicy)
         anchorAndPolicies.append(conversationTitleOutputPolicy)
 
         let memoryPacket = MemoryPromptPacket(
+            operatingContext: operatingContext,
             globalMemory: globalMemory,
             essentialStory: essentialStory,
             userModel: userModel,
@@ -398,6 +774,38 @@ CHAT FORMAT POLICY:
 
         if SafetyGuardrails.isHighRiskQuery(currentUserInput) {
             volatilePieces.append(highRiskSafetyModeBlock)
+        }
+
+        if needsDirectJudgmentGuard(currentUserInput) {
+            volatilePieces.append(directJudgmentContractPolicy)
+        }
+
+        if needsTeachingExplanationGuard(currentUserInput) {
+            volatilePieces.append(teachingExplanationFidelityPolicy)
+        }
+
+        if needsSoftHardCalibrationGuard(currentUserInput) {
+            volatilePieces.append(softHardCalibrationPolicy)
+        }
+
+        if needsRealityConstraintProbeGuard(currentUserInput) {
+            volatilePieces.append(realityConstraintProbeContractPolicy)
+        }
+
+        if needsSupportBoundaryProbeGuard(currentUserInput) {
+            volatilePieces.append(supportBoundaryProbeContractPolicy)
+        }
+
+        if needsStyleDemonstrationGuard(currentUserInput) {
+            volatilePieces.append(styleDemonstrationContractPolicy)
+        }
+
+        if needsMemoryBoundaryAnswerGuard(currentUserInput) {
+            volatilePieces.append(memoryBoundaryAnswerContractPolicy)
+        }
+
+        if needsMemorySynthesisJudgmentGuard(currentUserInput) {
+            volatilePieces.append(memorySynthesisJudgmentContractPolicy)
         }
 
         if !attachments.isEmpty {
@@ -616,6 +1024,7 @@ CHAT FORMAT POLICY:
     static func governanceTrace(
         chatMode: ChatMode = .companion,
         currentUserInput: String? = nil,
+        operatingContext: OperatingContext? = nil,
         globalMemory: String?,
         essentialStory: String? = nil,
         userModel: UserModel? = nil,
@@ -636,9 +1045,10 @@ CHAT FORMAT POLICY:
         slowCognitionArtifacts: [CognitionArtifact] = [],
         now: Date = Date()
     ) -> PromptGovernanceTrace {
-        var layers = ["anchor", "memory_interpretation_policy", "core_safety_policy", "stoic_grounding_policy", "real_world_decision_policy", "summary_output_policy", "conversation_title_output_policy", "chat_mode"]
+        var layers = ["anchor", "memory_interpretation_policy", "core_safety_policy", "user_address_policy", "answer_closure_policy", "stoic_grounding_policy", "real_world_decision_policy", "summary_output_policy", "conversation_title_output_policy", "chat_mode"]
         let highRiskQueryDetected = SafetyGuardrails.isHighRiskQuery(currentUserInput)
         let memoryPacket = MemoryPromptPacket(
+            operatingContext: operatingContext,
             globalMemory: globalMemory,
             essentialStory: essentialStory,
             userModel: userModel,
@@ -652,6 +1062,7 @@ CHAT FORMAT POLICY:
         let promptMemoryEvidence = memoryPacket.promptMemoryEvidence
         let promptRecentConversations = memoryPacket.promptRecentConversations
 
+        if operatingContext?.promptBlock() != nil { layers.append("operating_context") }
         if let globalMemory, !globalMemory.isEmpty { layers.append("global_memory") }
         if let essentialStory, !essentialStory.isEmpty { layers.append("essential_story") }
         if let projectMemory, !projectMemory.isEmpty { layers.append("project_memory") }
@@ -676,6 +1087,14 @@ CHAT FORMAT POLICY:
         if allowInteractiveClarification { layers.append("interactive_clarification") }
         if turnSteward != nil { layers.append("turn_steward") }
         if agentCoordination != nil { layers.append("agent_coordination") }
+        if needsDirectJudgmentGuard(currentUserInput) { layers.append("direct_judgment_guard") }
+        if needsTeachingExplanationGuard(currentUserInput) { layers.append("teaching_explanation_guard") }
+        if needsSoftHardCalibrationGuard(currentUserInput) { layers.append("soft_hard_calibration_guard") }
+        if needsRealityConstraintProbeGuard(currentUserInput) { layers.append("reality_constraint_probe_guard") }
+        if needsSupportBoundaryProbeGuard(currentUserInput) { layers.append("support_boundary_probe_guard") }
+        if needsStyleDemonstrationGuard(currentUserInput) { layers.append("style_demonstration_guard") }
+        if needsMemoryBoundaryAnswerGuard(currentUserInput) { layers.append("memory_boundary_answer_guard") }
+        if needsMemorySynthesisJudgmentGuard(currentUserInput) { layers.append("memory_synthesis_judgment_guard") }
         let selectedSlowCognitionArtifact = CognitionArtifactSelector.selectForChat(
             currentInput: currentUserInput,
             artifacts: slowCognitionArtifacts
@@ -738,17 +1157,20 @@ CHAT FORMAT POLICY:
         ---
 
         LONG-GAP CONNECTION CUE:
+        Temporal memory trigger, not emotional calibration:
         One retrieved source may matter here as an older cross-time connection:
         "\(candidate.node.title)": \(snippet)
 
-        Use this only if it deepens the answer.
+        Use this when the old memory can explain the current tension, repetition, drift, decision, or pattern.
         If you use it:
         - Add at most one short bridge sentence.
         - Explain why that earlier moment matters now.
         - Focus on movement, tension, or progression across time, not on catching Alex being inconsistent.
+        - Treat the connection as a hypothesis unless the evidence is explicit.
+        - Do not use old memory as pressure, proof of identity, or a way to make Alex agree.
         - Do not mention retrieval, citations, similarity scores, dates, percentages, or the phrase "long-gap".
-        - If the answer already works without this connection, leave it out.
         - Do not stack multiple older threads in one reply.
+        - End with one usable rule, judgment test, or next action if you rely on this older memory.
         \(modeSpecificRule)
         """
     }

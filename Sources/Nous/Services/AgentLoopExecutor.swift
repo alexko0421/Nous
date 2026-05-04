@@ -38,7 +38,8 @@ final class AgentLoopExecutor {
         plan: TurnPlan,
         request: TurnRequest,
         sink: TurnSequencedEventSink,
-        context: AgentToolContext
+        context: AgentToolContext,
+        captureThinking: Bool = true
     ) async throws -> TurnExecutionResult? {
         do {
             try Task.checkCancellation()
@@ -51,7 +52,8 @@ final class AgentLoopExecutor {
             var thinkingContent = ""
             var thinkingTrace = ThinkingTraceAccumulator()
 
-            for _ in 0..<Self.maxIterations {
+            for iterationIndex in 0..<Self.maxIterations {
+                let iteration = iterationIndex + 1
                 try Self.checkDeadline(deadline, totalSeconds: totalTurnTimeoutSeconds)
                 let messagesForCall = transcript
                 let response = try await Self.withTimeout(
@@ -69,7 +71,8 @@ final class AgentLoopExecutor {
                     response.thinkingContent,
                     trace: &thinkingTrace,
                     to: &thinkingContent,
-                    sink: sink
+                    sink: sink,
+                    captureThinking: captureThinking
                 )
                 transcript.append(response.assistantMessage)
 
@@ -84,11 +87,17 @@ final class AgentLoopExecutor {
 
                 var batchDiscoveredNodeIds: Set<UUID> = []
                 for toolCall in response.toolCalls {
-                    let callRecord = Self.toolCallRecord(toolCall)
+                    let callRecord = Self.toolCallRecord(
+                        toolCall,
+                        provider: plan.provider,
+                        quickActionMode: toolContext.activeQuickActionMode,
+                        iteration: iteration
+                    )
                     trace.append(callRecord)
                     await sink.emit(.agentTraceDelta(callRecord))
 
                     let toolResultMessage: AgentLoopMessage
+                    let toolStartedAt = Date()
                     do {
                         let input = try AgentToolInput(argumentsJSON: toolCall.argumentsJSON)
                         guard let tool = registry.tool(named: toolCall.name) else {
@@ -109,7 +118,14 @@ final class AgentLoopExecutor {
                             content: result.summary,
                             isError: false
                         )
-                        let resultRecord = Self.toolResultRecord(toolCall: toolCall, result: result)
+                        let resultRecord = Self.toolResultRecord(
+                            toolCall: toolCall,
+                            result: result,
+                            provider: plan.provider,
+                            quickActionMode: toolContext.activeQuickActionMode,
+                            iteration: iteration,
+                            durationMilliseconds: Self.durationMilliseconds(since: toolStartedAt)
+                        )
                         trace.append(resultRecord)
                         await sink.emit(.agentTraceDelta(resultRecord))
                     } catch is CancellationError {
@@ -122,7 +138,15 @@ final class AgentLoopExecutor {
                             content: "Tool error: \(message)",
                             isError: true
                         )
-                        let errorRecord = Self.toolErrorRecord(toolCall: toolCall, errorDescription: message)
+                        let errorRecord = Self.toolErrorRecord(
+                            toolCall: toolCall,
+                            errorDescription: message,
+                            errorCategory: Self.errorCategory(for: error),
+                            provider: plan.provider,
+                            quickActionMode: toolContext.activeQuickActionMode,
+                            iteration: iteration,
+                            durationMilliseconds: Self.durationMilliseconds(since: toolStartedAt)
+                        )
                         trace.append(errorRecord)
                         await sink.emit(.agentTraceDelta(errorRecord))
                     }
@@ -154,7 +178,8 @@ final class AgentLoopExecutor {
                 finalResponse.thinkingContent,
                 trace: &thinkingTrace,
                 to: &thinkingContent,
-                sink: sink
+                sink: sink,
+                captureThinking: captureThinking
             )
             await sink.emit(.textDelta(finalResponse.text))
             return Self.executionResult(
@@ -193,8 +218,10 @@ final class AgentLoopExecutor {
         _ delta: String?,
         trace: inout ThinkingTraceAccumulator,
         to thinkingContent: inout String,
-        sink: TurnSequencedEventSink
+        sink: TurnSequencedEventSink,
+        captureThinking: Bool
     ) async {
+        guard captureThinking else { return }
         guard let delta, !delta.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return
         }
@@ -219,34 +246,94 @@ final class AgentLoopExecutor {
         )
     }
 
-    private static func toolCallRecord(_ toolCall: AgentToolCall) -> AgentTraceRecord {
+    private static func toolCallRecord(
+        _ toolCall: AgentToolCall,
+        provider: LLMProvider,
+        quickActionMode: QuickActionMode?,
+        iteration: Int
+    ) -> AgentTraceRecord {
         AgentTraceRecord(
             kind: .toolCall,
             toolName: toolCall.name,
             title: title(for: toolCall.name, isCall: true),
             detail: "",
-            inputJSON: toolCall.argumentsJSON
+            inputJSON: toolCall.argumentsJSON,
+            provider: provider,
+            quickActionMode: quickActionMode,
+            iteration: iteration
         )
     }
 
-    private static func toolResultRecord(toolCall: AgentToolCall, result: AgentToolResult) -> AgentTraceRecord {
+    private static func toolResultRecord(
+        toolCall: AgentToolCall,
+        result: AgentToolResult,
+        provider: LLMProvider,
+        quickActionMode: QuickActionMode?,
+        iteration: Int,
+        durationMilliseconds: Int
+    ) -> AgentTraceRecord {
         AgentTraceRecord(
             kind: .toolResult,
             toolName: toolCall.name,
             title: title(for: toolCall.name, isCall: false),
             detail: result.traceContent,
-            inputJSON: toolCall.argumentsJSON
+            inputJSON: toolCall.argumentsJSON,
+            provider: provider,
+            quickActionMode: quickActionMode,
+            durationMilliseconds: durationMilliseconds,
+            iteration: iteration,
+            outcome: .success
         )
     }
 
-    private static func toolErrorRecord(toolCall: AgentToolCall, errorDescription: String) -> AgentTraceRecord {
+    private static func toolErrorRecord(
+        toolCall: AgentToolCall,
+        errorDescription: String,
+        errorCategory: AgentTraceRecord.ToolErrorCategory,
+        provider: LLMProvider,
+        quickActionMode: QuickActionMode?,
+        iteration: Int,
+        durationMilliseconds: Int
+    ) -> AgentTraceRecord {
         AgentTraceRecord(
             kind: .toolError,
             toolName: toolCall.name,
             title: "\(toolCall.name) failed",
             detail: errorDescription,
-            inputJSON: toolCall.argumentsJSON
+            inputJSON: toolCall.argumentsJSON,
+            provider: provider,
+            quickActionMode: quickActionMode,
+            durationMilliseconds: durationMilliseconds,
+            iteration: iteration,
+            outcome: .failure,
+            errorCategory: errorCategory
         )
+    }
+
+    private static func durationMilliseconds(since start: Date) -> Int {
+        max(0, Int((Date().timeIntervalSince(start) * 1000).rounded()))
+    }
+
+    private static func errorCategory(for error: Error) -> AgentTraceRecord.ToolErrorCategory {
+        if let toolError = error as? AgentToolError {
+            switch toolError {
+            case .missingArgument, .invalidArgument:
+                return .invalidArguments
+            case .notFound:
+                return .notFound
+            case .unauthorized:
+                return .unauthorized
+            case .unavailable:
+                return .unexpectedEnvironment
+            }
+        }
+        if error is AgentLoopError {
+            return .timeout
+        }
+        if error is LLMError || error is URLError {
+            return .providerError
+        }
+        return .unknown
     }
 
     private static func title(for toolName: String, isCall: Bool) -> String {

@@ -155,6 +155,38 @@ final class PromptGovernanceTraceTests: XCTestCase {
         XCTAssertEqual(trace.turnSteward, stewardTrace)
     }
 
+    func testGovernanceTraceAddsOperatingContextLayerOnlyWhenNonEmpty() {
+        let withContext = PromptContextAssembler.governanceTrace(
+            operatingContext: OperatingContext(
+                identity: "Alex is building Nous.",
+                currentWork: "",
+                communicationStyle: "",
+                boundaries: ""
+            ),
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        )
+
+        let emptyContext = PromptContextAssembler.governanceTrace(
+            operatingContext: OperatingContext(),
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        )
+
+        XCTAssertTrue(withContext.promptLayers.contains("operating_context"))
+        XCTAssertTrue(withContext.hasMemorySignal)
+        XCTAssertFalse(emptyContext.promptLayers.contains("operating_context"))
+        XCTAssertFalse(emptyContext.hasMemorySignal)
+    }
+
     func testGovernanceTraceAddsAgentCoordinationLayer() {
         let coordination = AgentCoordinationTrace(
             executionMode: .singleShot,

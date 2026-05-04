@@ -225,7 +225,7 @@ final class GraphEngineTests: XCTestCase {
         return max((xs.max() ?? 0) - (xs.min() ?? 0), (ys.max() ?? 0) - (ys.min() ?? 0))
     }
 
-    func testGenerateSemanticEdges() throws {
+    func testGenerateSemanticEdgesSkipsGenericTopicSimilarity() throws {
         var n1 = NousNode(type: .note, title: "A")
         n1.embedding = [1.0, 0.0, 0.0]
         var n2 = NousNode(type: .note, title: "B similar")
@@ -238,11 +238,7 @@ final class GraphEngineTests: XCTestCase {
 
         try engine.generateSemanticEdges(for: n1)
         let edges = try nodeStore.fetchEdges(nodeId: n1.id)
-        XCTAssertEqual(edges.count, 1)
-        XCTAssertTrue(edges[0].sourceId == n1.id || edges[0].targetId == n1.id)
-        XCTAssertGreaterThan(edges[0].strength, 0.75)
-        XCTAssertEqual(edges[0].relationKind, .topicSimilarity)
-        XCTAssertFalse(edges[0].explanation?.isEmpty ?? true)
+        XCTAssertTrue(edges.isEmpty)
     }
 
     func testGenerateSemanticEdgesUsesAtomRelationships() throws {
@@ -281,7 +277,7 @@ final class GraphEngineTests: XCTestCase {
         XCTAssertEqual(edge.targetAtomId, targetAtom.id)
     }
 
-    func testRelationTelemetryTracksSemanticCandidatesAndWrites() throws {
+    func testRelationTelemetryTracksDeferredSemanticCandidates() throws {
         let telemetry = GalaxyRelationTelemetry()
         engine = GraphEngine(
             nodeStore: nodeStore,
@@ -301,10 +297,10 @@ final class GraphEngineTests: XCTestCase {
         let snapshot = telemetry.snapshot()
         XCTAssertEqual(snapshot.relationCandidateCount, 1)
         XCTAssertEqual(snapshot.localVerdictCount, 1)
-        XCTAssertEqual(snapshot.semanticEdgeWriteCount, 1)
+        XCTAssertEqual(snapshot.semanticEdgeWriteCount, 0)
     }
 
-    func testLLMNoneKeepsLocalSimilarityEdgeVisible() async throws {
+    func testLLMNoneDoesNotWriteGenericSimilarityEdge() async throws {
         engine = GraphEngine(
             nodeStore: nodeStore,
             vectorStore: vectorStore,
@@ -333,9 +329,7 @@ final class GraphEngineTests: XCTestCase {
 
         try await engine.generateSemanticEdgesWithRefinement(for: n1, maxCandidates: 1)
 
-        let edge = try XCTUnwrap(nodeStore.fetchEdges(nodeId: n1.id).first)
-        XCTAssertEqual(edge.relationKind, .topicSimilarity)
-        XCTAssertGreaterThan(edge.strength, 0.75)
+        XCTAssertTrue(try nodeStore.fetchEdges(nodeId: n1.id).isEmpty)
     }
 
     func testRefineSemanticEdgeUpgradesVectorEdgeWithConcreteLLMRelation() async throws {
@@ -372,9 +366,16 @@ final class GraphEngineTests: XCTestCase {
         n2.embedding = [0.9, 0.1, 0.0]
         try nodeStore.insertNode(n1)
         try nodeStore.insertNode(n2)
-        try engine.generateSemanticEdges(for: n1)
-        let originalEdge = try XCTUnwrap(nodeStore.fetchEdges(nodeId: n1.id).first)
-        XCTAssertEqual(originalEdge.relationKind, .topicSimilarity)
+        let originalEdge = NodeEdge(
+            sourceId: n1.id,
+            targetId: n2.id,
+            strength: 0.9,
+            type: .semantic,
+            relationKind: .topicSimilarity,
+            confidence: 0.9,
+            explanation: "这只是语义相似，不是强结论；需要更多证据才能判断真正关系。"
+        )
+        try nodeStore.insertEdge(originalEdge)
 
         let refinedEdge = try await engine.refineSemanticEdge(sourceId: n1.id, targetId: n2.id)
 
@@ -412,7 +413,15 @@ final class GraphEngineTests: XCTestCase {
         n2.embedding = [0.95, 0.05, 0.0]
         try nodeStore.insertNode(n1)
         try nodeStore.insertNode(n2)
-        try engine.generateSemanticEdges(for: n1)
+        try nodeStore.insertEdge(NodeEdge(
+            sourceId: n1.id,
+            targetId: n2.id,
+            strength: 0.95,
+            type: .semantic,
+            relationKind: .topicSimilarity,
+            confidence: 0.95,
+            explanation: "这只是语义相似，不是强结论；需要更多证据才能判断真正关系。"
+        ))
         XCTAssertEqual(try nodeStore.fetchEdges(nodeId: n1.id).count, 1)
 
         let refinedEdge = try await engine.refineSemanticEdge(sourceId: n1.id, targetId: n2.id)

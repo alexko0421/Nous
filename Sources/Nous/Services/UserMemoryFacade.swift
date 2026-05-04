@@ -156,6 +156,10 @@ final class UserMemoryService: MemorySynthesizing, @unchecked Sendable {
         core.sourceSnippets(for: entryId, limit: limit)
     }
 
+    func factSourceSnippets(for factId: UUID, limit: Int = 3) -> [MemoryEvidenceSnippet] {
+        core.factSourceSnippets(for: factId, limit: limit)
+    }
+
     @discardableResult
     func confirmMemoryEntry(id: UUID) -> Bool {
         core.confirmMemoryEntry(id: id)
@@ -169,6 +173,21 @@ final class UserMemoryService: MemorySynthesizing, @unchecked Sendable {
     @discardableResult
     func deleteMemoryEntry(id: UUID) -> Bool {
         core.deleteMemoryEntry(id: id)
+    }
+
+    @discardableResult
+    func confirmMemoryFactEntry(id: UUID) -> Bool {
+        core.confirmMemoryFactEntry(id: id)
+    }
+
+    @discardableResult
+    func archiveMemoryFactEntry(id: UUID) -> Bool {
+        core.archiveMemoryFactEntry(id: id)
+    }
+
+    @discardableResult
+    func deleteMemoryFactEntry(id: UUID) -> Bool {
+        core.deleteMemoryFactEntry(id: id)
     }
 
     func contradictionRecallFacts(projectId: UUID?, conversationId: UUID) throws -> [MemoryFactEntry] {

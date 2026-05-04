@@ -130,6 +130,7 @@ final class ChatViewModel {
             outcomeFactory: turnOutcomeFactory,
             shadowLearningSignalRecorder: shadowLearningSignalRecorder,
             cognitionReviewer: CognitionReviewer(),
+            shouldSurfaceThinkingTraces: shouldPersistAssistantThinking,
             onPlanReady: { [governanceTelemetry] plan in
                 governanceTelemetry.recordPromptTrace(plan.promptTrace)
                 if let event = plan.judgeEventDraft {
@@ -227,6 +228,7 @@ final class ChatViewModel {
             skillMatcher: skillMatcher ?? SkillMatcher(),
             skillTracker: skillTracker,
             cognitionReviewer: CognitionReviewer(),
+            shouldSurfaceThinkingTraces: shouldPersistAssistantThinking,
             onPlanReady: { [governanceTelemetry] plan in
                 governanceTelemetry.recordPromptTrace(plan.promptTrace)
             },
@@ -352,6 +354,27 @@ final class ChatViewModel {
     }
 
     // MARK: - Conversation Management
+
+    @MainActor
+    func startBlankConversation(cancelInFlightWork: Bool = true) {
+        if cancelInFlightWork {
+            cancelInFlightResponse(clearDraft: true, reason: .supersededByNewTurn)
+            cancelInFlightJudge()
+        }
+        currentNode = nil
+        scratchPadStore.activate(conversationId: nil)
+        messages = []
+        citations = []
+        currentResponse = ""
+        currentThinking = ""
+        currentThinkingStartedAt = nil
+        currentAgentTrace = []
+        didHitBudgetExhaustion = false
+        inputText = ""
+        activeQuickActionMode = nil
+        activeChatMode = nil
+        lastPromptGovernanceTrace = nil
+    }
 
     @MainActor
     func startNewConversation(
@@ -1015,8 +1038,22 @@ extension ChatViewModel {
 
     @MainActor
     func recordFeedback(forMessageId messageId: UUID, feedback: JudgeFeedback) {
-        guard let eventId = judgeEventId(forMessageId: messageId) else { return }
+        guard let event = judgeEvent(forMessageId: messageId) else { return }
+        clearChangedShadowFeedbackSignal(
+            previousEvent: event,
+            newFeedback: feedback,
+            newReason: nil
+        )
+        let eventId = event.id
         governanceTelemetry.recordFeedback(eventId: eventId, feedback: feedback)
+        if feedback == .up {
+            recordShadowFeedbackSignal(
+                forMessageId: messageId,
+                feedback: feedback,
+                reason: nil,
+                note: nil
+            )
+        }
         bumpJudgeFeedbackVersion()
     }
 
@@ -1027,15 +1064,105 @@ extension ChatViewModel {
         reason: JudgeFeedbackReason?,
         note: String?
     ) {
-        guard let eventId = judgeEventId(forMessageId: messageId) else { return }
+        guard let event = judgeEvent(forMessageId: messageId) else { return }
+        clearChangedShadowFeedbackSignal(
+            previousEvent: event,
+            newFeedback: feedback,
+            newReason: reason
+        )
+        let eventId = event.id
         governanceTelemetry.recordFeedback(eventId: eventId, feedback: feedback, reason: reason, note: note)
+        recordShadowFeedbackSignal(
+            forMessageId: messageId,
+            feedback: feedback,
+            reason: reason,
+            note: note
+        )
         bumpJudgeFeedbackVersion()
     }
 
     @MainActor
     func clearFeedback(forMessageId messageId: UUID) {
-        guard let eventId = judgeEventId(forMessageId: messageId) else { return }
+        guard let event = judgeEvent(forMessageId: messageId) else { return }
+        if let feedback = event.userFeedback {
+            clearShadowFeedbackSignal(
+                forMessageId: messageId,
+                feedback: feedback,
+                reason: event.feedbackReason
+            )
+        }
+        let eventId = event.id
         governanceTelemetry.clearFeedback(eventId: eventId)
         bumpJudgeFeedbackVersion()
+    }
+
+    private func clearChangedShadowFeedbackSignal(
+        previousEvent: JudgeEvent,
+        newFeedback: JudgeFeedback,
+        newReason: JudgeFeedbackReason?
+    ) {
+        guard let shadowLearningSignalRecorder,
+              let previousFeedback = previousEvent.userFeedback,
+              let messageId = previousEvent.messageId else {
+            return
+        }
+
+        let previousLabel = shadowLearningSignalRecorder.feedbackSignalLabel(
+            feedback: previousFeedback,
+            reason: previousEvent.feedbackReason
+        )
+        let newLabel = shadowLearningSignalRecorder.feedbackSignalLabel(
+            feedback: newFeedback,
+            reason: newReason
+        )
+        guard previousLabel != newLabel else {
+            return
+        }
+
+        do {
+            try shadowLearningSignalRecorder.clearFeedbackSignal(
+                feedback: previousFeedback,
+                reason: previousEvent.feedbackReason,
+                sourceMessageId: messageId
+            )
+        } catch {
+            print("[ShadowLearning] failed to clear changed feedback signal: \(error)")
+        }
+    }
+
+    private func recordShadowFeedbackSignal(
+        forMessageId messageId: UUID,
+        feedback: JudgeFeedback,
+        reason: JudgeFeedbackReason?,
+        note: String?
+    ) {
+        guard let shadowLearningSignalRecorder else { return }
+        do {
+            try shadowLearningSignalRecorder.recordFeedbackSignal(
+                feedback: feedback,
+                reason: reason,
+                note: note,
+                sourceMessageId: messageId
+            )
+        } catch {
+            print("[ShadowLearning] failed to record feedback signal: \(error)")
+        }
+    }
+
+    private func clearShadowFeedbackSignal(
+        forMessageId messageId: UUID,
+        feedback: JudgeFeedback,
+        reason: JudgeFeedbackReason?
+    ) {
+        guard let shadowLearningSignalRecorder else { return }
+        do {
+            try shadowLearningSignalRecorder.clearFeedbackSignal(
+                feedback: feedback,
+                reason: reason,
+                sourceMessageId: messageId
+            )
+        } catch {
+            print("[ShadowLearning] failed to clear feedback signal: \(error)")
+        }
     }
 }

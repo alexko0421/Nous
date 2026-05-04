@@ -147,7 +147,10 @@ fi
 
 print_section "Agentic workflow"
 echo "Default: one lead agent. Use explorers for noisy read-heavy work."
+echo "Use the Context Boundary Card before delegating."
+echo "Do not split planner / implementer / tester roles when context overlaps."
 echo "Workers need explicit ownership and disjoint write sets."
+echo "Agent teams remain deferred unless explicitly requested."
 echo "Playbook: $workflow_doc"
 if [ -n "$bead_id" ]; then
   echo "Expected bead: $bead_id"

@@ -193,6 +193,47 @@ final class TurnPlannerShadowLearningTests: XCTestCase {
         XCTAssertNil(plan.focusBlock)
     }
 
+    func testJudgeKeepsReasoningBudgetWhenThinkingTraceIsHidden() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let judge = CountingJudge()
+        var configuredThinkingBudget: Int?
+        var configuredThinkingHandler: ThinkingDeltaHandler?
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: {
+                ClaudeLLMService(apiKey: "test-key")
+            },
+            provocationJudgeFactory: { llm in
+                let claude = llm as? ClaudeLLMService
+                configuredThinkingBudget = claude?.thinkingBudgetTokens
+                configuredThinkingHandler = claude?.onThinkingDelta
+                return judge
+            }
+        )
+        let node = NousNode(type: .conversation, title: "Hidden thinking")
+        let message = Message(nodeId: node.id, role: .user, content: "帮我判断下一步应该点做")
+        let prepared = PreparedConversationTurn(node: node, userMessage: message, messagesAfterUserAppend: [message])
+        let request = self.request(input: message.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .surfaceTension,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "test",
+            responseStance: .softAnalysis,
+            judgePolicy: .visibleTension,
+            routerMode: .active,
+            routerSource: .deterministic
+        )
+
+        _ = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertEqual(configuredThinkingBudget, 1024)
+        XCTAssertNil(configuredThinkingHandler)
+        XCTAssertEqual(judge.callCount, 1)
+    }
+
     func testPlanRouteUsesSingleTurnGuidanceBlockForResponseShape() async throws {
         let nodeStore = try NodeStore(path: ":memory:")
         let planner = makePlanner(

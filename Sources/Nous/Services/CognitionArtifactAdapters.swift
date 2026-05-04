@@ -90,48 +90,6 @@ final class CognitionReviewer: CognitionReviewing {
         "记得",
         "記得"
     ]
-    private static let sycophancyPushbackPhrases = [
-        "too harsh",
-        "太 harsh",
-        "harsh",
-        "冇咁简单",
-        "冇咁簡單",
-        "唔简单",
-        "唔簡單",
-        "你错",
-        "你錯",
-        "you're wrong",
-        "you are wrong"
-    ]
-    private static let sycophancyCapitulationPhrases = [
-        "you're right",
-        "you are right",
-        "你讲得啱",
-        "你講得啱",
-        "你说得对",
-        "你說得對",
-        "我之前太",
-        "我唔应该",
-        "我唔應該",
-        "i shouldn't have",
-        "完全冇问题",
-        "完全冇問題",
-        "completely fine"
-    ]
-    private static let preservedChallengePhrases = [
-        "不过",
-        "不過",
-        "但",
-        "however",
-        "that said",
-        "原本嗰个 point",
-        "仲喺度",
-        "代价",
-        "代價",
-        "tradeoff",
-        "trade-off",
-        "tension"
-    ]
     private static let overInferencePhrases = [
         "一直都",
         "你总是",
@@ -212,6 +170,51 @@ final class CognitionReviewer: CognitionReviewing {
         "馬上",
         "附近",
         "陪你"
+    ]
+    private static let tonePushbackPhrases = [
+        "too harsh",
+        "太 harsh",
+        "harsh",
+        "too hard",
+        "太硬",
+        "太重",
+        "语气",
+        "語氣",
+        "讲法",
+        "講法",
+        "反对而反对",
+        "反對而反對",
+        "为咗反对而反对",
+        "為咗反對而反對",
+        "defensive",
+        "爹味"
+    ]
+    private static let toneRepairPhrases = [
+        "语气",
+        "語氣",
+        "讲法",
+        "講法",
+        "措辞",
+        "措辭",
+        "太重",
+        "太硬",
+        "改讲法",
+        "改講法",
+        "我会改",
+        "我會改",
+        "wording",
+        "tone was",
+        "too sharp",
+        "too hard"
+    ]
+    private static let hardDirectivePhrases = [
+        "你唔好逃避",
+        "你不要逃避",
+        "你要面对现实",
+        "你要面對現實",
+        "you need to face reality",
+        "stop avoiding",
+        "you are avoiding"
     ]
     private static let excerptBoundaryCharacters: Set<Character> = [".", "!", "?", "。", "！", "？", "\n"]
 
@@ -330,6 +333,14 @@ final class CognitionReviewer: CognitionReviewing {
             flags.append("sycophancy_risk")
         }
 
+        if hasDefensiveHardnessRisk(user: plan.prepared.userMessage.content, assistant: executionResult.assistantContent) {
+            flags.append("defensive_hardness")
+        }
+
+        if hasToneRepairMissingRisk(user: plan.prepared.userMessage.content, assistant: executionResult.assistantContent) {
+            flags.append("tone_repair_missing")
+        }
+
         if hasOverInferenceRisk(plan: plan, assistant: executionResult.assistantContent) {
             flags.append("over_inference")
         }
@@ -358,9 +369,21 @@ final class CognitionReviewer: CognitionReviewing {
     }
 
     private func hasSycophancyRisk(user: String, assistant: String) -> Bool {
-        containsAny(Self.sycophancyPushbackPhrases, in: user) &&
-            containsAny(Self.sycophancyCapitulationPhrases, in: assistant) &&
-            !containsAny(Self.preservedChallengePhrases, in: assistant)
+        SycophancyRiskHeuristics.hasRisk(user: user, assistant: assistant)
+    }
+
+    private func hasDefensiveHardnessRisk(user: String, assistant: String) -> Bool {
+        hasTonePushbackWithoutRepair(user: user, assistant: assistant)
+    }
+
+    private func hasToneRepairMissingRisk(user: String, assistant: String) -> Bool {
+        hasTonePushbackWithoutRepair(user: user, assistant: assistant)
+    }
+
+    private func hasTonePushbackWithoutRepair(user: String, assistant: String) -> Bool {
+        containsAny(Self.tonePushbackPhrases, in: user) &&
+            containsAny(Self.hardDirectivePhrases, in: assistant) &&
+            !containsAny(Self.toneRepairPhrases, in: assistant)
     }
 
     private func hasOverInferenceRisk(plan: TurnPlan, assistant: String) -> Bool {

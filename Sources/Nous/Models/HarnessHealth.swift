@@ -402,6 +402,7 @@ struct RuntimeHarnessSnapshot: Equatable {
     var riskFlagCounts: [String: Int]
     var lastRiskFlags: [String]
     var sycophancyFixtureTrend: String
+    var agentToolReliability: AgentToolReliabilitySummary
 
     init(
         totalTurnCount: Int = 0,
@@ -409,7 +410,8 @@ struct RuntimeHarnessSnapshot: Equatable {
         reviewerCoverageRate: Double = 0,
         riskFlagCounts: [String: Int] = [:],
         lastRiskFlags: [String] = [],
-        sycophancyFixtureTrend: String = "No fixture history yet"
+        sycophancyFixtureTrend: String = "No fixture history yet",
+        agentToolReliability: AgentToolReliabilitySummary = .empty
     ) {
         self.totalTurnCount = totalTurnCount
         self.reviewedTurnCount = reviewedTurnCount
@@ -417,11 +419,15 @@ struct RuntimeHarnessSnapshot: Equatable {
         self.riskFlagCounts = riskFlagCounts
         self.lastRiskFlags = lastRiskFlags.sorted()
         self.sycophancyFixtureTrend = sycophancyFixtureTrend
+        self.agentToolReliability = agentToolReliability
     }
 
     static let empty = RuntimeHarnessSnapshot()
 
     var statusText: String {
+        if agentToolReliability.unknownErrorCount > 0 {
+            return "Agent harness unknown error recorded"
+        }
         if totalTurnCount == 0 {
             return "No runtime turns recorded"
         }
@@ -452,5 +458,92 @@ struct RuntimeHarnessSnapshot: Equatable {
         }
 
         return flags.joined(separator: " · ")
+    }
+}
+
+struct AgentToolFailureCount: Equatable {
+    let toolName: String
+    let failureCount: Int
+}
+
+struct AgentToolReliabilitySummary: Equatable {
+    var totalToolCallCount: Int
+    var failedToolCallCount: Int
+    var unknownErrorCount: Int
+    var timeoutErrorCount: Int
+    var topFailingTools: [AgentToolFailureCount]
+
+    init(
+        totalToolCallCount: Int = 0,
+        failedToolCallCount: Int = 0,
+        unknownErrorCount: Int = 0,
+        timeoutErrorCount: Int = 0,
+        topFailingTools: [AgentToolFailureCount] = []
+    ) {
+        self.totalToolCallCount = totalToolCallCount
+        self.failedToolCallCount = failedToolCallCount
+        self.unknownErrorCount = unknownErrorCount
+        self.timeoutErrorCount = timeoutErrorCount
+        self.topFailingTools = topFailingTools
+    }
+
+    static let empty = AgentToolReliabilitySummary()
+
+    var failureRate: Double {
+        guard totalToolCallCount > 0 else { return 0 }
+        return Double(failedToolCallCount) / Double(totalToolCallCount)
+    }
+
+    var summaryText: String {
+        guard totalToolCallCount > 0 else {
+            return "No agent tool traces recorded."
+        }
+
+        let failurePercent = Int((failureRate * 100).rounded())
+        var pieces = [
+            "Agent tools \(failedToolCallCount)/\(totalToolCallCount) failed",
+            "\(failurePercent)% failure"
+        ]
+        if unknownErrorCount > 0 {
+            pieces.append("unknown \(unknownErrorCount)")
+        }
+        if timeoutErrorCount > 0 {
+            pieces.append("timeout \(timeoutErrorCount)")
+        }
+        if let top = topFailingTools.first {
+            pieces.append("top \(top.toolName) \(top.failureCount)")
+        }
+        return pieces.joined(separator: " · ")
+    }
+
+    static func summarize(records: [AgentTraceRecord]) -> AgentToolReliabilitySummary {
+        let toolRecords = records.filter { record in
+            record.kind == .toolResult || record.kind == .toolError
+        }
+        let failedRecords = toolRecords.filter { $0.kind == .toolError || $0.outcome == .failure }
+        var failureCountsByTool: [String: Int] = [:]
+        var firstFailureIndexByTool: [String: Int] = [:]
+        for (index, record) in failedRecords.enumerated() {
+            let toolName = record.toolName ?? "unknown_tool"
+            failureCountsByTool[toolName, default: 0] += 1
+            firstFailureIndexByTool[toolName] = firstFailureIndexByTool[toolName] ?? index
+        }
+        let failureCounts = failureCountsByTool
+            .map { AgentToolFailureCount(toolName: $0.key, failureCount: $0.value) }
+            .sorted { left, right in
+                if left.failureCount == right.failureCount {
+                    return (firstFailureIndexByTool[left.toolName] ?? Int.max)
+                        < (firstFailureIndexByTool[right.toolName] ?? Int.max)
+                }
+                return left.failureCount > right.failureCount
+            }
+
+        return AgentToolReliabilitySummary(
+            totalToolCallCount: toolRecords.count,
+            failedToolCallCount: failedRecords.count,
+            unknownErrorCount: failedRecords.filter { $0.errorCategory == .unknown }.count,
+            timeoutErrorCount: failedRecords.filter { $0.errorCategory == .timeout }.count,
+            topFailingTools: Array(failureCounts.prefix(3))
+        )
     }
 }

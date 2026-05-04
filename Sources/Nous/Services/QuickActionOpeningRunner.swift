@@ -8,6 +8,7 @@ final class QuickActionOpeningRunner {
     private let currentProviderProvider: () -> LLMProvider
     private let quickActionAddendumResolver: QuickActionAddendumResolver
     private let cognitionReviewer: (any CognitionReviewing)?
+    private let shouldSurfaceThinkingTraces: () -> Bool
     private let onPlanReady: (TurnPlan) -> Void
     private let onReviewArtifact: (CognitionArtifact) -> Void
     private let onTurnCognitionSnapshot: (TurnCognitionSnapshot) -> Void
@@ -22,6 +23,7 @@ final class QuickActionOpeningRunner {
         skillMatcher: any SkillMatching = SkillMatcher(),
         skillTracker: (any SkillTracking)? = nil,
         cognitionReviewer: (any CognitionReviewing)? = nil,
+        shouldSurfaceThinkingTraces: @escaping () -> Bool = { true },
         onPlanReady: @escaping (TurnPlan) -> Void = { _ in },
         onReviewArtifact: @escaping (CognitionArtifact) -> Void = { _ in },
         onTurnCognitionSnapshot: @escaping (TurnCognitionSnapshot) -> Void = { _ in }
@@ -37,6 +39,7 @@ final class QuickActionOpeningRunner {
             skillTracker: skillTracker
         )
         self.cognitionReviewer = cognitionReviewer
+        self.shouldSurfaceThinkingTraces = shouldSurfaceThinkingTraces
         self.onPlanReady = onPlanReady
         self.onReviewArtifact = onReviewArtifact
         self.onTurnCognitionSnapshot = onTurnCognitionSnapshot
@@ -72,7 +75,7 @@ final class QuickActionOpeningRunner {
             guard let result = try await turnExecutor.execute(
                 plan: plan,
                 sink: sink,
-                captureThinking: true
+                captureThinking: shouldSurfaceThinkingTraces()
             ) else {
                 await sink.emit(.aborted(abortReason()))
                 return nil
@@ -182,6 +185,7 @@ final class QuickActionOpeningRunner {
         let turnSlice = PromptContextAssembler.assembleContext(
             chatMode: .companion,
             currentUserInput: openingText,
+            operatingContext: memoryContext.operatingContext,
             globalMemory: memoryContext.globalMemory,
             essentialStory: memoryContext.essentialStory,
             userModel: memoryContext.userModel,
@@ -202,6 +206,7 @@ final class QuickActionOpeningRunner {
         let promptTrace = PromptContextAssembler.governanceTrace(
             chatMode: .companion,
             currentUserInput: openingText,
+            operatingContext: memoryContext.operatingContext,
             globalMemory: memoryContext.globalMemory,
             essentialStory: memoryContext.essentialStory,
             userModel: memoryContext.userModel,

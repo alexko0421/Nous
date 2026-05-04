@@ -4,17 +4,20 @@ final class GalaxyEdgeEngine {
     private let nodeStore: NodeStore
     private let vectorStore: VectorStore
     private let relationJudge: GalaxyRelationJudge
+    private let connectionJudge: ConnectionJudge
     private let telemetry: GalaxyRelationTelemetry?
 
     init(
         nodeStore: NodeStore,
         vectorStore: VectorStore,
         relationJudge: GalaxyRelationJudge,
+        connectionJudge: ConnectionJudge = ConnectionJudge(),
         telemetry: GalaxyRelationTelemetry? = nil
     ) {
         self.nodeStore = nodeStore
         self.vectorStore = vectorStore
         self.relationJudge = relationJudge
+        self.connectionJudge = connectionJudge
         self.telemetry = telemetry
     }
 
@@ -31,13 +34,20 @@ final class GalaxyEdgeEngine {
         let sourceAtoms = atomsByNodeId[node.id, default: []]
 
         for neighbor in neighbors {
-            guard let verdict = relationJudge.judge(
+            let rawVerdict = relationJudge.judge(
                 source: node,
                 target: neighbor.node,
                 similarity: neighbor.similarity,
                 sourceAtoms: sourceAtoms,
                 targetAtoms: atomsByNodeId[neighbor.node.id, default: []]
-            ) else {
+            )
+            let assessment = connectionJudge.assess(
+                source: node,
+                target: neighbor.node,
+                similarity: neighbor.similarity,
+                verdict: rawVerdict
+            )
+            guard assessment.decision == .accept, let verdict = assessment.verdict else {
                 continue
             }
 
@@ -90,13 +100,20 @@ final class GalaxyEdgeEngine {
         let atomsByNodeId = try memoryAtomsBySourceNodeId(
             sourceNodeIds: [source.id, target.id]
         )
-        guard let verdict = await relationJudge.judgeRefined(
+        let rawVerdict = await relationJudge.judgeRefined(
             source: source,
             target: target,
             similarity: existingEdge.strength,
             sourceAtoms: atomsByNodeId[source.id, default: []],
             targetAtoms: atomsByNodeId[target.id, default: []]
-        ) else {
+        )
+        let assessment = connectionJudge.assess(
+            source: source,
+            target: target,
+            similarity: existingEdge.strength,
+            verdict: rawVerdict
+        )
+        guard assessment.decision == .accept, let verdict = assessment.verdict else {
             try nodeStore.deleteEdgeBetween(
                 sourceId: existingEdge.sourceId,
                 targetId: existingEdge.targetId,
@@ -132,13 +149,20 @@ final class GalaxyEdgeEngine {
 
         for neighbor in candidates {
             let targetAtoms = atomsByNodeId[neighbor.node.id, default: []]
-            guard let verdict = await relationJudge.judgeRefined(
+            let rawVerdict = await relationJudge.judgeRefined(
                 source: node,
                 target: neighbor.node,
                 similarity: neighbor.similarity,
                 sourceAtoms: sourceAtoms,
                 targetAtoms: targetAtoms
-            ) else {
+            )
+            let assessment = connectionJudge.assess(
+                source: node,
+                target: neighbor.node,
+                similarity: neighbor.similarity,
+                verdict: rawVerdict
+            )
+            guard assessment.decision == .accept, let verdict = assessment.verdict else {
                 continue
             }
 

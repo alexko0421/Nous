@@ -16,6 +16,9 @@ cd "$ROOT_DIR"
 mkdir -p "$BUILD_DIR"
 
 echo "Building SycophancyFixtureRunner..."
-swiftc Sources/SycophancyFixtureRunner/main.swift -o "$BINARY"
+swiftc \
+  Sources/SycophancyFixtureRunner/main.swift \
+  Sources/Nous/Services/SycophancyRiskHeuristics.swift \
+  -o "$BINARY"
 
 "$BINARY" "$FIXTURES_DIR" "$@"

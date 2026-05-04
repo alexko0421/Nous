@@ -139,6 +139,61 @@ final class NodeStoreTests: XCTestCase {
         XCTAssertEqual(types["last_fired_at"]?.uppercased(), "REAL")
     }
 
+    func testOperatingContextSchemaUsesSingleGlobalRowWithRealTimestamp() throws {
+        XCTAssertTrue(try tableExists("operating_context", in: store.rawDatabase))
+        let types = try columnTypes(for: "operating_context", in: store.rawDatabase)
+
+        XCTAssertEqual(types["id"]?.uppercased(), "INTEGER")
+        XCTAssertEqual(types["identity"]?.uppercased(), "TEXT")
+        XCTAssertEqual(types["currentWork"]?.uppercased(), "TEXT")
+        XCTAssertEqual(types["communicationStyle"]?.uppercased(), "TEXT")
+        XCTAssertEqual(types["boundaries"]?.uppercased(), "TEXT")
+        XCTAssertEqual(types["updatedAt"]?.uppercased(), "REAL")
+    }
+
+    func testSaveAndFetchOperatingContextTrimsManualFields() throws {
+        let now = Date(timeIntervalSince1970: 1_234)
+        let context = OperatingContext(
+            identity: "  Solo founder on F-1  ",
+            currentWork: "\nShip Nous memory trust\n",
+            communicationStyle: "  Be direct, warm, and concise.  ",
+            boundaries: "  Ask before storing sensitive info.  ",
+            updatedAt: now
+        )
+
+        try store.saveOperatingContext(context, now: now)
+
+        XCTAssertEqual(
+            try store.fetchOperatingContext(),
+            OperatingContext(
+                identity: "Solo founder on F-1",
+                currentWork: "Ship Nous memory trust",
+                communicationStyle: "Be direct, warm, and concise.",
+                boundaries: "Ask before storing sensitive info.",
+                updatedAt: now
+            )
+        )
+    }
+
+    func testSaveOperatingContextUpdatesSingleGlobalRow() throws {
+        let firstDate = Date(timeIntervalSince1970: 10)
+        let secondDate = Date(timeIntervalSince1970: 20)
+
+        try store.saveOperatingContext(
+            OperatingContext(identity: "Old", currentWork: "", communicationStyle: "", boundaries: "", updatedAt: firstDate),
+            now: firstDate
+        )
+        try store.saveOperatingContext(
+            OperatingContext(identity: "", currentWork: "New work", communicationStyle: "", boundaries: "", updatedAt: secondDate),
+            now: secondDate
+        )
+
+        let fetched = try XCTUnwrap(store.fetchOperatingContext())
+        XCTAssertEqual(fetched.identity, "")
+        XCTAssertEqual(fetched.currentWork, "New work")
+        XCTAssertEqual(fetched.updatedAt, secondDate)
+    }
+
     // MARK: - Node Tests
 
     func testInsertAndFetchNode() throws {

@@ -191,6 +191,10 @@ check_beads() {
 run_targeted_tests() {
   run_step "Targeted harness tests" ./scripts/test_nous.sh \
     -only-testing:NousTests/HarnessHealthTests \
+    -only-testing:NousTests/PromptContextAssemblerShadowLearningTests \
+    -only-testing:NousTests/PromptContextAssemblerSlowCognitionTests \
+    -only-testing:NousTests/PromptContextAssemblerTeachingExplanationTests \
+    -only-testing:NousTests/PromptContextAssemblerSoftHardCalibrationTests \
     -only-testing:NousTests/RuntimeQualityReviewerTests \
     -only-testing:NousTests/PromptGovernanceTraceTests \
     -only-testing:NousTests/SafetyGuardrailsTests
@@ -210,6 +214,8 @@ run_full_checks() {
     -scheme Nous \
     -destination "$DESTINATION" \
     build
+
+  run_step "Nous main window runtime smoke" ./scripts/smoke_nous_window.sh
 
   run_step "Full Nous tests" ./scripts/test_nous.sh
 

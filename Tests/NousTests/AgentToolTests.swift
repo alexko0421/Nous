@@ -28,7 +28,13 @@ final class AgentTraceCodecTests: XCTestCase {
                 toolName: AgentToolNames.searchMemory,
                 title: "Searching memory...",
                 detail: "",
-                inputJSON: #"{"query":"pivot"}"#
+                inputJSON: #"{"query":"pivot"}"#,
+                provider: .openrouter,
+                quickActionMode: .direction,
+                durationMilliseconds: 12,
+                iteration: 1,
+                outcome: .success,
+                errorCategory: nil
             )
         ]
 
@@ -36,6 +42,27 @@ final class AgentTraceCodecTests: XCTestCase {
         XCTAssertEqual(AgentTraceCodec.decode(encoded), records)
         XCTAssertEqual(AgentTraceCodec.decode(nil), [])
         XCTAssertEqual(AgentTraceCodec.decode("not-json"), [])
+    }
+
+    func testTraceCodecDecodesLegacyRecordsWithoutTelemetryFields() {
+        let legacyJSON = """
+        [{
+          "id":"00000000-0000-0000-0000-000000000901",
+          "kind":"toolError",
+          "toolName":"search_memory",
+          "title":"search_memory failed",
+          "detail":"Old trace",
+          "inputJSON":"{}",
+          "createdAt":0
+        }]
+        """
+
+        let records = AgentTraceCodec.decode(legacyJSON)
+
+        XCTAssertEqual(records.count, 1)
+        XCTAssertEqual(records.first?.kind, .toolError)
+        XCTAssertNil(records.first?.errorCategory)
+        XCTAssertNil(records.first?.outcome)
     }
 }
 
@@ -836,6 +863,57 @@ final class AgentLoopExecutorTests: XCTestCase {
         XCTAssertTrue(content.contains("Loaded direction tool content."))
     }
 
+    func testSuccessfulToolCallRecordsHarnessTelemetry() async throws {
+        let turnId = UUID()
+        let node = NousNode(type: .conversation, title: "Current")
+        let userMessage = Message(nodeId: node.id, role: .user, content: "Find context")
+        let toolCall = AgentToolCall(
+            id: "call_noop",
+            name: NoopTool.toolName,
+            argumentsJSON: "{}"
+        )
+        let llm = ScriptedToolCallingLLM(responses: [
+            AgentToolLLMResponse(
+                text: "",
+                assistantMessage: .assistantToolCalls(content: nil, toolCalls: [toolCall]),
+                toolCalls: [toolCall]
+            ),
+            AgentToolLLMResponse(
+                text: "Final answer",
+                assistantMessage: .text(role: "assistant", content: "Final answer"),
+                toolCalls: []
+            )
+        ])
+        let executor = AgentLoopExecutor(
+            llmService: llm,
+            registry: AgentToolRegistry(tools: [NoopTool()]),
+            perToolTimeoutSeconds: 1,
+            totalTurnTimeoutSeconds: 5
+        )
+        let capture = CapturingTurnEventSink()
+        let sink = TurnSequencedEventSink(turnId: turnId, sink: capture)
+
+        let result = try await executor.execute(
+            plan: makeAgentLoopPlan(turnId: turnId, node: node, userMessage: userMessage),
+            request: makeAgentLoopRequest(turnId: turnId, node: node, userMessage: userMessage),
+            sink: sink,
+            context: makeAgentToolContext(
+                node: node,
+                userMessage: userMessage,
+                activeMode: .direction
+            )
+        )
+
+        let records = AgentTraceCodec.decode(result?.agentTraceJson)
+        let resultRecord = try XCTUnwrap(records.first { $0.kind == .toolResult })
+        XCTAssertEqual(resultRecord.provider, .openrouter)
+        XCTAssertEqual(resultRecord.quickActionMode, .direction)
+        XCTAssertEqual(resultRecord.iteration, 1)
+        XCTAssertNotNil(resultRecord.durationMilliseconds)
+        XCTAssertEqual(resultRecord.outcome, .success)
+        XCTAssertNil(resultRecord.errorCategory)
+    }
+
     func testEmitsThinkingDeltaFromToolCallingResponse() async throws {
         let turnId = UUID()
         let node = NousNode(type: .conversation, title: "Current")
@@ -873,6 +951,43 @@ final class AgentLoopExecutorTests: XCTestCase {
             }
             return delta.contains("Sonnet tool-loop reasoning")
                 && delta.contains("I checked memory before answering.")
+        })
+    }
+
+    func testSuppressesThinkingDeltaFromToolCallingResponseWhenCaptureDisabled() async throws {
+        let turnId = UUID()
+        let node = NousNode(type: .conversation, title: "Current")
+        let userMessage = Message(nodeId: node.id, role: .user, content: "Find context")
+        let llm = ScriptedToolCallingLLM(responses: [
+            AgentToolLLMResponse(
+                text: "Final answer",
+                assistantMessage: .text(role: "assistant", content: "Final answer"),
+                toolCalls: [],
+                thinkingContent: "I checked memory before answering."
+            )
+        ])
+        let executor = AgentLoopExecutor(
+            llmService: llm,
+            registry: AgentToolRegistry(tools: []),
+            perToolTimeoutSeconds: 1,
+            totalTurnTimeoutSeconds: 5
+        )
+        let capture = CapturingTurnEventSink()
+        let sink = TurnSequencedEventSink(turnId: turnId, sink: capture)
+
+        let result = try await executor.execute(
+            plan: makeAgentLoopPlan(turnId: turnId, node: node, userMessage: userMessage),
+            request: makeAgentLoopRequest(turnId: turnId, node: node, userMessage: userMessage),
+            sink: sink,
+            context: makeAgentToolContext(node: node, userMessage: userMessage),
+            captureThinking: false
+        )
+
+        XCTAssertNil(result?.persistedThinking)
+        let events = await capture.events()
+        XCTAssertFalse(events.contains { envelope in
+            if case .thinkingDelta = envelope.event { return true }
+            return false
         })
     }
 
@@ -936,6 +1051,131 @@ final class AgentLoopExecutorTests: XCTestCase {
             return XCTFail("Expected a tool-error trace event.")
         }
         XCTAssertEqual(errorTrace.kind, .toolError)
+        XCTAssertEqual(errorTrace.errorCategory, .notFound)
+        XCTAssertEqual(errorTrace.outcome, .failure)
+    }
+
+    func testInvalidToolArgumentsAreClassifiedAsInvalidArguments() async throws {
+        let turnId = UUID()
+        let node = NousNode(type: .conversation, title: "Current")
+        let userMessage = Message(nodeId: node.id, role: .user, content: "Find context")
+        let invalidCall = AgentToolCall(
+            id: "call_invalid",
+            name: NoopTool.toolName,
+            argumentsJSON: "{"
+        )
+        let llm = ScriptedToolCallingLLM(responses: [
+            AgentToolLLMResponse(
+                text: "",
+                assistantMessage: .assistantToolCalls(content: nil, toolCalls: [invalidCall]),
+                toolCalls: [invalidCall]
+            ),
+            AgentToolLLMResponse(
+                text: "Final answer",
+                assistantMessage: .text(role: "assistant", content: "Final answer"),
+                toolCalls: []
+            )
+        ])
+        let executor = AgentLoopExecutor(
+            llmService: llm,
+            registry: AgentToolRegistry(tools: [NoopTool()]),
+            perToolTimeoutSeconds: 1,
+            totalTurnTimeoutSeconds: 5
+        )
+        let capture = CapturingTurnEventSink()
+        let sink = TurnSequencedEventSink(turnId: turnId, sink: capture)
+
+        let result = try await executor.execute(
+            plan: makeAgentLoopPlan(turnId: turnId, node: node, userMessage: userMessage),
+            request: makeAgentLoopRequest(turnId: turnId, node: node, userMessage: userMessage),
+            sink: sink,
+            context: makeAgentToolContext(node: node, userMessage: userMessage)
+        )
+
+        let records = AgentTraceCodec.decode(result?.agentTraceJson)
+        XCTAssertEqual(records.first { $0.kind == .toolError }?.errorCategory, .invalidArguments)
+    }
+
+    func testToolTimeoutIsClassifiedAsTimeout() async throws {
+        let turnId = UUID()
+        let node = NousNode(type: .conversation, title: "Current")
+        let userMessage = Message(nodeId: node.id, role: .user, content: "Find context")
+        let slowCall = AgentToolCall(
+            id: "call_slow",
+            name: SlowAgentTool.toolName,
+            argumentsJSON: "{}"
+        )
+        let llm = ScriptedToolCallingLLM(responses: [
+            AgentToolLLMResponse(
+                text: "",
+                assistantMessage: .assistantToolCalls(content: nil, toolCalls: [slowCall]),
+                toolCalls: [slowCall]
+            ),
+            AgentToolLLMResponse(
+                text: "Final answer",
+                assistantMessage: .text(role: "assistant", content: "Final answer"),
+                toolCalls: []
+            )
+        ])
+        let executor = AgentLoopExecutor(
+            llmService: llm,
+            registry: AgentToolRegistry(tools: [SlowAgentTool()]),
+            perToolTimeoutSeconds: 0.01,
+            totalTurnTimeoutSeconds: 5
+        )
+        let capture = CapturingTurnEventSink()
+        let sink = TurnSequencedEventSink(turnId: turnId, sink: capture)
+
+        let result = try await executor.execute(
+            plan: makeAgentLoopPlan(turnId: turnId, node: node, userMessage: userMessage),
+            request: makeAgentLoopRequest(turnId: turnId, node: node, userMessage: userMessage),
+            sink: sink,
+            context: makeAgentToolContext(node: node, userMessage: userMessage)
+        )
+
+        let records = AgentTraceCodec.decode(result?.agentTraceJson)
+        XCTAssertEqual(records.first { $0.kind == .toolError }?.errorCategory, .timeout)
+    }
+
+    func testUnexpectedToolErrorIsClassifiedAsUnknown() async throws {
+        let turnId = UUID()
+        let node = NousNode(type: .conversation, title: "Current")
+        let userMessage = Message(nodeId: node.id, role: .user, content: "Find context")
+        let failingCall = AgentToolCall(
+            id: "call_unknown",
+            name: UnknownFailingTool.toolName,
+            argumentsJSON: "{}"
+        )
+        let llm = ScriptedToolCallingLLM(responses: [
+            AgentToolLLMResponse(
+                text: "",
+                assistantMessage: .assistantToolCalls(content: nil, toolCalls: [failingCall]),
+                toolCalls: [failingCall]
+            ),
+            AgentToolLLMResponse(
+                text: "Final answer",
+                assistantMessage: .text(role: "assistant", content: "Final answer"),
+                toolCalls: []
+            )
+        ])
+        let executor = AgentLoopExecutor(
+            llmService: llm,
+            registry: AgentToolRegistry(tools: [UnknownFailingTool()]),
+            perToolTimeoutSeconds: 1,
+            totalTurnTimeoutSeconds: 5
+        )
+        let capture = CapturingTurnEventSink()
+        let sink = TurnSequencedEventSink(turnId: turnId, sink: capture)
+
+        let result = try await executor.execute(
+            plan: makeAgentLoopPlan(turnId: turnId, node: node, userMessage: userMessage),
+            request: makeAgentLoopRequest(turnId: turnId, node: node, userMessage: userMessage),
+            sink: sink,
+            context: makeAgentToolContext(node: node, userMessage: userMessage)
+        )
+
+        let records = AgentTraceCodec.decode(result?.agentTraceJson)
+        XCTAssertEqual(records.first { $0.kind == .toolError }?.errorCategory, .unknown)
     }
 
     func testPassesReasoningDetailsBackAfterToolCall() async throws {
@@ -1083,6 +1323,11 @@ final class AgentLoopExecutorTests: XCTestCase {
         XCTAssertTrue(content.contains("Tool error:"))
         XCTAssertTrue(content.contains("outside the readable scope"))
         XCTAssertFalse(content.contains("Sibling read should not see this."))
+        let events = await capture.events()
+        XCTAssertTrue(events.contains { envelope in
+            guard case .agentTraceDelta(let record) = envelope.event else { return false }
+            return record.kind == .toolError && record.errorCategory == .unauthorized
+        })
     }
 
     func testCapReachedForcesFinalSynthesisWithToolCallsDisabled() async throws {
@@ -1554,6 +1799,29 @@ private struct NoopTool: AgentTool {
 
     func execute(input: AgentToolInput, context: AgentToolContext) async throws -> AgentToolResult {
         AgentToolResult(summary: "ok")
+    }
+}
+
+private struct SlowAgentTool: AgentTool {
+    static let toolName = "slow_tool"
+    let name = Self.toolName
+    let description = "Sleeps long enough to trigger the per-tool timeout."
+    let inputSchema = AgentToolSchema(properties: [:], required: [])
+
+    func execute(input: AgentToolInput, context: AgentToolContext) async throws -> AgentToolResult {
+        try await Task.sleep(nanoseconds: 500_000_000)
+        return AgentToolResult(summary: "too late")
+    }
+}
+
+private struct UnknownFailingTool: AgentTool {
+    static let toolName = "unknown_failing_tool"
+    let name = Self.toolName
+    let description = "Throws an untyped error for harness classification tests."
+    let inputSchema = AgentToolSchema(properties: [:], required: [])
+
+    func execute(input: AgentToolInput, context: AgentToolContext) async throws -> AgentToolResult {
+        throw NSError(domain: "AgentHarnessTelemetryTests", code: 42)
     }
 }
 

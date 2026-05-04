@@ -211,7 +211,7 @@ struct AgentWorkView: View {
                     systemImage: runtimeIcon(vm.snapshot.runtimeHarness),
                     color: runtimeColor(vm.snapshot.runtimeHarness),
                     primary: vm.snapshot.runtimeHarness.statusText,
-                    secondary: "\(vm.snapshot.runtimeHarness.reviewerCoverageText) · \(vm.snapshot.runtimeHarness.riskFlagSummary) · \(vm.snapshot.runtimeHarness.sycophancyFixtureTrend)"
+                    secondary: runtimeDetailText(vm.snapshot.runtimeHarness)
                 )
             }
 
@@ -298,6 +298,15 @@ struct AgentWorkView: View {
         return snapshot.findingTitles.joined(separator: " · ")
     }
 
+    private func runtimeDetailText(_ snapshot: RuntimeHarnessSnapshot) -> String {
+        [
+            snapshot.reviewerCoverageText,
+            snapshot.riskFlagSummary,
+            snapshot.agentToolReliability.summaryText,
+            snapshot.sycophancyFixtureTrend
+        ].joined(separator: " · ")
+    }
+
     private func harnessColor(_ status: HarnessBuildStatus) -> Color {
         switch status {
         case .passed:
@@ -329,6 +338,9 @@ struct AgentWorkView: View {
     }
 
     private func runtimeColor(_ snapshot: RuntimeHarnessSnapshot) -> Color {
+        if snapshot.agentToolReliability.unknownErrorCount > 0 {
+            return AppColor.colaOrange
+        }
         if !snapshot.lastRiskFlags.isEmpty {
             return AppColor.colaOrange
         }
@@ -339,6 +351,9 @@ struct AgentWorkView: View {
     }
 
     private func runtimeIcon(_ snapshot: RuntimeHarnessSnapshot) -> String {
+        if snapshot.agentToolReliability.unknownErrorCount > 0 {
+            return "exclamationmark.bubble"
+        }
         if !snapshot.lastRiskFlags.isEmpty {
             return "exclamationmark.bubble"
         }

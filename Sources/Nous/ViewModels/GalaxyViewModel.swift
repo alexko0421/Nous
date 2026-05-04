@@ -48,13 +48,16 @@ final class GalaxyViewModel {
         return Task { [weak self] in
             guard let self else { return }
             do {
-                _ = try await graphEngine.refineSemanticEdge(
+                let refinedEdge = try await graphEngine.refineSemanticEdge(
                     sourceId: edge.sourceId,
                     targetId: edge.targetId
                 )
                 let snapshot = try loadSnapshot()
                 await MainActor.run {
                     self.apply(snapshot)
+                    if let refinedEdge, self.canDisplayEdge(refinedEdge) {
+                        self.replaceOrAppendEdge(refinedEdge)
+                    }
                     self.refiningEdgeIds.remove(edgeId)
                 }
             } catch {
@@ -172,5 +175,28 @@ final class GalaxyViewModel {
         nodes = snapshot.nodes
         edges = snapshot.edges
         positions = snapshot.positions
+    }
+
+    private func replaceOrAppendEdge(_ edge: NodeEdge) {
+        if let existingIndex = edges.firstIndex(where: { existingEdge in
+            existingEdge.id == edge.id || sameEdgeEndpoints(existingEdge, edge)
+        }) {
+            edges[existingIndex] = edge
+        } else {
+            edges.append(edge)
+        }
+    }
+
+    private func canDisplayEdge(_ edge: NodeEdge) -> Bool {
+        let nodeIds = Set(nodes.map(\.id))
+        return nodeIds.contains(edge.sourceId) && nodeIds.contains(edge.targetId)
+    }
+
+    private func sameEdgeEndpoints(_ lhs: NodeEdge, _ rhs: NodeEdge) -> Bool {
+        lhs.type == rhs.type &&
+            (
+                (lhs.sourceId == rhs.sourceId && lhs.targetId == rhs.targetId) ||
+                (lhs.sourceId == rhs.targetId && lhs.targetId == rhs.sourceId)
+            )
     }
 }

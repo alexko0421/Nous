@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import Nous
 
@@ -39,8 +40,58 @@ final class AppMotionTests: XCTestCase {
         XCTAssertNil(window.identifier)
         XCTAssertFalse(window.isOpaque)
         XCTAssertEqual(window.backgroundColor, .clear)
+        XCTAssertFalse(window.isReleasedWhenClosed)
         XCTAssertTrue(window.canBecomeKey)
         XCTAssertTrue(window.canBecomeMain)
+    }
+
+    @MainActor
+    func testMainWindowCloseHidesWithoutDestroyingRecoverableSurface() {
+        let window = NousMainWindowController.makeWindow()
+
+        window.makeKeyAndOrderFront(nil)
+        XCTAssertTrue(window.isVisible)
+
+        window.close()
+        XCTAssertFalse(window.isVisible)
+
+        window.makeKeyAndOrderFront(nil)
+        XCTAssertTrue(window.isVisible)
+
+        window.orderOut(nil)
+    }
+
+    @MainActor
+    func testMainWindowControllerMarksOrderedOutSurfaceAsRecoverable() {
+        let window = NousMainWindowController.makeWindow()
+        let controller = NousMainWindowController(rootView: EmptyView(), window: window)
+        defer { window.orderOut(nil) }
+
+        controller.show()
+        XCTAssertFalse(controller.needsMissingSurfaceRecovery)
+
+        window.orderOut(nil)
+        XCTAssertTrue(controller.needsMissingSurfaceRecovery)
+    }
+
+    @MainActor
+    func testTrafficLightWindowLookupPrefersNousMainWindow() {
+        let auxiliary = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 120, height: 120),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        auxiliary.titleVisibility = .hidden
+        let main = NousMainWindowController.makeWindow()
+        defer {
+            auxiliary.orderOut(nil)
+            main.orderOut(nil)
+        }
+
+        XCTAssertTrue(
+            AppWindowLookup.mainWindow(in: [auxiliary, main], keyWindow: auxiliary) === main
+        )
     }
 
     @MainActor
@@ -81,5 +132,47 @@ final class AppMotionTests: XCTestCase {
         XCTAssertNil(defaults.object(forKey: "NSSplitView Subview Frames SwiftUI.ModifiedContent<Nous.ContentView, SwiftUI._BackgroundModifier<Nous.WindowConfigurator>>-1-AppWindow-1, SidebarNavigationSplitView"))
         XCTAssertEqual(defaults.string(forKey: "NSWindow Frame settings-view"), "679 267 450 452 0 0 1512 949")
         XCTAssertEqual(defaults.string(forKey: "nous.user.name"), "Alex")
+    }
+
+    func testDatabasePathOverrideCreatesOnlyTheRequestedDatabaseDirectory() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NousDatabaseOverride-\(UUID().uuidString)", isDirectory: true)
+        let databaseURL = root
+            .appendingPathComponent("Session A", isDirectory: true)
+            .appendingPathComponent("baseline.sqlite", isDirectory: false)
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        let path = try AppEnvironment.databasePath(
+            environment: [AppEnvironment.databasePathOverrideKey: databaseURL.path],
+            applicationSupportURL: root.appendingPathComponent("UnusedSupport", isDirectory: true)
+        )
+
+        XCTAssertEqual(path, databaseURL.standardizedFileURL.path)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: databaseURL.deletingLastPathComponent().path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("UnusedSupport").path))
+    }
+
+    func testDatabaseProfileCreatesStableIsolatedProfilePath() throws {
+        let appSupport = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NousProfileSupport-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: appSupport)
+        }
+
+        let path = try AppEnvironment.databasePath(
+            environment: [AppEnvironment.databaseProfileKey: "Memory QA / Session B"],
+            applicationSupportURL: appSupport
+        )
+
+        let expected = appSupport
+            .appendingPathComponent("Nous", isDirectory: true)
+            .appendingPathComponent("Profiles", isDirectory: true)
+            .appendingPathComponent("Memory-QA-Session-B", isDirectory: true)
+            .appendingPathComponent("nous.db", isDirectory: false)
+            .path
+        XCTAssertEqual(path, expected)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: URL(fileURLWithPath: path).deletingLastPathComponent().path))
     }
 }
