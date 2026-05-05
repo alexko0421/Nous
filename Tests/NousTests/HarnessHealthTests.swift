@@ -348,6 +348,263 @@ final class HarnessHealthTests: XCTestCase {
         XCTAssertEqual(snapshot.behaviorEval.summaryText, "No behavior eval signals recorded.")
     }
 
+    func testRuntimeHarnessSummarizesContextManifestSignals() {
+        let telemetry = makeRuntimeHarnessTelemetry()
+        telemetry.recordContextManifest(ContextManifestRecord(
+            turnId: UUID(),
+            conversationId: UUID(),
+            assistantMessageId: UUID(),
+            resources: [
+                ContextManifestResource(
+                    source: .memory,
+                    label: "global_memory",
+                    referenceId: "global_memory",
+                    state: .loaded,
+                    used: false
+                ),
+                ContextManifestResource(
+                    source: .citation,
+                    label: "node",
+                    referenceId: UUID().uuidString,
+                    state: .loaded,
+                    used: true
+                ),
+                ContextManifestResource(
+                    source: .skill,
+                    label: "quick_action_skill",
+                    referenceId: UUID().uuidString,
+                    state: .indexed,
+                    used: false
+                )
+            ]
+        ))
+
+        let snapshot = RuntimeHarnessService(telemetry: telemetry).loadSnapshot()
+
+        XCTAssertEqual(snapshot.contextManifest.totalManifestCount, 1)
+        XCTAssertEqual(snapshot.contextManifest.totalResourceCount, 3)
+        XCTAssertEqual(snapshot.contextManifest.loadedMemoryCount, 1)
+        XCTAssertEqual(snapshot.contextManifest.loadedCitationCount, 1)
+        XCTAssertEqual(snapshot.contextManifest.indexedSkillCount, 1)
+        XCTAssertEqual(snapshot.contextManifest.usedCitationCount, 1)
+        XCTAssertEqual(snapshot.contextManifest.usageRate, 1.0 / 3.0, accuracy: 0.0001)
+        XCTAssertEqual(
+            snapshot.contextManifest.summaryText,
+            "Context manifest 3 resources · 1 used · memory 1 · citation 1 · skill indexed 1"
+        )
+    }
+
+    func testRuntimeHarnessContextManifestIsQuietWithoutSignals() {
+        let snapshot = RuntimeHarnessService(telemetry: makeRuntimeHarnessTelemetry()).loadSnapshot()
+
+        XCTAssertEqual(snapshot.contextManifest.totalManifestCount, 0)
+        XCTAssertEqual(snapshot.contextManifest.totalResourceCount, 0)
+        XCTAssertEqual(snapshot.contextManifest.summaryText, "No context manifest signals recorded.")
+    }
+
+    func testRuntimeHarnessExposesLastVisibleResponseLanguageTarget() {
+        let telemetry = makeRuntimeHarnessTelemetry()
+        telemetry.recordPromptTrace(
+            PromptGovernanceTrace(
+                promptLayers: ["anchor", "chat_mode", "visible_response_language_target"],
+                evidenceAttached: false,
+                safetyPolicyInvoked: false,
+                highRiskQueryDetected: false,
+                visibleResponseLanguageTarget: .english,
+                visibleResponseLanguageSource: .explicitLanguageRequest
+            )
+        )
+
+        let snapshot = RuntimeHarnessService(telemetry: telemetry).loadSnapshot()
+
+        XCTAssertEqual(snapshot.visibleResponseLanguageTarget, .english)
+        XCTAssertEqual(snapshot.visibleResponseLanguageSource, .explicitLanguageRequest)
+        XCTAssertEqual(snapshot.visibleResponseLanguageSummaryText, "Visible language target English · explicit language request")
+    }
+
+    func testRuntimeHarnessLanguageTargetIsQuietWithoutPromptTrace() {
+        let snapshot = RuntimeHarnessService(telemetry: makeRuntimeHarnessTelemetry()).loadSnapshot()
+
+        XCTAssertEqual(snapshot.visibleResponseLanguageTarget, .unspecified)
+        XCTAssertEqual(snapshot.visibleResponseLanguageSource, .none)
+        XCTAssertEqual(snapshot.visibleResponseLanguageSummaryText, "No visible language target recorded.")
+    }
+
+    func testRuntimeHarnessLanguageTargetSummaryNamesMandarin() {
+        let snapshot = RuntimeHarnessSnapshot(
+            visibleResponseLanguageTarget: .mandarin,
+            visibleResponseLanguageSource: .currentTurnMandarin
+        )
+
+        XCTAssertEqual(snapshot.visibleResponseLanguageSummaryText, "Visible language target Mandarin · current message uses Mandarin")
+    }
+
+    func testRuntimeHarnessSummarizesDelegationMetricsAgainstSingleShotBaseline() {
+        let telemetry = makeRuntimeHarnessTelemetry()
+        let delegatedAssistantId = UUID(uuidString: "00000000-0000-0000-0000-00000000D101")!
+        let singleShotAssistantId = UUID(uuidString: "00000000-0000-0000-0000-00000000D102")!
+        telemetry.recordTurnCognitionSnapshot(TurnCognitionSnapshot(
+            turnId: UUID(),
+            conversationId: UUID(),
+            assistantMessageId: delegatedAssistantId,
+            promptLayers: ["anchor", "agent_coordination"],
+            slowCognitionAttached: false,
+            reviewArtifactId: UUID(),
+            reviewRiskFlags: [],
+            reviewConfidence: 0.8,
+            agentCoordination: AgentCoordinationTrace(
+                executionMode: .toolLoop,
+                quickActionMode: .direction,
+                provider: .openrouter,
+                reason: .explicitQuickActionToolLoop,
+                indexedSkillCount: 2
+            )
+        ))
+        telemetry.recordTurnCognitionSnapshot(TurnCognitionSnapshot(
+            turnId: UUID(),
+            conversationId: UUID(),
+            assistantMessageId: singleShotAssistantId,
+            promptLayers: ["anchor", "agent_coordination"],
+            slowCognitionAttached: false,
+            reviewArtifactId: nil,
+            reviewRiskFlags: [],
+            reviewConfidence: nil,
+            agentCoordination: AgentCoordinationTrace(
+                executionMode: .singleShot,
+                quickActionMode: .direction,
+                provider: .gemini,
+                reason: .providerCannotUseToolLoop,
+                indexedSkillCount: 0
+            )
+        ))
+        telemetry.recordBehaviorEvalEvent(BehaviorEvalEvent(
+            conversationId: UUID(),
+            assistantMessageId: delegatedAssistantId,
+            userMessageId: UUID(),
+            outcome: .retry
+        ))
+        telemetry.recordBehaviorEvalEvent(BehaviorEvalEvent(
+            conversationId: UUID(),
+            assistantMessageId: singleShotAssistantId,
+            userMessageId: UUID(),
+            outcome: .continued
+        ))
+
+        let snapshot = RuntimeHarnessService(telemetry: telemetry).loadSnapshot()
+
+        XCTAssertEqual(snapshot.delegationMetrics.totalEventCount, 2)
+        XCTAssertEqual(snapshot.delegationMetrics.delegatedTurnCount, 1)
+        XCTAssertEqual(snapshot.delegationMetrics.verifierTurnCount, 1)
+        XCTAssertEqual(snapshot.delegationMetrics.evaluatedDelegatedTurnCount, 1)
+        XCTAssertEqual(snapshot.delegationMetrics.delegatedReworkCount, 1)
+        XCTAssertEqual(snapshot.delegationMetrics.evaluatedSingleShotTurnCount, 1)
+        XCTAssertEqual(snapshot.delegationMetrics.singleShotReworkCount, 0)
+        XCTAssertEqual(snapshot.delegationMetrics.delegationReworkRate, 1, accuracy: 0.0001)
+        XCTAssertEqual(snapshot.delegationMetrics.singleShotReworkRate, 0, accuracy: 0.0001)
+        XCTAssertEqual(
+            snapshot.delegationMetrics.summaryText,
+            "Delegation 1 turns · rework 1/1 · single-shot 0/1 · verifier 1 turns"
+        )
+    }
+
+    func testRuntimeHarnessDelegationMetricsAreQuietWithoutSignals() {
+        let snapshot = RuntimeHarnessService(telemetry: makeRuntimeHarnessTelemetry()).loadSnapshot()
+
+        XCTAssertEqual(snapshot.delegationMetrics.totalEventCount, 0)
+        XCTAssertEqual(snapshot.delegationMetrics.summaryText, "No delegation metric signals recorded.")
+    }
+
+    func testModelHarnessProfilesCoverEveryProviderWithExplicitCapabilities() {
+        let profiles = ModelHarnessProfileCatalog.allProfiles
+
+        XCTAssertEqual(Set(profiles.map(\.provider)), Set(LLMProvider.allCases))
+        XCTAssertTrue(ModelHarnessProfileCatalog.coverageSummary.isComplete)
+
+        let gemini = ModelHarnessProfileCatalog.profile(for: .gemini)
+        XCTAssertEqual(gemini.toolSchema, .unsupported)
+        XCTAssertEqual(gemini.cacheStrategy, .geminiCachedContent)
+        XCTAssertEqual(gemini.thinkingStrategy, .geminiThinkingConfig)
+        XCTAssertEqual(gemini.thinkingBudgetTokens, 2000)
+        XCTAssertEqual(gemini.agentLoopSupport, .unsupported)
+        XCTAssertEqual(gemini.fallbackStrategy, .inlineProviderError)
+
+        let claude = ModelHarnessProfileCatalog.profile(for: .claude)
+        XCTAssertEqual(claude.cacheStrategy, .anthropicEphemeralSystemPrefix)
+        XCTAssertEqual(claude.thinkingStrategy, .anthropicThinkingBudget)
+        XCTAssertEqual(claude.thinkingBudgetTokens, 1024)
+
+        let local = ModelHarnessProfileCatalog.profile(for: .local)
+        XCTAssertEqual(local.fallbackStrategy, .inlineConfigurationMessage)
+
+        let openRouter = ModelHarnessProfileCatalog.profile(for: .openrouter)
+        XCTAssertEqual(openRouter.toolSchema, .openRouterFunctionTools)
+        XCTAssertEqual(openRouter.cacheStrategy, .openRouterSystemBlockCacheControl)
+        XCTAssertEqual(openRouter.thinkingStrategy, .openRouterReasoningBudget)
+        XCTAssertEqual(openRouter.agentLoopSupport, .openRouterClaudeSonnet46)
+        XCTAssertEqual(openRouter.requiredToolLoopModel, "anthropic/claude-sonnet-4.6")
+        XCTAssertEqual(openRouter.fallbackStrategy, .providerCannotUseToolLoop)
+    }
+
+    func testModelHarnessProfileChecksRequiredToolLoopModel() {
+        let profile = ModelHarnessProfile(
+            provider: .openrouter,
+            toolSchema: .openRouterFunctionTools,
+            cacheStrategy: .openRouterSystemBlockCacheControl,
+            thinkingStrategy: .openRouterReasoningBudget,
+            thinkingBudgetTokens: 1024,
+            agentLoopSupport: .openRouterClaudeSonnet46,
+            requiredToolLoopModel: "provider/required-tool-model",
+            fallbackStrategy: .providerCannotUseToolLoop
+        )
+
+        XCTAssertTrue(profile.allowsAgentToolUse(model: "provider/required-tool-model"))
+        XCTAssertFalse(profile.allowsAgentToolUse(model: "provider/other-model"))
+    }
+
+    func testOpenRouterToolSupportUsesRequiredProfileModel() throws {
+        let requiredModel = try XCTUnwrap(
+            ModelHarnessProfileCatalog.profile(for: .openrouter).requiredToolLoopModel
+        )
+
+        XCTAssertTrue(ModelHarnessProfileCatalog.allowsAgentToolUse(for: .openrouter, model: requiredModel))
+        XCTAssertFalse(ModelHarnessProfileCatalog.allowsAgentToolUse(
+            for: .openrouter,
+            model: "anthropic/claude-sonnet-4.5"
+        ))
+
+        var openRouter = OpenRouterLLMService(apiKey: "test")
+        openRouter.model = requiredModel
+        XCTAssertTrue(openRouter.supportsAgentToolUse)
+
+        openRouter.model = "anthropic/claude-sonnet-4.5"
+        XCTAssertFalse(openRouter.supportsAgentToolUse)
+    }
+
+    func testRuntimeHarnessSummarizesModelHarnessProfiles() {
+        let snapshot = RuntimeHarnessService(telemetry: makeRuntimeHarnessTelemetry()).loadSnapshot()
+
+        XCTAssertEqual(snapshot.modelHarnessProfiles.totalProviderCount, LLMProvider.allCases.count)
+        XCTAssertEqual(snapshot.modelHarnessProfiles.coveredProviderCount, LLMProvider.allCases.count)
+        XCTAssertEqual(snapshot.modelHarnessProfiles.agentLoopProviderCount, 1)
+        XCTAssertEqual(snapshot.modelHarnessProfiles.cacheStrategyCount, 3)
+        XCTAssertEqual(snapshot.modelHarnessProfiles.thinkingStrategyCount, 3)
+        XCTAssertEqual(
+            snapshot.modelHarnessProfiles.summaryText,
+            "Model profiles 5/5 covered · agent loop 1 · cache 3 · thinking 3"
+        )
+    }
+
+    func testModelHarnessProfileSummaryFlagsMissingProviderCoverage() {
+        let incomplete = ModelHarnessProfileCoverageSummary.summarize(
+            profiles: ModelHarnessProfileCatalog.allProfiles.filter { $0.provider != .local },
+            expectedProviders: LLMProvider.allCases
+        )
+
+        XCTAssertFalse(incomplete.isComplete)
+        XCTAssertEqual(incomplete.missingProviders, [.local])
+        XCTAssertEqual(incomplete.summaryText, "Model profiles missing Local (MLX)")
+    }
+
     func testWindowRuntimeSmokeUsesCGWindowListAsTheWindowOracle() throws {
         let repoURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

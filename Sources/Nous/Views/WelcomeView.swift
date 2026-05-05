@@ -1,7 +1,18 @@
 import SwiftUI
 
+enum ComposerTextInputMetrics {
+    static let maxVisibleLines = 6
+    static let minimumTextHeight: CGFloat = 18
+    static let maximumTextHeight: CGFloat = 108
+    static let verticalPadding: CGFloat = 10
+
+    static var minimumControlHeight: CGFloat {
+        minimumTextHeight + verticalPadding * 2
+    }
+}
+
 enum WelcomeActionMenuHitRegion {
-    static let composerHeight: CGFloat = 34
+    static let composerHeight: CGFloat = ComposerTextInputMetrics.minimumControlHeight
     static let actionMenuHeight: CGFloat = 62
     static let actionMenuGap: CGFloat = 8
 
@@ -153,7 +164,7 @@ struct WelcomeView: View {
             .frame(width: 34, height: 34)
 
             HStack(spacing: 6) {
-                ZStack(alignment: .leading) {
+                ZStack(alignment: .topLeading) {
                     RotatingComposerPromptLabel(
                         inputText: inputText,
                         isFocused: isComposerFocused
@@ -164,7 +175,8 @@ struct WelcomeView: View {
                         .textFieldStyle(.plain)
                         .font(.system(size: 13, weight: .medium, design: .rounded))
                         .foregroundColor(AppColor.colaDarkText)
-                        .lineLimit(1...6)
+                        .lineLimit(1...ComposerTextInputMetrics.maxVisibleLines)
+                        .frame(maxWidth: .infinity, minHeight: ComposerTextInputMetrics.minimumTextHeight, alignment: .topLeading)
                         .fixedSize(horizontal: false, vertical: true)
                         .onSubmit { onSend() }
                         .onChange(of: inputText) { _, _ in
@@ -179,7 +191,7 @@ struct WelcomeView: View {
             }
             .padding(.leading, 16)
             .padding(.trailing, 16)
-            .padding(.vertical, 10)
+            .padding(.vertical, ComposerTextInputMetrics.verticalPadding)
             .background(
                 NativeGlassPanel(
                     cornerRadius: 18,
@@ -236,26 +248,14 @@ struct WelcomeView: View {
     }
 
     private func circleActionButton(systemImage: String, isVoiceActive: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(isVoiceActive ? AppColor.colaOrange : AppColor.secondaryText)
-                .frame(width: 32, height: 32)
-                .rotationEffect(.degrees(isActionMenuExpanded && !isVoiceActive ? 90 : 0))
-                .background(
-                    NativeGlassPanel(
-                        cornerRadius: 16,
-                        tintColor: isVoiceActive
-                            ? NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.22)
-                            : AppColor.controlGlassTint
-                    ) { EmptyView() }
-                )
-                .overlay(
-                    Circle()
-                        .stroke(AppColor.panelStroke, lineWidth: 1)
-                )
-        }
-        .buttonStyle(.plain)
+        ComposerLeadingActionButton(
+            systemImage: systemImage,
+            isMenuExpanded: isActionMenuExpanded,
+            isVoiceActive: isVoiceActive,
+            size: 32,
+            cornerRadius: 16,
+            action: action
+        )
     }
 
     private func primaryActionButton(isSeparated: Bool) -> some View {

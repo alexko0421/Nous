@@ -118,6 +118,30 @@ final class NodeStore {
         )
 
         try db.exec("""
+            CREATE TABLE IF NOT EXISTS source_metadata (
+                nodeId           TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
+                kind             TEXT NOT NULL,
+                originalURL      TEXT,
+                originalFilename TEXT,
+                contentHash      TEXT NOT NULL,
+                ingestedAt       REAL NOT NULL,
+                extractionStatus TEXT NOT NULL
+            );
+        """)
+
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS source_chunks (
+                id           TEXT PRIMARY KEY,
+                sourceNodeId TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+                ordinal      INTEGER NOT NULL,
+                text         TEXT NOT NULL,
+                embedding    BLOB,
+                createdAt    REAL NOT NULL,
+                UNIQUE(sourceNodeId, ordinal)
+            );
+        """)
+
+        try db.exec("""
             CREATE TABLE IF NOT EXISTS messages (
                 id               TEXT PRIMARY KEY,
                 nodeId           TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
@@ -146,6 +170,25 @@ final class NodeStore {
             column: "source",
             alterSQL: "ALTER TABLE messages ADD COLUMN source TEXT NOT NULL DEFAULT 'typed';"
         )
+
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS message_source_materials (
+                messageId    TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+                sourceNodeId TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+                ordinal      INTEGER NOT NULL,
+                createdAt    REAL NOT NULL,
+                PRIMARY KEY(messageId, sourceNodeId)
+            );
+        """)
+
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS temporary_branch_records (
+                sourceMessageId TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+                nodeId          TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+                recordJSON      TEXT NOT NULL,
+                updatedAt       REAL NOT NULL
+            );
+        """)
 
         try db.exec("""
             CREATE TABLE IF NOT EXISTS edges (
@@ -544,7 +587,13 @@ final class NodeStore {
 
         // Indexes
         try db.exec("CREATE INDEX IF NOT EXISTS idx_nodes_projectId  ON nodes(projectId);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_source_metadata_originalURL ON source_metadata(originalURL);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_source_metadata_contentHash ON source_metadata(contentHash);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_source_chunks_sourceNodeId ON source_chunks(sourceNodeId);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_message_source_materials_messageId ON message_source_materials(messageId);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_message_source_materials_sourceNodeId ON message_source_materials(sourceNodeId);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_messages_nodeId  ON messages(nodeId);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_temporary_branch_records_nodeId ON temporary_branch_records(nodeId);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_edges_sourceId   ON edges(sourceId);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_edges_targetId   ON edges(targetId);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_edges_sourceAtomId ON edges(sourceAtomId);")
@@ -660,6 +709,11 @@ final class NodeStore {
     // MARK: - Nodes
 
     func insertNode(_ node: NousNode) throws {
+        try insertNodeRow(node)
+        notifyNodesDidChange()
+    }
+
+    private func insertNodeRow(_ node: NousNode) throws {
         let stmt = try db.prepare("""
             INSERT INTO nodes (id, type, title, content, emoji, embedding, projectId, isFavorite, createdAt, updatedAt)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
@@ -676,7 +730,6 @@ final class NodeStore {
         try stmt.bind(node.createdAt.timeIntervalSince1970, at: 9)
         try stmt.bind(node.updatedAt.timeIntervalSince1970, at: 10)
         try stmt.step()
-        notifyNodesDidChange()
     }
 
     func updateNode(_ node: NousNode) throws {
@@ -734,6 +787,129 @@ final class NodeStore {
         return results
     }
 
+    func upsertSourceMetadata(_ metadata: SourceMetadata) throws {
+        let stmt = try db.prepare("""
+            INSERT INTO source_metadata
+                (nodeId, kind, originalURL, originalFilename, contentHash, ingestedAt, extractionStatus)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(nodeId) DO UPDATE SET
+                kind = excluded.kind,
+                originalURL = excluded.originalURL,
+                originalFilename = excluded.originalFilename,
+                contentHash = excluded.contentHash,
+                ingestedAt = excluded.ingestedAt,
+                extractionStatus = excluded.extractionStatus;
+        """)
+        try stmt.bind(metadata.nodeId.uuidString, at: 1)
+        try stmt.bind(metadata.kind.rawValue, at: 2)
+        try stmt.bind(metadata.originalURL, at: 3)
+        try stmt.bind(metadata.originalFilename, at: 4)
+        try stmt.bind(metadata.contentHash, at: 5)
+        try stmt.bind(metadata.ingestedAt.timeIntervalSince1970, at: 6)
+        try stmt.bind(metadata.extractionStatus.rawValue, at: 7)
+        try stmt.step()
+    }
+
+    func fetchSourceMetadata(nodeId: UUID) throws -> SourceMetadata? {
+        let stmt = try db.prepare("""
+            SELECT nodeId, kind, originalURL, originalFilename, contentHash, ingestedAt, extractionStatus
+            FROM source_metadata
+            WHERE nodeId = ?
+            LIMIT 1;
+        """)
+        try stmt.bind(nodeId.uuidString, at: 1)
+        guard try stmt.step() else { return nil }
+        return sourceMetadata(from: stmt)
+    }
+
+    func fetchSourceMetadata(originalURL: String) throws -> SourceMetadata? {
+        let stmt = try db.prepare("""
+            SELECT nodeId, kind, originalURL, originalFilename, contentHash, ingestedAt, extractionStatus
+            FROM source_metadata
+            WHERE originalURL = ?
+            LIMIT 1;
+        """)
+        try stmt.bind(originalURL, at: 1)
+        guard try stmt.step() else { return nil }
+        return sourceMetadata(from: stmt)
+    }
+
+    func fetchSourceMetadata(contentHash: String) throws -> SourceMetadata? {
+        let stmt = try db.prepare("""
+            SELECT nodeId, kind, originalURL, originalFilename, contentHash, ingestedAt, extractionStatus
+            FROM source_metadata
+            WHERE contentHash = ?
+            LIMIT 1;
+        """)
+        try stmt.bind(contentHash, at: 1)
+        guard try stmt.step() else { return nil }
+        return sourceMetadata(from: stmt)
+    }
+
+    func replaceSourceChunks(_ chunks: [SourceChunk], for sourceNodeId: UUID) throws {
+        try inTransaction {
+            try replaceSourceChunksRows(chunks, for: sourceNodeId)
+        }
+    }
+
+    func insertSource(
+        node: NousNode,
+        metadata: SourceMetadata,
+        chunks: [SourceChunk]
+    ) throws {
+        try inTransaction {
+            try insertNodeRow(node)
+            try upsertSourceMetadata(metadata)
+            try replaceSourceChunksRows(chunks, for: node.id)
+        }
+        notifyNodesDidChange()
+    }
+
+    private func replaceSourceChunksRows(_ chunks: [SourceChunk], for sourceNodeId: UUID) throws {
+        let delete = try db.prepare("DELETE FROM source_chunks WHERE sourceNodeId = ?;")
+        try delete.bind(sourceNodeId.uuidString, at: 1)
+        try delete.step()
+
+        for chunk in chunks {
+            try insertSourceChunk(chunk)
+        }
+    }
+
+    func fetchSourceChunks(nodeId: UUID) throws -> [SourceChunk] {
+        let stmt = try db.prepare("""
+            SELECT id, sourceNodeId, ordinal, text, embedding, createdAt
+            FROM source_chunks
+            WHERE sourceNodeId = ?
+            ORDER BY ordinal ASC;
+        """)
+        try stmt.bind(nodeId.uuidString, at: 1)
+        var chunks: [SourceChunk] = []
+        while try stmt.step() {
+            chunks.append(sourceChunk(from: stmt))
+        }
+        return chunks
+    }
+
+    func fetchSourceChunksWithEmbeddings() throws -> [(SourceChunk, NousNode, [Float])] {
+        let stmt = try db.prepare("""
+            SELECT
+                c.id, c.sourceNodeId, c.ordinal, c.text, c.embedding, c.createdAt,
+                n.id, n.type, n.title, n.content, n.emoji, n.embedding, n.projectId, n.isFavorite, n.createdAt, n.updatedAt
+            FROM source_chunks c
+            JOIN nodes n ON n.id = c.sourceNodeId
+            WHERE c.embedding IS NOT NULL;
+        """)
+        var results: [(SourceChunk, NousNode, [Float])] = []
+        while try stmt.step() {
+            let chunk = sourceChunk(from: stmt)
+            let node = nodeFrom(stmt, offset: 6)
+            if let embedding = chunk.embedding {
+                results.append((chunk, node, embedding))
+            }
+        }
+        return results
+    }
+
     /// Lightweight title lookup for inspector/debug UIs that should not decode
     /// full node bodies or embedding blobs just to render labels.
     func fetchAllNodeTitles() throws -> [UUID: String] {
@@ -780,7 +956,9 @@ final class NodeStore {
     func fetchRecents(limit: Int) throws -> [NousNode] {
         let stmt = try db.prepare("""
             SELECT id, type, title, content, emoji, embedding, projectId, isFavorite, createdAt, updatedAt
-            FROM nodes ORDER BY updatedAt DESC LIMIT ?;
+            FROM nodes
+            WHERE type != 'source'
+            ORDER BY updatedAt DESC LIMIT ?;
         """)
         try stmt.bind(limit, at: 1)
         var results: [NousNode] = []
@@ -907,20 +1085,82 @@ final class NodeStore {
         }
     }
 
-    private func nodeFrom(_ stmt: Statement) -> NousNode {
-        let id = UUID(uuidString: stmt.text(at: 0) ?? "") ?? UUID()
-        let type = NodeType(rawValue: stmt.text(at: 1) ?? "") ?? .note
-        let title = stmt.text(at: 2) ?? ""
-        let content = stmt.text(at: 3) ?? ""
-        let emoji = stmt.text(at: 4)
-        let embedding: [Float]? = stmt.blob(at: 5).map { decodeFloats($0) }
-        let projectId: UUID? = stmt.text(at: 6).flatMap { UUID(uuidString: $0) }
-        let isFavorite = stmt.int(at: 7) != 0
-        let createdAt = Date(timeIntervalSince1970: stmt.double(at: 8))
-        let updatedAt = Date(timeIntervalSince1970: stmt.double(at: 9))
+    private func nodeFrom(_ stmt: Statement, offset: Int32 = 0) -> NousNode {
+        let id = UUID(uuidString: stmt.text(at: offset + 0) ?? "") ?? UUID()
+        let type = NodeType(rawValue: stmt.text(at: offset + 1) ?? "") ?? .note
+        let title = stmt.text(at: offset + 2) ?? ""
+        let content = stmt.text(at: offset + 3) ?? ""
+        let emoji = stmt.text(at: offset + 4)
+        let embedding: [Float]? = stmt.blob(at: offset + 5).map { decodeFloats($0) }
+        let projectId: UUID? = stmt.text(at: offset + 6).flatMap { UUID(uuidString: $0) }
+        let isFavorite = stmt.int(at: offset + 7) != 0
+        let createdAt = Date(timeIntervalSince1970: stmt.double(at: offset + 8))
+        let updatedAt = Date(timeIntervalSince1970: stmt.double(at: offset + 9))
         return NousNode(id: id, type: type, title: title, content: content,
                         emoji: emoji, embedding: embedding, projectId: projectId,
                         isFavorite: isFavorite, createdAt: createdAt, updatedAt: updatedAt)
+    }
+
+    private func insertSourceChunk(_ chunk: SourceChunk) throws {
+        let stmt = try db.prepare("""
+            INSERT INTO source_chunks (id, sourceNodeId, ordinal, text, embedding, createdAt)
+            VALUES (?, ?, ?, ?, ?, ?);
+        """)
+        try stmt.bind(chunk.id.uuidString, at: 1)
+        try stmt.bind(chunk.sourceNodeId.uuidString, at: 2)
+        try stmt.bind(chunk.ordinal, at: 3)
+        try stmt.bind(chunk.text, at: 4)
+        let embeddingData: Data? = chunk.embedding.map { encodeFloats($0) }
+        try stmt.bind(embeddingData, at: 5)
+        try stmt.bind(chunk.createdAt.timeIntervalSince1970, at: 6)
+        try stmt.step()
+    }
+
+    private func sourceMetadata(from stmt: Statement) -> SourceMetadata {
+        SourceMetadata(
+            nodeId: UUID(uuidString: stmt.text(at: 0) ?? "") ?? UUID(),
+            kind: SourceKind(rawValue: stmt.text(at: 1) ?? "") ?? .document,
+            originalURL: stmt.text(at: 2),
+            originalFilename: stmt.text(at: 3),
+            contentHash: stmt.text(at: 4) ?? "",
+            ingestedAt: Date(timeIntervalSince1970: stmt.double(at: 5)),
+            extractionStatus: SourceExtractionStatus(rawValue: stmt.text(at: 6) ?? "") ?? .failed
+        )
+    }
+
+    private func sourceChunk(from stmt: Statement) -> SourceChunk {
+        SourceChunk(
+            id: UUID(uuidString: stmt.text(at: 0) ?? "") ?? UUID(),
+            sourceNodeId: UUID(uuidString: stmt.text(at: 1) ?? "") ?? UUID(),
+            ordinal: stmt.int(at: 2),
+            text: stmt.text(at: 3) ?? "",
+            embedding: stmt.blob(at: 4).map { decodeFloats($0) },
+            createdAt: Date(timeIntervalSince1970: stmt.double(at: 5))
+        )
+    }
+
+    private func sourceMaterialContext(nodeId: UUID) throws -> SourceMaterialContext? {
+        guard let node = try fetchNode(id: nodeId),
+              let metadata = try fetchSourceMetadata(nodeId: nodeId) else {
+            return nil
+        }
+        let chunks = try fetchSourceChunks(nodeId: nodeId)
+            .prefix(3)
+            .map {
+                SourceChunkContext(
+                    sourceNodeId: $0.sourceNodeId,
+                    ordinal: $0.ordinal,
+                    text: $0.text,
+                    similarity: nil
+                )
+            }
+        return SourceMaterialContext(
+            sourceNodeId: node.id,
+            title: node.title,
+            originalURL: metadata.originalURL,
+            originalFilename: metadata.originalFilename,
+            chunks: Array(chunks)
+        )
     }
 
     // MARK: - Messages
@@ -978,6 +1218,101 @@ final class NodeStore {
             ))
         }
         return results
+    }
+
+    func replaceMessageSourceMaterials(
+        _ materials: [SourceMaterialContext],
+        for messageId: UUID
+    ) throws {
+        let uniqueSourceNodeIds = materials.reduce(into: [UUID]()) { result, material in
+            guard !result.contains(material.sourceNodeId) else { return }
+            result.append(material.sourceNodeId)
+        }
+
+        try inTransaction {
+            let delete = try db.prepare("DELETE FROM message_source_materials WHERE messageId = ?;")
+            try delete.bind(messageId.uuidString, at: 1)
+            try delete.step()
+
+            guard !uniqueSourceNodeIds.isEmpty else { return }
+
+            let createdAt = Date().timeIntervalSince1970
+            for (ordinal, sourceNodeId) in uniqueSourceNodeIds.enumerated() {
+                let insert = try db.prepare("""
+                    INSERT INTO message_source_materials (messageId, sourceNodeId, ordinal, createdAt)
+                    VALUES (?, ?, ?, ?);
+                """)
+                try insert.bind(messageId.uuidString, at: 1)
+                try insert.bind(sourceNodeId.uuidString, at: 2)
+                try insert.bind(ordinal, at: 3)
+                try insert.bind(createdAt, at: 4)
+                try insert.step()
+            }
+        }
+    }
+
+    func fetchMessageSourceMaterials(messageId: UUID) throws -> [SourceMaterialContext] {
+        let stmt = try db.prepare("""
+            SELECT sourceNodeId
+            FROM message_source_materials
+            WHERE messageId = ?
+            ORDER BY ordinal ASC;
+        """)
+        try stmt.bind(messageId.uuidString, at: 1)
+
+        var materials: [SourceMaterialContext] = []
+        while try stmt.step() {
+            guard let rawId = stmt.text(at: 0),
+                  let sourceNodeId = UUID(uuidString: rawId),
+                  let material = try sourceMaterialContext(nodeId: sourceNodeId) else {
+                continue
+            }
+            materials.append(material)
+        }
+        return materials
+    }
+
+    func upsertTemporaryBranchRecord(_ record: TemporaryBranchRecord) throws {
+        let recordJSON = String(
+            data: try JSONEncoder().encode(record),
+            encoding: .utf8
+        ) ?? "{}"
+        let stmt = try db.prepare("""
+            INSERT INTO temporary_branch_records (sourceMessageId, nodeId, recordJSON, updatedAt)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(sourceMessageId) DO UPDATE SET
+                nodeId = excluded.nodeId,
+                recordJSON = excluded.recordJSON,
+                updatedAt = excluded.updatedAt;
+        """)
+        try stmt.bind(record.sourceMessage.id.uuidString, at: 1)
+        try stmt.bind(record.sourceMessage.nodeId.uuidString, at: 2)
+        try stmt.bind(recordJSON, at: 3)
+        try stmt.bind(record.updatedAt.timeIntervalSince1970, at: 4)
+        try stmt.step()
+        notifyNodesDidChange()
+    }
+
+    func fetchTemporaryBranchRecords(nodeId: UUID) throws -> [TemporaryBranchRecord] {
+        let stmt = try db.prepare("""
+            SELECT recordJSON
+            FROM temporary_branch_records
+            WHERE nodeId = ?
+            ORDER BY updatedAt ASC;
+        """)
+        try stmt.bind(nodeId.uuidString, at: 1)
+
+        var records: [TemporaryBranchRecord] = []
+        let decoder = JSONDecoder()
+        while try stmt.step() {
+            guard let json = stmt.text(at: 0),
+                  let data = json.data(using: .utf8),
+                  let record = try? decoder.decode(TemporaryBranchRecord.self, from: data)
+            else { continue }
+
+            records.append(record)
+        }
+        return records
     }
 
     func fetchRecentAgentTraceRecords(limit: Int = 50) throws -> [AgentTraceRecord] {
@@ -2798,13 +3133,26 @@ extension NodeStore {
     /// manual-orphan button and by `reconcileOrphanedReflectionClaims`.
     /// No-op if the claim is already orphaned/superseded.
     func orphanReflectionClaim(id: UUID) throws {
-        let stmt = try db.prepare("""
+        try inTransaction {
+            try orphanReflectionClaimInCurrentTransaction(id: id)
+        }
+    }
+
+    private func orphanReflectionClaimInCurrentTransaction(id: UUID) throws {
+        let update = try db.prepare("""
             UPDATE reflection_claim
             SET status = 'orphaned'
             WHERE id = ? AND status = 'active';
         """)
-        try stmt.bind(id.uuidString, at: 1)
-        try stmt.step()
+        try update.bind(id.uuidString, at: 1)
+        try update.step()
+
+        let cleanup = try db.prepare("""
+            DELETE FROM reflection_evidence
+            WHERE reflection_id = ?;
+        """)
+        try cleanup.bind(id.uuidString, at: 1)
+        try cleanup.step()
     }
 
     /// After a cascade-delete drops evidence rows, any claim whose remaining
@@ -2830,7 +3178,7 @@ extension NodeStore {
             flipped.append(uuid)
         }
         for id in flipped {
-            try orphanReflectionClaim(id: id)
+            try orphanReflectionClaimInCurrentTransaction(id: id)
         }
         return flipped
     }

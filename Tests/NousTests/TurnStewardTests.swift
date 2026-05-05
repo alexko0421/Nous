@@ -67,6 +67,85 @@ final class TurnStewardTests: XCTestCase {
         XCTAssertEqual(decision.responseShape, .narrowNextStep)
     }
 
+    func testSourceMaterialsRouteToSourceAnalysis() {
+        let sourceNodeId = UUID()
+        let decision = steward.steer(
+            prepared: preparedTurn(userText: "what connects here?"),
+            request: request(
+                input: "what connects here?",
+                sourceMaterials: [
+                    SourceMaterialContext(
+                        sourceNodeId: sourceNodeId,
+                        title: "External essay",
+                        originalURL: "https://example.com/essay",
+                        originalFilename: nil,
+                        chunks: [
+                            SourceChunkContext(
+                                sourceNodeId: sourceNodeId,
+                                ordinal: 0,
+                                text: "External essay chunk about connecting ideas.",
+                                similarity: nil
+                            )
+                        ]
+                    )
+                ]
+            )
+        )
+
+        XCTAssertEqual(decision.route, .sourceAnalysis)
+        XCTAssertEqual(decision.memoryPolicy, .full)
+        XCTAssertEqual(decision.responseShape, .answerNow)
+        XCTAssertEqual(decision.supervisorLanes, [.source, .memory, .project, .analytics, .reflection])
+        XCTAssertEqual(decision.trace.supervisorLanes, decision.supervisorLanes)
+    }
+
+    func testActiveSupportFirstRouterDoesNotEraseSourceAnalysisLane() async {
+        let sourceNodeId = UUID()
+        let decision = await TurnSteward(
+            routerModeProvider: { .active }
+        ).steerForTurn(
+            prepared: preparedTurn(userText: "我好焦虑，帮我 connect this source"),
+            request: request(
+                input: "我好焦虑，帮我 connect this source",
+                sourceMaterials: [
+                    SourceMaterialContext(
+                        sourceNodeId: sourceNodeId,
+                        title: "External essay",
+                        originalURL: "https://example.com/essay",
+                        originalFilename: nil,
+                        chunks: [
+                            SourceChunkContext(
+                                sourceNodeId: sourceNodeId,
+                                ordinal: 0,
+                                text: "External essay chunk about connecting ideas.",
+                                similarity: nil
+                            )
+                        ]
+                    )
+                ]
+            )
+        )
+
+        XCTAssertEqual(decision.route, .sourceAnalysis)
+        XCTAssertEqual(decision.trace.responseStance, .supportFirst)
+        XCTAssertTrue(decision.supervisorLanes.contains(.source))
+        XCTAssertEqual(decision.trace.supervisorLanes, decision.supervisorLanes)
+    }
+
+    func testPlanRouteActivatesProjectSupervisorLanes() {
+        let decision = steward.steer(
+            prepared: preparedTurn(userText: "help me plan the next phase"),
+            request: request(input: "help me plan the next phase")
+        )
+
+        XCTAssertEqual(decision.route, .plan)
+        XCTAssertTrue(decision.supervisorLanes.contains(.memory))
+        XCTAssertTrue(decision.supervisorLanes.contains(.project))
+        XCTAssertTrue(decision.supervisorLanes.contains(.analytics))
+        XCTAssertTrue(decision.supervisorLanes.contains(.reflection))
+        XCTAssertFalse(decision.supervisorLanes.contains(.source))
+    }
+
     func testEmotionalDistressSupportFirst() {
         let decision = steward.steer(
             prepared: preparedTurn(userText: "我好攰，感觉顶唔顺"),
@@ -598,7 +677,8 @@ final class TurnStewardTests: XCTestCase {
 
     private func request(
         input: String,
-        activeQuickActionMode: QuickActionMode? = nil
+        activeQuickActionMode: QuickActionMode? = nil,
+        sourceMaterials: [SourceMaterialContext] = []
     ) -> TurnRequest {
         TurnRequest(
             turnId: UUID(),
@@ -611,6 +691,7 @@ final class TurnStewardTests: XCTestCase {
             ),
             inputText: input,
             attachments: [],
+            sourceMaterials: sourceMaterials,
             now: Date()
         )
     }

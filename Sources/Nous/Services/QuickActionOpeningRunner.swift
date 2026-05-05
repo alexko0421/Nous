@@ -12,6 +12,7 @@ final class QuickActionOpeningRunner {
     private let onPlanReady: (TurnPlan) -> Void
     private let onReviewArtifact: (CognitionArtifact) -> Void
     private let onTurnCognitionSnapshot: (TurnCognitionSnapshot) -> Void
+    private let onContextManifest: (ContextManifestRecord) -> Void
 
     init(
         conversationSessionStore: ConversationSessionStore,
@@ -26,7 +27,8 @@ final class QuickActionOpeningRunner {
         shouldSurfaceThinkingTraces: @escaping () -> Bool = { true },
         onPlanReady: @escaping (TurnPlan) -> Void = { _ in },
         onReviewArtifact: @escaping (CognitionArtifact) -> Void = { _ in },
-        onTurnCognitionSnapshot: @escaping (TurnCognitionSnapshot) -> Void = { _ in }
+        onTurnCognitionSnapshot: @escaping (TurnCognitionSnapshot) -> Void = { _ in },
+        onContextManifest: @escaping (ContextManifestRecord) -> Void = { _ in }
     ) {
         self.conversationSessionStore = conversationSessionStore
         self.memoryContextBuilder = memoryContextBuilder
@@ -43,6 +45,7 @@ final class QuickActionOpeningRunner {
         self.onPlanReady = onPlanReady
         self.onReviewArtifact = onReviewArtifact
         self.onTurnCognitionSnapshot = onTurnCognitionSnapshot
+        self.onContextManifest = onContextManifest
     }
 
     func run(
@@ -113,6 +116,15 @@ final class QuickActionOpeningRunner {
             committed: committed,
             reviewArtifact: reviewArtifact
         ))
+        let contextManifest = ContextManifestFactory.make(
+            plan: plan,
+            assistantMessageId: committed.assistantMessage.id,
+            assistantContent: executionResult.assistantContent,
+            agentTraceJson: executionResult.agentTraceJson
+        )
+        if !contextManifest.resources.isEmpty {
+            onContextManifest(contextManifest)
+        }
 
         let completion = outcomeFactory.makeCompletion(
             turnId: turnId,
@@ -203,6 +215,20 @@ final class QuickActionOpeningRunner {
             allowSkillIndex: false,
             allowInteractiveClarification: false
         )
+        let promptResourceIds = PromptContextAssembler.promptResourceIds(
+            operatingContext: memoryContext.operatingContext,
+            globalMemory: memoryContext.globalMemory,
+            essentialStory: memoryContext.essentialStory,
+            userModel: memoryContext.userModel,
+            memoryEvidence: memoryContext.memoryEvidence,
+            memoryGraphRecall: memoryContext.memoryGraphRecall,
+            projectMemory: memoryContext.projectMemory,
+            conversationMemory: memoryContext.conversationMemory,
+            recentConversations: memoryContext.recentConversations,
+            citations: memoryContext.citations,
+            projectGoal: memoryContext.projectGoal,
+            memoryProvenance: memoryContext.memoryProvenance
+        )
         let promptTrace = PromptContextAssembler.governanceTrace(
             chatMode: .companion,
             currentUserInput: openingText,
@@ -241,7 +267,12 @@ final class QuickActionOpeningRunner {
             turnSlice: turnSlice,
             transcriptMessages: [LLMMessage(role: "user", content: openingText)],
             focusBlock: nil,
-            provider: provider
+            provider: provider,
+            loadedSkillIds: Set(quickActionResolution.loadedSkills.map(\.skillID)),
+            memoryEvidenceSourceIds: promptResourceIds.memoryEvidenceSourceIds,
+            loadedCitationIds: promptResourceIds.citationIds,
+            memoryUsageHints: promptResourceIds.memoryUsageHints,
+            memoryProvenance: promptResourceIds.memoryProvenance
         )
     }
 

@@ -19,6 +19,7 @@ final class ChatTurnRunner {
     private let onPlanReady: (TurnPlan) -> Void
     private let onReviewArtifact: (CognitionArtifact) -> Void
     private let onTurnCognitionSnapshot: (TurnCognitionSnapshot) -> Void
+    private let onContextManifest: (ContextManifestRecord) -> Void
 
     init(
         conversationSessionStore: ConversationSessionStore,
@@ -32,7 +33,8 @@ final class ChatTurnRunner {
         shouldSurfaceThinkingTraces: @escaping () -> Bool = { true },
         onPlanReady: @escaping (TurnPlan) -> Void = { _ in },
         onReviewArtifact: @escaping (CognitionArtifact) -> Void = { _ in },
-        onTurnCognitionSnapshot: @escaping (TurnCognitionSnapshot) -> Void = { _ in }
+        onTurnCognitionSnapshot: @escaping (TurnCognitionSnapshot) -> Void = { _ in },
+        onContextManifest: @escaping (ContextManifestRecord) -> Void = { _ in }
     ) {
         self.conversationSessionStore = conversationSessionStore
         self.turnSteward = turnSteward
@@ -46,6 +48,7 @@ final class ChatTurnRunner {
         self.onPlanReady = onPlanReady
         self.onReviewArtifact = onReviewArtifact
         self.onTurnCognitionSnapshot = onTurnCognitionSnapshot
+        self.onContextManifest = onContextManifest
     }
 
     func run(
@@ -271,6 +274,15 @@ final class ChatTurnRunner {
             committed: committed,
             reviewArtifact: reviewArtifact
         ))
+        let contextManifest = ContextManifestFactory.make(
+            plan: plan,
+            assistantMessageId: committed.assistantMessage.id,
+            assistantContent: executionResult.assistantContent,
+            agentTraceJson: executionResult.agentTraceJson
+        )
+        if !contextManifest.resources.isEmpty {
+            onContextManifest(contextManifest)
+        }
 
         let completion = outcomeFactory.makeCompletion(
             turnId: request.turnId,
@@ -374,6 +386,7 @@ enum TurnCognitionSnapshotFactory {
             reviewArtifactId: reviewArtifact?.id,
             reviewRiskFlags: reviewArtifact?.riskFlags ?? [],
             reviewConfidence: reviewArtifact?.confidence,
+            agentCoordination: plan.promptTrace.agentCoordination,
             conversationRecoveryReason: recoveryEvent?.reason.rawValue,
             conversationRecoveryOriginalNodeId: recoveryEvent?.originalNodeId,
             conversationRecoveryRecoveredNodeId: recoveryEvent?.recoveredNodeId,
@@ -430,6 +443,7 @@ private extension TurnPlan {
             turnId: turnId,
             prepared: prepared,
             citations: citations,
+            sourceMaterials: sourceMaterials,
             promptTrace: trace,
             effectiveMode: effectiveMode,
             nextQuickActionModeIfCompleted: nextQuickActionModeIfCompleted,
@@ -439,7 +453,12 @@ private extension TurnPlan {
             transcriptMessages: transcriptMessages,
             focusBlock: focusBlock,
             provider: provider,
-            indexedSkillIds: indexedSkillIds
+            indexedSkillIds: indexedSkillIds,
+            loadedSkillIds: loadedSkillIds,
+            memoryEvidenceSourceIds: memoryEvidenceSourceIds,
+            loadedCitationIds: loadedCitationIds,
+            memoryUsageHints: memoryUsageHints,
+            memoryProvenance: memoryProvenance
         )
     }
 }

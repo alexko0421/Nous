@@ -42,4 +42,44 @@ final class NoteViewModelTests: XCTestCase {
         XCTAssertEqual(vm.currentNote?.title, "Untitled")
         XCTAssertEqual(vm.content, "Body")
     }
+
+    func testSourceNodesAreReadOnlyThroughNoteViewModel() throws {
+        let source = NousNode(
+            type: .source,
+            title: "External memo",
+            content: "Original source text",
+            emoji: "source"
+        )
+        try store.insertNode(source)
+        try store.upsertSourceMetadata(
+            SourceMetadata(
+                nodeId: source.id,
+                kind: .document,
+                originalURL: nil,
+                originalFilename: "memo.pdf",
+                contentHash: "hash-1",
+                ingestedAt: source.createdAt,
+                extractionStatus: .ready
+            )
+        )
+        try store.replaceSourceChunks([
+            SourceChunk(
+                sourceNodeId: source.id,
+                ordinal: 0,
+                text: "Original source chunk",
+                embedding: nil,
+                createdAt: source.createdAt
+            )
+        ], for: source.id)
+
+        vm.openNote(source)
+        vm.title = "Edited title"
+        vm.content = "Edited source text"
+        vm.save()
+
+        let stored = try XCTUnwrap(store.fetchNode(id: source.id))
+        XCTAssertEqual(stored.title, "External memo")
+        XCTAssertEqual(stored.content, "Original source text")
+        XCTAssertEqual(try store.fetchSourceChunks(nodeId: source.id).map(\.text), ["Original source chunk"])
+    }
 }

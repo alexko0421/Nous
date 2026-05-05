@@ -22,6 +22,8 @@ final class ChatViewModel {
     var defaultProjectId: UUID?
     var lastPromptGovernanceTrace: PromptGovernanceTrace?
     private var judgeFeedbackVersion: Int = 0
+    @ObservationIgnored private var pendingSourceMaterialsByTurnId: [UUID: [SourceMaterialContext]] = [:]
+    @ObservationIgnored private var sourceMaterialsByUserMessageId: [UUID: [SourceMaterialContext]] = [:]
 
     // MARK: - Dependencies
 
@@ -38,6 +40,7 @@ final class ChatViewModel {
     @ObservationIgnored private let explicitTurnExecutor: TurnExecutor?
     @ObservationIgnored private let explicitContextContinuationService: ContextContinuationService?
     @ObservationIgnored private let explicitTurnHousekeepingService: TurnHousekeepingService?
+    @ObservationIgnored private let explicitSourceIngestionService: SourceIngestionService?
     private let llmServiceProvider: () -> (any LLMService)?
     private let currentProviderProvider: () -> LLMProvider
     private let judgeLLMServiceFactory: () -> (any LLMService)?
@@ -68,6 +71,7 @@ final class ChatViewModel {
     @ObservationIgnored private var cachedQuickActionOpeningRunner: QuickActionOpeningRunner?
     @ObservationIgnored private var cachedContextContinuationService: ContextContinuationService?
     @ObservationIgnored private var cachedTurnHousekeepingService: TurnHousekeepingService?
+    @ObservationIgnored private var cachedSourceIngestionService: SourceIngestionService?
     private var memoryProjectionService: MemoryProjectionService {
         userMemoryService.projectionReader
     }
@@ -95,14 +99,14 @@ final class ChatViewModel {
             turnExecutor: turnExecutor,
             agentLoopExecutorFactory: { [weak self] mode, _, _ in
                 guard let self,
-                      self.currentProviderProvider() == .openrouter,
+                      ModelHarnessProfileCatalog.profile(for: self.currentProviderProvider()).supportsAgentToolUse,
                       let llm = self.llmServiceProvider() else {
                     return nil
                 }
 
                 let toolLLM: any ToolCallingLLMService
                 if var openRouter = llm as? OpenRouterLLMService {
-                    openRouter.reasoningBudgetTokens = 1024
+                    openRouter.reasoningBudgetTokens = ModelHarnessProfileCatalog.thinkingBudgetTokens(for: .openrouter)
                     toolLLM = openRouter
                 } else if let candidate = llm as? any ToolCallingLLMService {
                     toolLLM = candidate
@@ -142,6 +146,9 @@ final class ChatViewModel {
             },
             onTurnCognitionSnapshot: { [governanceTelemetry] snapshot in
                 governanceTelemetry.recordTurnCognitionSnapshot(snapshot)
+            },
+            onContextManifest: { [governanceTelemetry] record in
+                governanceTelemetry.recordContextManifest(record)
             }
         )
     }
@@ -169,7 +176,7 @@ final class ChatViewModel {
             shadowPatternPromptProvider: shadowPatternPromptProvider,
             slowCognitionArtifactProvider: slowCognitionArtifactProvider,
             agentLoopProviderSupportsToolUse: { [weak self] provider in
-                guard provider == .openrouter,
+                guard ModelHarnessProfileCatalog.profile(for: provider).supportsAgentToolUse,
                       let llm = self?.llmServiceProvider()
                 else { return false }
 
@@ -237,6 +244,9 @@ final class ChatViewModel {
             },
             onTurnCognitionSnapshot: { [governanceTelemetry] snapshot in
                 governanceTelemetry.recordTurnCognitionSnapshot(snapshot)
+            },
+            onContextManifest: { [governanceTelemetry] record in
+                governanceTelemetry.recordContextManifest(record)
             }
         )
         cachedQuickActionOpeningRunner = runner
@@ -256,6 +266,29 @@ final class ChatViewModel {
             governanceTelemetry: governanceTelemetry
         )
         cachedContextContinuationService = service
+        return service
+    }
+    private var sourceIngestionService: SourceIngestionService {
+        if let explicitSourceIngestionService {
+            return explicitSourceIngestionService
+        }
+        if let cachedSourceIngestionService {
+            return cachedSourceIngestionService
+        }
+
+        let service = SourceIngestionService(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingProvider: embeddingService,
+            onSourceNodeIngested: { [weak self] node in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    try? self.graphEngine.regenerateEdges(for: node)
+                    self.relationRefinementQueue?.enqueue(nodeId: node.id)
+                }
+            }
+        )
+        cachedSourceIngestionService = service
         return service
     }
     private var turnHousekeepingService: TurnHousekeepingService {
@@ -300,6 +333,7 @@ final class ChatViewModel {
         turnExecutor: TurnExecutor? = nil,
         contextContinuationService: ContextContinuationService? = nil,
         turnHousekeepingService: TurnHousekeepingService? = nil,
+        sourceIngestionService: SourceIngestionService? = nil,
         llmServiceProvider: @escaping () -> (any LLMService)?,
         currentProviderProvider: @escaping () -> LLMProvider,
         judgeLLMServiceFactory: @escaping () -> (any LLMService)?,
@@ -351,6 +385,7 @@ final class ChatViewModel {
         self.explicitTurnExecutor = turnExecutor
         self.explicitContextContinuationService = contextContinuationService
         self.explicitTurnHousekeepingService = turnHousekeepingService
+        self.explicitSourceIngestionService = sourceIngestionService
     }
 
     // MARK: - Conversation Management
@@ -374,6 +409,8 @@ final class ChatViewModel {
         activeQuickActionMode = nil
         activeChatMode = nil
         lastPromptGovernanceTrace = nil
+        pendingSourceMaterialsByTurnId.removeAll()
+        sourceMaterialsByUserMessageId.removeAll()
     }
 
     @MainActor
@@ -401,6 +438,8 @@ final class ChatViewModel {
         didHitBudgetExhaustion = false
         activeQuickActionMode = nil
         activeChatMode = nil  // brand-new chat has no prior judgment
+        pendingSourceMaterialsByTurnId.removeAll()
+        sourceMaterialsByUserMessageId.removeAll()
     }
 
     @MainActor
@@ -420,6 +459,8 @@ final class ChatViewModel {
         didHitBudgetExhaustion = false
         activeQuickActionMode = nil
         activeChatMode = (try? nodeStore.latestChatMode(forNode: node.id)) ?? nil
+        pendingSourceMaterialsByTurnId.removeAll()
+        sourceMaterialsByUserMessageId.removeAll()
     }
 
     func activateQuickActionMode(_ mode: QuickActionMode) {
@@ -607,6 +648,71 @@ final class ChatViewModel {
     }
 
     @MainActor
+    func sendTemporaryBranch(_ branch: TemporaryBranchViewModel) async {
+        await branch.send(using: llmServiceProvider)
+    }
+
+    @MainActor
+    func regenerateTemporaryBranch(_ branch: TemporaryBranchViewModel) async {
+        await branch.regenerateLatestAssistant(using: llmServiceProvider)
+    }
+
+    @MainActor
+    func loadTemporaryBranchRecords() -> [TemporaryBranchRecord] {
+        guard let nodeId = currentNode?.id else { return [] }
+        return (try? nodeStore.fetchTemporaryBranchRecords(nodeId: nodeId)) ?? []
+    }
+
+    @MainActor
+    func persistTemporaryBranchRecord(_ record: TemporaryBranchRecord) {
+        try? nodeStore.upsertTemporaryBranchRecord(record)
+    }
+
+    @MainActor
+    func evaluateTemporaryBranchRecord(_ record: TemporaryBranchRecord) async -> TemporaryBranchRecord {
+        let evaluator = TemporaryBranchMemoryEvaluator(llmServiceProvider: llmServiceProvider)
+        let evaluated = await evaluator.evaluatedRecord(record)
+        try? nodeStore.upsertTemporaryBranchRecord(evaluated)
+        await userMemoryService.absorbTemporaryBranchSummary(record: evaluated)
+        return evaluated
+    }
+
+    @MainActor
+    func applyTemporaryBranchCandidate(
+        _ candidateId: UUID,
+        in record: TemporaryBranchRecord,
+        action: TemporaryBranchMemoryCandidateAction
+    ) async -> TemporaryBranchRecord? {
+        guard let index = record.memoryCandidates.firstIndex(where: { $0.id == candidateId }) else {
+            return nil
+        }
+        var updatedCandidates = record.memoryCandidates
+        switch action {
+        case .ignore:
+            updatedCandidates[index].status = .rejected
+        case .save:
+            let didApply = await userMemoryService.applyTemporaryBranchCandidate(
+                updatedCandidates[index],
+                record: record
+            )
+            guard didApply else { return nil }
+            updatedCandidates[index].status = .applied
+        }
+
+        let updated = TemporaryBranchRecord(
+            sourceMessage: record.sourceMessage,
+            localContext: record.localContext,
+            messages: record.messages,
+            summary: record.summary,
+            memoryCandidates: updatedCandidates,
+            updatedAt: Date(),
+            lastEvaluatedAt: record.lastEvaluatedAt
+        )
+        try? nodeStore.upsertTemporaryBranchRecord(updated)
+        return updated
+    }
+
+    @MainActor
     func canRegenerateAssistantMessage(_ messageId: UUID) -> Bool {
         guard !isGenerating,
               let latestAssistant = messages.last,
@@ -645,6 +751,29 @@ final class ChatViewModel {
         let query = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard (!query.isEmpty || !attachments.isEmpty), isActiveResponseTask(responseTaskId) else { return }
 
+        inputText = ""
+        isGenerating = true
+        currentResponse = ""
+        currentThinking = ""
+        currentThinkingStartedAt = Date()
+        currentAgentTrace = []
+        didHitBudgetExhaustion = false
+        defer {
+            if isActiveResponseTask(responseTaskId) {
+                isGenerating = false
+            }
+        }
+
+        let sourcePreparation = await prepareSourceMaterials(
+            inputText: query,
+            attachments: attachments
+        )
+        guard isActiveResponseTask(responseTaskId) else { return }
+        rememberPendingSourceMaterials(sourcePreparation.materials, for: responseTaskId)
+        defer {
+            pendingSourceMaterialsByTurnId.removeValue(forKey: responseTaskId)
+        }
+
         let turnRequest = TurnRequest(
             turnId: responseTaskId,
             snapshot: TurnSessionSnapshot(
@@ -655,22 +784,11 @@ final class ChatViewModel {
                 activeQuickActionMode: activeQuickActionMode
             ),
             inputText: query,
-            attachments: attachments,
+            attachments: sourcePreparation.remainingAttachments,
+            sourceMaterials: sourcePreparation.materials,
             now: Date()
         )
         let eventSink = makeTurnEventSink(turnId: responseTaskId)
-
-        inputText = ""
-        isGenerating = true
-        currentResponse = ""
-        currentThinking = ""
-        currentThinkingStartedAt = Date()
-        currentAgentTrace = []
-        defer {
-            if isActiveResponseTask(responseTaskId) {
-                isGenerating = false
-            }
-        }
 
         guard let completion = await turnRunner.run(
             request: turnRequest,
@@ -685,6 +803,96 @@ final class ChatViewModel {
         await contextContinuationService.run(completion.continuationPlan)
         turnHousekeepingService.run(completion.housekeepingPlan)
         scheduleShadowLearningHeartbeat()
+    }
+
+    private func prepareSourceMaterials(
+        inputText: String,
+        attachments: [AttachedFileContext]
+    ) async -> (materials: [SourceMaterialContext], remainingAttachments: [AttachedFileContext]) {
+        var materials: [SourceMaterialContext] = []
+        var ingestedDocumentAttachmentIds = Set<UUID>()
+        let urls = SourceURLDetector.urls(in: inputText)
+        if !urls.isEmpty {
+            let urlMaterials = (try? await sourceIngestionService.ingestURLs(
+                urls,
+                projectId: currentNode?.projectId ?? defaultProjectId
+            )) ?? []
+            materials.append(contentsOf: urlMaterials)
+        }
+
+        let documentAttachments = attachments.filter(SourceIngestionService.isSupportedDocumentAttachment)
+        if !documentAttachments.isEmpty {
+            for attachment in documentAttachments {
+                let documentMaterials = (try? sourceIngestionService.ingestDocumentAttachments(
+                    [attachment],
+                    projectId: currentNode?.projectId ?? defaultProjectId
+                )) ?? []
+                if !documentMaterials.isEmpty {
+                    ingestedDocumentAttachmentIds.insert(attachment.id)
+                    materials.append(contentsOf: documentMaterials)
+                }
+            }
+        }
+
+        materials = sourceIngestionService.enrichedMaterials(materials, matching: inputText)
+
+        let remainingAttachments = attachments.filter { attachment in
+            guard SourceIngestionService.isSupportedDocumentAttachment(attachment) else {
+                return true
+            }
+            return !ingestedDocumentAttachmentIds.contains(attachment.id)
+        }
+        return (materials, remainingAttachments)
+    }
+
+    private func rememberPendingSourceMaterials(
+        _ materials: [SourceMaterialContext],
+        for turnId: UUID
+    ) {
+        if materials.isEmpty {
+            pendingSourceMaterialsByTurnId.removeValue(forKey: turnId)
+        } else {
+            pendingSourceMaterialsByTurnId[turnId] = materials
+        }
+    }
+
+    private func rememberSourceMaterials(
+        _ materials: [SourceMaterialContext],
+        for userMessageId: UUID
+    ) {
+        guard !materials.isEmpty else { return }
+        sourceMaterialsByUserMessageId[userMessageId] = materials
+        do {
+            try nodeStore.replaceMessageSourceMaterials(materials, for: userMessageId)
+        } catch {
+            NSLog("[SourceIngestion] failed to persist source material links for message %@: %@", userMessageId.uuidString, error.localizedDescription)
+        }
+    }
+
+    private func sourceMaterialsForRetry(userMessage: Message) async -> [SourceMaterialContext] {
+        if let materials = sourceMaterialsByUserMessageId[userMessage.id],
+           !materials.isEmpty {
+            return materials
+        }
+
+        if let storedMaterials = try? nodeStore.fetchMessageSourceMaterials(messageId: userMessage.id),
+           !storedMaterials.isEmpty {
+            let enrichedMaterials = sourceIngestionService.enrichedMaterials(
+                storedMaterials,
+                matching: userMessage.content
+            )
+            sourceMaterialsByUserMessageId[userMessage.id] = enrichedMaterials
+            return enrichedMaterials
+        }
+
+        let prepared = await prepareSourceMaterials(
+            inputText: userMessage.content,
+            attachments: []
+        )
+        if !prepared.materials.isEmpty {
+            rememberSourceMaterials(prepared.materials, for: userMessage.id)
+        }
+        return prepared.materials
     }
 
     @MainActor
@@ -718,6 +926,7 @@ final class ChatViewModel {
         currentThinkingStartedAt = nil
         currentAgentTrace = []
         didHitBudgetExhaustion = false
+        let retrySourceMaterials = await sourceMaterialsForRetry(userMessage: userMessage)
 
         let request = TurnRequest(
             turnId: responseTaskId,
@@ -730,6 +939,7 @@ final class ChatViewModel {
             ),
             inputText: userMessage.content,
             attachments: [],
+            sourceMaterials: retrySourceMaterials,
             now: Date()
         )
         let prepared = PreparedConversationTurn(
@@ -797,6 +1007,10 @@ final class ChatViewModel {
                 scratchPadStore.activate(conversationId: appended.node.id)
             }
             messages = appended.messagesAfterUserAppend
+            if let materials = pendingSourceMaterialsByTurnId.removeValue(forKey: envelope.turnId),
+               !materials.isEmpty {
+                rememberSourceMaterials(materials, for: appended.userMessage.id)
+            }
         case .prepared(let prepared):
             currentNode = prepared.node
             messages = prepared.messagesAfterUserAppend

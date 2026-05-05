@@ -1406,6 +1406,471 @@ private func makeLoopSkill(
     )
 }
 
+final class ContextManifestFactoryTests: XCTestCase {
+    func testManifestUsesBoundedIdsAndMarksCitationAndToolLoadedSkillUsage() throws {
+        let turnId = UUID()
+        let conversation = NousNode(type: .conversation, title: "Current")
+        let userMessage = Message(nodeId: conversation.id, role: .user, content: "Use context")
+        let citedNode = NousNode(
+            id: UUID(),
+            type: .note,
+            title: "Architecture Decision",
+            content: "Alex wants raw SQLite ownership."
+        )
+        let loadedSkillId = UUID()
+        let indexedSkillId = UUID()
+        let assistantMessageId = UUID()
+        let memoryEvidenceSourceA = UUID()
+        let memoryEvidenceSourceB = UUID()
+        let trace = AgentTraceCodec.encode([
+            AgentTraceRecord(
+                kind: .toolResult,
+                toolName: AgentToolNames.loadSkill,
+                title: "Skill loaded",
+                detail: "Loaded skill.",
+                inputJSON: #"{"skill_id":"\#(indexedSkillId.uuidString)"}"#,
+                outcome: .success
+            )
+        ])
+        let plan = TurnPlan(
+            turnId: turnId,
+            prepared: PreparedConversationTurn(
+                node: conversation,
+                userMessage: userMessage,
+                messagesAfterUserAppend: [userMessage]
+            ),
+            citations: [SearchResult(node: citedNode, similarity: 0.91)],
+            promptTrace: PromptGovernanceTrace(
+                promptLayers: ["global_memory", "memory_evidence", "citations", "agent_coordination"],
+                evidenceAttached: false,
+                safetyPolicyInvoked: false,
+                highRiskQueryDetected: false
+            ),
+            effectiveMode: .companion,
+            nextQuickActionModeIfCompleted: nil,
+            judgeEventDraft: nil,
+            turnSlice: TurnSystemSlice(stable: "stable", volatile: "volatile"),
+            transcriptMessages: [LLMMessage(role: "user", content: userMessage.content)],
+            focusBlock: nil,
+            provider: .openrouter,
+            indexedSkillIds: [indexedSkillId],
+            loadedSkillIds: [loadedSkillId],
+            memoryEvidenceSourceIds: [memoryEvidenceSourceA, memoryEvidenceSourceB],
+            memoryUsageHints: [
+                ContextManifestUsageHint(
+                    referenceId: "global_memory",
+                    phrases: ["Alex owns the data layer."]
+                ),
+                ContextManifestUsageHint(
+                    referenceId: memoryEvidenceSourceA.uuidString,
+                    phrases: ["Architecture Decision", "raw SQLite ownership"]
+                ),
+                ContextManifestUsageHint(
+                    referenceId: memoryEvidenceSourceB.uuidString,
+                    phrases: ["unmentioned source"]
+                )
+            ]
+        )
+
+        let record = ContextManifestFactory.make(
+            plan: plan,
+            assistantMessageId: assistantMessageId,
+            assistantContent: "This connects to Architecture Decision because Alex owns the data layer.",
+            agentTraceJson: trace
+        )
+
+        XCTAssertEqual(record.turnId, turnId)
+        XCTAssertEqual(record.conversationId, conversation.id)
+        XCTAssertEqual(record.assistantMessageId, assistantMessageId)
+        XCTAssertTrue(record.resources.contains(ContextManifestResource(
+            source: .memory,
+            label: "global_memory",
+            referenceId: "global_memory",
+            state: .loaded,
+            used: true
+        )))
+        XCTAssertTrue(record.resources.contains(ContextManifestResource(
+            source: .memory,
+            label: "memory_evidence",
+            referenceId: memoryEvidenceSourceA.uuidString,
+            state: .loaded,
+            used: true
+        )))
+        XCTAssertTrue(record.resources.contains(ContextManifestResource(
+            source: .memory,
+            label: "memory_evidence",
+            referenceId: memoryEvidenceSourceB.uuidString,
+            state: .loaded,
+            used: false
+        )))
+        XCTAssertFalse(record.resources.contains(ContextManifestResource(
+            source: .memory,
+            label: "memory_evidence",
+            referenceId: "memory_evidence",
+            state: .loaded,
+            used: false
+        )))
+        XCTAssertTrue(record.resources.contains(ContextManifestResource(
+            source: .citation,
+            label: "node",
+            referenceId: citedNode.id.uuidString,
+            state: .loaded,
+            used: true
+        )))
+        XCTAssertTrue(record.resources.contains(ContextManifestResource(
+            source: .skill,
+            label: "quick_action_skill",
+            referenceId: loadedSkillId.uuidString,
+            state: .loaded,
+            used: false
+        )))
+        XCTAssertTrue(record.resources.contains(ContextManifestResource(
+            source: .skill,
+            label: "quick_action_skill",
+            referenceId: indexedSkillId.uuidString,
+            state: .indexed,
+            used: true
+        )))
+
+        let encoded = String(data: try JSONEncoder().encode(record), encoding: .utf8) ?? ""
+        XCTAssertFalse(encoded.contains("Architecture Decision"))
+        XCTAssertFalse(encoded.contains("raw SQLite"))
+        XCTAssertFalse(encoded.contains("Loaded skill"))
+    }
+
+    func testManifestCarriesMemoryProvenanceWithoutPromptText() throws {
+        let conversation = NousNode(type: .conversation, title: "Current")
+        let userMessage = Message(nodeId: conversation.id, role: .user, content: "Use memory")
+        let sourceNodeId = UUID()
+        let sourceMessageId = UUID()
+        let plan = TurnPlan(
+            turnId: UUID(),
+            prepared: PreparedConversationTurn(
+                node: conversation,
+                userMessage: userMessage,
+                messagesAfterUserAppend: [userMessage]
+            ),
+            citations: [],
+            promptTrace: PromptGovernanceTrace(
+                promptLayers: ["global_memory"],
+                evidenceAttached: false,
+                safetyPolicyInvoked: false,
+                highRiskQueryDetected: false
+            ),
+            effectiveMode: .companion,
+            nextQuickActionModeIfCompleted: nil,
+            judgeEventDraft: nil,
+            turnSlice: TurnSystemSlice(stable: "stable", volatile: "volatile"),
+            transcriptMessages: [LLMMessage(role: "user", content: userMessage.content)],
+            focusBlock: nil,
+            provider: .openrouter,
+            memoryUsageHints: [
+                ContextManifestUsageHint(
+                    referenceId: "global_memory",
+                    phrases: ["quiet durable boundary"]
+                )
+            ],
+            memoryProvenance: [
+                "global_memory": ContextManifestMemoryProvenance(
+                    scope: .global,
+                    statuses: [.active],
+                    confidence: 0.93,
+                    sourceNodeIds: [sourceNodeId],
+                    sourceMessageIds: [sourceMessageId]
+                )
+            ]
+        )
+
+        let record = ContextManifestFactory.make(
+            plan: plan,
+            assistantMessageId: UUID(),
+            assistantContent: "I am using the quiet durable boundary here.",
+            agentTraceJson: nil
+        )
+
+        let resource = try XCTUnwrap(record.resources.first { $0.referenceId == "global_memory" })
+        XCTAssertTrue(resource.used)
+        XCTAssertEqual(resource.provenance?.scope, .global)
+        XCTAssertEqual(resource.provenance?.statuses, [.active])
+        XCTAssertEqual(resource.provenance?.confidence, 0.93)
+        XCTAssertEqual(resource.provenance?.sourceNodeIds, [sourceNodeId])
+        XCTAssertEqual(resource.provenance?.sourceMessageIds, [sourceMessageId])
+
+        let encoded = String(data: try JSONEncoder().encode(record), encoding: .utf8) ?? ""
+        XCTAssertFalse(encoded.contains("quiet durable boundary"))
+    }
+
+    func testManifestRecordsLoadedAndUsedSourceMaterials() {
+        let conversation = NousNode(type: .conversation, title: "Current")
+        let userMessage = Message(nodeId: conversation.id, role: .user, content: "Connect these sources")
+        let titleSourceId = UUID()
+        let urlSourceId = UUID()
+        let filenameSourceId = UUID()
+        let hostSourceId = UUID()
+        let unusedSourceId = UUID()
+        let sourceMaterials = [
+            SourceMaterialContext(
+                sourceNodeId: titleSourceId,
+                title: "Article title",
+                originalURL: "https://title.example/article",
+                originalFilename: nil,
+                chunks: []
+            ),
+            SourceMaterialContext(
+                sourceNodeId: urlSourceId,
+                title: "URL Source",
+                originalURL: "https://example.com/report",
+                originalFilename: nil,
+                chunks: []
+            ),
+            SourceMaterialContext(
+                sourceNodeId: filenameSourceId,
+                title: "Document Source",
+                originalURL: nil,
+                originalFilename: "memo.pdf",
+                chunks: []
+            ),
+            SourceMaterialContext(
+                sourceNodeId: hostSourceId,
+                title: "Host Source",
+                originalURL: "https://news.example.org/path",
+                originalFilename: nil,
+                chunks: []
+            ),
+            SourceMaterialContext(
+                sourceNodeId: unusedSourceId,
+                title: "Unused Source",
+                originalURL: "https://unused.example/source",
+                originalFilename: nil,
+                chunks: []
+            )
+        ]
+        let plan = TurnPlan(
+            turnId: UUID(),
+            prepared: PreparedConversationTurn(
+                node: conversation,
+                userMessage: userMessage,
+                messagesAfterUserAppend: [userMessage]
+            ),
+            citations: [],
+            sourceMaterials: sourceMaterials,
+            promptTrace: PromptGovernanceTrace(
+                promptLayers: ["source_material"],
+                evidenceAttached: false,
+                safetyPolicyInvoked: false,
+                highRiskQueryDetected: false
+            ),
+            effectiveMode: .companion,
+            nextQuickActionModeIfCompleted: nil,
+            judgeEventDraft: nil,
+            turnSlice: TurnSystemSlice(stable: "stable", volatile: "volatile"),
+            transcriptMessages: [LLMMessage(role: "user", content: userMessage.content)],
+            focusBlock: nil,
+            provider: .openrouter
+        )
+
+        let record = ContextManifestFactory.make(
+            plan: plan,
+            assistantMessageId: UUID(),
+            assistantContent: "Article title connects here. Also see https://example.com/report, memo.pdf, and news.example.org.",
+            agentTraceJson: nil
+        )
+
+        XCTAssertTrue(record.resources.contains(ContextManifestResource(
+            source: .sourceMaterial,
+            label: "source_material",
+            referenceId: titleSourceId.uuidString,
+            state: .loaded,
+            used: true
+        )))
+        XCTAssertTrue(record.resources.contains(ContextManifestResource(
+            source: .sourceMaterial,
+            label: "source_material",
+            referenceId: urlSourceId.uuidString,
+            state: .loaded,
+            used: true
+        )))
+        XCTAssertTrue(record.resources.contains(ContextManifestResource(
+            source: .sourceMaterial,
+            label: "source_material",
+            referenceId: filenameSourceId.uuidString,
+            state: .loaded,
+            used: true
+        )))
+        XCTAssertTrue(record.resources.contains(ContextManifestResource(
+            source: .sourceMaterial,
+            label: "source_material",
+            referenceId: hostSourceId.uuidString,
+            state: .loaded,
+            used: true
+        )))
+        XCTAssertTrue(record.resources.contains(ContextManifestResource(
+            source: .sourceMaterial,
+            label: "source_material",
+            referenceId: unusedSourceId.uuidString,
+            state: .loaded,
+            used: false
+        )))
+
+        let summary = ContextManifestTelemetrySummary.summarize(records: [record])
+        XCTAssertEqual(summary.loadedSourceMaterialCount, 5)
+        XCTAssertEqual(summary.usedSourceMaterialCount, 4)
+        XCTAssertTrue(summary.summaryText.contains("source material 5"))
+    }
+
+    func testManifestMarksSourceMaterialUsedByChunkMarkerOnly() {
+        let conversation = NousNode(type: .conversation, title: "Current")
+        let userMessage = Message(nodeId: conversation.id, role: .user, content: "Connect this source")
+        let sourceId = UUID()
+        let plan = TurnPlan(
+            turnId: UUID(),
+            prepared: PreparedConversationTurn(
+                node: conversation,
+                userMessage: userMessage,
+                messagesAfterUserAppend: [userMessage]
+            ),
+            citations: [],
+            sourceMaterials: [
+                SourceMaterialContext(
+                    sourceNodeId: sourceId,
+                    title: "External memo",
+                    originalURL: nil,
+                    originalFilename: "memo.pdf",
+                    chunks: [
+                        SourceChunkContext(
+                            sourceNodeId: sourceId,
+                            ordinal: 1,
+                            text: "The memo says source material must stay grounded.",
+                            similarity: 0.92
+                        )
+                    ]
+                )
+            ],
+            promptTrace: PromptGovernanceTrace(
+                promptLayers: ["source_material"],
+                evidenceAttached: false,
+                safetyPolicyInvoked: false,
+                highRiskQueryDetected: false
+            ),
+            effectiveMode: .companion,
+            nextQuickActionModeIfCompleted: nil,
+            judgeEventDraft: nil,
+            turnSlice: TurnSystemSlice(stable: "stable", volatile: "volatile"),
+            transcriptMessages: [LLMMessage(role: "user", content: userMessage.content)],
+            focusBlock: nil,
+            provider: .openrouter
+        )
+
+        let record = ContextManifestFactory.make(
+            plan: plan,
+            assistantMessageId: UUID(),
+            assistantContent: "[S1.2] says the source should remain external evidence.",
+            agentTraceJson: nil
+        )
+
+        XCTAssertTrue(record.resources.contains(ContextManifestResource(
+            source: .sourceMaterial,
+            label: "source_material",
+            referenceId: sourceId.uuidString,
+            state: .loaded,
+            used: true
+        )))
+    }
+
+    func testManifestSkipsCitationsWhenPromptTraceDidNotLoadCitationLayer() {
+        let conversation = NousNode(type: .conversation, title: "Current")
+        let userMessage = Message(nodeId: conversation.id, role: .user, content: "Use context")
+        let citedNode = NousNode(
+            id: UUID(),
+            type: .note,
+            title: "Filtered Citation",
+            content: "This was covered by memory evidence."
+        )
+        let plan = TurnPlan(
+            turnId: UUID(),
+            prepared: PreparedConversationTurn(
+                node: conversation,
+                userMessage: userMessage,
+                messagesAfterUserAppend: [userMessage]
+            ),
+            citations: [SearchResult(node: citedNode, similarity: 0.91)],
+            promptTrace: PromptGovernanceTrace(
+                promptLayers: ["global_memory"],
+                evidenceAttached: false,
+                safetyPolicyInvoked: false,
+                highRiskQueryDetected: false
+            ),
+            effectiveMode: .companion,
+            nextQuickActionModeIfCompleted: nil,
+            judgeEventDraft: nil,
+            turnSlice: TurnSystemSlice(stable: "stable", volatile: "volatile"),
+            transcriptMessages: [LLMMessage(role: "user", content: userMessage.content)],
+            focusBlock: nil,
+            provider: .openrouter
+        )
+
+        let record = ContextManifestFactory.make(
+            plan: plan,
+            assistantMessageId: UUID(),
+            assistantContent: "Filtered Citation",
+            agentTraceJson: nil
+        )
+
+        XCTAssertFalse(record.resources.contains { $0.source == .citation })
+    }
+
+    func testManifestRecordsOnlyLoadedCitationIdsWhenPresent() {
+        let conversation = NousNode(type: .conversation, title: "Current")
+        let userMessage = Message(nodeId: conversation.id, role: .user, content: "Use context")
+        let loadedCitation = NousNode(id: UUID(), type: .note, title: "Loaded Citation")
+        let filteredCitation = NousNode(id: UUID(), type: .note, title: "Filtered Citation")
+        let plan = TurnPlan(
+            turnId: UUID(),
+            prepared: PreparedConversationTurn(
+                node: conversation,
+                userMessage: userMessage,
+                messagesAfterUserAppend: [userMessage]
+            ),
+            citations: [
+                SearchResult(node: loadedCitation, similarity: 0.91),
+                SearchResult(node: filteredCitation, similarity: 0.89)
+            ],
+            promptTrace: PromptGovernanceTrace(
+                promptLayers: ["citations"],
+                evidenceAttached: false,
+                safetyPolicyInvoked: false,
+                highRiskQueryDetected: false
+            ),
+            effectiveMode: .companion,
+            nextQuickActionModeIfCompleted: nil,
+            judgeEventDraft: nil,
+            turnSlice: TurnSystemSlice(stable: "stable", volatile: "volatile"),
+            transcriptMessages: [LLMMessage(role: "user", content: userMessage.content)],
+            focusBlock: nil,
+            provider: .openrouter,
+            loadedCitationIds: [loadedCitation.id]
+        )
+
+        let record = ContextManifestFactory.make(
+            plan: plan,
+            assistantMessageId: UUID(),
+            assistantContent: "Loaded Citation",
+            agentTraceJson: nil
+        )
+
+        XCTAssertTrue(record.resources.contains(ContextManifestResource(
+            source: .citation,
+            label: "node",
+            referenceId: loadedCitation.id.uuidString,
+            state: .loaded,
+            used: true
+        )))
+        XCTAssertFalse(record.resources.contains {
+            $0.source == .citation && $0.referenceId == filteredCitation.id.uuidString
+        })
+    }
+}
+
 final class ChatTurnRunnerAgentRoutingTests: XCTestCase {
     func testDirectionUsesAgentLoopWhenFactoryProvidesExecutor() async throws {
         let store = try NodeStore(path: ":memory:")
@@ -1417,11 +1882,13 @@ final class ChatTurnRunnerAgentRoutingTests: XCTestCase {
             )
         ])
         var capturedPlan: TurnPlan?
+        var contextManifests: [ContextManifestRecord] = []
         let runner = makeChatTurnRunner(
             nodeStore: store,
             provider: .openrouter,
             singleShotText: "Single shot answer",
-            onPlanReady: { capturedPlan = $0 }
+            onPlanReady: { capturedPlan = $0 },
+            onContextManifest: { contextManifests.append($0) }
         ) { _, _, _ in
             AgentLoopExecutor(
                 llmService: agentLLM,
@@ -1452,6 +1919,7 @@ final class ChatTurnRunnerAgentRoutingTests: XCTestCase {
                 indexedSkillCount: 0
             )
         )
+        XCTAssertTrue(contextManifests.isEmpty)
     }
 
     func testDirectionFallsBackToSingleShotWhenFactoryReturnsNil() async throws {
@@ -1542,11 +2010,13 @@ final class ChatTurnRunnerAgentRoutingTests: XCTestCase {
         ])
         var factoryModes: [QuickActionMode] = []
         var factoryPlans: [TurnPlan] = []
+        var contextManifests: [ContextManifestRecord] = []
         let runner = makeChatTurnRunner(
             nodeStore: store,
             provider: .openrouter,
             singleShotText: "Single shot answer",
-            skillStore: skillStore
+            skillStore: skillStore,
+            onContextManifest: { contextManifests.append($0) }
         ) { mode, plan, _ in
             factoryModes.append(mode)
             factoryPlans.append(plan)
@@ -1580,6 +2050,14 @@ final class ChatTurnRunnerAgentRoutingTests: XCTestCase {
                 indexedSkillCount: 1
             )
         )
+        XCTAssertEqual(contextManifests.count, 1)
+        XCTAssertTrue(contextManifests[0].resources.contains(ContextManifestResource(
+            source: .skill,
+            label: "quick_action_skill",
+            referenceId: skill.id.uuidString,
+            state: .indexed,
+            used: false
+        )))
     }
 
     func testInferredDirectionSkipsSkillIndexWhenProviderCannotUseAgentLoop() async throws {
@@ -1912,6 +2390,7 @@ private func makeChatTurnRunner(
     singleShotText: String,
     skillStore: (any SkillStoring)? = nil,
     onPlanReady: @escaping (TurnPlan) -> Void = { _ in },
+    onContextManifest: @escaping (ContextManifestRecord) -> Void = { _ in },
     agentLoopExecutorFactory: AgentLoopExecutorFactory?
 ) -> ChatTurnRunner {
     let core = UserMemoryCore(nodeStore: nodeStore, llmServiceProvider: { nil })
@@ -1937,7 +2416,8 @@ private func makeChatTurnRunner(
         ),
         agentLoopExecutorFactory: agentLoopExecutorFactory,
         outcomeFactory: TurnOutcomeFactory(shouldPersistMemory: { _, _ in false }),
-        onPlanReady: onPlanReady
+        onPlanReady: onPlanReady,
+        onContextManifest: onContextManifest
     )
 }
 

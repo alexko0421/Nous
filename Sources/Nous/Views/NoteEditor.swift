@@ -13,7 +13,11 @@ struct NoteEditor: View {
 
     var body: some View {
         if let note = vm.currentNote {
-            editorView(note: note)
+            if note.type == .source {
+                sourceView(note: note)
+            } else {
+                editorView(note: note)
+            }
         } else {
             NoteListView(vm: vm)
         }
@@ -57,6 +61,43 @@ struct NoteEditor: View {
                 }
 
             // Related nodes panel
+            if !vm.relatedNodes.isEmpty {
+                relatedPanel
+            }
+        }
+        .background(AppColor.colaBeige)
+    }
+
+    @ViewBuilder
+    private func sourceView(note: NousNode) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(note.title)
+                .font(.system(size: 22, weight: .bold, design: .rounded))
+                .foregroundColor(AppColor.colaDarkText)
+                .padding(.horizontal, 24)
+                .padding(.top, 24)
+                .padding(.bottom, 8)
+
+            HStack(spacing: 8) {
+                Text(note.emoji ?? "Source")
+                    .font(.system(size: 13))
+                Text(Self.dateFormatter.string(from: note.updatedAt))
+                    .font(.system(size: 12, design: .rounded))
+                    .foregroundColor(AppColor.colaDarkText.opacity(0.45))
+            }
+            .padding(.horizontal, 24)
+            .padding(.bottom, 12)
+
+            ScrollView {
+                Text(note.content.isEmpty ? vm.content : note.content)
+                    .font(.system(size: 14))
+                    .foregroundColor(AppColor.colaDarkText)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 12)
+            }
+
             if !vm.relatedNodes.isEmpty {
                 relatedPanel
             }

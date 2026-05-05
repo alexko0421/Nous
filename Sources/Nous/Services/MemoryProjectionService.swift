@@ -312,6 +312,8 @@ final class MemoryProjectionService {
             }
         case .note:
             break
+        case .source:
+            return ""
         }
 
         for line in Self.extractSummaryLines(from: node.content, limit: 1) where !line.isEmpty {

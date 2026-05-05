@@ -26,6 +26,17 @@ final class ReflectionCascadeOrphanTests: XCTestCase {
         XCTAssertFalse(remaining.contains { $0.id == claim.id })
     }
 
+    func testOrphanReflectionClaimCleansEvidenceRows() throws {
+        let (_, claim) = try seedClaim(status: .active, evidenceCount: 2)
+
+        try store.orphanReflectionClaim(id: claim.id)
+
+        XCTAssertTrue(
+            try store.fetchReflectionEvidence(reflectionIds: [claim.id]).isEmpty,
+            "orphaned reflection claims should not keep stale evidence rows around"
+        )
+    }
+
     func testOrphanReflectionClaimIsIdempotentOnAlreadyOrphaned() throws {
         let (_, claim) = try seedClaim(status: .orphaned, evidenceCount: 2)
 

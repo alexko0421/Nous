@@ -395,6 +395,189 @@ struct HarnessHealthSnapshot: Equatable {
     }
 }
 
+enum ModelHarnessToolSchema: Equatable {
+    case unsupported
+    case openRouterFunctionTools
+}
+
+enum ModelHarnessCacheStrategy: Equatable {
+    case unsupported
+    case geminiCachedContent
+    case anthropicEphemeralSystemPrefix
+    case openRouterSystemBlockCacheControl
+}
+
+enum ModelHarnessThinkingStrategy: Equatable {
+    case unsupported
+    case geminiThinkingConfig
+    case anthropicThinkingBudget
+    case openRouterReasoningBudget
+}
+
+enum ModelHarnessAgentLoopSupport: Equatable {
+    case unsupported
+    case openRouterClaudeSonnet46
+}
+
+enum ModelHarnessFallbackStrategy: Equatable {
+    case inlineConfigurationMessage
+    case inlineProviderError
+    case providerCannotUseToolLoop
+}
+
+struct ModelHarnessProfile: Equatable {
+    let provider: LLMProvider
+    let toolSchema: ModelHarnessToolSchema
+    let cacheStrategy: ModelHarnessCacheStrategy
+    let thinkingStrategy: ModelHarnessThinkingStrategy
+    let thinkingBudgetTokens: Int?
+    let agentLoopSupport: ModelHarnessAgentLoopSupport
+    let requiredToolLoopModel: String?
+    let fallbackStrategy: ModelHarnessFallbackStrategy
+
+    var supportsAgentToolUse: Bool {
+        agentLoopSupport != .unsupported
+    }
+
+    func allowsAgentToolUse(model: String?) -> Bool {
+        guard supportsAgentToolUse else { return false }
+        guard let requiredToolLoopModel else { return true }
+        return model == requiredToolLoopModel
+    }
+}
+
+struct ModelHarnessProfileCoverageSummary: Equatable {
+    let totalProviderCount: Int
+    let coveredProviderCount: Int
+    let agentLoopProviderCount: Int
+    let cacheStrategyCount: Int
+    let thinkingStrategyCount: Int
+    let missingProviders: [LLMProvider]
+
+    static let empty = ModelHarnessProfileCoverageSummary(
+        totalProviderCount: 0,
+        coveredProviderCount: 0,
+        agentLoopProviderCount: 0,
+        cacheStrategyCount: 0,
+        thinkingStrategyCount: 0,
+        missingProviders: []
+    )
+
+    var isComplete: Bool {
+        missingProviders.isEmpty && totalProviderCount == coveredProviderCount
+    }
+
+    var summaryText: String {
+        guard totalProviderCount > 0 else {
+            return "No model harness profiles recorded."
+        }
+        guard missingProviders.isEmpty else {
+            return "Model profiles missing \(missingProviders.map(\.rawValue).joined(separator: ", "))"
+        }
+
+        return "Model profiles \(coveredProviderCount)/\(totalProviderCount) covered · agent loop \(agentLoopProviderCount) · cache \(cacheStrategyCount) · thinking \(thinkingStrategyCount)"
+    }
+
+    static func summarize(
+        profiles: [ModelHarnessProfile],
+        expectedProviders: [LLMProvider]
+    ) -> ModelHarnessProfileCoverageSummary {
+        let coveredProviders = Set(profiles.map(\.provider))
+        let expectedProviderSet = Set(expectedProviders)
+        let missingProviders = expectedProviders.filter { !coveredProviders.contains($0) }
+
+        return ModelHarnessProfileCoverageSummary(
+            totalProviderCount: expectedProviders.count,
+            coveredProviderCount: coveredProviders.intersection(expectedProviderSet).count,
+            agentLoopProviderCount: profiles.filter { $0.agentLoopSupport != .unsupported }.count,
+            cacheStrategyCount: profiles.filter { $0.cacheStrategy != .unsupported }.count,
+            thinkingStrategyCount: profiles.filter { $0.thinkingStrategy != .unsupported }.count,
+            missingProviders: missingProviders
+        )
+    }
+}
+
+enum ModelHarnessProfileCatalog {
+    static let allProfiles: [ModelHarnessProfile] = [
+        ModelHarnessProfile(
+            provider: .local,
+            toolSchema: .unsupported,
+            cacheStrategy: .unsupported,
+            thinkingStrategy: .unsupported,
+            thinkingBudgetTokens: nil,
+            agentLoopSupport: .unsupported,
+            requiredToolLoopModel: nil,
+            fallbackStrategy: .inlineConfigurationMessage
+        ),
+        ModelHarnessProfile(
+            provider: .gemini,
+            toolSchema: .unsupported,
+            cacheStrategy: .geminiCachedContent,
+            thinkingStrategy: .geminiThinkingConfig,
+            thinkingBudgetTokens: 2000,
+            agentLoopSupport: .unsupported,
+            requiredToolLoopModel: nil,
+            fallbackStrategy: .inlineProviderError
+        ),
+        ModelHarnessProfile(
+            provider: .claude,
+            toolSchema: .unsupported,
+            cacheStrategy: .anthropicEphemeralSystemPrefix,
+            thinkingStrategy: .anthropicThinkingBudget,
+            thinkingBudgetTokens: 1024,
+            agentLoopSupport: .unsupported,
+            requiredToolLoopModel: nil,
+            fallbackStrategy: .inlineProviderError
+        ),
+        ModelHarnessProfile(
+            provider: .openai,
+            toolSchema: .unsupported,
+            cacheStrategy: .unsupported,
+            thinkingStrategy: .unsupported,
+            thinkingBudgetTokens: nil,
+            agentLoopSupport: .unsupported,
+            requiredToolLoopModel: nil,
+            fallbackStrategy: .inlineProviderError
+        ),
+        ModelHarnessProfile(
+            provider: .openrouter,
+            toolSchema: .openRouterFunctionTools,
+            cacheStrategy: .openRouterSystemBlockCacheControl,
+            thinkingStrategy: .openRouterReasoningBudget,
+            thinkingBudgetTokens: 1024,
+            agentLoopSupport: .openRouterClaudeSonnet46,
+            requiredToolLoopModel: "anthropic/claude-sonnet-4.6",
+            fallbackStrategy: .providerCannotUseToolLoop
+        )
+    ]
+
+    static let coverageSummary = ModelHarnessProfileCoverageSummary.summarize(
+        profiles: allProfiles,
+        expectedProviders: LLMProvider.allCases
+    )
+
+    static func profile(for provider: LLMProvider) -> ModelHarnessProfile {
+        allProfiles.first { $0.provider == provider } ?? ModelHarnessProfile(
+            provider: provider,
+            toolSchema: .unsupported,
+            cacheStrategy: .unsupported,
+            thinkingStrategy: .unsupported,
+            thinkingBudgetTokens: nil,
+            agentLoopSupport: .unsupported,
+            requiredToolLoopModel: nil,
+            fallbackStrategy: .inlineProviderError
+        )
+    }
+
+    static func thinkingBudgetTokens(for provider: LLMProvider) -> Int? {
+        profile(for: provider).thinkingBudgetTokens
+    }
+
+    static func allowsAgentToolUse(for provider: LLMProvider, model: String?) -> Bool {
+        profile(for: provider).allowsAgentToolUse(model: model)
+    }
+}
+
 struct RuntimeHarnessSnapshot: Equatable {
     var totalTurnCount: Int
     var reviewedTurnCount: Int
@@ -404,6 +587,11 @@ struct RuntimeHarnessSnapshot: Equatable {
     var sycophancyFixtureTrend: String
     var agentToolReliability: AgentToolReliabilitySummary
     var behaviorEval: BehaviorEvalTelemetrySummary
+    var contextManifest: ContextManifestTelemetrySummary
+    var delegationMetrics: DelegationMetricSummary
+    var modelHarnessProfiles: ModelHarnessProfileCoverageSummary
+    var visibleResponseLanguageTarget: VisibleResponseLanguageTarget
+    var visibleResponseLanguageSource: VisibleResponseLanguageSource
 
     init(
         totalTurnCount: Int = 0,
@@ -413,7 +601,12 @@ struct RuntimeHarnessSnapshot: Equatable {
         lastRiskFlags: [String] = [],
         sycophancyFixtureTrend: String = "No fixture history yet",
         agentToolReliability: AgentToolReliabilitySummary = .empty,
-        behaviorEval: BehaviorEvalTelemetrySummary = .empty
+        behaviorEval: BehaviorEvalTelemetrySummary = .empty,
+        contextManifest: ContextManifestTelemetrySummary = .empty,
+        delegationMetrics: DelegationMetricSummary = .empty,
+        modelHarnessProfiles: ModelHarnessProfileCoverageSummary = ModelHarnessProfileCatalog.coverageSummary,
+        visibleResponseLanguageTarget: VisibleResponseLanguageTarget = .unspecified,
+        visibleResponseLanguageSource: VisibleResponseLanguageSource = .none
     ) {
         self.totalTurnCount = totalTurnCount
         self.reviewedTurnCount = reviewedTurnCount
@@ -423,11 +616,19 @@ struct RuntimeHarnessSnapshot: Equatable {
         self.sycophancyFixtureTrend = sycophancyFixtureTrend
         self.agentToolReliability = agentToolReliability
         self.behaviorEval = behaviorEval
+        self.contextManifest = contextManifest
+        self.delegationMetrics = delegationMetrics
+        self.modelHarnessProfiles = modelHarnessProfiles
+        self.visibleResponseLanguageTarget = visibleResponseLanguageTarget
+        self.visibleResponseLanguageSource = visibleResponseLanguageSource
     }
 
     static let empty = RuntimeHarnessSnapshot()
 
     var statusText: String {
+        if !modelHarnessProfiles.isComplete {
+            return "Model harness profile missing"
+        }
         if agentToolReliability.unknownErrorCount > 0 {
             return "Agent harness unknown error recorded"
         }
@@ -461,6 +662,16 @@ struct RuntimeHarnessSnapshot: Equatable {
         }
 
         return flags.joined(separator: " · ")
+    }
+
+    var visibleResponseLanguageSummaryText: String {
+        guard visibleResponseLanguageTarget != .unspecified else {
+            return "No visible language target recorded."
+        }
+        if let summaryLabel = visibleResponseLanguageSource.summaryLabel {
+            return "Visible language target \(visibleResponseLanguageTarget.promptLabel) · \(summaryLabel)"
+        }
+        return "Visible language target \(visibleResponseLanguageTarget.promptLabel)"
     }
 }
 

@@ -5,10 +5,11 @@ enum TurnRoute: String, Codable, Equatable {
     case direction
     case brainstorm
     case plan
+    case sourceAnalysis
 
     var quickActionMode: QuickActionMode? {
         switch self {
-        case .ordinaryChat:
+        case .ordinaryChat, .sourceAnalysis:
             return nil
         case .direction:
             return .direction
@@ -25,6 +26,14 @@ enum TurnMemoryPolicyPreset: String, Codable, Equatable {
     case lean
     case projectOnly
     case conversationOnly
+}
+
+enum TurnSupervisorLane: String, Codable, Equatable {
+    case source
+    case memory
+    case project
+    case analytics
+    case reflection
 }
 
 enum ChallengeStance: String, Codable, Equatable {
@@ -185,6 +194,7 @@ struct TurnStewardTrace: Codable, Equatable {
     let softerFallback: ResponseStance?
     let fallbackUsed: Bool?
     let routerReason: String?
+    let supervisorLanes: [TurnSupervisorLane]
 
     init(
         route: TurnRoute,
@@ -201,7 +211,8 @@ struct TurnStewardTrace: Codable, Equatable {
         confidence: Double? = nil,
         softerFallback: ResponseStance? = nil,
         fallbackUsed: Bool? = nil,
-        routerReason: String? = nil
+        routerReason: String? = nil,
+        supervisorLanes: [TurnSupervisorLane] = []
     ) {
         self.route = route
         self.memoryPolicy = memoryPolicy
@@ -218,6 +229,46 @@ struct TurnStewardTrace: Codable, Equatable {
         self.softerFallback = softerFallback
         self.fallbackUsed = fallbackUsed
         self.routerReason = routerReason
+        self.supervisorLanes = supervisorLanes
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case route
+        case memoryPolicy
+        case challengeStance
+        case responseShape
+        case projectSignalKind
+        case source
+        case reason
+        case responseStance
+        case judgePolicy
+        case routerMode
+        case routerSource
+        case confidence
+        case softerFallback
+        case fallbackUsed
+        case routerReason
+        case supervisorLanes
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        route = try container.decode(TurnRoute.self, forKey: .route)
+        memoryPolicy = try container.decode(TurnMemoryPolicyPreset.self, forKey: .memoryPolicy)
+        challengeStance = try container.decode(ChallengeStance.self, forKey: .challengeStance)
+        responseShape = try container.decode(ResponseShape.self, forKey: .responseShape)
+        projectSignalKind = try container.decodeIfPresent(ProjectSignalKind.self, forKey: .projectSignalKind)
+        source = try container.decode(TurnStewardSource.self, forKey: .source)
+        reason = try container.decode(String.self, forKey: .reason)
+        responseStance = try container.decodeIfPresent(ResponseStance.self, forKey: .responseStance)
+        judgePolicy = try container.decodeIfPresent(JudgePolicy.self, forKey: .judgePolicy)
+        routerMode = try container.decodeIfPresent(ResponseStanceRouterMode.self, forKey: .routerMode)
+        routerSource = try container.decodeIfPresent(ResponseStanceRouterSource.self, forKey: .routerSource)
+        confidence = try container.decodeIfPresent(Double.self, forKey: .confidence)
+        softerFallback = try container.decodeIfPresent(ResponseStance.self, forKey: .softerFallback)
+        fallbackUsed = try container.decodeIfPresent(Bool.self, forKey: .fallbackUsed)
+        routerReason = try container.decodeIfPresent(String.self, forKey: .routerReason)
+        supervisorLanes = try container.decodeIfPresent([TurnSupervisorLane].self, forKey: .supervisorLanes) ?? []
     }
 }
 
@@ -229,6 +280,7 @@ struct TurnStewardDecision: Codable, Equatable {
     let responseShape: ResponseShape
     let projectSignal: ProjectSignal?
     let trace: TurnStewardTrace
+    let supervisorLanes: [TurnSupervisorLane]
 
     init(
         route: TurnRoute,
@@ -246,14 +298,24 @@ struct TurnStewardDecision: Codable, Equatable {
         confidence: Double? = nil,
         softerFallback: ResponseStance? = nil,
         fallbackUsed: Bool? = nil,
-        routerReason: String? = nil
+        routerReason: String? = nil,
+        supervisorLanes: [TurnSupervisorLane]? = nil
     ) {
+        let resolvedJudgePolicy = judgePolicy ?? JudgePolicy(challengeStance: challengeStance)
+        let resolvedSupervisorLanes = supervisorLanes ?? Self.defaultSupervisorLanes(
+            route: route,
+            memoryPolicy: memoryPolicy,
+            challengeStance: challengeStance,
+            judgePolicy: resolvedJudgePolicy,
+            projectSignal: projectSignal
+        )
         self.route = route
         self.memoryPolicy = memoryPolicy
         self.challengeStance = challengeStance
-        self.judgePolicy = judgePolicy ?? JudgePolicy(challengeStance: challengeStance)
+        self.judgePolicy = resolvedJudgePolicy
         self.responseShape = responseShape
         self.projectSignal = projectSignal
+        self.supervisorLanes = resolvedSupervisorLanes
         self.trace = TurnStewardTrace(
             route: route,
             memoryPolicy: memoryPolicy,
@@ -269,8 +331,55 @@ struct TurnStewardDecision: Codable, Equatable {
             confidence: confidence,
             softerFallback: softerFallback,
             fallbackUsed: fallbackUsed,
-            routerReason: routerReason
+            routerReason: routerReason,
+            supervisorLanes: resolvedSupervisorLanes
         )
+    }
+
+    static func defaultSupervisorLanes(
+        route: TurnRoute,
+        memoryPolicy: TurnMemoryPolicyPreset,
+        challengeStance: ChallengeStance,
+        judgePolicy: JudgePolicy,
+        projectSignal: ProjectSignal?
+    ) -> [TurnSupervisorLane] {
+        var lanes: [TurnSupervisorLane] = []
+
+        func add(_ lane: TurnSupervisorLane) {
+            guard !lanes.contains(lane) else { return }
+            lanes.append(lane)
+        }
+
+        if route == .sourceAnalysis {
+            add(.source)
+        }
+
+        if memoryPolicy != .lean {
+            add(.memory)
+        }
+
+        if route == .sourceAnalysis
+            || route == .plan
+            || route == .direction
+            || memoryPolicy == .projectOnly
+            || projectSignal != nil {
+            add(.project)
+        }
+
+        if route == .sourceAnalysis
+            || route == .plan
+            || route == .direction
+            || projectSignal != nil {
+            add(.analytics)
+        }
+
+        if route == .sourceAnalysis
+            || challengeStance == .surfaceTension
+            || judgePolicy != .off {
+            add(.reflection)
+        }
+
+        return lanes
     }
 
     static func fallback(reason: String) -> TurnStewardDecision {

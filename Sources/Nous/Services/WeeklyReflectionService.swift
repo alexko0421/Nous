@@ -397,7 +397,9 @@ final class WeeklyReflectionService {
     /// without a timer or background task (Codex R1).
     static func previousCompletedWeek(now: Date, calendar: Calendar? = nil) -> (start: Date, end: Date)? {
         var cal = calendar ?? Calendar(identifier: .iso8601)
-        cal.timeZone = TimeZone.current
+        if calendar == nil {
+            cal.timeZone = TimeZone.current
+        }
         // Start of current ISO week (Monday 00:00 local).
         guard let thisWeekStart = cal.date(
             from: cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: now)

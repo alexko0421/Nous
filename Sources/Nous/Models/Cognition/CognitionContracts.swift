@@ -101,6 +101,7 @@ struct TurnCognitionSnapshot: Codable, Equatable, Sendable {
     let reviewArtifactId: UUID?
     let reviewRiskFlags: [String]
     let reviewConfidence: Double?
+    let agentCoordination: AgentCoordinationTrace?
     let conversationRecoveryReason: String?
     let conversationRecoveryOriginalNodeId: UUID?
     let conversationRecoveryRecoveredNodeId: UUID?
@@ -119,6 +120,7 @@ struct TurnCognitionSnapshot: Codable, Equatable, Sendable {
         reviewArtifactId: UUID?,
         reviewRiskFlags: [String],
         reviewConfidence: Double?,
+        agentCoordination: AgentCoordinationTrace? = nil,
         conversationRecoveryReason: String? = nil,
         conversationRecoveryOriginalNodeId: UUID? = nil,
         conversationRecoveryRecoveredNodeId: UUID? = nil,
@@ -136,6 +138,7 @@ struct TurnCognitionSnapshot: Codable, Equatable, Sendable {
         self.reviewArtifactId = reviewArtifactId
         self.reviewRiskFlags = reviewRiskFlags
         self.reviewConfidence = reviewConfidence
+        self.agentCoordination = agentCoordination
         self.conversationRecoveryReason = conversationRecoveryReason
         self.conversationRecoveryOriginalNodeId = conversationRecoveryOriginalNodeId
         self.conversationRecoveryRecoveredNodeId = conversationRecoveryRecoveredNodeId
@@ -155,6 +158,7 @@ struct TurnCognitionSnapshot: Codable, Equatable, Sendable {
         case reviewArtifactId
         case reviewRiskFlags
         case reviewConfidence
+        case agentCoordination
         case conversationRecoveryReason
         case conversationRecoveryOriginalNodeId
         case conversationRecoveryRecoveredNodeId
@@ -176,6 +180,7 @@ struct TurnCognitionSnapshot: Codable, Equatable, Sendable {
         reviewArtifactId = try container.decodeIfPresent(UUID.self, forKey: .reviewArtifactId)
         reviewRiskFlags = try container.decodeIfPresent([String].self, forKey: .reviewRiskFlags) ?? []
         reviewConfidence = try container.decodeIfPresent(Double.self, forKey: .reviewConfidence)
+        agentCoordination = try container.decodeIfPresent(AgentCoordinationTrace.self, forKey: .agentCoordination)
         conversationRecoveryReason = try container.decodeIfPresent(String.self, forKey: .conversationRecoveryReason)
         conversationRecoveryOriginalNodeId = try container.decodeIfPresent(UUID.self, forKey: .conversationRecoveryOriginalNodeId)
         conversationRecoveryRecoveredNodeId = try container.decodeIfPresent(UUID.self, forKey: .conversationRecoveryRecoveredNodeId)

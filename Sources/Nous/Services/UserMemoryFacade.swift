@@ -252,6 +252,17 @@ final class UserMemoryService: MemorySynthesizing, @unchecked Sendable {
         )
     }
 
+    func absorbTemporaryBranchSummary(record: TemporaryBranchRecord) async {
+        await synthesisService.absorbTemporaryBranchSummary(record: record)
+    }
+
+    func applyTemporaryBranchCandidate(
+        _ candidate: TemporaryBranchMemoryCandidate,
+        record: TemporaryBranchRecord
+    ) async -> Bool {
+        await synthesisService.applyTemporaryBranchCandidate(candidate, record: record)
+    }
+
     static func stripQuoteBlocks(_ content: String) -> String {
         UserMemoryCore.stripQuoteBlocks(content)
     }

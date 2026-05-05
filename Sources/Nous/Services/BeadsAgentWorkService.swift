@@ -93,7 +93,7 @@ enum BeadsAgentWorkServiceError: LocalizedError, Equatable {
     }
 }
 
-final class BeadsAgentWorkService {
+final class BeadsAgentWorkService: @unchecked Sendable {
     private let commandRunner: any BeadsCommandRunning
     private let harnessLoader: any HarnessHealthLoading
     private let runtimeHarnessLoader: any RuntimeHarnessLoading

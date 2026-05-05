@@ -3,11 +3,10 @@ import SwiftUI
 
 @MainActor
 final class NousMainWindowController {
-    static let defaultSize = NSSize(width: 790, height: 650)
+    static let defaultSize = NSSize(width: 900, height: 690)
     static let minimumSize = NSSize(width: 760, height: 600)
 
     private let window: NSWindow
-    private var didCenterWindow = false
 
     var isVisible: Bool {
         window.isVisible && !window.isMiniaturized
@@ -41,7 +40,7 @@ final class NousMainWindowController {
     static func makeWindow() -> NSWindow {
         let window = NousMainWindow(
             contentRect: NSRect(origin: .zero, size: defaultSize),
-            styleMask: [.borderless, .resizable],
+            styleMask: [.borderless, .resizable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
@@ -54,10 +53,7 @@ final class NousMainWindowController {
             NSApp.unhide(nil)
         }
 
-        if !didCenterWindow {
-            window.center()
-            didCenterWindow = true
-        }
+        centerOnVisibleScreen()
 
         if window.isMiniaturized {
             window.deminiaturize(nil)
@@ -66,6 +62,20 @@ final class NousMainWindowController {
         window.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
         NotificationCenter.default.post(name: .nousMainWindowConfigured, object: window)
+    }
+
+    private func centerOnVisibleScreen() {
+        let screen = window.screen ?? NSScreen.main ?? NSScreen.screens.first
+        guard let visibleFrame = screen?.visibleFrame else {
+            window.center()
+            return
+        }
+        let size = window.frame.size
+        let origin = NSPoint(
+            x: visibleFrame.midX - size.width / 2,
+            y: visibleFrame.midY - size.height / 2
+        )
+        window.setFrameOrigin(origin)
     }
 
     private static func configure(_ window: NSWindow) {

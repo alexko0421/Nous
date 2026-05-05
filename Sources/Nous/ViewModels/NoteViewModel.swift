@@ -12,6 +12,9 @@ final class NoteViewModel {
     var content: String = ""
     var relatedNodes: [SearchResult] = []
     var currentProject: Project?
+    var canEditCurrentNote: Bool {
+        currentNote?.type == .note
+    }
 
     // MARK: - Dependencies
 
@@ -81,7 +84,7 @@ final class NoteViewModel {
     }
 
     func save() {
-        guard var node = currentNote else { return }
+        guard var node = currentNote, node.type == .note else { return }
         node.title = title
         node.content = content
         node.updatedAt = Date()
@@ -92,7 +95,7 @@ final class NoteViewModel {
     }
 
     func deleteNote() {
-        guard let node = currentNote else { return }
+        guard let node = currentNote, node.type == .note else { return }
         try? nodeStore.deleteNode(id: node.id)
         currentNote = nil
         title = ""
@@ -102,6 +105,7 @@ final class NoteViewModel {
     }
 
     func onContentChanged() {
+        guard canEditCurrentNote else { return }
         save()
     }
 
