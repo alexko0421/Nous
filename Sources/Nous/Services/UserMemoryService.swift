@@ -591,6 +591,7 @@ final class UserMemoryCore {
 
     func absorbTemporaryBranchSummary(record: TemporaryBranchRecord) {
         guard let summary = record.summary else { return }
+        guard Self.shouldAbsorbTemporaryBranchSummary(summary, record: record) else { return }
         let content = Self.temporaryBranchSummaryContent(summary, sourceExcerpt: record.sourceExcerpt)
         guard !content.isEmpty else { return }
         let existing = (try? nodeStore.fetchActiveMemoryEntry(
@@ -1342,6 +1343,10 @@ final class UserMemoryCore {
         _ summary: TemporaryBranchSummary,
         sourceExcerpt: String
     ) -> String {
+        if isTemporaryBranchMemoryBoundary(summary) {
+            return "Temporary branch memory boundary: Alex explicitly marked this branch as do-not-remember. Protected details are redacted."
+        }
+
         var lines: [String] = []
         if !summary.preview.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let prefix = sourceExcerpt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1359,6 +1364,51 @@ final class UserMemoryCore {
             lines.append("- Insight: \(insight)")
         }
         return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func shouldAbsorbTemporaryBranchSummary(
+        _ summary: TemporaryBranchSummary,
+        record: TemporaryBranchRecord
+    ) -> Bool {
+        guard !isTemporaryBranchMemoryBoundary(summary) else { return true }
+        return !isLowSignalTemporaryBranchTranscript(temporaryBranchUserTranscript(from: record))
+    }
+
+    private static func isTemporaryBranchMemoryBoundary(_ summary: TemporaryBranchSummary) -> Bool {
+        let text = ([summary.topic, summary.preview] + summary.keyPoints)
+            .joined(separator: "\n")
+            .lowercased()
+        return text.contains("do-not-remember") || text.contains("不要记住") || text.contains("不要記住")
+    }
+
+    private static func temporaryBranchUserTranscript(from record: TemporaryBranchRecord) -> String {
+        record.messages
+            .filter { $0.role == .user }
+            .map(\.content)
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func isLowSignalTemporaryBranchTranscript(_ text: String) -> Bool {
+        let collapsed = text
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !collapsed.isEmpty else { return true }
+
+        let normalized = collapsed.lowercased().unicodeScalars
+            .filter { scalar in
+                !CharacterSet.whitespacesAndNewlines.contains(scalar) &&
+                !CharacterSet.punctuationCharacters.contains(scalar) &&
+                !CharacterSet.symbols.contains(scalar)
+            }
+            .map(String.init)
+            .joined()
+
+        let lowSignalTokens: Set<String> = [
+            "hi", "hey", "hello", "yo", "ok", "okay", "okkk", "thanks", "thankyou",
+            "lol", "haha", "哈哈", "好", "好呀", "嗯", "嗯嗯", "唔该", "唔該"
+        ]
+        return lowSignalTokens.contains(normalized)
     }
 
     private static func cleanedEvidenceTurns(from messages: [Message]) -> [EvidencePromptTurn] {

@@ -206,17 +206,10 @@ struct ChatArea: View {
                                         }
                                         .blur(radius: branchFocusBlurRadius(for: msg))
                                         .opacity(branchFocusOpacity(for: msg))
-                                        .allowsHitTesting(!temporaryBranch.isPresented || isTemporaryBranchSource(msg))
+                                        .allowsHitTesting(!temporaryBranch.isPresented)
 
-                                        if isTemporaryBranchSource(msg) {
-                                            TemporaryBranchTranscript(
-                                                branch: temporaryBranch,
-                                                onRegenerate: regenerateTemporaryBranchAssistant
-                                            )
-                                            .transition(.opacity.combined(with: .move(edge: .top)))
-                                            .zIndex(1)
-                                        } else if !temporaryBranch.isPresented,
-                                                  let record = temporaryBranch.record(for: msg.id) {
+                                        if !temporaryBranch.isPresented,
+                                           let record = temporaryBranch.record(for: msg.id) {
                                             TemporaryBranchRecordMarker(
                                                 record: record,
                                                 action: { openTemporaryBranch(from: msg) },
@@ -231,6 +224,7 @@ struct ChatArea: View {
                                             .transition(.opacity.combined(with: .move(edge: .top)))
                                         }
                                     }
+                                    .id(msg.id)
                                 }
                                 if streamingPresentation.showsPendingThinking {
                                     HStack {
@@ -329,6 +323,10 @@ struct ChatArea: View {
                             .frame(height: 80)
                         }
                     )
+
+                    if temporaryBranch.isPresented {
+                        temporaryBranchFocusedSourceLane
+                    }
 
                     // Floating Header
                     ZStack(alignment: .top) {
@@ -646,6 +644,44 @@ struct ChatArea: View {
         .frame(maxWidth: composerMaxWidth)
     }
 
+    @ViewBuilder
+    private var temporaryBranchFocusedSourceLane: some View {
+        if let sourceMessage = temporaryBranch.sourceMessage {
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 14) {
+                    MessageBubble(
+                        text: sourceMessage.content,
+                        thinkingContent: sourceMessage.thinkingContent,
+                        thinkingStartedAt: nil,
+                        agentTraceRecords: sourceMessage.decodedAgentTraceRecords,
+                        isThinkingStreaming: false,
+                        isAgentTraceStreaming: false,
+                        isUser: sourceMessage.role == .user,
+                        source: sourceMessage.source,
+                        timestamp: sourceMessage.timestamp,
+                        onOpenBranch: nil
+                    )
+
+                    TemporaryBranchTranscript(
+                        branch: temporaryBranch,
+                        onRegenerate: regenerateTemporaryBranchAssistant
+                    )
+                }
+                .frame(maxWidth: composerMaxWidth, alignment: .leading)
+                .padding(.horizontal, 36)
+                .padding(.top, TemporaryBranchMembraneStyle.focusedSourceTopPadding)
+                .padding(
+                    .bottom,
+                    floatingComposerHeight + TemporaryBranchMembraneStyle.focusedSourceBottomClearance
+                )
+                .frame(maxWidth: .infinity, alignment: .center)
+                .opacity(TemporaryBranchMembraneStyle.focusedContentOpacity)
+            }
+            .transition(.opacity.combined(with: .move(edge: .top)))
+            .zIndex(2)
+        }
+    }
+
     private func openTemporaryBranch(from message: Message) {
         withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
             temporaryBranch.open(from: message, in: vm.messages)
@@ -686,7 +722,7 @@ struct ChatArea: View {
     private func branchFocusOpacity(for message: Message) -> Double {
         guard temporaryBranch.isPresented else { return 1 }
         return isTemporaryBranchSource(message)
-            ? TemporaryBranchMembraneStyle.focusedContentOpacity
+            ? 0
             : TemporaryBranchMembraneStyle.dimmedContentOpacity
     }
 
@@ -853,6 +889,7 @@ struct ChatArea: View {
     }
 
     private func scrollToBottom(with proxy: ScrollViewProxy) {
+        guard !temporaryBranch.isPresented else { return }
         DispatchQueue.main.async {
             proxy.scrollTo(bottomScrollAnchor, anchor: .bottom)
         }

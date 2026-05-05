@@ -348,6 +348,47 @@ final class TemporaryBranchViewModelTests: XCTestCase {
         XCTAssertFalse(evaluation.summary.preview.contains("blue train"))
     }
 
+    func testEvaluatorSuppressesSourceOptOutMemoryCandidate() async throws {
+        let source = Message(nodeId: UUID(), role: .user, content: "Do not remember this private source detail: blue train.")
+        let record = TemporaryBranchRecord(
+            sourceMessage: source,
+            localContext: [source],
+            messages: [
+                TemporaryBranchMessage(role: .user, content: "Can we branch from this?")
+            ],
+            updatedAt: Date()
+        )
+        let evaluator = TemporaryBranchMemoryEvaluator(llmServiceProvider: {
+            StaticTemporaryBranchLLMService(text: """
+            {
+              "summary": {
+                "topic": "Source detail",
+                "key_points": ["Alex mentioned blue train."],
+                "decisions": [],
+                "open_questions": [],
+                "insights": [],
+                "preview": "Alex mentioned blue train."
+              },
+              "memory_candidates": [
+                {
+                  "content": "Alex has a private source detail: blue train.",
+                  "scope": "global",
+                  "kind": "identity",
+                  "confidence": 0.91,
+                  "reason": "Grounded in source.",
+                  "evidence_quote": "blue train"
+                }
+              ]
+            }
+            """)
+        })
+
+        let evaluation = await evaluator.evaluate(record: record)
+
+        XCTAssertTrue(evaluation.candidates.isEmpty)
+        XCTAssertEqual(evaluation.summary.preview, "Do-not-remember branch content redacted.")
+    }
+
     func testEvaluatorRejectsLLMCandidateWithoutEvidenceQuote() async throws {
         let source = Message(nodeId: UUID(), role: .assistant, content: "How should branch memory work?")
         let record = TemporaryBranchRecord(
@@ -418,6 +459,69 @@ final class TemporaryBranchViewModelTests: XCTestCase {
         let memory = try XCTUnwrap(try store.fetchActiveMemoryEntry(scope: .conversation, scopeRefId: node.id))
         XCTAssertTrue(memory.content.contains("Branch summary enters thread context."))
         XCTAssertFalse(memory.content.contains("raw transcript should stay out of normal prompt"))
+    }
+
+    func testMemoryServiceSkipsLowSignalBranchSummaryThreadMemory() async throws {
+        let store = try NodeStore(path: ":memory:")
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { nil })
+        let node = NousNode(type: .conversation, title: "Branch memory")
+        let source = Message(nodeId: node.id, role: .user, content: "hi")
+        let record = TemporaryBranchRecord(
+            sourceMessage: source,
+            localContext: [source],
+            messages: [
+                TemporaryBranchMessage(role: .user, content: "hi")
+            ],
+            summary: TemporaryBranchSummary(
+                topic: "hi",
+                keyPoints: [],
+                decisions: [],
+                openQuestions: [],
+                insights: [],
+                preview: "hi"
+            ),
+            updatedAt: Date()
+        )
+
+        try store.insertNode(node)
+        try store.insertMessage(source)
+
+        await service.absorbTemporaryBranchSummary(record: record)
+
+        XCTAssertNil(try store.fetchActiveMemoryEntry(scope: .conversation, scopeRefId: node.id))
+    }
+
+    func testMemoryServiceRedactsOptOutBranchSummarySourceExcerpt() async throws {
+        let store = try NodeStore(path: ":memory:")
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { nil })
+        let node = NousNode(type: .conversation, title: "Branch memory")
+        let source = Message(nodeId: node.id, role: .user, content: "Do not remember this private source detail: blue train.")
+        let record = TemporaryBranchRecord(
+            sourceMessage: source,
+            localContext: [source],
+            messages: [
+                TemporaryBranchMessage(role: .user, content: "Do not remember this private branch detail: green station.")
+            ],
+            summary: TemporaryBranchSummary(
+                topic: "Memory boundary",
+                keyPoints: ["Alex marked this branch content as do-not-remember."],
+                decisions: [],
+                openQuestions: [],
+                insights: [],
+                preview: "Do-not-remember branch content redacted."
+            ),
+            updatedAt: Date()
+        )
+
+        try store.insertNode(node)
+        try store.insertMessage(source)
+
+        await service.absorbTemporaryBranchSummary(record: record)
+
+        let memory = try XCTUnwrap(try store.fetchActiveMemoryEntry(scope: .conversation, scopeRefId: node.id))
+        XCTAssertTrue(memory.content.contains("do-not-remember"))
+        XCTAssertFalse(memory.content.contains("blue train"))
+        XCTAssertFalse(memory.content.contains("green station"))
     }
 
     func testMemoryServiceDoesNotApplyProjectOrGlobalCandidatesWhenAbsorbingSummary() async throws {

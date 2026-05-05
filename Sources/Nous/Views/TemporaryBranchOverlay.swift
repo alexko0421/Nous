@@ -18,6 +18,8 @@ enum TemporaryBranchMembraneStyle {
     static let inlineBlurRadius: CGFloat = 9
     static let sourceQuoteMarkerHeight: CGFloat = 32
     static let recordMarkerHeight: CGFloat = 64
+    static let focusedSourceTopPadding: CGFloat = 118
+    static let focusedSourceBottomClearance: CGFloat = 44
 }
 
 enum TemporaryBranchTriggerHitTarget {

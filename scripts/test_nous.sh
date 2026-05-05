@@ -67,6 +67,7 @@ build_command=(
   -project Nous.xcodeproj
   -scheme NousTests
   -destination "$DESTINATION"
+  CODE_SIGNING_ALLOWED=NO
 )
 if ((${#BUILD_ARGS[@]} > 0)); then
   build_command+=("${BUILD_ARGS[@]}")
@@ -80,6 +81,7 @@ test_command=(
   -project Nous.xcodeproj
   -scheme NousTests
   -destination "$DESTINATION"
+  CODE_SIGNING_ALLOWED=NO
 )
 if ((${#TEST_ARGS[@]} > 0)); then
   test_command+=("${TEST_ARGS[@]}")

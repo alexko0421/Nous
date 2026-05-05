@@ -263,7 +263,8 @@ final class TemporaryBranchUILayoutTests: XCTestCase {
         XCTAssertTrue(source.contains("temporaryBranchBottomRail"))
         XCTAssertTrue(source.contains("TemporaryBranchInlineComposer("))
         XCTAssertTrue(source.contains("branchFocusBlurRadius(for: msg)"))
-        XCTAssertTrue(source.contains("isTemporaryBranchSource(msg)"))
+        XCTAssertTrue(source.contains("isTemporaryBranchSource(message)"))
+        XCTAssertTrue(source.contains("temporaryBranchFocusedSourceLane"))
         XCTAssertTrue(source.contains("TemporaryBranchRecordMarker("))
         XCTAssertTrue(source.contains("record(for: msg.id)"))
         XCTAssertTrue(source.contains("persistTemporaryBranchRecord(record)"))
@@ -274,6 +275,32 @@ final class TemporaryBranchUILayoutTests: XCTestCase {
         XCTAssertFalse(source.contains(".blur(radius: branchBackgroundBlurRadius)\n                    .opacity(branchBackgroundOpacity)\n                    .allowsHitTesting(!temporaryBranch.isPresented)"))
         XCTAssertFalse(source.contains("TemporaryBranchOverlay("))
         XCTAssertFalse(source.contains(".scaleEffect(temporaryBranch.isPresented ? 1.012 : 1)"))
+    }
+
+    func testBranchOpeningUsesFixedUpperFocusLane() throws {
+        XCTAssertEqual(TemporaryBranchMembraneStyle.focusedSourceTopPadding, 118)
+        XCTAssertGreaterThanOrEqual(TemporaryBranchMembraneStyle.focusedSourceBottomClearance, 40)
+
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Views/ChatArea.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("temporaryBranchFocusedSourceLane"))
+        XCTAssertTrue(source.contains("TemporaryBranchMembraneStyle.focusedSourceTopPadding"))
+        XCTAssertTrue(source.contains("floatingComposerHeight + TemporaryBranchMembraneStyle.focusedSourceBottomClearance"))
+        XCTAssertTrue(source.contains("onOpenBranch: nil"))
+        XCTAssertTrue(source.contains("TemporaryBranchTranscript("))
+        XCTAssertTrue(source.contains(".opacity(TemporaryBranchMembraneStyle.focusedContentOpacity)"))
+        XCTAssertTrue(source.contains(".allowsHitTesting(!temporaryBranch.isPresented)"))
+        XCTAssertTrue(source.contains("isTemporaryBranchSource(message)\n            ? 0"))
+        XCTAssertTrue(source.contains("guard !temporaryBranch.isPresented else { return }"))
+        XCTAssertFalse(source.contains("scrollToTemporaryBranchSource(with: proxy)"))
+        XCTAssertFalse(source.contains("focusedSourceScrollAnchor"))
     }
 
     func testBranchMarkerSurfacesMemoryCandidateActions() throws {

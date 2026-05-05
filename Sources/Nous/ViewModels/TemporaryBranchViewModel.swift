@@ -218,7 +218,7 @@ final class TemporaryBranchMemoryEvaluator {
 
     func evaluate(record: TemporaryBranchRecord) async -> TemporaryBranchMemoryEvaluation {
         let transcript = Self.userTranscript(from: record)
-        if SafetyGuardrails.containsHardMemoryOptOut(transcript) {
+        if SafetyGuardrails.containsHardMemoryOptOut(Self.evidenceCorpus(record: record, transcript: transcript)) {
             return TemporaryBranchMemoryEvaluation(
                 summary: TemporaryBranchSummary(
                     topic: "Memory boundary",
