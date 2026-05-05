@@ -87,6 +87,56 @@ final class VectorStore {
         return Array(results.prefix(topK))
     }
 
+    func searchSourceChunks(
+        query: [Float],
+        topK: Int = 5,
+        excludeSourceNodeIds: Set<UUID> = []
+    ) throws -> [SourceChunkSearchResult] {
+        try searchSourceChunks(
+            query: query,
+            topK: topK,
+            sourceNodeIds: nil,
+            excludeSourceNodeIds: excludeSourceNodeIds
+        )
+    }
+
+    func searchSourceChunks(
+        query: [Float],
+        topK: Int = 5,
+        sourceNodeIds: Set<UUID>,
+        excludeSourceNodeIds: Set<UUID> = []
+    ) throws -> [SourceChunkSearchResult] {
+        try searchSourceChunks(
+            query: query,
+            topK: topK,
+            sourceNodeIds: Optional(sourceNodeIds),
+            excludeSourceNodeIds: excludeSourceNodeIds
+        )
+    }
+
+    private func searchSourceChunks(
+        query: [Float],
+        topK: Int,
+        sourceNodeIds: Set<UUID>?,
+        excludeSourceNodeIds: Set<UUID>
+    ) throws -> [SourceChunkSearchResult] {
+        let chunks = try nodeStore.fetchSourceChunksWithEmbeddings()
+        var results: [SourceChunkSearchResult] = []
+        for (chunk, sourceNode, embedding) in chunks {
+            if let sourceNodeIds, !sourceNodeIds.contains(sourceNode.id) { continue }
+            guard !excludeSourceNodeIds.contains(sourceNode.id) else { continue }
+            results.append(
+                SourceChunkSearchResult(
+                    sourceNode: sourceNode,
+                    chunk: chunk,
+                    similarity: cosineSimilarity(query, embedding)
+                )
+            )
+        }
+        results.sort { $0.similarity > $1.similarity }
+        return Array(results.prefix(topK))
+    }
+
     /// Chat-only retrieval keeps semantic matches dominant while reserving one
     /// slot for an older-but-still-relevant spark.
     func searchForChatCitations(
@@ -104,11 +154,17 @@ final class VectorStore {
         guard topK > 0 else { return [] }
 
         let semanticQuota = min(semanticSlots, topK)
-        let candidates = try search(
+        let nodeCandidates = try search(
             query: query,
             topK: max(candidatePoolSize, topK, semanticQuota + 1),
             excludeIds: excludeIds
         )
+        let chunkCandidates = try sourceChunkCitationCandidates(
+            query: query,
+            topK: max(candidatePoolSize, topK, semanticQuota + 1),
+            excludeIds: excludeIds
+        )
+        let candidates = mergedChatCitationCandidates(nodeCandidates + chunkCandidates)
 
         var selected: [SearchResult] = []
         var seen = Set<UUID>()
@@ -141,7 +197,8 @@ final class VectorStore {
                 admit(SearchResult(
                     node: longGapCandidate.node,
                     similarity: longGapCandidate.similarity,
-                    lane: .longGap
+                    lane: .longGap,
+                    previewSnippet: longGapCandidate.previewSnippet
                 ))
             }
         }
@@ -156,9 +213,65 @@ final class VectorStore {
                 node: result.node,
                 similarity: result.similarity,
                 lane: result.lane,
-                previewSnippet: anchoredPreviewSnippet(for: result.node, queryText: queryText)
+                previewSnippet: result.previewSnippet ?? anchoredPreviewSnippet(for: result.node, queryText: queryText)
             )
         }
+    }
+
+    private func sourceChunkCitationCandidates(
+        query: [Float],
+        topK: Int,
+        excludeIds: Set<UUID>
+    ) throws -> [SearchResult] {
+        try searchSourceChunks(
+            query: query,
+            topK: topK,
+            excludeSourceNodeIds: excludeIds
+        ).map { result in
+            SearchResult(
+                node: result.sourceNode,
+                similarity: result.similarity,
+                previewSnippet: String(
+                    result.chunk.text
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                        .prefix(320)
+                )
+            )
+        }
+    }
+
+    private func mergedChatCitationCandidates(_ candidates: [SearchResult]) -> [SearchResult] {
+        var bestByNodeId: [UUID: SearchResult] = [:]
+
+        for candidate in candidates {
+            guard let current = bestByNodeId[candidate.node.id] else {
+                bestByNodeId[candidate.node.id] = candidate
+                continue
+            }
+            if shouldReplaceCitationCandidate(candidate, replacing: current) {
+                bestByNodeId[candidate.node.id] = candidate
+            }
+        }
+
+        return bestByNodeId.values.sorted {
+            if $0.similarity == $1.similarity {
+                return $0.node.updatedAt > $1.node.updatedAt
+            }
+            return $0.similarity > $1.similarity
+        }
+    }
+
+    private func shouldReplaceCitationCandidate(
+        _ candidate: SearchResult,
+        replacing current: SearchResult
+    ) -> Bool {
+        if candidate.similarity != current.similarity {
+            return candidate.similarity > current.similarity
+        }
+        if current.previewSnippet == nil, candidate.previewSnippet != nil {
+            return true
+        }
+        return false
     }
 
     /// Find all nodes semantically similar to a given node above a threshold.
@@ -269,7 +382,7 @@ final class VectorStore {
                 }
             }
             return chunks
-        case .note:
+        case .note, .source:
             let paragraphs = content
                 .components(separatedBy: "\n\n")
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }

@@ -37,6 +37,9 @@ final class TurnSteward {
         let normalized = request.inputText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let deterministic = deterministicResponseStance(for: normalized).result
         if deterministic.stance == .supportFirst {
+            if legacy.route == .sourceAnalysis {
+                return legacy.withRouterTrace(mode: mode, routing: deterministic)
+            }
             if mode == .active {
                 return activeDecision(
                     from: legacy,
@@ -77,6 +80,9 @@ final class TurnSteward {
         let normalized = text.lowercased()
         let deterministic = deterministicResponseStance(for: normalized).result
         if deterministic.stance == .supportFirst {
+            if legacy.route == .sourceAnalysis {
+                return legacy.withRouterTrace(mode: mode, routing: deterministic)
+            }
             if mode == .active {
                 return activeDecision(
                     from: legacy,
@@ -120,6 +126,17 @@ final class TurnSteward {
 
         let text = request.inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalized = text.lowercased()
+
+        if !request.sourceMaterials.isEmpty {
+            return TurnStewardDecision(
+                route: .sourceAnalysis,
+                memoryPolicy: .full,
+                challengeStance: .useSilently,
+                responseShape: .answerNow,
+                source: .deterministic,
+                reason: "source material attached"
+            )
+        }
 
         let route = route(for: normalized)
         let memoryOptOut = containsAny(normalized, in: Self.memoryOptOutCues)
@@ -174,6 +191,15 @@ final class TurnSteward {
                 responseShape: .narrowNextStep,
                 source: .deterministic,
                 reason: "explicit direction cue"
+            )
+        case .sourceAnalysis:
+            return TurnStewardDecision(
+                route: .sourceAnalysis,
+                memoryPolicy: .full,
+                challengeStance: .useSilently,
+                responseShape: .answerNow,
+                source: .deterministic,
+                reason: "source material attached"
             )
         case .ordinaryChat:
             return TurnStewardDecision(
@@ -479,6 +505,9 @@ final class TurnSteward {
         } else {
             switch legacy.route {
             case .plan, .direction:
+                stance = .softAnalysis
+                softerFallback = .reflective
+            case .sourceAnalysis:
                 stance = .softAnalysis
                 softerFallback = .reflective
             case .brainstorm, .ordinaryChat:

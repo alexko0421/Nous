@@ -9,6 +9,22 @@ protocol MemorySynthesizing: Sendable {
         sourceNodeIds: [UUID],
         confirmation: UserMemoryCore.PersonalInferenceDisposition
     ) async -> Bool
+    func absorbTemporaryBranchSummary(record: TemporaryBranchRecord) async
+    func applyTemporaryBranchCandidate(
+        _ candidate: TemporaryBranchMemoryCandidate,
+        record: TemporaryBranchRecord
+    ) async -> Bool
+}
+
+extension MemorySynthesizing {
+    func absorbTemporaryBranchSummary(record: TemporaryBranchRecord) async {}
+
+    func applyTemporaryBranchCandidate(
+        _ candidate: TemporaryBranchMemoryCandidate,
+        record: TemporaryBranchRecord
+    ) async -> Bool {
+        false
+    }
 }
 
 final class MemorySynthesisService: MemorySynthesizing, @unchecked Sendable {
@@ -40,5 +56,16 @@ final class MemorySynthesisService: MemorySynthesizing, @unchecked Sendable {
             sourceNodeIds: sourceNodeIds,
             confirmation: confirmation
         )
+    }
+
+    func absorbTemporaryBranchSummary(record: TemporaryBranchRecord) async {
+        core.absorbTemporaryBranchSummary(record: record)
+    }
+
+    func applyTemporaryBranchCandidate(
+        _ candidate: TemporaryBranchMemoryCandidate,
+        record: TemporaryBranchRecord
+    ) async -> Bool {
+        core.applyTemporaryBranchCandidate(candidate, record: record)
     }
 }

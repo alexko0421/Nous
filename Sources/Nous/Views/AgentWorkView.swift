@@ -295,6 +295,7 @@ struct AgentWorkView: View {
             snapshot.agentToolReliability.summaryText,
             snapshot.behaviorEval.summaryText,
             snapshot.contextManifest.summaryText,
+            snapshot.delegationMetrics.summaryText,
             snapshot.modelHarnessProfiles.summaryText,
             snapshot.sycophancyFixtureTrend
         ].joined(separator: " · ")

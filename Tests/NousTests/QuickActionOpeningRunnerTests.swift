@@ -122,13 +122,18 @@ final class QuickActionOpeningRunnerTests: XCTestCase {
         XCTAssertEqual(contextManifests[0].turnId, turnId)
         XCTAssertEqual(contextManifests[0].conversationId, node.id)
         XCTAssertEqual(contextManifests[0].assistantMessageId, completion.assistantMessage.id)
-        XCTAssertTrue(contextManifests[0].resources.contains(ContextManifestResource(
-            source: .memory,
-            label: "global_memory",
-            referenceId: "global_memory",
-            state: .loaded,
-            used: false
-        )))
+        let globalMemoryResource = try XCTUnwrap(contextManifests[0].resources.first {
+            $0.source == .memory &&
+            $0.label == "global_memory" &&
+            $0.referenceId == "global_memory" &&
+            $0.state == .loaded
+        })
+        XCTAssertFalse(globalMemoryResource.used)
+        XCTAssertEqual(globalMemoryResource.provenance?.scope, .global)
+        XCTAssertEqual(globalMemoryResource.provenance?.statuses, [.active])
+        XCTAssertEqual(globalMemoryResource.provenance?.confidence, 0.9)
+        XCTAssertEqual(globalMemoryResource.provenance?.sourceNodeIds, [])
+        XCTAssertEqual(globalMemoryResource.provenance?.sourceMessageIds, [])
     }
 
     func testOpeningRunnerTracesSingleShotAgentCoordination() async throws {

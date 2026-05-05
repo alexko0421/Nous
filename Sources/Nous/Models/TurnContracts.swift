@@ -119,7 +119,24 @@ struct TurnRequest {
     let snapshot: TurnSessionSnapshot
     let inputText: String
     let attachments: [AttachedFileContext]
+    let sourceMaterials: [SourceMaterialContext]
     let now: Date
+
+    init(
+        turnId: UUID,
+        snapshot: TurnSessionSnapshot,
+        inputText: String,
+        attachments: [AttachedFileContext],
+        sourceMaterials: [SourceMaterialContext] = [],
+        now: Date
+    ) {
+        self.turnId = turnId
+        self.snapshot = snapshot
+        self.inputText = inputText
+        self.attachments = attachments
+        self.sourceMaterials = sourceMaterials
+        self.now = now
+    }
 }
 
 struct ScratchpadIngestRequest {
@@ -321,10 +338,23 @@ struct TurnExecutionResult {
     }
 }
 
+struct ContextManifestUsageHint: Equatable {
+    let referenceId: String
+    let phrases: [String]
+
+    init(referenceId: String, phrases: [String]) {
+        self.referenceId = referenceId
+        self.phrases = phrases
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+}
+
 struct TurnPlan {
     let turnId: UUID
     let prepared: PreparedTurnSession
     let citations: [SearchResult]
+    let sourceMaterials: [SourceMaterialContext]
     let promptTrace: PromptGovernanceTrace
     let effectiveMode: ChatMode
     let nextQuickActionModeIfCompleted: QuickActionMode?
@@ -338,6 +368,50 @@ struct TurnPlan {
     let loadedSkillIds: Set<UUID>
     let memoryEvidenceSourceIds: Set<UUID>
     let loadedCitationIds: Set<UUID>
+    let memoryUsageHints: [ContextManifestUsageHint]
+    let memoryProvenance: [String: ContextManifestMemoryProvenance]
+
+    init(
+        turnId: UUID,
+        prepared: PreparedTurnSession,
+        citations: [SearchResult],
+        sourceMaterials: [SourceMaterialContext],
+        promptTrace: PromptGovernanceTrace,
+        effectiveMode: ChatMode,
+        nextQuickActionModeIfCompleted: QuickActionMode?,
+        agentLoopMode: QuickActionMode? = nil,
+        judgeEventDraft: JudgeEvent?,
+        turnSlice: TurnSystemSlice,
+        transcriptMessages: [LLMMessage],
+        focusBlock: String?,
+        provider: LLMProvider,
+        indexedSkillIds: Set<UUID> = [],
+        loadedSkillIds: Set<UUID> = [],
+        memoryEvidenceSourceIds: Set<UUID> = [],
+        loadedCitationIds: Set<UUID> = [],
+        memoryUsageHints: [ContextManifestUsageHint] = [],
+        memoryProvenance: [String: ContextManifestMemoryProvenance] = [:]
+    ) {
+        self.turnId = turnId
+        self.prepared = prepared
+        self.citations = citations
+        self.sourceMaterials = sourceMaterials
+        self.promptTrace = promptTrace
+        self.effectiveMode = effectiveMode
+        self.nextQuickActionModeIfCompleted = nextQuickActionModeIfCompleted
+        self.agentLoopMode = agentLoopMode
+        self.judgeEventDraft = judgeEventDraft
+        self.turnSlice = turnSlice
+        self.transcriptMessages = transcriptMessages
+        self.focusBlock = focusBlock
+        self.provider = provider
+        self.indexedSkillIds = indexedSkillIds
+        self.loadedSkillIds = loadedSkillIds
+        self.memoryEvidenceSourceIds = memoryEvidenceSourceIds
+        self.loadedCitationIds = loadedCitationIds
+        self.memoryUsageHints = memoryUsageHints
+        self.memoryProvenance = memoryProvenance
+    }
 
     init(
         turnId: UUID,
@@ -355,23 +429,30 @@ struct TurnPlan {
         indexedSkillIds: Set<UUID> = [],
         loadedSkillIds: Set<UUID> = [],
         memoryEvidenceSourceIds: Set<UUID> = [],
-        loadedCitationIds: Set<UUID> = []
+        loadedCitationIds: Set<UUID> = [],
+        memoryUsageHints: [ContextManifestUsageHint] = [],
+        memoryProvenance: [String: ContextManifestMemoryProvenance] = [:]
     ) {
-        self.turnId = turnId
-        self.prepared = prepared
-        self.citations = citations
-        self.promptTrace = promptTrace
-        self.effectiveMode = effectiveMode
-        self.nextQuickActionModeIfCompleted = nextQuickActionModeIfCompleted
-        self.agentLoopMode = agentLoopMode
-        self.judgeEventDraft = judgeEventDraft
-        self.turnSlice = turnSlice
-        self.transcriptMessages = transcriptMessages
-        self.focusBlock = focusBlock
-        self.provider = provider
-        self.indexedSkillIds = indexedSkillIds
-        self.loadedSkillIds = loadedSkillIds
-        self.memoryEvidenceSourceIds = memoryEvidenceSourceIds
-        self.loadedCitationIds = loadedCitationIds
+        self.init(
+            turnId: turnId,
+            prepared: prepared,
+            citations: citations,
+            sourceMaterials: [],
+            promptTrace: promptTrace,
+            effectiveMode: effectiveMode,
+            nextQuickActionModeIfCompleted: nextQuickActionModeIfCompleted,
+            agentLoopMode: agentLoopMode,
+            judgeEventDraft: judgeEventDraft,
+            turnSlice: turnSlice,
+            transcriptMessages: transcriptMessages,
+            focusBlock: focusBlock,
+            provider: provider,
+            indexedSkillIds: indexedSkillIds,
+            loadedSkillIds: loadedSkillIds,
+            memoryEvidenceSourceIds: memoryEvidenceSourceIds,
+            loadedCitationIds: loadedCitationIds,
+            memoryUsageHints: memoryUsageHints,
+            memoryProvenance: memoryProvenance
+        )
     }
 }

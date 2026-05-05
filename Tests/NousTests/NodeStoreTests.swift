@@ -303,6 +303,22 @@ final class NodeStoreTests: XCTestCase {
         XCTAssertEqual(favorites.first?.title, "Favorite")
     }
 
+    func testFetchRecentsExcludesSourceNodesFromNormalNavigation() throws {
+        var source = makeNode(title: "Ingested source", type: .source, content: "external material")
+        source.updatedAt = Date().addingTimeInterval(120)
+        var note = makeNode(title: "Working note", type: .note)
+        note.updatedAt = Date().addingTimeInterval(60)
+        let conversation = makeNode(title: "Chat", type: .conversation, content: "Transcript")
+        try store.insertNode(source)
+        try store.insertNode(note)
+        try store.insertNode(conversation)
+
+        let recents = try store.fetchRecents(limit: 20)
+
+        XCTAssertFalse(recents.contains { $0.type == .source })
+        XCTAssertEqual(recents.map(\.title), ["Working note", "Chat"])
+    }
+
     func testFetchRecentConversationsExcludesCurrentNode() throws {
         let older = makeNode(title: "Older Chat", type: .conversation, content: "Old transcript")
         try store.insertNode(older)
@@ -466,6 +482,55 @@ final class NodeStoreTests: XCTestCase {
         XCTAssertEqual(messages[1].content, "Hi there")
         XCTAssertEqual(messages[0].role, .user)
         XCTAssertEqual(messages[1].role, .assistant)
+    }
+
+    func testMessageSourceMaterialsRoundTripAndDeleteCascade() throws {
+        let conversation = makeNode(type: .conversation)
+        let source = makeNode(title: "Report", type: .source, content: "Full source text")
+        let now = Date(timeIntervalSince1970: 1_000)
+        try store.insertNode(conversation)
+        try store.insertNode(source)
+        try store.upsertSourceMetadata(
+            SourceMetadata(
+                nodeId: source.id,
+                kind: .document,
+                originalURL: nil,
+                originalFilename: "report.txt",
+                contentHash: "hash-report",
+                ingestedAt: now,
+                extractionStatus: .ready
+            )
+        )
+        try store.replaceSourceChunks([
+            SourceChunk(
+                sourceNodeId: source.id,
+                ordinal: 0,
+                text: "Late section connects to runway decisions.",
+                createdAt: now
+            )
+        ], for: source.id)
+
+        let message = Message(nodeId: conversation.id, role: .user, content: "Files: report.txt")
+        try store.insertMessage(message)
+        let material = SourceMaterialContext(
+            sourceNodeId: source.id,
+            title: source.title,
+            originalURL: nil,
+            originalFilename: "report.txt",
+            chunks: []
+        )
+
+        try store.replaceMessageSourceMaterials([material, material], for: message.id)
+
+        let fetched = try store.fetchMessageSourceMaterials(messageId: message.id)
+        XCTAssertEqual(fetched.count, 1)
+        XCTAssertEqual(fetched.first?.sourceNodeId, source.id)
+        XCTAssertEqual(fetched.first?.originalFilename, "report.txt")
+        XCTAssertEqual(fetched.first?.chunks.first?.text, "Late section connects to runway decisions.")
+
+        try store.deleteMessage(id: message.id)
+
+        XCTAssertTrue(try store.fetchMessageSourceMaterials(messageId: message.id).isEmpty)
     }
 
     func testClearAllMessageThinkingContentRemovesStoredTraces() throws {

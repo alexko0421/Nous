@@ -172,6 +172,215 @@ struct BehaviorEvalTelemetrySummary: Equatable {
     }
 }
 
+struct DelegationMetricEvent: Identifiable, Codable, Equatable {
+    let id: UUID
+    let conversationId: UUID
+    let assistantMessageId: UUID
+    let executionMode: AgentExecutionMode
+    let quickActionMode: QuickActionMode?
+    let provider: LLMProvider
+    let reason: AgentCoordinationReason
+    let indexedSkillCount: Int
+    let verifierUsed: Bool
+    let verifierRiskFlagCount: Int
+    let outcome: BehaviorEvalOutcome?
+    let outcomeLatencySeconds: TimeInterval?
+    let recordedAt: Date
+    let outcomeRecordedAt: Date?
+
+    init(
+        id: UUID = UUID(),
+        conversationId: UUID,
+        assistantMessageId: UUID,
+        executionMode: AgentExecutionMode,
+        quickActionMode: QuickActionMode?,
+        provider: LLMProvider,
+        reason: AgentCoordinationReason,
+        indexedSkillCount: Int,
+        verifierUsed: Bool,
+        verifierRiskFlagCount: Int,
+        outcome: BehaviorEvalOutcome? = nil,
+        outcomeLatencySeconds: TimeInterval? = nil,
+        recordedAt: Date = Date(),
+        outcomeRecordedAt: Date? = nil
+    ) {
+        self.id = id
+        self.conversationId = conversationId
+        self.assistantMessageId = assistantMessageId
+        self.executionMode = executionMode
+        self.quickActionMode = quickActionMode
+        self.provider = provider
+        self.reason = reason
+        self.indexedSkillCount = indexedSkillCount
+        self.verifierUsed = verifierUsed
+        self.verifierRiskFlagCount = verifierRiskFlagCount
+        self.outcome = outcome
+        self.outcomeLatencySeconds = outcomeLatencySeconds
+        self.recordedAt = recordedAt
+        self.outcomeRecordedAt = outcomeRecordedAt
+    }
+
+    init?(snapshot: TurnCognitionSnapshot) {
+        guard let coordination = snapshot.agentCoordination else { return nil }
+        self.init(
+            conversationId: snapshot.conversationId,
+            assistantMessageId: snapshot.assistantMessageId,
+            executionMode: coordination.executionMode,
+            quickActionMode: coordination.quickActionMode,
+            provider: coordination.provider,
+            reason: coordination.reason,
+            indexedSkillCount: coordination.indexedSkillCount,
+            verifierUsed: snapshot.reviewArtifactId != nil,
+            verifierRiskFlagCount: snapshot.reviewRiskFlags.count,
+            recordedAt: snapshot.recordedAt
+        )
+    }
+
+    var isDelegated: Bool {
+        executionMode == .toolLoop
+    }
+
+    var isSingleShot: Bool {
+        executionMode == .singleShot
+    }
+
+    var isEvaluated: Bool {
+        outcome != nil
+    }
+
+    var isRework: Bool {
+        outcome == .correction || outcome == .retry || outcome == .delete
+    }
+
+    func recordingOutcome(_ behaviorEvent: BehaviorEvalEvent) -> DelegationMetricEvent {
+        guard shouldReplaceOutcome(with: behaviorEvent.outcome) else { return self }
+
+        return DelegationMetricEvent(
+            id: id,
+            conversationId: conversationId,
+            assistantMessageId: assistantMessageId,
+            executionMode: executionMode,
+            quickActionMode: quickActionMode,
+            provider: provider,
+            reason: reason,
+            indexedSkillCount: indexedSkillCount,
+            verifierUsed: verifierUsed,
+            verifierRiskFlagCount: verifierRiskFlagCount,
+            outcome: behaviorEvent.outcome,
+            outcomeLatencySeconds: behaviorEvent.latencySeconds,
+            recordedAt: recordedAt,
+            outcomeRecordedAt: behaviorEvent.recordedAt
+        )
+    }
+
+    private func shouldReplaceOutcome(with candidate: BehaviorEvalOutcome) -> Bool {
+        guard let outcome else { return true }
+        return candidate.delegationSeverity > outcome.delegationSeverity
+    }
+}
+
+private extension BehaviorEvalOutcome {
+    var delegationSeverity: Int {
+        switch self {
+        case .continued:
+            return 0
+        case .correction:
+            return 1
+        case .retry:
+            return 2
+        case .delete:
+            return 3
+        }
+    }
+}
+
+struct DelegationMetricSummary: Equatable {
+    let totalEventCount: Int
+    let delegatedTurnCount: Int
+    let verifierTurnCount: Int
+    let evaluatedDelegatedTurnCount: Int
+    let delegatedReworkCount: Int
+    let evaluatedSingleShotTurnCount: Int
+    let singleShotReworkCount: Int
+    let evaluatedVerifierTurnCount: Int
+    let verifierReworkCount: Int
+
+    init(
+        totalEventCount: Int = 0,
+        delegatedTurnCount: Int = 0,
+        verifierTurnCount: Int = 0,
+        evaluatedDelegatedTurnCount: Int = 0,
+        delegatedReworkCount: Int = 0,
+        evaluatedSingleShotTurnCount: Int = 0,
+        singleShotReworkCount: Int = 0,
+        evaluatedVerifierTurnCount: Int = 0,
+        verifierReworkCount: Int = 0
+    ) {
+        self.totalEventCount = totalEventCount
+        self.delegatedTurnCount = delegatedTurnCount
+        self.verifierTurnCount = verifierTurnCount
+        self.evaluatedDelegatedTurnCount = evaluatedDelegatedTurnCount
+        self.delegatedReworkCount = delegatedReworkCount
+        self.evaluatedSingleShotTurnCount = evaluatedSingleShotTurnCount
+        self.singleShotReworkCount = singleShotReworkCount
+        self.evaluatedVerifierTurnCount = evaluatedVerifierTurnCount
+        self.verifierReworkCount = verifierReworkCount
+    }
+
+    static let empty = DelegationMetricSummary()
+
+    var delegationReworkRate: Double {
+        rate(delegatedReworkCount, of: evaluatedDelegatedTurnCount)
+    }
+
+    var singleShotReworkRate: Double {
+        rate(singleShotReworkCount, of: evaluatedSingleShotTurnCount)
+    }
+
+    var verifierReworkRate: Double {
+        rate(verifierReworkCount, of: evaluatedVerifierTurnCount)
+    }
+
+    var summaryText: String {
+        guard totalEventCount > 0 else {
+            return "No delegation metric signals recorded."
+        }
+
+        return [
+            "Delegation \(delegatedTurnCount) turns",
+            "rework \(delegatedReworkCount)/\(evaluatedDelegatedTurnCount)",
+            "single-shot \(singleShotReworkCount)/\(evaluatedSingleShotTurnCount)",
+            "verifier \(verifierTurnCount) turns"
+        ].joined(separator: " · ")
+    }
+
+    static func summarize(events: [DelegationMetricEvent]) -> DelegationMetricSummary {
+        let delegated = events.filter(\.isDelegated)
+        let evaluatedDelegated = delegated.filter(\.isEvaluated)
+        let singleShot = events.filter(\.isSingleShot)
+        let evaluatedSingleShot = singleShot.filter(\.isEvaluated)
+        let verifier = events.filter(\.verifierUsed)
+        let evaluatedVerifier = verifier.filter(\.isEvaluated)
+
+        return DelegationMetricSummary(
+            totalEventCount: events.count,
+            delegatedTurnCount: delegated.count,
+            verifierTurnCount: verifier.count,
+            evaluatedDelegatedTurnCount: evaluatedDelegated.count,
+            delegatedReworkCount: evaluatedDelegated.filter(\.isRework).count,
+            evaluatedSingleShotTurnCount: evaluatedSingleShot.count,
+            singleShotReworkCount: evaluatedSingleShot.filter(\.isRework).count,
+            evaluatedVerifierTurnCount: evaluatedVerifier.count,
+            verifierReworkCount: evaluatedVerifier.filter(\.isRework).count
+        )
+    }
+
+    private func rate(_ numerator: Int, of denominator: Int) -> Double {
+        guard denominator > 0 else { return 0 }
+        return Double(numerator) / Double(denominator)
+    }
+}
+
 enum BehaviorEvalClassifier {
     static func classifyUserFollowUp(_ text: String) -> BehaviorEvalOutcome {
         let normalized = text
@@ -183,7 +392,10 @@ enum BehaviorEvalClassifier {
             return .retry
         }
 
-        if containsAny(normalized, correctionMarkers) {
+        let correctionCandidate = scrubbedAffirmativeChineseWrongMarkers(from: normalized)
+        if containsAny(correctionCandidate, correctionPhraseMarkers) ||
+            containsEnglishCorrectionRephrase(correctionCandidate) ||
+            containsChineseWrongMarker(correctionCandidate) {
             return .correction
         }
 
@@ -207,25 +419,92 @@ enum BehaviorEvalClassifier {
         "再来"
     ]
 
-    private static let correctionMarkers = [
-        "actually",
+    private static let correctionPhraseMarkers = [
         "that's wrong",
         "that is wrong",
+        "that was wrong",
         "incorrect",
         "not what i asked",
-        "i mean",
         "you missed",
         "you misunderstood",
-        "should be",
+        "you got it wrong",
         "唔系",
         "唔係",
         "不是",
         "不对",
         "不對",
-        "错",
-        "錯",
         "修正"
     ]
+
+    private static let affirmativeChineseWrongMarkers = [
+        "冇错",
+        "冇錯",
+        "没错",
+        "沒錯",
+        "无错",
+        "無錯",
+        "不错",
+        "不錯",
+        "唔错",
+        "唔錯",
+        "唔系错",
+        "唔系錯",
+        "唔係错",
+        "唔係錯",
+        "没有错",
+        "沒有錯",
+        "不是错",
+        "不是錯"
+    ]
+
+    private static let chineseWrongMarkers = ["错", "錯"]
+
+    private static let englishCorrectionRephraseMarkers = [
+        "no, i meant",
+        "no i meant",
+        "no, i mean",
+        "no i mean",
+        "actually no",
+        "actually, no",
+        "what i meant was",
+        "what i mean is",
+        "i was asking for",
+        "i asked for"
+    ]
+
+    private static let englishRephraseLeadMarkers = [
+        " i mean ",
+        " i mean,",
+        " i meant ",
+        " i meant,"
+    ]
+
+    private static let englishContrastMarkers = [
+        ", not ",
+        " not the ",
+        " instead",
+        " rather than "
+    ]
+
+    private static func containsChineseWrongMarker(_ text: String) -> Bool {
+        containsAny(text, chineseWrongMarkers)
+    }
+
+    private static func containsEnglishCorrectionRephrase(_ text: String) -> Bool {
+        if containsAny(text, englishCorrectionRephraseMarkers) {
+            return true
+        }
+
+        let padded = " \(text) "
+        return containsAny(padded, englishRephraseLeadMarkers) &&
+            containsAny(padded, englishContrastMarkers)
+    }
+
+    private static func scrubbedAffirmativeChineseWrongMarkers(from text: String) -> String {
+        affirmativeChineseWrongMarkers.reduce(text) { partial, marker in
+            partial.replacingOccurrences(of: marker, with: "")
+        }
+    }
 
     private static func containsAny(_ text: String, _ markers: [String]) -> Bool {
         markers.contains { text.contains($0) }
@@ -240,11 +519,34 @@ enum ContextManifestResourceSource: String, Codable, Equatable {
     case memory
     case skill
     case citation
+    case sourceMaterial = "source_material"
 }
 
 enum ContextManifestResourceState: String, Codable, Equatable {
     case loaded
     case indexed
+}
+
+struct ContextManifestMemoryProvenance: Codable, Equatable {
+    let scope: MemoryScope?
+    let statuses: [MemoryStatus]
+    let confidence: Double?
+    let sourceNodeIds: [UUID]
+    let sourceMessageIds: [UUID]
+
+    init(
+        scope: MemoryScope?,
+        statuses: [MemoryStatus],
+        confidence: Double?,
+        sourceNodeIds: [UUID],
+        sourceMessageIds: [UUID]
+    ) {
+        self.scope = scope
+        self.statuses = statuses
+        self.confidence = confidence
+        self.sourceNodeIds = sourceNodeIds
+        self.sourceMessageIds = sourceMessageIds
+    }
 }
 
 struct ContextManifestResource: Codable, Equatable {
@@ -253,6 +555,23 @@ struct ContextManifestResource: Codable, Equatable {
     let referenceId: String
     let state: ContextManifestResourceState
     let used: Bool
+    let provenance: ContextManifestMemoryProvenance?
+
+    init(
+        source: ContextManifestResourceSource,
+        label: String,
+        referenceId: String,
+        state: ContextManifestResourceState,
+        used: Bool,
+        provenance: ContextManifestMemoryProvenance? = nil
+    ) {
+        self.source = source
+        self.label = label
+        self.referenceId = referenceId
+        self.state = state
+        self.used = used
+        self.provenance = provenance
+    }
 }
 
 struct ContextManifestRecord: Identifiable, Codable, Equatable {
@@ -287,9 +606,11 @@ struct ContextManifestTelemetrySummary: Equatable {
     let loadedSkillCount: Int
     let indexedSkillCount: Int
     let loadedCitationCount: Int
+    let loadedSourceMaterialCount: Int
     let usedMemoryCount: Int
     let usedSkillCount: Int
     let usedCitationCount: Int
+    let usedSourceMaterialCount: Int
 
     init(
         totalManifestCount: Int = 0,
@@ -298,9 +619,11 @@ struct ContextManifestTelemetrySummary: Equatable {
         loadedSkillCount: Int = 0,
         indexedSkillCount: Int = 0,
         loadedCitationCount: Int = 0,
+        loadedSourceMaterialCount: Int = 0,
         usedMemoryCount: Int = 0,
         usedSkillCount: Int = 0,
-        usedCitationCount: Int = 0
+        usedCitationCount: Int = 0,
+        usedSourceMaterialCount: Int = 0
     ) {
         self.totalManifestCount = totalManifestCount
         self.totalResourceCount = totalResourceCount
@@ -308,15 +631,17 @@ struct ContextManifestTelemetrySummary: Equatable {
         self.loadedSkillCount = loadedSkillCount
         self.indexedSkillCount = indexedSkillCount
         self.loadedCitationCount = loadedCitationCount
+        self.loadedSourceMaterialCount = loadedSourceMaterialCount
         self.usedMemoryCount = usedMemoryCount
         self.usedSkillCount = usedSkillCount
         self.usedCitationCount = usedCitationCount
+        self.usedSourceMaterialCount = usedSourceMaterialCount
     }
 
     static let empty = ContextManifestTelemetrySummary()
 
     var usedResourceCount: Int {
-        usedMemoryCount + usedSkillCount + usedCitationCount
+        usedMemoryCount + usedSkillCount + usedCitationCount + usedSourceMaterialCount
     }
 
     var usageRate: Double {
@@ -329,13 +654,19 @@ struct ContextManifestTelemetrySummary: Equatable {
             return "No context manifest signals recorded."
         }
 
-        return [
+        var parts = [
             "Context manifest \(totalResourceCount) resources",
             "\(usedResourceCount) used",
-            "memory \(loadedMemoryCount)",
+            "memory \(loadedMemoryCount)"
+        ]
+        if loadedSourceMaterialCount > 0 || usedSourceMaterialCount > 0 {
+            parts.append("source material \(loadedSourceMaterialCount)")
+        }
+        parts.append(contentsOf: [
             "citation \(loadedCitationCount)",
             "skill indexed \(indexedSkillCount)"
-        ].joined(separator: " · ")
+        ])
+        return parts.joined(separator: " · ")
     }
 
     static func summarize(records: [ContextManifestRecord]) -> ContextManifestTelemetrySummary {
@@ -347,9 +678,11 @@ struct ContextManifestTelemetrySummary: Equatable {
             loadedSkillCount: resources.filter { $0.source == .skill && $0.state == .loaded }.count,
             indexedSkillCount: resources.filter { $0.source == .skill && $0.state == .indexed }.count,
             loadedCitationCount: resources.filter { $0.source == .citation && $0.state == .loaded }.count,
+            loadedSourceMaterialCount: resources.filter { $0.source == .sourceMaterial && $0.state == .loaded }.count,
             usedMemoryCount: resources.filter { $0.source == .memory && $0.used }.count,
             usedSkillCount: resources.filter { $0.source == .skill && $0.used }.count,
-            usedCitationCount: resources.filter { $0.source == .citation && $0.used }.count
+            usedCitationCount: resources.filter { $0.source == .citation && $0.used }.count,
+            usedSourceMaterialCount: resources.filter { $0.source == .sourceMaterial && $0.used }.count
         )
     }
 }
@@ -377,6 +710,8 @@ enum ContextManifestFactory {
     ) -> ContextManifestRecord {
         let usedSkillIds = toolLoadedSkillIds(from: agentTraceJson)
         let loadedPromptLayers = Set(plan.promptTrace.promptLayers)
+        let memoryUsageHints = Dictionary(grouping: plan.memoryUsageHints, by: \.referenceId)
+        let memoryProvenance = plan.memoryProvenance
         var resources: [ContextManifestResource] = []
         var seen = Set<String>()
 
@@ -399,7 +734,12 @@ enum ContextManifestFactory {
                         label: layer,
                         referenceId: sourceId.uuidString,
                         state: .loaded,
-                        used: false
+                        used: memoryWasUsed(
+                            referenceId: sourceId.uuidString,
+                            assistantContent: assistantContent,
+                            hintsByReferenceId: memoryUsageHints
+                        ),
+                        provenance: memoryProvenance[sourceId.uuidString]
                     ))
                 }
                 continue
@@ -409,7 +749,12 @@ enum ContextManifestFactory {
                 label: layer,
                 referenceId: layer,
                 state: .loaded,
-                used: false
+                used: memoryWasUsed(
+                    referenceId: layer,
+                    assistantContent: assistantContent,
+                    hintsByReferenceId: memoryUsageHints
+                ),
+                provenance: memoryProvenance[layer]
             ))
         }
 
@@ -425,6 +770,22 @@ enum ContextManifestFactory {
                     referenceId: citation.node.id.uuidString,
                     state: .loaded,
                     used: assistantContent.containsCaseFolded(citation.node.title)
+                ))
+            }
+        }
+
+        if loadedPromptLayers.contains("source_material") {
+            for (sourceIndex, material) in plan.sourceMaterials.enumerated() {
+                append(ContextManifestResource(
+                    source: .sourceMaterial,
+                    label: "source_material",
+                    referenceId: material.sourceNodeId.uuidString,
+                    state: .loaded,
+                    used: sourceMaterialWasUsed(
+                        material,
+                        sourceIndex: sourceIndex,
+                        assistantContent: assistantContent
+                    )
                 ))
             }
         }
@@ -471,6 +832,42 @@ enum ContextManifestFactory {
             return UUID(uuidString: skillId)
         })
     }
+
+    private static func memoryWasUsed(
+        referenceId: String,
+        assistantContent: String,
+        hintsByReferenceId: [String: [ContextManifestUsageHint]]
+    ) -> Bool {
+        guard let hints = hintsByReferenceId[referenceId] else { return false }
+        return hints
+            .flatMap(\.phrases)
+            .contains { assistantContent.containsCaseFolded($0) }
+    }
+
+    private static func sourceMaterialWasUsed(
+        _ material: SourceMaterialContext,
+        sourceIndex: Int,
+        assistantContent: String
+    ) -> Bool {
+        sourceMaterialIdentifiers(for: material, sourceIndex: sourceIndex)
+            .contains { assistantContent.containsCaseFolded($0) }
+    }
+
+    private static func sourceMaterialIdentifiers(
+        for material: SourceMaterialContext,
+        sourceIndex: Int
+    ) -> [String] {
+        var identifiers = [material.title, material.originalURL, material.originalFilename]
+            .compactMap { $0 }
+        let sourceNumber = sourceIndex + 1
+        identifiers.append("[S\(sourceNumber)]")
+        identifiers.append(contentsOf: material.chunks.map { "[S\(sourceNumber).\($0.ordinal + 1)]" })
+        if let originalURL = material.originalURL,
+           let host = URL(string: originalURL)?.host {
+            identifiers.append(host)
+        }
+        return identifiers
+    }
 }
 
 private extension Collection where Element == UUID {
@@ -496,6 +893,7 @@ final class GovernanceTelemetryStore {
     private static let recentTurnCognitionSnapshotLimit = 20
     private static let recentBehaviorEvalEventLimit = 100
     private static let recentContextManifestLimit = 100
+    private static let recentDelegationMetricEventLimit = 100
 
     private let defaults: UserDefaults
     private let nodeStore: NodeStore?
@@ -516,6 +914,7 @@ final class GovernanceTelemetryStore {
         static let recentTurnCognitionSnapshots = "nous.governance.recentTurnCognitionSnapshots"
         static let recentBehaviorEvalEvents = "nous.governance.recentBehaviorEvalEvents"
         static let recentContextManifests = "nous.governance.recentContextManifests"
+        static let recentDelegationMetricEvents = "nous.governance.recentDelegationMetricEvents"
 
         static func counter(_ counter: EvalCounter) -> String {
             "nous.governance.counter.\(counter.rawValue)"
@@ -617,6 +1016,9 @@ final class GovernanceTelemetryStore {
             defaults.set(data, forKey: Keys.lastTurnCognitionSnapshot)
         }
         recordRecentTurnCognitionSnapshot(snapshot)
+        if let event = DelegationMetricEvent(snapshot: snapshot) {
+            recordRecentDelegationMetricEvent(event)
+        }
         incrementIntegerKey(Keys.turnCognitionSnapshotCount)
         if snapshot.slowCognitionAttached {
             incrementIntegerKey(Keys.turnCognitionSlowAttachedCount)
@@ -677,6 +1079,15 @@ final class GovernanceTelemetryStore {
     func recentContextManifests(limit: Int) -> [ContextManifestRecord] {
         guard limit > 0 else { return [] }
         return Array(storedRecentContextManifests().prefix(limit))
+    }
+
+    var delegationMetricSummary: DelegationMetricSummary {
+        DelegationMetricSummary.summarize(events: storedRecentDelegationMetricEvents())
+    }
+
+    func recentDelegationMetricEvents(limit: Int) -> [DelegationMetricEvent] {
+        guard limit > 0 else { return [] }
+        return Array(storedRecentDelegationMetricEvents().prefix(limit))
     }
 
     func increment(_ counter: EvalCounter, by amount: Int = 1) {
@@ -800,6 +1211,38 @@ final class GovernanceTelemetryStore {
         return records
     }
 
+    private func recordRecentDelegationMetricEvent(_ event: DelegationMetricEvent) {
+        var events = storedRecentDelegationMetricEvents()
+        events.insert(event, at: 0)
+        if events.count > Self.recentDelegationMetricEventLimit {
+            events = Array(events.prefix(Self.recentDelegationMetricEventLimit))
+        }
+        storeRecentDelegationMetricEvents(events)
+    }
+
+    private func recordDelegationOutcome(_ event: BehaviorEvalEvent) {
+        var events = storedRecentDelegationMetricEvents()
+        guard let index = events.firstIndex(where: { $0.assistantMessageId == event.assistantMessageId }) else {
+            return
+        }
+        events[index] = events[index].recordingOutcome(event)
+        storeRecentDelegationMetricEvents(events)
+    }
+
+    private func storeRecentDelegationMetricEvents(_ events: [DelegationMetricEvent]) {
+        if let data = try? JSONEncoder().encode(events) {
+            defaults.set(data, forKey: Keys.recentDelegationMetricEvents)
+        }
+    }
+
+    private func storedRecentDelegationMetricEvents() -> [DelegationMetricEvent] {
+        guard let data = defaults.data(forKey: Keys.recentDelegationMetricEvents),
+              let events = try? JSONDecoder().decode([DelegationMetricEvent].self, from: data) else {
+            return []
+        }
+        return events
+    }
+
     func recordMemoryStorageSuppressed(reason: MemorySuppressionReason = .unspecified) {
         defaults.set(defaults.integer(forKey: Keys.memoryStorageSuppressedCount) + 1, forKey: Keys.memoryStorageSuppressedCount)
         let reasonKey = Keys.memoryStorageSuppressedReasonCount(reason)
@@ -906,5 +1349,6 @@ extension GovernanceTelemetryStore: ConversationRecoveryTelemetryRecording {
 extension GovernanceTelemetryStore: BehaviorEvalTelemetryRecording {
     func recordBehaviorEvalEvent(_ event: BehaviorEvalEvent) {
         recordRecentBehaviorEvalEvent(event)
+        recordDelegationOutcome(event)
     }
 }

@@ -208,7 +208,10 @@ final class RuntimeHarnessService: RuntimeHarnessLoading {
             agentToolReliability: agentToolReliabilitySummary(),
             behaviorEval: telemetry.behaviorEvalSummary,
             contextManifest: telemetry.contextManifestSummary,
-            modelHarnessProfiles: ModelHarnessProfileCatalog.coverageSummary
+            delegationMetrics: telemetry.delegationMetricSummary,
+            modelHarnessProfiles: ModelHarnessProfileCatalog.coverageSummary,
+            visibleResponseLanguageTarget: telemetry.lastPromptTrace?.visibleResponseLanguageTarget ?? .unspecified,
+            visibleResponseLanguageSource: telemetry.lastPromptTrace?.visibleResponseLanguageSource ?? .none
         )
     }
 

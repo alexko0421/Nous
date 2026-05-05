@@ -76,7 +76,11 @@ final class TurnPlanner {
             attachments: request.attachments
         )
         let attachmentNames = request.attachments.map(\.name)
-        let retrievalQuery = ([promptQuery] + attachmentNames).joined(separator: "\n")
+        let sourceRetrievalText = request.sourceMaterials.flatMap { material in
+            [material.title, material.originalURL, material.originalFilename].compactMap { $0 } +
+                material.chunks.prefix(3).map(\.text)
+        }
+        let retrievalQuery = ([promptQuery] + attachmentNames + sourceRetrievalText).joined(separator: "\n")
 
         let explicitQuickActionMode = request.snapshot.activeQuickActionMode
         let inferredQuickActionMode = explicitQuickActionMode == nil
@@ -104,6 +108,7 @@ final class TurnPlanner {
             promptQuery: promptQuery,
             node: prepared.node,
             policy: policy,
+            citationSourceMaterials: request.sourceMaterials,
             includeGraphPromptRecall: planningQuickActionMode != nil,
             now: request.now
         )
@@ -272,6 +277,8 @@ final class TurnPlanner {
             citations: citations,
             projectGoal: projectGoal,
             attachments: request.attachments,
+            sourceMaterials: request.sourceMaterials,
+            turnSteward: stewardship.trace,
             activeQuickActionMode: planningQuickActionMode,
             loadedSkills: quickActionResolution.loadedSkills,
             matchedSkills: quickActionResolution.matchedSkills,
@@ -288,13 +295,17 @@ final class TurnPlanner {
             essentialStory: essentialStory,
             userModel: userModel,
             memoryEvidence: memoryEvidence,
+            memoryGraphRecall: promptMemoryGraphRecall,
             projectMemory: projectMemory,
             conversationMemory: conversationMemory,
             recentConversations: recentConversations,
             citations: citations,
-            projectGoal: projectGoal
+            projectGoal: projectGoal,
+            currentUserInput: promptQuery,
+            slowCognitionArtifacts: slowCognitionArtifacts,
+            memoryProvenance: memoryContext.memoryProvenance
         )
-        let promptTrace = PromptContextAssembler.governanceTrace(
+            let promptTrace = PromptContextAssembler.governanceTrace(
             chatMode: effectiveMode,
             currentUserInput: promptQuery,
             operatingContext: memoryContext.operatingContext,
@@ -309,6 +320,7 @@ final class TurnPlanner {
             citations: citations,
             projectGoal: projectGoal,
             attachments: request.attachments,
+            sourceMaterials: request.sourceMaterials,
             activeQuickActionMode: planningQuickActionMode,
             quickActionAddendum: quickActionContext,
             allowInteractiveClarification: shouldAllowInteractiveClarification,
@@ -344,6 +356,7 @@ final class TurnPlanner {
                 turnId: request.turnId,
                 prepared: prepared,
                 citations: citations,
+                sourceMaterials: request.sourceMaterials,
                 promptTrace: promptTrace,
                 effectiveMode: effectiveMode,
                 nextQuickActionModeIfCompleted: explicitQuickActionMode,
@@ -363,7 +376,9 @@ final class TurnPlanner {
                 indexedSkillIds: indexedSkillIds,
                 loadedSkillIds: Set(quickActionResolution.loadedSkills.map(\.skillID)),
                 memoryEvidenceSourceIds: promptResourceIds.memoryEvidenceSourceIds,
-                loadedCitationIds: promptResourceIds.citationIds
+                loadedCitationIds: promptResourceIds.citationIds,
+                memoryUsageHints: promptResourceIds.memoryUsageHints,
+                memoryProvenance: promptResourceIds.memoryProvenance
             )
         }
 
@@ -371,6 +386,7 @@ final class TurnPlanner {
             turnId: request.turnId,
             prepared: prepared,
             citations: citations,
+            sourceMaterials: request.sourceMaterials,
             promptTrace: promptTrace,
             effectiveMode: effectiveMode,
             nextQuickActionModeIfCompleted: explicitQuickActionMode,
@@ -390,7 +406,9 @@ final class TurnPlanner {
             indexedSkillIds: indexedSkillIds,
             loadedSkillIds: Set(quickActionResolution.loadedSkills.map(\.skillID)),
             memoryEvidenceSourceIds: promptResourceIds.memoryEvidenceSourceIds,
-            loadedCitationIds: promptResourceIds.citationIds
+            loadedCitationIds: promptResourceIds.citationIds,
+            memoryUsageHints: promptResourceIds.memoryUsageHints,
+            memoryProvenance: promptResourceIds.memoryProvenance
         )
     }
 
@@ -469,15 +487,18 @@ final class TurnPlanner {
 
     private static func configuredJudgeThinkingBudgetOnly(_ service: any LLMService) -> any LLMService {
         if var claude = service as? ClaudeLLMService {
-            claude.thinkingBudgetTokens = claude.thinkingBudgetTokens ?? 1024
+            claude.thinkingBudgetTokens = claude.thinkingBudgetTokens
+                ?? ModelHarnessProfileCatalog.thinkingBudgetTokens(for: .claude)
             return claude
         }
         if var openRouter = service as? OpenRouterLLMService {
-            openRouter.reasoningBudgetTokens = openRouter.reasoningBudgetTokens ?? 1024
+            openRouter.reasoningBudgetTokens = openRouter.reasoningBudgetTokens
+                ?? ModelHarnessProfileCatalog.thinkingBudgetTokens(for: .openrouter)
             return openRouter
         }
         if var gemini = service as? GeminiLLMService {
-            gemini.thinkingBudgetTokens = gemini.thinkingBudgetTokens ?? 1024
+            gemini.thinkingBudgetTokens = gemini.thinkingBudgetTokens
+                ?? ModelHarnessProfileCatalog.thinkingBudgetTokens(for: .gemini)
             return gemini
         }
         return service
@@ -495,6 +516,8 @@ final class TurnPlanner {
         switch (stewardship.route, stewardship.responseShape) {
         case (.direction, _), (.brainstorm, _):
             return 1
+        case (.sourceAnalysis, _):
+            return 0
         case (.plan, .askOneQuestion):
             return 1
         case (.plan, _):

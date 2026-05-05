@@ -14,6 +14,14 @@ final class MemoryCurator {
             return rejected("hard opt-out", suppressionReason: .hardOptOut)
         }
 
+        if Self.looksLowSignalProbe(normalized) {
+            return ephemeral("low-signal probe without new durable memory")
+        }
+
+        if Self.looksProbeOnlyQuestion(normalized) {
+            return ephemeral("probe-only question without new durable memory")
+        }
+
         if SafetyGuardrails.requiresConsentForSensitiveMemory(boundaryLines: boundaryLines),
            SafetyGuardrails.containsSensitiveMemory(normalized) {
             return consentRequired("sensitive memory needs consent")
@@ -84,6 +92,90 @@ final class MemoryCurator {
             "暫時"
         ]
         return phrases.contains { text.contains($0) }
+    }
+
+    private static func looksLowSignalProbe(_ text: String) -> Bool {
+        guard !hasDurableSignal(text) else { return false }
+        let phrases = [
+            "context unclear",
+            "final probe",
+            "recall probe",
+            "qa probe",
+            "memory probe",
+            "probe:",
+            "测试 probe",
+            "測試 probe"
+        ]
+        return phrases.contains { text.contains($0) }
+    }
+
+    private static func looksProbeOnlyQuestion(_ text: String) -> Bool {
+        guard isQuestionLike(text) else { return false }
+
+        let probePhrases = [
+            "基于你知道",
+            "基於你知道",
+            "based on what you know",
+            "你记得",
+            "你記得",
+            "do you remember",
+            "刚才",
+            "剛才",
+            "之前",
+            "previously",
+            "can you recall",
+            "你有没有",
+            "你有沒有",
+            "有没有把",
+            "有沒有把",
+            "我到底",
+            "什么时候我应该",
+            "什麼時候我應該",
+            "什么时候我應該",
+            "你觉得",
+            "你覺得",
+            "这两个想法",
+            "這兩個想法",
+            "这个 project",
+            "這個 project",
+            "这个项目",
+            "這個項目",
+            "我现在需要你",
+            "我現在需要你",
+            "你应该用什么语气",
+            "你應該用什麼語氣",
+            "如果我之前"
+        ]
+        return probePhrases.contains { text.contains($0) }
+    }
+
+    private static func hasDurableSignal(_ text: String) -> Bool {
+        let phrases = [
+            "remember that",
+            "记住",
+            "記住",
+            "from now on",
+            "going forward",
+            "以后",
+            "以後",
+            "prefer",
+            "preference",
+            "decision",
+            "decided",
+            "决定",
+            "決定",
+            "correction"
+        ]
+        return phrases.contains { text.contains($0) }
+    }
+
+    private static func isQuestionLike(_ text: String) -> Bool {
+        text.contains("?") ||
+            text.contains("？") ||
+            text.hasSuffix("吗") ||
+            text.hasSuffix("嗎") ||
+            text.hasSuffix("咩") ||
+            text.hasSuffix("么")
     }
 
     private static func hasStableHorizon(_ text: String) -> Bool {

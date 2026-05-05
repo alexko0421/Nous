@@ -41,6 +41,32 @@ final class MemoryCuratorTests: XCTestCase {
         XCTAssertTrue(assessment.reason.contains("temporary"))
     }
 
+    func testContextUnclearProbeDoesNotPersist() {
+        let curator = MemoryCurator()
+
+        let assessment = curator.assess(
+            latestUserText: "context unclear",
+            boundaryLines: []
+        )
+
+        XCTAssertEqual(assessment.lifecycle, .ephemeral)
+        XCTAssertEqual(assessment.persistenceDecision, .suppress(.unspecified))
+        XCTAssertTrue(assessment.reason.contains("low-signal"))
+    }
+
+    func testFinalRecallProbeDoesNotPersist() {
+        let curator = MemoryCurator()
+
+        let assessment = curator.assess(
+            latestUserText: "final probe: can you recall what this thread established?",
+            boundaryLines: []
+        )
+
+        XCTAssertEqual(assessment.lifecycle, .ephemeral)
+        XCTAssertEqual(assessment.persistenceDecision, .suppress(.unspecified))
+        XCTAssertTrue(assessment.reason.contains("probe"))
+    }
+
     func testStablePreferencePersistsAsPreference() {
         let curator = MemoryCurator()
 

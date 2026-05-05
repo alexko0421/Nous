@@ -216,10 +216,54 @@ final class CognitionReviewer: CognitionReviewing {
         "stop avoiding",
         "you are avoiding"
     ]
+    private static let memorySaveVerbs = [
+        "saved",
+        "save",
+        "stored",
+        "store",
+        "recorded",
+        "record",
+        "added",
+        "add",
+        "remembered",
+        "remember"
+    ]
+    private static let personalMemorySavePhrases = [
+        "saved this to your memory",
+        "saved it to your memory",
+        "stored this in your memory",
+        "stored it in your memory",
+        "recorded this as your memory",
+        "added this to your memory",
+        "i will remember this about you",
+        "i've remembered this about you",
+        "我已经记住",
+        "我已經記住",
+        "我帮你记住",
+        "我幫你記住",
+        "存入你嘅memory",
+        "保存到你嘅memory"
+    ]
+    private static let noStrongSourceConnectionPhrases = [
+        "no strong existing nous connection",
+        "no strong existing connection",
+        "no clear existing nous connection",
+        "no clear existing connection",
+        "no obvious existing nous connection",
+        "no obvious existing connection",
+        "未有强连接",
+        "未有強連接",
+        "冇强连接",
+        "冇強連接",
+        "没有明显连接",
+        "沒有明顯連接"
+    ]
     private static let excerptBoundaryCharacters: Set<Character> = [".", "!", "?", "。", "！", "？", "\n"]
 
     func review(plan: TurnPlan, executionResult: TurnExecutionResult) throws -> CognitionArtifact? {
-        guard isReviewableHighStakesTurn(plan) else {
+        let isHighStakesTurn = isReviewableHighStakesTurn(plan)
+        let isSourceAnalysisTurn = isSourceAnalysisTurn(plan)
+        guard isHighStakesTurn || isSourceAnalysisTurn else {
             return nil
         }
 
@@ -232,9 +276,13 @@ final class CognitionReviewer: CognitionReviewing {
             executionResult: executionResult,
             unsupportedMemoryExcerpt: unsupportedMemoryExcerpt
         )
+        guard isHighStakesTurn || !riskFlags.isEmpty else {
+            return nil
+        }
+
         let artifact = CognitionArtifact(
             organ: .reviewer,
-            title: "Silent reviewer audit",
+            title: isSourceAnalysisTurn ? "Source grounding audit" : "Silent reviewer audit",
             summary: summary(for: riskFlags, hasMemorySignal: plan.promptTrace.hasMemorySignal),
             confidence: riskFlags.isEmpty ? 0.74 : 0.62,
             jurisdiction: .turnContext,
@@ -274,6 +322,13 @@ final class CognitionReviewer: CognitionReviewing {
         return false
     }
 
+    private func isSourceAnalysisTurn(_ plan: TurnPlan) -> Bool {
+        if plan.promptTrace.turnSteward?.route == .sourceAnalysis {
+            return true
+        }
+        return !plan.sourceMaterials.isEmpty
+    }
+
     private func evidenceRefs(
         for plan: TurnPlan,
         assistantRiskExcerpt: String?
@@ -291,6 +346,14 @@ final class CognitionReviewer: CognitionReviewing {
                 source: .node,
                 id: citation.node.id.uuidString,
                 quote: snippet(citation.surfacedSnippet)
+            )
+        })
+
+        refs.append(contentsOf: plan.sourceMaterials.prefix(4).map { material in
+            CognitionEvidenceRef(
+                source: .node,
+                id: material.sourceNodeId.uuidString,
+                quote: snippet([material.title, material.displaySource].joined(separator: " | "))
             )
         })
 
@@ -353,6 +416,18 @@ final class CognitionReviewer: CognitionReviewing {
             flags.append("safety_escalation")
         }
 
+        if isSourceAnalysisTurn(plan) {
+            if hasMissingSourceReference(plan: plan, assistant: executionResult.assistantContent) {
+                flags.append("source_reference_missing")
+            }
+            if hasMissingSourceConnectionGrounding(plan: plan, assistant: executionResult.assistantContent) {
+                flags.append("source_connection_grounding_missing")
+            }
+            if claimsSavedPersonalMemory(executionResult.assistantContent) {
+                flags.append("source_memory_boundary")
+            }
+        }
+
         return Array(Set(flags)).sorted()
     }
 
@@ -404,6 +479,66 @@ final class CognitionReviewer: CognitionReviewing {
         return acuteSafetyDetected &&
             containsAny(Self.acuteSafetyPhrases, in: user) &&
             !containsAny(Self.safetyEscalationPhrases, in: assistant)
+    }
+
+    private func hasMissingSourceReference(plan: TurnPlan, assistant: String) -> Bool {
+        let identifiers = plan.sourceMaterials
+            .enumerated()
+            .flatMap { sourceIndex, material in
+                sourceIdentifiers(for: material, sourceIndex: sourceIndex)
+            }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.count >= 4 }
+        guard !identifiers.isEmpty else { return false }
+        return !containsAny(identifiers, in: assistant)
+    }
+
+    private func sourceIdentifiers(for material: SourceMaterialContext, sourceIndex: Int) -> [String] {
+        var identifiers = [material.title, material.originalURL, material.originalFilename]
+            .compactMap { $0 }
+        let sourceNumber = sourceIndex + 1
+        identifiers.append("[S\(sourceNumber)]")
+        identifiers.append(contentsOf: material.chunks.map { "[S\(sourceNumber).\($0.ordinal + 1)]" })
+        if let originalURL = material.originalURL,
+           let host = URL(string: originalURL)?.host {
+            identifiers.append(host)
+        }
+        return identifiers
+    }
+
+    private func hasMissingSourceConnectionGrounding(plan: TurnPlan, assistant: String) -> Bool {
+        guard !plan.sourceMaterials.isEmpty, !plan.citations.isEmpty else { return false }
+        if containsAny(Self.noStrongSourceConnectionPhrases, in: assistant) {
+            return false
+        }
+
+        let citationTitles = plan.citations
+            .map { $0.node.title.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.count >= 4 }
+        guard !citationTitles.isEmpty else { return false }
+
+        return !containsAny(citationTitles, in: assistant)
+    }
+
+    private func claimsSavedPersonalMemory(_ assistant: String) -> Bool {
+        if containsAny(Self.personalMemorySavePhrases, in: assistant) {
+            return true
+        }
+
+        let lowercased = assistant.lowercased()
+        let referencesMemory = lowercased.contains("memory") ||
+            lowercased.contains("long-term") ||
+            lowercased.contains("personal memory")
+        guard referencesMemory else { return false }
+
+        let deniesSave = lowercased.contains("not save") ||
+            lowercased.contains("won't save") ||
+            lowercased.contains("will not save") ||
+            lowercased.contains("don't save") ||
+            lowercased.contains("do not save")
+        guard !deniesSave else { return false }
+
+        return containsAny(Self.memorySaveVerbs, in: assistant)
     }
 
     private func memoryReferenceExcerpt(in text: String) -> String? {

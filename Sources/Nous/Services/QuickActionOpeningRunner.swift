@@ -221,11 +221,13 @@ final class QuickActionOpeningRunner {
             essentialStory: memoryContext.essentialStory,
             userModel: memoryContext.userModel,
             memoryEvidence: memoryContext.memoryEvidence,
+            memoryGraphRecall: memoryContext.memoryGraphRecall,
             projectMemory: memoryContext.projectMemory,
             conversationMemory: memoryContext.conversationMemory,
             recentConversations: memoryContext.recentConversations,
             citations: memoryContext.citations,
-            projectGoal: memoryContext.projectGoal
+            projectGoal: memoryContext.projectGoal,
+            memoryProvenance: memoryContext.memoryProvenance
         )
         let promptTrace = PromptContextAssembler.governanceTrace(
             chatMode: .companion,
@@ -268,7 +270,9 @@ final class QuickActionOpeningRunner {
             provider: provider,
             loadedSkillIds: Set(quickActionResolution.loadedSkills.map(\.skillID)),
             memoryEvidenceSourceIds: promptResourceIds.memoryEvidenceSourceIds,
-            loadedCitationIds: promptResourceIds.citationIds
+            loadedCitationIds: promptResourceIds.citationIds,
+            memoryUsageHints: promptResourceIds.memoryUsageHints,
+            memoryProvenance: promptResourceIds.memoryProvenance
         )
     }
 

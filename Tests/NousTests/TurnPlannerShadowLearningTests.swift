@@ -112,6 +112,24 @@ final class TurnPlannerShadowLearningTests: XCTestCase {
         XCTAssertTrue(plan.turnSlice.volatile.contains("SLOW COGNITION SIGNAL:"))
         XCTAssertTrue(plan.turnSlice.volatile.contains(artifact.summary))
         XCTAssertTrue(plan.promptTrace.promptLayers.contains("slow_cognition"))
+
+        let manifest = ContextManifestFactory.make(
+            plan: plan,
+            assistantMessageId: UUID(),
+            assistantContent: "That points back to the long-term mind signal: \(artifact.summary)",
+            agentTraceJson: nil
+        )
+        XCTAssertTrue(manifest.resources.contains(ContextManifestResource(
+            source: .memory,
+            label: "slow_cognition",
+            referenceId: "slow_cognition",
+            state: .loaded,
+            used: true
+        )))
+
+        let encodedManifest = String(data: try JSONEncoder().encode(manifest), encoding: .utf8) ?? ""
+        XCTAssertFalse(encodedManifest.contains(artifact.summary))
+        XCTAssertFalse(encodedManifest.contains("long-term product direction"))
     }
 
     func testPlannerSkipsSlowCognitionArtifactsWhenMemoryPolicyIsLean() async throws {
@@ -232,6 +250,64 @@ final class TurnPlannerShadowLearningTests: XCTestCase {
         XCTAssertEqual(configuredThinkingBudget, 1024)
         XCTAssertNil(configuredThinkingHandler)
         XCTAssertEqual(judge.callCount, 1)
+    }
+
+    func testGeminiJudgeThinkingBudgetMatchesModelHarnessProfile() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let judge = CountingJudge()
+        var hiddenThinkingBudget: Int?
+        var visibleThinkingBudget: Int?
+        let expectedBudget = ModelHarnessProfileCatalog.profile(for: .gemini).thinkingBudgetTokens
+
+        let hiddenPlanner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: {
+                GeminiLLMService(apiKey: "test-key")
+            },
+            provocationJudgeFactory: { llm in
+                hiddenThinkingBudget = (llm as? GeminiLLMService)?.thinkingBudgetTokens
+                return judge
+            }
+        )
+        let node = NousNode(type: .conversation, title: "Gemini hidden thinking")
+        let message = Message(nodeId: node.id, role: .user, content: "帮我判断下一步应该点做")
+        let prepared = PreparedConversationTurn(node: node, userMessage: message, messagesAfterUserAppend: [message])
+        let request = self.request(input: message.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .surfaceTension,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "test",
+            responseStance: .softAnalysis,
+            judgePolicy: .visibleTension,
+            routerMode: .active,
+            routerSource: .deterministic
+        )
+
+        _ = try await hiddenPlanner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        let visiblePlanner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: {
+                GeminiLLMService(apiKey: "test-key")
+            },
+            provocationJudgeFactory: { llm in
+                visibleThinkingBudget = (llm as? GeminiLLMService)?.thinkingBudgetTokens
+                return judge
+            }
+        )
+
+        _ = try await visiblePlanner.plan(
+            from: prepared,
+            request: request,
+            stewardship: stewardship,
+            judgeThinkingHandler: { _ in }
+        )
+
+        XCTAssertEqual(hiddenThinkingBudget, expectedBudget)
+        XCTAssertEqual(visibleThinkingBudget, expectedBudget)
     }
 
     func testPlanRouteUsesSingleTurnGuidanceBlockForResponseShape() async throws {

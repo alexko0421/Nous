@@ -24,6 +24,7 @@ struct ChatArea: View {
     @State private var activeDownvotePopoverMessageId: UUID?
     @State private var downvoteFeedbackReason: JudgeFeedbackReason?
     @State private var downvoteFeedbackNote: String = ""
+    @State private var temporaryBranch = TemporaryBranchViewModel()
     @FocusState private var isComposerFocused: Bool
     @Namespace private var composerPrimaryActionNamespace
 
@@ -94,6 +95,11 @@ struct ChatArea: View {
     }
 
     var body: some View {
+        chatSurface
+        .animation(.spring(response: 0.34, dampingFraction: 0.86), value: temporaryBranch.isPresented)
+    }
+
+    private var chatSurface: some View {
         VStack(spacing: 0) {
             if isWelcomeState {
                 WelcomeView(
@@ -121,79 +127,108 @@ struct ChatArea: View {
                         ScrollView {
                             VStack(spacing: 28) {
                                 ForEach(vm.messages) { msg in
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        MessageBubble(
-                                            text: msg.content,
-                                            thinkingContent: msg.thinkingContent,
-                                            thinkingStartedAt: nil,
-                                            agentTraceRecords: msg.decodedAgentTraceRecords,
-                                            isThinkingStreaming: false,
-                                            isAgentTraceStreaming: false,
-                                            isUser: msg.role == .user,
-                                            source: msg.source,
-                                            timestamp: msg.timestamp
-                                        )
-                                        if shouldShowRelevantChats(after: msg) {
-                                            RAGCitationView(
-                                                citations: vm.citations,
-                                                isExpanded: $isRelevantChatsExpanded,
-                                                onOpenSource: onNavigateToNode
+                                    VStack(alignment: .leading, spacing: 10) {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            MessageBubble(
+                                                text: msg.content,
+                                                thinkingContent: msg.thinkingContent,
+                                                thinkingStartedAt: nil,
+                                                agentTraceRecords: msg.decodedAgentTraceRecords,
+                                                isThinkingStreaming: false,
+                                                isAgentTraceStreaming: false,
+                                                isUser: msg.role == .user,
+                                                source: msg.source,
+                                                timestamp: msg.timestamp,
+                                                onOpenBranch: { openTemporaryBranch(from: msg) }
                                             )
-                                            .padding(.top, 8)
-                                        }
-                                        if msg.role == .assistant {
-                                            HStack(spacing: 4) {
-                                                if let eventId = vm.judgeEventId(forMessageId: msg.id) {
-                                                    let feedback = vm.feedback(forMessageId: msg.id)
+                                            if shouldShowRelevantChats(after: msg) {
+                                                RAGCitationView(
+                                                    citations: vm.citations,
+                                                    isExpanded: $isRelevantChatsExpanded,
+                                                    onOpenSource: onNavigateToNode
+                                                )
+                                                .padding(.top, 8)
+                                            }
+                                            if msg.role == .assistant {
+                                                HStack(spacing: 4) {
+                                                    if let eventId = vm.judgeEventId(forMessageId: msg.id) {
+                                                        let feedback = vm.feedback(forMessageId: msg.id)
 
-                                                    AssistantFeedbackButton(
-                                                        symbolName: feedback == .up ? "hand.thumbsup.fill" : "hand.thumbsup",
-                                                        isSelected: feedback == .up,
-                                                        helpText: feedback == .up
-                                                            ? "Clear useful feedback (event \(eventId.uuidString.prefix(8)))"
-                                                            : "Mark this reply as useful (event \(eventId.uuidString.prefix(8)))"
-                                                    ) {
-                                                        handleThumbsUpTap(for: msg.id)
-                                                    }
+                                                        AssistantFeedbackButton(
+                                                            symbolName: feedback == .up ? "hand.thumbsup.fill" : "hand.thumbsup",
+                                                            isSelected: feedback == .up,
+                                                            helpText: feedback == .up
+                                                                ? "Clear useful feedback (event \(eventId.uuidString.prefix(8)))"
+                                                                : "Mark this reply as useful (event \(eventId.uuidString.prefix(8)))"
+                                                        ) {
+                                                            handleThumbsUpTap(for: msg.id)
+                                                        }
 
-                                                    AssistantFeedbackButton(
-                                                        symbolName: feedback == .down ? "hand.thumbsdown.fill" : "hand.thumbsdown",
-                                                        isSelected: feedback == .down,
-                                                        helpText: feedback == .down
-                                                            ? "Clear not useful feedback (event \(eventId.uuidString.prefix(8)))"
-                                                            : "Mark this reply as not useful (event \(eventId.uuidString.prefix(8)))"
-                                                    ) {
-                                                        handleThumbsDownTap(for: msg.id)
-                                                    }
-                                                    .popover(
-                                                        isPresented: isDownvotePopoverPresented(for: msg.id),
-                                                        arrowEdge: .bottom
-                                                    ) {
-                                                        DownvoteFeedbackPopover(
-                                                            selectedReason: $downvoteFeedbackReason,
-                                                            note: $downvoteFeedbackNote,
-                                                            onSave: { saveDownvoteFeedback(for: msg.id) },
-                                                            onSkip: closeDownvotePopover
-                                                        )
-                                                    }
-                                                }
-
-                                                if vm.canRegenerateAssistantMessage(msg.id) {
-                                                    AssistantFeedbackButton(
-                                                        symbolName: "arrow.clockwise",
-                                                        isSelected: false,
-                                                        helpText: "Regenerate response"
-                                                    ) {
-                                                        Task {
-                                                            await vm.regenerateLatestAssistant()
+                                                        AssistantFeedbackButton(
+                                                            symbolName: feedback == .down ? "hand.thumbsdown.fill" : "hand.thumbsdown",
+                                                            isSelected: feedback == .down,
+                                                            helpText: feedback == .down
+                                                                ? "Clear not useful feedback (event \(eventId.uuidString.prefix(8)))"
+                                                                : "Mark this reply as not useful (event \(eventId.uuidString.prefix(8)))"
+                                                        ) {
+                                                            handleThumbsDownTap(for: msg.id)
+                                                        }
+                                                        .popover(
+                                                            isPresented: isDownvotePopoverPresented(for: msg.id),
+                                                            arrowEdge: .bottom
+                                                        ) {
+                                                            DownvoteFeedbackPopover(
+                                                                selectedReason: $downvoteFeedbackReason,
+                                                                note: $downvoteFeedbackNote,
+                                                                onSave: { saveDownvoteFeedback(for: msg.id) },
+                                                                onSkip: closeDownvotePopover
+                                                            )
                                                         }
                                                     }
-                                                }
 
-                                                CopyButton(text: msg.content)
+                                                    if vm.canRegenerateAssistantMessage(msg.id) {
+                                                        AssistantFeedbackButton(
+                                                            symbolName: "arrow.clockwise",
+                                                            isSelected: false,
+                                                            helpText: "Regenerate response"
+                                                        ) {
+                                                            Task {
+                                                                await vm.regenerateLatestAssistant()
+                                                            }
+                                                        }
+                                                    }
+
+                                                    CopyButton(text: msg.content)
+                                                }
+                                                .font(.footnote)
+                                                .foregroundStyle(AppColor.colaDarkText.opacity(0.5))
                                             }
-                                            .font(.footnote)
-                                            .foregroundStyle(AppColor.colaDarkText.opacity(0.5))
+                                        }
+                                        .blur(radius: branchFocusBlurRadius(for: msg))
+                                        .opacity(branchFocusOpacity(for: msg))
+                                        .allowsHitTesting(!temporaryBranch.isPresented || isTemporaryBranchSource(msg))
+
+                                        if isTemporaryBranchSource(msg) {
+                                            TemporaryBranchTranscript(
+                                                branch: temporaryBranch,
+                                                onRegenerate: regenerateTemporaryBranchAssistant
+                                            )
+                                            .transition(.opacity.combined(with: .move(edge: .top)))
+                                            .zIndex(1)
+                                        } else if !temporaryBranch.isPresented,
+                                                  let record = temporaryBranch.record(for: msg.id) {
+                                            TemporaryBranchRecordMarker(
+                                                record: record,
+                                                action: { openTemporaryBranch(from: msg) },
+                                                onMemoryCandidateAction: { candidateId, action in
+                                                    handleTemporaryBranchMemoryCandidate(
+                                                        candidateId,
+                                                        in: record,
+                                                        action: action
+                                                    )
+                                                }
+                                            )
+                                            .transition(.opacity.combined(with: .move(edge: .top)))
                                         }
                                     }
                                 }
@@ -206,6 +241,8 @@ struct ChatArea: View {
                                         )
                                         Spacer(minLength: 0)
                                     }
+                                    .blur(radius: branchBackgroundBlurRadius)
+                                    .opacity(branchBackgroundOpacity)
                                 }
                                 if streamingPresentation.showsPendingAgentTrace {
                                     HStack {
@@ -215,6 +252,8 @@ struct ChatArea: View {
                                         )
                                         Spacer(minLength: 0)
                                     }
+                                    .blur(radius: branchBackgroundBlurRadius)
+                                    .opacity(branchBackgroundOpacity)
                                 }
                                 if streamingPresentation.showsAssistantDraft {
                                     VStack(alignment: .leading, spacing: 4) {
@@ -227,7 +266,8 @@ struct ChatArea: View {
                                             isAgentTraceStreaming: streamingPresentation.isDraftAgentTraceStreaming,
                                             isUser: false,
                                             source: .typed,
-                                            timestamp: Date()
+                                            timestamp: Date(),
+                                            onOpenBranch: nil
                                         )
                                         if !vm.citations.isEmpty {
                                             RAGCitationView(
@@ -238,6 +278,8 @@ struct ChatArea: View {
                                             .padding(.top, 4)
                                         }
                                     }
+                                    .blur(radius: branchBackgroundBlurRadius)
+                                    .opacity(branchBackgroundOpacity)
                                 }
                                 Color.clear
                                     .frame(height: floatingComposerHeight + bottomVisibleSpacing)
@@ -342,77 +384,64 @@ struct ChatArea: View {
                     )
                     .allowsHitTesting(voiceController.pendingAction != nil || voiceController.summaryPreview != nil)
                     .readHeight { floatingHeaderHeight = $0 }
+                    .blur(radius: branchBackgroundBlurRadius)
+                    .opacity(branchBackgroundOpacity)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
                     // Floating Input
                     VStack(alignment: .leading, spacing: 10) {
-                        if let clarificationCard = activeClarificationCard {
-                            ClarificationCardView(card: clarificationCard) { option in
-                                sendClarificationOption(option)
+                        if temporaryBranch.isPresented {
+                            temporaryBranchBottomRail
+                        } else {
+                            if let clarificationCard = activeClarificationCard {
+                                ClarificationCardView(card: clarificationCard) { option in
+                                    sendClarificationOption(option)
+                                }
                             }
-                        }
 
-                        if !attachments.isEmpty {
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 8) {
-                                    ForEach(attachments) { attachment in
-                                        AttachmentChip(attachment: attachment) {
-                                            removeAttachment(attachment.id)
+                            if !attachments.isEmpty {
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 8) {
+                                        ForEach(attachments) { attachment in
+                                            AttachmentChip(attachment: attachment) {
+                                                removeAttachment(attachment.id)
+                                            }
                                         }
                                     }
                                 }
                             }
-                        }
 
-                        HStack(spacing: 12) {
-                                Button(action: {
-                                    if voiceController.isActive {
-                                        onToggleVoiceMode()
-                                    } else {
-                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                                            isActionMenuExpanded.toggle()
+                            HStack(spacing: 12) {
+                                ComposerLeadingActionButton(
+                                    systemImage: voiceController.isActive ? "mic.fill" : (isActionMenuExpanded ? "xmark" : "plus"),
+                                    isMenuExpanded: isActionMenuExpanded,
+                                    isVoiceActive: voiceController.isActive,
+                                    size: 36,
+                                    cornerRadius: 18,
+                                    action: {
+                                        if voiceController.isActive {
+                                            onToggleVoiceMode()
+                                        } else {
+                                            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                                isActionMenuExpanded.toggle()
+                                            }
                                         }
                                     }
-                                }) {
-                                    NativeGlassPanel(
-                                        cornerRadius: 18,
-                                        tintColor: voiceController.isActive
-                                            ? NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.22)
-                                            : AppColor.controlGlassTint
-                                    ) { EmptyView() }
-                                        .frame(width: 36, height: 36)
-                                        .overlay(
-                                            Image(systemName: voiceController.isActive ? "mic.fill" : (isActionMenuExpanded ? "xmark" : "plus"))
-                                                .font(.system(size: 13, weight: .semibold))
-                                                .foregroundColor(voiceController.isActive ? AppColor.colaOrange : AppColor.secondaryText)
-                                                .rotationEffect(.degrees(isActionMenuExpanded && !voiceController.isActive ? 90 : 0))
-                                        )
-                                        .overlay(
-                                            Circle()
-                                                .stroke(AppColor.panelStroke, lineWidth: 1)
-                                        )
-                                }
-                                .buttonStyle(.plain)
+                                )
                                 .help(voiceController.isActive ? "Stop Voice Mode" : "Actions")
 
-                                ZStack(alignment: .leading) {
-                                    RotatingComposerPromptLabel(
-                                        inputText: vm.inputText,
-                                        isFocused: isComposerFocused,
-                                        horizontalPadding: 18
-                                    )
-
+                                ZStack(alignment: .topLeading) {
                                     TextField("", text: $vm.inputText, axis: .vertical)
                                         .focused($isComposerFocused)
                                         .textFieldStyle(.plain)
                                         .font(.system(size: 13, weight: .medium, design: .rounded))
                                         .foregroundColor(AppColor.colaDarkText)
-                                        .lineLimit(1...6)
+                                        .lineLimit(1...ComposerTextInputMetrics.maxVisibleLines)
+                                        .frame(maxWidth: .infinity, minHeight: ComposerTextInputMetrics.minimumTextHeight, alignment: .topLeading)
                                         .fixedSize(horizontal: false, vertical: true)
                                         .padding(.leading, 18)
                                         .padding(.trailing, 18)
-                                        .padding(.vertical, 10)
-                                        .frame(minHeight: 36)
+                                        .padding(.vertical, ComposerTextInputMetrics.verticalPadding)
                                         .onSubmit(sendCurrentInput)
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -458,6 +487,7 @@ struct ChatArea: View {
                         }
                         .padding(.top, isActionMenuExpanded ? ActionMenuPopoutMetrics.reservedTopPadding : 0)
                         .animation(.spring(response: 0.38, dampingFraction: 0.82), value: isActionMenuExpanded)
+                        }
                     }
                     .frame(maxWidth: composerMaxWidth)
                     .padding(.horizontal, 36)
@@ -486,26 +516,32 @@ struct ChatArea: View {
             isRelevantChatsExpanded = false
         }
         .overlay(alignment: .topLeading) {
-            Button(action: {
-                withAnimation(AppMotion.sidebarPanelSpring.animation) {
-                    isSidebarVisible.toggle()
+            if temporaryBranch.isPresented {
+                TemporaryBranchCloseButton(action: closeTemporaryBranch)
+                    .padding(.top, isWelcomeState ? 24 : 16)
+                    .padding(.leading, 24)
+            } else {
+                Button(action: {
+                    withAnimation(AppMotion.sidebarPanelSpring.animation) {
+                        isSidebarVisible.toggle()
+                    }
+                }) {
+                    ZStack {
+                        NativeGlassPanel(cornerRadius: 16, tintColor: AppColor.controlGlassTint) { EmptyView() }
+                            .frame(width: 32, height: 32)
+                            .overlay(
+                                Circle()
+                                    .stroke(AppColor.panelStroke, lineWidth: 1)
+                            )
+                        Image(systemName: "sidebar.left")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(AppColor.secondaryText)
+                    }
                 }
-            }) {
-                ZStack {
-                    NativeGlassPanel(cornerRadius: 16, tintColor: AppColor.controlGlassTint) { EmptyView() }
-                        .frame(width: 32, height: 32)
-                        .overlay(
-                            Circle()
-                                .stroke(AppColor.panelStroke, lineWidth: 1)
-                        )
-                    Image(systemName: "sidebar.left")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(AppColor.secondaryText)
-                }
+                .buttonStyle(.plain)
+                .padding(.top, isWelcomeState ? 24 : 16)
+                .padding(.leading, 24)
             }
-            .buttonStyle(.plain)
-            .padding(.top, isWelcomeState ? 24 : 16)
-            .padding(.leading, 24)
         }
         .overlay(alignment: .topTrailing) {
             if !isWelcomeState {
@@ -537,6 +573,9 @@ struct ChatArea: View {
                 .buttonStyle(.plain)
                 .padding(.top, 16)
                 .padding(.trailing, 24)
+                .blur(radius: branchBackgroundBlurRadius)
+                .opacity(branchBackgroundOpacity)
+                .allowsHitTesting(!temporaryBranch.isPresented)
             }
         }
         .confirmationDialog("Add Attachment", isPresented: $isAttachmentMenuPresented, titleVisibility: .visible) {
@@ -574,7 +613,11 @@ struct ChatArea: View {
         }
         .onChange(of: vm.currentNode?.id) { _, _ in
             attachments = []
+            reloadTemporaryBranchRecords()
             closeDownvotePopover()
+        }
+        .onAppear {
+            reloadTemporaryBranchRecords()
         }
         .onChange(of: voiceAttachmentResetToken) { _, _ in
             attachments = []
@@ -593,6 +636,92 @@ struct ChatArea: View {
         let pendingAttachments = AttachmentLimitPolicy.limitingImageAttachments(attachments)
         attachments = []
         Task { await vm.send(attachments: pendingAttachments) }
+    }
+
+    private var temporaryBranchBottomRail: some View {
+        TemporaryBranchInlineComposer(
+            branch: temporaryBranch,
+            onSend: sendTemporaryBranchInput
+        )
+        .frame(maxWidth: composerMaxWidth)
+    }
+
+    private func openTemporaryBranch(from message: Message) {
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+            temporaryBranch.open(from: message, in: vm.messages)
+        }
+    }
+
+    private func closeTemporaryBranch() {
+        let recordToEvaluate = temporaryBranch.presentedRecordSnapshot()
+        persistPresentedTemporaryBranch()
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+            temporaryBranch.close()
+        }
+        if let recordToEvaluate {
+            Task {
+                _ = await vm.evaluateTemporaryBranchRecord(recordToEvaluate)
+                temporaryBranch.loadRecords(vm.loadTemporaryBranchRecords())
+            }
+        }
+    }
+
+    private var branchBackgroundBlurRadius: CGFloat {
+        temporaryBranch.isPresented ? TemporaryBranchMembraneStyle.inlineBlurRadius : 0
+    }
+
+    private var branchBackgroundOpacity: Double {
+        temporaryBranch.isPresented ? TemporaryBranchMembraneStyle.dimmedContentOpacity : 1
+    }
+
+    private func isTemporaryBranchSource(_ message: Message) -> Bool {
+        temporaryBranch.isPresented && temporaryBranch.sourceMessage?.id == message.id
+    }
+
+    private func branchFocusBlurRadius(for message: Message) -> CGFloat {
+        guard temporaryBranch.isPresented else { return 0 }
+        return isTemporaryBranchSource(message) ? 0 : TemporaryBranchMembraneStyle.inlineBlurRadius
+    }
+
+    private func branchFocusOpacity(for message: Message) -> Double {
+        guard temporaryBranch.isPresented else { return 1 }
+        return isTemporaryBranchSource(message)
+            ? TemporaryBranchMembraneStyle.focusedContentOpacity
+            : TemporaryBranchMembraneStyle.dimmedContentOpacity
+    }
+
+    private func sendTemporaryBranchInput() {
+        Task {
+            await vm.sendTemporaryBranch(temporaryBranch)
+            persistPresentedTemporaryBranch()
+        }
+    }
+
+    private func regenerateTemporaryBranchAssistant() {
+        Task {
+            await vm.regenerateTemporaryBranch(temporaryBranch)
+            persistPresentedTemporaryBranch()
+        }
+    }
+
+    private func persistPresentedTemporaryBranch() {
+        guard let record = temporaryBranch.presentedRecordSnapshot() else { return }
+        vm.persistTemporaryBranchRecord(record)
+    }
+
+    private func reloadTemporaryBranchRecords() {
+        temporaryBranch.reset(records: vm.loadTemporaryBranchRecords())
+    }
+
+    private func handleTemporaryBranchMemoryCandidate(
+        _ candidateId: UUID,
+        in record: TemporaryBranchRecord,
+        action: TemporaryBranchMemoryCandidateAction
+    ) {
+        Task {
+            _ = await vm.applyTemporaryBranchCandidate(candidateId, in: record, action: action)
+            temporaryBranch.loadRecords(vm.loadTemporaryBranchRecords())
+        }
     }
 
     private func handlePrimaryAction() {
@@ -704,7 +833,7 @@ struct ChatArea: View {
         var updatedAttachments = attachments
         for attachment in newAttachments {
             let alreadyExists = !AttachmentLimitPolicy.isImageAttachment(attachment) && updatedAttachments.contains {
-                $0.name == attachment.name && $0.extractedText == attachment.extractedText
+                AttachmentLimitPolicy.isDuplicateNonImageAttachment(attachment, of: $0)
             }
             if !alreadyExists {
                 updatedAttachments = AttachmentLimitPolicy.applyingImageLimit(
@@ -792,6 +921,9 @@ struct MessageBubble: View {
     let isUser: Bool
     let source: MessageSource
     let timestamp: Date
+    let onOpenBranch: (() -> Void)?
+
+    @State private var isHovering = false
 
     private let userBubbleMaxWidth: CGFloat = 520
     private let userParagraphSpacing: CGFloat = 10
@@ -836,6 +968,15 @@ struct MessageBubble: View {
                             .padding(.vertical, 12)
                             .background(AppColor.colaBubble)
                             .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                            .temporaryBranchEntry(
+                                isHovering: $isHovering,
+                                triggerAlignment: .topLeading,
+                                triggerOffset: CGSize(
+                                    width: -TemporaryBranchTriggerHitTarget.userButtonOutsideOffset,
+                                    height: TemporaryBranchTriggerHitTarget.buttonVerticalOffset
+                                ),
+                                onOpenBranch: onOpenBranch
+                            )
                             timestampRow
                                 .padding(.trailing, 4)
                         }
@@ -845,6 +986,15 @@ struct MessageBubble: View {
                     VStack(alignment: .leading, spacing: 2) {
                         HStack {
                             AssistantBubbleContent(displayText: assistantDisplayText)
+                                .temporaryBranchEntry(
+                                    isHovering: $isHovering,
+                                    triggerAlignment: .topTrailing,
+                                    triggerOffset: CGSize(
+                                        width: TemporaryBranchTriggerHitTarget.assistantButtonOutsideOffset,
+                                        height: TemporaryBranchTriggerHitTarget.buttonVerticalOffset
+                                    ),
+                                    onOpenBranch: onOpenBranch
+                                )
                             Spacer(minLength: 0)
                         }
                         timestampRow
@@ -955,6 +1105,53 @@ struct MessageBubble: View {
     }
 }
 
+private struct TemporaryBranchEntryModifier: ViewModifier {
+    @Binding var isHovering: Bool
+    let triggerAlignment: Alignment
+    let triggerOffset: CGSize
+    let onOpenBranch: (() -> Void)?
+
+    func body(content: Content) -> some View {
+        content
+            .contentShape(Rectangle())
+            .onLongPressGesture(minimumDuration: TemporaryBranchTriggerHitTarget.longPressDuration) {
+                onOpenBranch?()
+            }
+            .overlay(alignment: triggerAlignment) {
+                if let onOpenBranch {
+                    TemporaryBranchTriggerButton(isVisible: isHovering, action: onOpenBranch)
+                        .padding(TemporaryBranchTriggerHitTarget.hoverBridgePadding)
+                        .contentShape(Rectangle())
+                        .offset(x: triggerOffset.width, y: triggerOffset.height)
+                        .onHover { hovering in
+                            isHovering = hovering
+                        }
+                }
+            }
+            .onHover { hovering in
+                isHovering = hovering
+            }
+    }
+}
+
+private extension View {
+    func temporaryBranchEntry(
+        isHovering: Binding<Bool>,
+        triggerAlignment: Alignment,
+        triggerOffset: CGSize,
+        onOpenBranch: (() -> Void)?
+    ) -> some View {
+        modifier(
+            TemporaryBranchEntryModifier(
+                isHovering: isHovering,
+                triggerAlignment: triggerAlignment,
+                triggerOffset: triggerOffset,
+                onOpenBranch: onOpenBranch
+            )
+        )
+    }
+}
+
 struct StreamingAssistantPresentation {
     let isGenerating: Bool
     let currentThinking: String
@@ -1008,7 +1205,7 @@ struct StreamingAssistantPresentation {
     }
 }
 
-private struct AssistantBubbleContent: View {
+struct AssistantBubbleContent: View {
     let displayText: String
 
     private let assistantTextMaxWidth: CGFloat = 520
@@ -1078,6 +1275,86 @@ enum ActionMenuPopoutMetrics {
     static let itemHeight: CGFloat = 52
     static let itemWidth: CGFloat = 52
     static let capsuleCornerRadius: CGFloat = 18
+}
+
+struct ComposerLeadingActionButton: View {
+    let systemImage: String
+    let isMenuExpanded: Bool
+    let isVoiceActive: Bool
+    let size: CGFloat
+    let cornerRadius: CGFloat
+    let action: () -> Void
+
+    private let motion = ComposerLeadingActionMotion()
+
+    private var isSeparated: Bool {
+        isMenuExpanded || isVoiceActive
+    }
+
+    private var tintColor: NSColor {
+        guard isSeparated else {
+            return AppColor.controlGlassTint
+        }
+
+        return NSColor(
+            red: 243 / 255,
+            green: 131 / 255,
+            blue: 53 / 255,
+            alpha: motion.tintAlpha(isSeparated: isSeparated)
+        )
+    }
+
+    private var iconColor: Color {
+        isSeparated ? AppColor.colaOrange : AppColor.secondaryText
+    }
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(iconColor)
+                .frame(width: size, height: size)
+                .rotationEffect(.degrees(isMenuExpanded && !isVoiceActive ? 90 : 0))
+                .background(buttonBackground)
+                .overlay(buttonStroke)
+                .shadow(
+                    color: AppColor.colaOrange.opacity(motion.glowOpacity(isSeparated: isSeparated)),
+                    radius: isSeparated ? 6 : 0,
+                    x: 0,
+                    y: isSeparated ? 1 : 0
+                )
+                .scaleEffect(motion.scale(isSeparated: isSeparated))
+                .offset(y: motion.yOffset(isSeparated: isSeparated))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .animation(
+            .timingCurve(0.68, -0.6, 0.32, 1.6, duration: 0.42),
+            value: isMenuExpanded
+        )
+        .animation(.spring(response: 0.25, dampingFraction: 0.72), value: isVoiceActive)
+    }
+
+    private var buttonBackground: some View {
+        ZStack {
+            Circle()
+                .fill(AppColor.colaOrange.opacity(motion.fillOpacity(isSeparated: isSeparated)))
+
+            NativeGlassPanel(
+                cornerRadius: cornerRadius,
+                tintColor: tintColor
+            ) { EmptyView() }
+            .opacity(isSeparated ? 0.72 : 1)
+        }
+    }
+
+    private var buttonStroke: some View {
+        Circle()
+            .stroke(
+                isSeparated ? AppColor.colaOrange.opacity(0.22) : AppColor.panelStroke,
+                lineWidth: 1
+            )
+    }
 }
 
 struct ActionMenuCapsule: View {

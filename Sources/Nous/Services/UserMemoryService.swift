@@ -46,11 +46,14 @@ final class UserMemoryCore {
 
         func redact(_ content: String) -> String {
             guard !protectedFragments.isEmpty else { return content }
-            var redacted = content
-            for fragment in protectedFragments {
-                redacted = Self.replacing(fragment, in: redacted, with: Self.redactedFragment)
-            }
-            return redacted
+            return content.components(separatedBy: .newlines)
+                .map { line in
+                    if referencesProtectedContent(line) {
+                        return Self.redactedEvidenceLine
+                    }
+                    return line
+                }
+                .joined(separator: "\n")
         }
 
         func referencesProtectedContent(_ content: String) -> Bool {
@@ -586,6 +589,63 @@ final class UserMemoryCore {
         }
     }
 
+    func absorbTemporaryBranchSummary(record: TemporaryBranchRecord) {
+        guard let summary = record.summary else { return }
+        let content = Self.temporaryBranchSummaryContent(summary, sourceExcerpt: record.sourceExcerpt)
+        guard !content.isEmpty else { return }
+        let existing = (try? nodeStore.fetchActiveMemoryEntry(
+            scope: .conversation,
+            scopeRefId: record.sourceMessage.nodeId
+        ))??.content
+        let mergedContent = Self.mergedTemporaryBranchSummary(existing: existing, addition: content)
+
+        writeScopeEntry(
+            scope: .conversation,
+            scopeRefId: record.sourceMessage.nodeId,
+            content: mergedContent,
+            kind: .thread,
+            stability: .temporary,
+            sourceNodeIds: [record.sourceMessage.nodeId],
+            confidence: 0.7,
+            lastConfirmedAt: nil,
+            now: Date()
+        )
+    }
+
+    func applyTemporaryBranchCandidate(
+        _ candidate: TemporaryBranchMemoryCandidate,
+        record: TemporaryBranchRecord
+    ) -> Bool {
+        guard let memoryScope = candidate.scope.memoryScope else { return false }
+        let scopeRefId: UUID?
+        switch candidate.scope {
+        case .global:
+            scopeRefId = nil
+        case .project:
+            guard let projectId = try? nodeStore.fetchNode(id: record.sourceMessage.nodeId)?.projectId else {
+                return false
+            }
+            scopeRefId = projectId
+        case .conversation:
+            scopeRefId = record.sourceMessage.nodeId
+        case .ignore:
+            return false
+        }
+
+        writeScopeEntry(
+            scope: memoryScope,
+            scopeRefId: scopeRefId,
+            content: candidate.content,
+            kind: candidate.kind,
+            stability: candidate.scope == .conversation ? .temporary : .stable,
+            sourceNodeIds: [record.sourceMessage.nodeId],
+            confidence: candidate.confidence,
+            lastConfirmedAt: nil,
+            now: Date()
+        )
+        return true
+    }
+
     // MARK: - Canonical scope writes
 
     /// Persist the latest scope summary into canonical `memory_entries`.
@@ -714,6 +774,8 @@ final class UserMemoryCore {
             }
         case .note:
             break
+        case .source:
+            return ""
         }
 
         for line in Self.extractSummaryLines(from: node.content, limit: 1) {
@@ -1264,6 +1326,39 @@ final class UserMemoryCore {
         guard trimmed.count > maxChars else { return trimmed }
         let limit = trimmed.index(trimmed.startIndex, offsetBy: maxChars)
         return String(trimmed[..<limit]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func mergedTemporaryBranchSummary(existing: String?, addition: String) -> String {
+        let trimmedAddition = addition.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let existing = existing?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !existing.isEmpty else {
+            return trimmedAddition
+        }
+        guard !existing.contains(trimmedAddition) else { return existing }
+        return [existing, trimmedAddition].joined(separator: "\n\n")
+    }
+
+    private static func temporaryBranchSummaryContent(
+        _ summary: TemporaryBranchSummary,
+        sourceExcerpt: String
+    ) -> String {
+        var lines: [String] = []
+        if !summary.preview.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let prefix = sourceExcerpt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "Temporary branch summary"
+                : "Temporary branch on \"\(sourceExcerpt)\""
+            lines.append("\(prefix): \(summary.preview)")
+        }
+        for keyPoint in summary.keyPoints where !keyPoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            lines.append("- \(keyPoint)")
+        }
+        for decision in summary.decisions where !decision.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            lines.append("- Decision: \(decision)")
+        }
+        for insight in summary.insights where !insight.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            lines.append("- Insight: \(insight)")
+        }
+        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func cleanedEvidenceTurns(from messages: [Message]) -> [EvidencePromptTurn] {

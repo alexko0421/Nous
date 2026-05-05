@@ -438,6 +438,12 @@ struct ModelHarnessProfile: Equatable {
     var supportsAgentToolUse: Bool {
         agentLoopSupport != .unsupported
     }
+
+    func allowsAgentToolUse(model: String?) -> Bool {
+        guard supportsAgentToolUse else { return false }
+        guard let requiredToolLoopModel else { return true }
+        return model == requiredToolLoopModel
+    }
 }
 
 struct ModelHarnessProfileCoverageSummary: Equatable {
@@ -562,6 +568,14 @@ enum ModelHarnessProfileCatalog {
             fallbackStrategy: .inlineProviderError
         )
     }
+
+    static func thinkingBudgetTokens(for provider: LLMProvider) -> Int? {
+        profile(for: provider).thinkingBudgetTokens
+    }
+
+    static func allowsAgentToolUse(for provider: LLMProvider, model: String?) -> Bool {
+        profile(for: provider).allowsAgentToolUse(model: model)
+    }
 }
 
 struct RuntimeHarnessSnapshot: Equatable {
@@ -574,7 +588,10 @@ struct RuntimeHarnessSnapshot: Equatable {
     var agentToolReliability: AgentToolReliabilitySummary
     var behaviorEval: BehaviorEvalTelemetrySummary
     var contextManifest: ContextManifestTelemetrySummary
+    var delegationMetrics: DelegationMetricSummary
     var modelHarnessProfiles: ModelHarnessProfileCoverageSummary
+    var visibleResponseLanguageTarget: VisibleResponseLanguageTarget
+    var visibleResponseLanguageSource: VisibleResponseLanguageSource
 
     init(
         totalTurnCount: Int = 0,
@@ -586,7 +603,10 @@ struct RuntimeHarnessSnapshot: Equatable {
         agentToolReliability: AgentToolReliabilitySummary = .empty,
         behaviorEval: BehaviorEvalTelemetrySummary = .empty,
         contextManifest: ContextManifestTelemetrySummary = .empty,
-        modelHarnessProfiles: ModelHarnessProfileCoverageSummary = ModelHarnessProfileCatalog.coverageSummary
+        delegationMetrics: DelegationMetricSummary = .empty,
+        modelHarnessProfiles: ModelHarnessProfileCoverageSummary = ModelHarnessProfileCatalog.coverageSummary,
+        visibleResponseLanguageTarget: VisibleResponseLanguageTarget = .unspecified,
+        visibleResponseLanguageSource: VisibleResponseLanguageSource = .none
     ) {
         self.totalTurnCount = totalTurnCount
         self.reviewedTurnCount = reviewedTurnCount
@@ -597,7 +617,10 @@ struct RuntimeHarnessSnapshot: Equatable {
         self.agentToolReliability = agentToolReliability
         self.behaviorEval = behaviorEval
         self.contextManifest = contextManifest
+        self.delegationMetrics = delegationMetrics
         self.modelHarnessProfiles = modelHarnessProfiles
+        self.visibleResponseLanguageTarget = visibleResponseLanguageTarget
+        self.visibleResponseLanguageSource = visibleResponseLanguageSource
     }
 
     static let empty = RuntimeHarnessSnapshot()
@@ -639,6 +662,16 @@ struct RuntimeHarnessSnapshot: Equatable {
         }
 
         return flags.joined(separator: " · ")
+    }
+
+    var visibleResponseLanguageSummaryText: String {
+        guard visibleResponseLanguageTarget != .unspecified else {
+            return "No visible language target recorded."
+        }
+        if let summaryLabel = visibleResponseLanguageSource.summaryLabel {
+            return "Visible language target \(visibleResponseLanguageTarget.promptLabel) · \(summaryLabel)"
+        }
+        return "Visible language target \(visibleResponseLanguageTarget.promptLabel)"
     }
 }
 

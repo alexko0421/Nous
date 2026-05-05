@@ -93,6 +93,52 @@ final class ActionMenuSeparationMotionTests: XCTestCase {
         XCTAssertEqual(motion.iconOpacity(isSeparated: true), 1)
     }
 
+    func testComposerLeadingActionPopsOutQuietlyWhenExpanded() {
+        let motion = ComposerLeadingActionMotion()
+
+        XCTAssertEqual(motion.scale(isSeparated: false), 1)
+        XCTAssertEqual(motion.yOffset(isSeparated: false), 0)
+        XCTAssertEqual(motion.fillOpacity(isSeparated: false), 0)
+        XCTAssertEqual(motion.glowOpacity(isSeparated: false), 0)
+        XCTAssertEqual(motion.tintAlpha(isSeparated: false), 0)
+
+        XCTAssertGreaterThan(motion.scale(isSeparated: true), 1)
+        XCTAssertLessThan(motion.scale(isSeparated: true), 1.05)
+        XCTAssertLessThan(motion.yOffset(isSeparated: true), 0)
+        XCTAssertGreaterThan(motion.yOffset(isSeparated: true), -1.25)
+        XCTAssertGreaterThan(motion.fillOpacity(isSeparated: true), 0.2)
+        XCTAssertLessThan(motion.fillOpacity(isSeparated: true), 0.36)
+        XCTAssertGreaterThan(motion.tintAlpha(isSeparated: true), 0.3)
+        XCTAssertLessThan(motion.tintAlpha(isSeparated: true), 0.46)
+        XCTAssertGreaterThan(motion.glowOpacity(isSeparated: true), 0.03)
+        XCTAssertLessThan(motion.glowOpacity(isSeparated: true), 0.09)
+    }
+
+    func testComposerPlusButtonsUseSharedPopoutControl() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let chatSource = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Views/ChatArea.swift"),
+            encoding: .utf8
+        )
+        let welcomeSource = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Views/WelcomeView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(chatSource.contains("ComposerLeadingActionButton("))
+        XCTAssertTrue(welcomeSource.contains("ComposerLeadingActionButton("))
+        XCTAssertTrue(chatSource.contains("value: isActionMenuExpanded"))
+        XCTAssertTrue(welcomeSource.contains("value: isActionMenuExpanded"))
+
+        let leadingButtonRange = try XCTUnwrap(chatSource.range(of: "struct ComposerLeadingActionButton"))
+        let leadingButtonSource = String(chatSource[leadingButtonRange.lowerBound...])
+        XCTAssertTrue(leadingButtonSource.contains(".foregroundColor(iconColor)"))
+        XCTAssertFalse(leadingButtonSource.contains(".foregroundColor(isSeparated ? .white : AppColor.secondaryText)"))
+    }
+
     func testComposerPrimaryActionHasNoFusionPulseImplementation() throws {
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

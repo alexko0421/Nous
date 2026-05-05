@@ -131,6 +131,15 @@ enum SafetyGuardrails {
         "唔好keep"
     ]
 
+    private static let hardMemoryOptOutPatterns = [
+        #"do not.{0,40}(remember|store|save|keep).{0,40}(memory|long[- ]?term|durable)"#,
+        #"don't.{0,40}(remember|store|save|keep).{0,40}(memory|long[- ]?term|durable)"#,
+        #"不要.{0,40}(记住|記住|记低|記低|记下来|記下來|记|記|存|保存|保留).{0,40}(memory|长期记忆|長期記憶|durable)"#,
+        #"不要.{0,40}(进入|進入|进|進).{0,40}(memory|长期记忆|長期記憶|durable)"#,
+        #"唔好.{0,40}(记住|記住|记低|記低|记|記|存|保存|保留).{0,40}(memory|长期记忆|長期記憶|durable)"#,
+        #"唔好.{0,40}(入|进入|進入|进|進).{0,40}(memory|长期记忆|長期記憶|durable)"#
+    ]
+
     private static let consentBoundaryPhrases = [
         "ask before storing",
         "ask first before storing",
@@ -162,13 +171,22 @@ enum SafetyGuardrails {
     }
 
     static func containsHardMemoryOptOut(_ text: String?) -> Bool {
-        containsAnyPhrase(text, phrases: hardMemoryOptOutPhrases)
+        let normalized = normalize(text)
+        guard !normalized.isEmpty else { return false }
+        if hardMemoryOptOutPhrases.contains(where: { normalized.contains($0) }) {
+            return true
+        }
+        return hardMemoryOptOutPatterns.contains { regexContains(pattern: $0, in: normalized) }
     }
 
     static func matchedHardMemoryOptOutPhrases(in text: String?) -> [String] {
         let normalized = normalize(text)
         guard !normalized.isEmpty else { return [] }
-        return hardMemoryOptOutPhrases.filter { normalized.contains($0) }
+        var matches = hardMemoryOptOutPhrases.filter { normalized.contains($0) }
+        matches.append(contentsOf: hardMemoryOptOutPatterns.compactMap {
+            regexFirstMatch(pattern: $0, in: normalized)
+        })
+        return matches
     }
 
     static func requiresConsentForSensitiveMemory(boundaryLines: [String]) -> Bool {
@@ -182,6 +200,23 @@ enum SafetyGuardrails {
         let normalized = normalize(text)
         guard !normalized.isEmpty else { return false }
         return phrases.contains { normalized.contains($0) }
+    }
+
+    private static func regexContains(pattern: String, in text: String) -> Bool {
+        regexFirstMatch(pattern: pattern, in: text) != nil
+    }
+
+    private static func regexFirstMatch(pattern: String, in text: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return nil
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = regex.firstMatch(in: text, options: [], range: range),
+              let matchRange = Range(match.range, in: text)
+        else {
+            return nil
+        }
+        return String(text[matchRange])
     }
 
     private static func normalize(_ text: String?) -> String {

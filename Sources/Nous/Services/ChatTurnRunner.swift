@@ -386,6 +386,7 @@ enum TurnCognitionSnapshotFactory {
             reviewArtifactId: reviewArtifact?.id,
             reviewRiskFlags: reviewArtifact?.riskFlags ?? [],
             reviewConfidence: reviewArtifact?.confidence,
+            agentCoordination: plan.promptTrace.agentCoordination,
             conversationRecoveryReason: recoveryEvent?.reason.rawValue,
             conversationRecoveryOriginalNodeId: recoveryEvent?.originalNodeId,
             conversationRecoveryRecoveredNodeId: recoveryEvent?.recoveredNodeId,
@@ -442,6 +443,7 @@ private extension TurnPlan {
             turnId: turnId,
             prepared: prepared,
             citations: citations,
+            sourceMaterials: sourceMaterials,
             promptTrace: trace,
             effectiveMode: effectiveMode,
             nextQuickActionModeIfCompleted: nextQuickActionModeIfCompleted,
@@ -454,7 +456,9 @@ private extension TurnPlan {
             indexedSkillIds: indexedSkillIds,
             loadedSkillIds: loadedSkillIds,
             memoryEvidenceSourceIds: memoryEvidenceSourceIds,
-            loadedCitationIds: loadedCitationIds
+            loadedCitationIds: loadedCitationIds,
+            memoryUsageHints: memoryUsageHints,
+            memoryProvenance: memoryProvenance
         )
     }
 }
