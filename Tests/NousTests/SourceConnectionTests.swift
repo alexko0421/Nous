@@ -2,15 +2,95 @@ import XCTest
 @testable import Nous
 
 final class SourceURLDetectorTests: XCTestCase {
-    func testDetectsDedupedHTTPURLsAndTrimsTrailingPunctuation() {
+    func testDetectsDedupedHTTPURLsAndFiltersPrivateNetworkTargets() {
         let urls = SourceURLDetector.urls(
-            in: "Read https://example.com/report?x=1, then compare with (https://example.com/report?x=1). Also https://nous.local/path."
+            in: "Read https://example.com/report?x=1, then compare with (https://example.com/report?x=1). Also https://nous.local/path, http://localhost:3000/admin, and http://192.168.1.7/status."
         )
 
         XCTAssertEqual(urls.map(\.absoluteString), [
-            "https://example.com/report?x=1",
-            "https://nous.local/path"
+            "https://example.com/report?x=1"
         ])
+    }
+
+    func testURLSafetyRejectsIPLiteralAliasesAndAllowsPublicSources() {
+        XCTAssertTrue(SourceURLSafety.allowsNetworkFetch(URL(string: "https://example.com/report")!))
+        XCTAssertTrue(SourceURLSafety.allowsNetworkFetch(URL(string: "http://93.184.216.34/report")!))
+        XCTAssertTrue(SourceURLSafety.allowsNetworkFetch(URL(string: "http://[2606:2800:220:1:248:1893:25c8:1946]/report")!))
+        XCTAssertTrue(SourceURLSafety.allowsNetworkFetch(URL(string: "http://[64:ff9b::5db8:d822]/report")!))
+        XCTAssertTrue(SourceURLSafety.allowsNetworkFetch(URL(string: "http://[2002:5db8:d822::]/report")!))
+
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://127.1/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://127.0.0.1%00.example.com/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://example%2f.com/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://example%5c.com/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://example%40.com/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://example%23.com/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://example%3f.com/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://010.000.000.001/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://0x7f.0.0.1/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://0x7f.0.1/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://0x7f.1/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://127.0x1/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://0xc0.0xa8.1/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://0xc0.0xa8.0x01.0x01/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://192.88.99.1/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://[gggg::1]/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://[not::ip]/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://[100::]/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://[100:0:0:1::1]/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://[2001:db8::1]/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://[2001:0db8::1]/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://[2001:2::1]/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://[2001:10::1]/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://[fe90::1]/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://[3fff::1]/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://[5f00::1]/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://[0:0:0:0:0:0:0:0001]/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://[::ffff:127.0.0.1]/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://[::ffff:7f00:1]/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://[0:0:0:0:0:ffff:7f00:1]/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://[::7f00:1]/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://[64:ff9b::0a00:0001]/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://[64:ff9b::c0a8:0107]/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://[64:ff9b:1::5db8:d822]/report")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://[64:ff9b:1::c0a8:0107]/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://[2002:0a00:0001::]/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://[2002:c0a8:0107::]/admin")!))
+        XCTAssertFalse(SourceURLSafety.allowsNetworkFetch(URL(string: "http://[2001:0::1]/admin")!))
+    }
+
+    func testResolvedAddressSafetyRejectsPrivateDNSResults() {
+        XCTAssertTrue(SourceDNSResolver.resolvedAddressesArePublic([
+            "93.184.216.34",
+            "2606:2800:220:1:248:1893:25c8:1946"
+        ]))
+        XCTAssertTrue(SourceDNSResolver.resolvedAddressesArePublic(["64:ff9b::5db8:d822"]))
+        XCTAssertTrue(SourceDNSResolver.resolvedAddressesArePublic(["2002:5db8:d822::"]))
+
+        XCTAssertFalse(SourceDNSResolver.resolvedAddressesArePublic(["127.0.0.1"]))
+        XCTAssertFalse(SourceDNSResolver.resolvedAddressesArePublic(["192.88.99.1"]))
+        XCTAssertFalse(SourceDNSResolver.resolvedAddressesArePublic(["93.184.216.34", "10.0.0.7"]))
+        XCTAssertFalse(SourceDNSResolver.resolvedAddressesArePublic(["gggg::1"]))
+        XCTAssertFalse(SourceDNSResolver.resolvedAddressesArePublic(["100::"]))
+        XCTAssertFalse(SourceDNSResolver.resolvedAddressesArePublic(["100:0:0:1::1"]))
+        XCTAssertFalse(SourceDNSResolver.resolvedAddressesArePublic(["2001:db8::1"]))
+        XCTAssertFalse(SourceDNSResolver.resolvedAddressesArePublic(["2001:0db8::1"]))
+        XCTAssertFalse(SourceDNSResolver.resolvedAddressesArePublic(["2001:2::1"]))
+        XCTAssertFalse(SourceDNSResolver.resolvedAddressesArePublic(["2001:10::1"]))
+        XCTAssertFalse(SourceDNSResolver.resolvedAddressesArePublic(["3fff::1"]))
+        XCTAssertFalse(SourceDNSResolver.resolvedAddressesArePublic(["5f00::1"]))
+        XCTAssertFalse(SourceDNSResolver.resolvedAddressesArePublic(["0:0:0:0:0:0:0:0001"]))
+        XCTAssertFalse(SourceDNSResolver.resolvedAddressesArePublic(["::ffff:192.168.1.7"]))
+        XCTAssertFalse(SourceDNSResolver.resolvedAddressesArePublic(["0:0:0:0:0:ffff:7f00:1"]))
+        XCTAssertFalse(SourceDNSResolver.resolvedAddressesArePublic(["::7f00:1"]))
+        XCTAssertFalse(SourceDNSResolver.resolvedAddressesArePublic(["64:ff9b::0a00:0001"]))
+        XCTAssertFalse(SourceDNSResolver.resolvedAddressesArePublic(["64:ff9b::c0a8:0107"]))
+        XCTAssertFalse(SourceDNSResolver.resolvedAddressesArePublic(["64:ff9b:1::5db8:d822"]))
+        XCTAssertFalse(SourceDNSResolver.resolvedAddressesArePublic(["64:ff9b:1::c0a8:0107"]))
+        XCTAssertFalse(SourceDNSResolver.resolvedAddressesArePublic(["2002:0a00:0001::"]))
+        XCTAssertFalse(SourceDNSResolver.resolvedAddressesArePublic(["2002:c0a8:0107::"]))
+        XCTAssertFalse(SourceDNSResolver.resolvedAddressesArePublic(["2001:0::1"]))
+        XCTAssertFalse(SourceDNSResolver.resolvedAddressesArePublic([]))
     }
 }
 
@@ -275,6 +355,23 @@ final class SourceIngestionServiceTests: XCTestCase {
         XCTAssertTrue(materials.isEmpty)
         XCTAssertTrue(try store.fetchAllNodes().filter { $0.type == .source }.isEmpty)
     }
+
+    func testURLIngestionSkipsPrivateNetworkURLBeforeFetcher() async throws {
+        let store = try NodeStore(path: ":memory:")
+        let fetcher = RecordingSourceFetcher()
+        let service = SourceIngestionService(
+            nodeStore: store,
+            vectorStore: VectorStore(nodeStore: store),
+            embeddingProvider: StubSourceEmbeddingProvider(),
+            fetcher: fetcher
+        )
+
+        let materials = try await service.ingestURLs([URL(string: "http://localhost:3000/admin")!], projectId: nil)
+
+        XCTAssertTrue(materials.isEmpty)
+        XCTAssertTrue(fetcher.requestedURLs.isEmpty)
+        XCTAssertTrue(try store.fetchAllNodes().filter { $0.type == .source }.isEmpty)
+    }
 }
 
 final class SourceFetchServiceTests: XCTestCase {
@@ -327,6 +424,100 @@ final class SourceFetchServiceTests: XCTestCase {
         } catch {
             XCTFail("Expected tooLarge, got \(error).")
         }
+    }
+
+    func testRejectsPrivateNetworkURLBeforeNetworkRequest() async throws {
+        SourceFetchMockURLProtocol.handler = { request in
+            (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "text/html"]
+                )!,
+                Data("<html><body>internal service</body></html>".utf8)
+            )
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [SourceFetchMockURLProtocol.self]
+        let service = SourceFetchService(session: URLSession(configuration: configuration))
+
+        do {
+            _ = try await service.fetch(url: URL(string: "http://127.0.0.1/admin")!)
+            XCTFail("Expected private network source URL to be rejected before fetch.")
+        } catch {
+            XCTAssertTrue(SourceFetchMockURLProtocol.requests.isEmpty)
+        }
+    }
+
+    @MainActor
+    func testDNSPreflightRunsOffMainThreadBeforeNetworkRequest() async throws {
+        let recorder = ThreadRecorder()
+        SourceFetchMockURLProtocol.handler = { request in
+            if request.httpMethod == "HEAD" {
+                return (
+                    HTTPURLResponse(
+                        url: request.url!,
+                        statusCode: 200,
+                        httpVersion: nil,
+                        headerFields: [
+                            "Content-Length": "48",
+                            "Content-Type": "text/html"
+                        ]
+                    )!,
+                    Data()
+                )
+            }
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "text/html"]
+                )!,
+                Data("<html><body>public source body</body></html>".utf8)
+            )
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [SourceFetchMockURLProtocol.self]
+        let service = SourceFetchService(
+            configuration: configuration,
+            resolveNetworkAddresses: true,
+            dnsResolution: { _ in
+                recorder.record(isMainThread: Thread.isMainThread)
+                return true
+            }
+        )
+
+        let fetched = try await service.fetch(url: URL(string: "https://example.com/off-main-dns")!)
+
+        XCTAssertTrue(fetched.text.contains("public source body"))
+        XCTAssertEqual(recorder.mainThreadSnapshots, [false])
+    }
+
+    func testRedirectGuardRejectsPrivateNetworkRedirectTarget() {
+        let redirectGuard = SourceFetchRedirectGuard()
+        let session = URLSession(configuration: .ephemeral)
+        let task = session.dataTask(with: URL(string: "https://example.com/redirect")!)
+        let response = HTTPURLResponse(
+            url: URL(string: "https://example.com/redirect")!,
+            statusCode: 302,
+            httpVersion: nil,
+            headerFields: ["Location": "http://127.0.0.1/admin"]
+        )!
+        let expectation = expectation(description: "redirect decision")
+
+        redirectGuard.urlSession(
+            session,
+            task: task,
+            willPerformHTTPRedirection: response,
+            newRequest: URLRequest(url: URL(string: "http://127.0.0.1/admin")!)
+        ) { redirectedRequest in
+            XCTAssertNil(redirectedRequest)
+            expectation.fulfill()
+        }
+
+        wait(for: [expectation], timeout: 1)
     }
 
     func testStopsStreamingGETWhenBodyExceedsMaxBytesWithoutContentLength() async throws {
@@ -405,6 +596,19 @@ private struct StubSourceFetcher: SourceFetching {
     }
 }
 
+private final class RecordingSourceFetcher: SourceFetching {
+    private(set) var requestedURLs: [URL] = []
+
+    func fetch(url: URL) async throws -> SourceFetchedDocument {
+        requestedURLs.append(url)
+        return SourceFetchedDocument(
+            url: url,
+            title: "Should not fetch",
+            text: "This should not become source material."
+        )
+    }
+}
+
 private final class SourceFetchMockURLProtocol: URLProtocol {
     static var handler: ((URLRequest) -> (HTTPURLResponse, Data))?
     static var streamingHandler: ((URLRequest, SourceFetchMockURLProtocol) -> Void)?
@@ -467,5 +671,22 @@ private final class SourceFetchMockURLProtocol: URLProtocol {
     func finish() {
         guard !isStopped else { return }
         client?.urlProtocolDidFinishLoading(self)
+    }
+}
+
+private final class ThreadRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var snapshots: [Bool] = []
+
+    var mainThreadSnapshots: [Bool] {
+        lock.lock()
+        defer { lock.unlock() }
+        return snapshots
+    }
+
+    func record(isMainThread: Bool) {
+        lock.lock()
+        snapshots.append(isMainThread)
+        lock.unlock()
     }
 }

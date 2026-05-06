@@ -6,8 +6,8 @@ final class SeedSkillsResourceTests: XCTestCase {
     func testSeedSkillsResourceDecodesExpectedRows() throws {
         let rows = try decodeSeedRows()
 
-        XCTAssertEqual(rows.count, 8)
-        XCTAssertEqual(Set(rows.map(\.id)).count, 8)
+        XCTAssertEqual(rows.count, 10)
+        XCTAssertEqual(Set(rows.map(\.id)).count, 10)
         XCTAssertTrue(rows.allSatisfy { $0.userId == "alex" })
         XCTAssertTrue(rows.allSatisfy { $0.state == .active })
         XCTAssertTrue(rows.allSatisfy { (1...2).contains($0.payload.payloadVersion) })
@@ -34,7 +34,9 @@ final class SeedSkillsResourceTests: XCTestCase {
                 "direct-when-disagreeing",
                 "interleave-language",
                 "weight-against-default-chat-baseline",
-                "analysis-judge-gate"
+                "analysis-judge-gate",
+                "pain-test-before-building",
+                "inversion-before-commitment"
             ]
         )
 
@@ -49,10 +51,11 @@ final class SeedSkillsResourceTests: XCTestCase {
         XCTAssertEqual(brainstorm.payload.trigger.priority, 90)
 
         let tasteRows = rows.filter { $0.payload.trigger.kind == .always }
-        XCTAssertEqual(tasteRows.count, 5)
-        XCTAssertTrue(tasteRows.allSatisfy {
+        XCTAssertEqual(tasteRows.count, 7)
+        let broadTasteRows = tasteRows.filter {
             $0.payload.trigger.modes == [.direction, .brainstorm, .plan]
-        })
+        }
+        XCTAssertEqual(broadTasteRows.count, 5)
 
         let analysisGate = try XCTUnwrap(rows.first { $0.payload.name == "analysis-judge-gate" })
         XCTAssertEqual(analysisGate.payload.payloadVersion, 2)
@@ -63,6 +66,22 @@ final class SeedSkillsResourceTests: XCTestCase {
         XCTAssertFalse(analysisGate.payload.trigger.cues.contains("啱唔啱"))
         XCTAssertFalse(analysisGate.payload.trigger.cues.contains("对不对"))
         XCTAssertFalse(analysisGate.payload.trigger.cues.contains("我错"))
+
+        let painTest = try XCTUnwrap(rows.first { $0.payload.name == "pain-test-before-building" })
+        XCTAssertEqual(painTest.id, UUID(uuidString: "00000000-0000-0000-0000-000000000009"))
+        XCTAssertEqual(painTest.payload.payloadVersion, 1)
+        XCTAssertEqual(painTest.payload.trigger.kind, .always)
+        XCTAssertEqual(painTest.payload.trigger.modes, [.plan])
+        XCTAssertEqual(painTest.payload.trigger.priority, 80)
+        XCTAssertTrue(painTest.payload.action.content.contains("冇呢樣嘢"))
+
+        let inversion = try XCTUnwrap(rows.first { $0.payload.name == "inversion-before-commitment" })
+        XCTAssertEqual(inversion.id, UUID(uuidString: "00000000-0000-0000-0000-000000000010"))
+        XCTAssertEqual(inversion.payload.payloadVersion, 1)
+        XCTAssertEqual(inversion.payload.trigger.kind, .always)
+        XCTAssertEqual(inversion.payload.trigger.modes, [.direction])
+        XCTAssertEqual(inversion.payload.trigger.priority, 80)
+        XCTAssertTrue(inversion.payload.action.content.contains("worst version"))
     }
 
     func testSeedSkillsResourceImportsActiveAnalysisGate() throws {

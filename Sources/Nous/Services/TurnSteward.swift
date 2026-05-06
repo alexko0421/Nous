@@ -179,7 +179,7 @@ final class TurnSteward {
                 route: .plan,
                 memoryPolicy: memoryOptOut ? .lean : .full,
                 challengeStance: distress ? .supportFirst : .surfaceTension,
-                responseShape: .producePlan,
+                responseShape: distress ? .answerNow : .producePlan,
                 source: .deterministic,
                 reason: "explicit plan cue"
             )
@@ -188,7 +188,7 @@ final class TurnSteward {
                 route: .direction,
                 memoryPolicy: memoryOptOut ? .lean : .full,
                 challengeStance: distress ? .supportFirst : .surfaceTension,
-                responseShape: .narrowNextStep,
+                responseShape: distress ? .answerNow : .narrowNextStep,
                 source: .deterministic,
                 reason: "explicit direction cue"
             )
@@ -410,9 +410,12 @@ final class TurnSteward {
 
         switch routing.stance {
         case .supportFirst:
+            let hasDeterministicDistress = containsAny(normalizedText, in: Self.distressCues)
+            let preserveDistressRoute = legacy.challengeStance == .supportFirst
+                || (hasDeterministicDistress && (legacy.route == .plan || legacy.route == .direction))
             return TurnStewardDecision(
-                route: .ordinaryChat,
-                memoryPolicy: .conversationOnly,
+                route: preserveDistressRoute ? legacy.route : .ordinaryChat,
+                memoryPolicy: preserveDistressRoute ? legacy.memoryPolicy : .conversationOnly,
                 challengeStance: .supportFirst,
                 responseShape: .answerNow,
                 source: legacy.trace.source,

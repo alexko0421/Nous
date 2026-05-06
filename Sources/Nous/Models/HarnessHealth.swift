@@ -214,6 +214,11 @@ enum HarnessChangeClassifier {
     private static func isFixtureSurfacePath(_ path: String) -> Bool {
         path.contains("FixtureRunner") ||
             path.contains("Sycophancy") ||
+            path.contains("BehaviorDataset") ||
+            path.contains("BehaviorExperiment") ||
+            path.contains("BehaviorEval") ||
+            path.contains("BehaviorFineTune") ||
+            path.contains("BehaviorLocalModel") ||
             path.contains("fixtures") ||
             path.hasPrefix("Tests/NousTests/PromptGovernance") ||
             path.hasPrefix("Tests/NousTests/RuntimeQuality")

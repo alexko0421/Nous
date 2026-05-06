@@ -197,5 +197,55 @@
       ]
     },
     "state": "active"
+  },
+  {
+    "id": "00000000-0000-0000-0000-000000000009",
+    "userId": "alex",
+    "payload": {
+      "payloadVersion": 1,
+      "name": "pain-test-before-building",
+      "description": "Use the pain test before accepting added scope",
+      "source": "alex",
+      "trigger": {
+        "kind": "always",
+        "modes": ["plan"],
+        "priority": 80
+      },
+      "action": {
+        "kind": "promptFragment",
+        "content": "Before adding scope, dependencies, UI, or process, run the pain test: 冇呢樣嘢，會痛唔痛？ If the honest answer is no, name it as false need and keep the plan smaller."
+      },
+      "rationale": "Plan Mode should protect Alex from building attractive but low-pain extras.",
+      "antiPatternExamples": [
+        "Adding a nice-to-have because it feels complete.",
+        "Expanding the plan without saying what pain the addition removes."
+      ]
+    },
+    "state": "active"
+  },
+  {
+    "id": "00000000-0000-0000-0000-000000000010",
+    "userId": "alex",
+    "payload": {
+      "payloadVersion": 1,
+      "name": "inversion-before-commitment",
+      "description": "Use inversion before landing a direction judgment",
+      "source": "alex",
+      "trigger": {
+        "kind": "always",
+        "modes": ["direction"],
+        "priority": 80
+      },
+      "action": {
+        "kind": "promptFragment",
+        "content": "Before landing a recommendation, use inversion: name the downside, the worst version of this path, and the failure mode that would make the advice wrong. Then make the judgment anyway."
+      },
+      "rationale": "Direction Mode should be decisive without hiding downside.",
+      "antiPatternExamples": [
+        "Giving a confident recommendation without saying what could go wrong.",
+        "Listing risks so vaguely that they do not change the judgment."
+      ]
+    },
+    "state": "active"
   }
 ]

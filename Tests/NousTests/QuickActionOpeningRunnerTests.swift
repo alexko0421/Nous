@@ -235,6 +235,42 @@ final class QuickActionOpeningRunnerTests: XCTestCase {
         })
     }
 
+    func testOpeningRunnerRecordsSilentReviewerFailuresInCognitionFrame() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let conversationStore = ConversationSessionStore(nodeStore: nodeStore)
+        let node = try conversationStore.startConversation()
+        let snapshotCapture = OpeningTurnCognitionSnapshotCapture()
+        let runner = QuickActionOpeningRunner(
+            conversationSessionStore: conversationStore,
+            memoryContextBuilder: makeMemoryContextBuilder(nodeStore: nodeStore),
+            turnExecutor: TurnExecutor(
+                llmServiceProvider: { OpeningPromptCapturingLLM(output: "先定一个方向。") },
+                shouldUseGeminiHistoryCache: { false },
+                shouldPersistAssistantThinking: { false }
+            ),
+            outcomeFactory: TurnOutcomeFactory(shouldPersistMemory: { _, _ in false }),
+            cognitionReviewer: OpeningThrowingCognitionReviewer(),
+            onTurnCognitionSnapshot: { snapshotCapture.append($0) }
+        )
+        let turnId = UUID()
+        let sink = TurnSequencedEventSink(turnId: turnId, sink: OpeningTurnEventCapture())
+
+        let completion = await runner.run(
+            mode: .direction,
+            node: node,
+            turnId: turnId,
+            sink: sink,
+            abortReason: { .unexpectedCancellation }
+        )
+
+        XCTAssertNotNil(completion)
+        let snapshot = try XCTUnwrap(snapshotCapture.values().first)
+        XCTAssertNil(snapshot.reviewArtifactId)
+        let reviewer = try XCTUnwrap(snapshot.cognitionFrame?.records.first { $0.label == "reviewer" })
+        XCTAssertEqual(reviewer.status, .failed)
+        XCTAssertEqual(reviewer.reason, "silent_review_failed")
+    }
+
     func testOpeningRunnerDoesNotRecordReviewOrSnapshotWhenCommitFails() async throws {
         let nodeStore = try NodeStore(path: ":memory:")
         let conversationStore = ConversationSessionStore(nodeStore: nodeStore)
@@ -374,6 +410,16 @@ private final class OpeningRecordingCognitionReviewer: CognitionReviewing {
             )
         )
     }
+}
+
+private final class OpeningThrowingCognitionReviewer: CognitionReviewing {
+    func review(plan: TurnPlan, executionResult: TurnExecutionResult) throws -> CognitionArtifact? {
+        throw OpeningReviewerTestError.boom
+    }
+}
+
+private enum OpeningReviewerTestError: Error {
+    case boom
 }
 
 private final class OpeningReviewArtifactCapture {

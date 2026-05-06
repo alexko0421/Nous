@@ -245,12 +245,116 @@ final class TemporaryBranchViewModelTests: XCTestCase {
     }
 
     func testEvaluatorSuppressesLowSignalBranchBeforeLLM() async throws {
-        let source = Message(nodeId: UUID(), role: .user, content: "hi")
+        let lowSignalChats = ["hi", "ok thanks, makes sense", "继续扫继续扫"]
+
+        for text in lowSignalChats {
+            let source = Message(nodeId: UUID(), role: .user, content: text)
+            let record = TemporaryBranchRecord(
+                sourceMessage: source,
+                localContext: [source],
+                messages: [
+                    TemporaryBranchMessage(role: .user, content: text)
+                ],
+                updatedAt: Date()
+            )
+            let evaluator = TemporaryBranchMemoryEvaluator(llmServiceProvider: {
+                StaticTemporaryBranchLLMService(text: """
+                {
+                  "summary": {
+                    "topic": "Greeting",
+                    "key_points": ["Alex said hi."],
+                    "decisions": [],
+                    "open_questions": [],
+                    "insights": [],
+                    "preview": "Alex said hi."
+                  },
+                  "memory_candidates": [
+                    {
+                      "content": "Alex says hi in branches.",
+                      "scope": "global",
+                      "kind": "preference",
+                      "confidence": 0.91,
+                      "reason": "Grounded but low signal.",
+                      "evidence_quote": "\(text)"
+                    }
+                  ]
+                }
+                """)
+            })
+
+            let evaluation = await evaluator.evaluate(record: record)
+
+            XCTAssertEqual(evaluation.summary.preview, text)
+            XCTAssertTrue(evaluation.candidates.isEmpty, text)
+        }
+    }
+
+    func testEvaluatorSuppressesLowSignalProbeBranchBeforeLLM() async throws {
+        let probes = [
+            "context unclear",
+            "context-unclear",
+            "recall-probe: what is my preference?",
+            "recall-probe: what correction did I make?",
+            "Should Nous memory save this?",
+            "Should Nous memory save this",
+            "Should I remember that I prefer branch ideas to stay pending until confirmed?",
+            "應唔應該記住呢個",
+            "Going forward, should you remember this?",
+            "Going forward, should you remember that I prefer branch ideas to stay pending?",
+            "memory probe: 你记住了吗？",
+            "memory-probe: 你記住咗咩？"
+        ]
+
+        for probe in probes {
+            let source = Message(nodeId: UUID(), role: .user, content: probe)
+            let record = TemporaryBranchRecord(
+                sourceMessage: source,
+                localContext: [source],
+                messages: [
+                    TemporaryBranchMessage(role: .user, content: probe)
+                ],
+                updatedAt: Date()
+            )
+            let evaluator = TemporaryBranchMemoryEvaluator(llmServiceProvider: {
+                StaticTemporaryBranchLLMService(text: """
+                {
+                  "summary": {
+                    "topic": "Probe",
+                    "key_points": ["Alex asked a probe."],
+                    "decisions": [],
+                    "open_questions": [],
+                    "insights": [],
+                    "preview": "Alex asked a probe."
+                  },
+                  "memory_candidates": [
+                    {
+                      "content": "Alex runs this probe as a stable preference.",
+                      "scope": "global",
+                      "kind": "preference",
+                      "confidence": 0.91,
+                      "reason": "Deliberately should not surface.",
+                      "evidence_quote": "\(probe)"
+                    }
+                  ]
+                }
+                """)
+            })
+
+            let evaluation = await evaluator.evaluate(record: record)
+
+            XCTAssertEqual(evaluation.summary.preview, probe)
+            XCTAssertTrue(evaluation.candidates.isEmpty, probe)
+        }
+    }
+
+    func testEvaluatorDoesNotSuppressProbeWhenBranchContainsStablePreference() async throws {
+        let text = "memory-probe: remember that I prefer branch ideas to stay pending until confirmed."
+        let source = Message(nodeId: UUID(), role: .user, content: text)
         let record = TemporaryBranchRecord(
             sourceMessage: source,
             localContext: [source],
             messages: [
-                TemporaryBranchMessage(role: .user, content: "hi")
+                TemporaryBranchMessage(role: .user, content: text)
             ],
             updatedAt: Date()
         )
@@ -258,21 +362,21 @@ final class TemporaryBranchViewModelTests: XCTestCase {
             StaticTemporaryBranchLLMService(text: """
             {
               "summary": {
-                "topic": "Greeting",
-                "key_points": ["Alex said hi."],
+                "topic": "Branch confirmation",
+                "key_points": ["Alex prefers branch ideas to stay pending until confirmed."],
                 "decisions": [],
                 "open_questions": [],
                 "insights": [],
-                "preview": "Alex said hi."
+                "preview": "Branch ideas stay pending until confirmed."
               },
               "memory_candidates": [
                 {
-                  "content": "Alex says hi in branches.",
+                  "content": "Alex prefers branch ideas to stay pending until confirmed.",
                   "scope": "global",
                   "kind": "preference",
                   "confidence": 0.91,
-                  "reason": "Grounded but low signal.",
-                  "evidence_quote": "hi"
+                  "reason": "Stable branch memory preference.",
+                  "evidence_quote": "prefer branch ideas to stay pending"
                 }
               ]
             }
@@ -281,8 +385,61 @@ final class TemporaryBranchViewModelTests: XCTestCase {
 
         let evaluation = await evaluator.evaluate(record: record)
 
-        XCTAssertEqual(evaluation.summary.preview, "hi")
-        XCTAssertTrue(evaluation.candidates.isEmpty)
+        let candidate = try XCTUnwrap(evaluation.candidates.first)
+        XCTAssertEqual(candidate.scope, .global)
+        XCTAssertEqual(candidate.kind, .preference)
+        XCTAssertTrue(candidate.content.contains("pending until confirmed"))
+    }
+
+    func testEvaluatorClampsAndFiltersLLMMemoryCandidates() async throws {
+        let text = "Decision: Branch candidates should stay pending before confirmation."
+        let source = Message(nodeId: UUID(), role: .user, content: text)
+        let record = TemporaryBranchRecord(
+            sourceMessage: source,
+            localContext: [source],
+            messages: [
+                TemporaryBranchMessage(role: .user, content: text)
+            ],
+            updatedAt: Date()
+        )
+        let evaluator = TemporaryBranchMemoryEvaluator(llmServiceProvider: {
+            StaticTemporaryBranchLLMService(text: """
+            {
+              "summary": {
+                "topic": "Branch candidates",
+                "key_points": ["Branch candidates should stay pending."],
+                "decisions": [],
+                "open_questions": [],
+                "insights": [],
+                "preview": "Branch candidates stay pending."
+              },
+              "memory_candidates": [
+                {
+                  "content": "   ",
+                  "scope": "project",
+                  "kind": "decision",
+                  "confidence": 0.99,
+                  "reason": "Empty content should not surface.",
+                  "evidence_quote": "Branch candidates should stay pending"
+                },
+                {
+                  "content": "Branch candidates should stay pending before confirmation.",
+                  "scope": "project",
+                  "kind": "decision",
+                  "confidence": 12.5,
+                  "reason": "Overconfident LLM output should be clamped.",
+                  "evidence_quote": "Branch candidates should stay pending"
+                }
+              ]
+            }
+            """)
+        })
+
+        let evaluation = await evaluator.evaluate(record: record)
+
+        XCTAssertEqual(evaluation.candidates.count, 1)
+        XCTAssertEqual(evaluation.candidates[0].confidence, 1)
+        XCTAssertTrue(evaluation.candidates[0].content.contains("pending before confirmation"))
     }
 
     func testEvaluatorCreatesProjectCandidateForProductDecision() async throws {
@@ -307,6 +464,25 @@ final class TemporaryBranchViewModelTests: XCTestCase {
         XCTAssertEqual(candidate.status, .pending)
         XCTAssertGreaterThanOrEqual(candidate.confidence, 0.55)
         XCTAssertTrue(candidate.evidenceQuote.contains("branch summary should enter thread context"))
+    }
+
+    func testEvaluatorDoesNotCreateProjectDecisionCandidateForOpenQuestion() async throws {
+        let source = Message(nodeId: UUID(), role: .assistant, content: "What should we explore?")
+        let record = TemporaryBranchRecord(
+            sourceMessage: source,
+            localContext: [source],
+            messages: [
+                TemporaryBranchMessage(
+                    role: .user,
+                    content: "Should we make the memory UI simpler?"
+                )
+            ],
+            updatedAt: Date()
+        )
+
+        let evaluation = await TemporaryBranchMemoryEvaluator().evaluate(record: record)
+
+        XCTAssertTrue(evaluation.candidates.isEmpty)
     }
 
     func testEvaluatorCreatesGlobalCandidateForStableThinkingPreference() async throws {
@@ -491,6 +667,128 @@ final class TemporaryBranchViewModelTests: XCTestCase {
         XCTAssertNil(try store.fetchActiveMemoryEntry(scope: .conversation, scopeRefId: node.id))
     }
 
+    func testMemoryServiceSkipsLowSignalProbeBranchSummaryThreadMemory() async throws {
+        let store = try NodeStore(path: ":memory:")
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { nil })
+        let node = NousNode(type: .conversation, title: "Branch memory")
+        let source = Message(nodeId: node.id, role: .user, content: "context-unclear")
+        let record = TemporaryBranchRecord(
+            sourceMessage: source,
+            localContext: [source],
+            messages: [
+                TemporaryBranchMessage(role: .user, content: "context-unclear")
+            ],
+            summary: TemporaryBranchSummary(
+                topic: "context-unclear",
+                keyPoints: ["Probe only."],
+                decisions: [],
+                openQuestions: [],
+                insights: [],
+                preview: "context-unclear"
+            ),
+            updatedAt: Date()
+        )
+
+        try store.insertNode(node)
+        try store.insertMessage(source)
+
+        await service.absorbTemporaryBranchSummary(record: record)
+
+        XCTAssertNil(try store.fetchActiveMemoryEntry(scope: .conversation, scopeRefId: node.id))
+    }
+
+    func testMemoryServiceSkipsMetaMemoryQuestionBranchSummaryThreadMemory() async throws {
+        let store = try NodeStore(path: ":memory:")
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { nil })
+        let node = NousNode(type: .conversation, title: "Branch memory")
+        let source = Message(nodeId: node.id, role: .user, content: "Should Nous memory save this?")
+        let record = TemporaryBranchRecord(
+            sourceMessage: source,
+            localContext: [source],
+            messages: [
+                TemporaryBranchMessage(role: .user, content: "Should Nous memory save this?")
+            ],
+            summary: TemporaryBranchSummary(
+                topic: "Meta memory question",
+                keyPoints: ["Question only."],
+                decisions: [],
+                openQuestions: [],
+                insights: [],
+                preview: "Should Nous memory save this?"
+            ),
+            updatedAt: Date()
+        )
+
+        try store.insertNode(node)
+        try store.insertMessage(source)
+
+        await service.absorbTemporaryBranchSummary(record: record)
+
+        XCTAssertNil(try store.fetchActiveMemoryEntry(scope: .conversation, scopeRefId: node.id))
+    }
+
+    func testMemoryServiceSkipsFutureHorizonQuestionBranchSummaryThreadMemory() async throws {
+        let store = try NodeStore(path: ":memory:")
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { nil })
+        let node = NousNode(type: .conversation, title: "Branch memory")
+        let sourceText = "Going forward, should you remember this?"
+        let source = Message(nodeId: node.id, role: .user, content: sourceText)
+        let record = TemporaryBranchRecord(
+            sourceMessage: source,
+            localContext: [source],
+            messages: [
+                TemporaryBranchMessage(role: .user, content: sourceText)
+            ],
+            summary: TemporaryBranchSummary(
+                topic: "Future horizon question",
+                keyPoints: ["Question only."],
+                decisions: [],
+                openQuestions: [],
+                insights: [],
+                preview: sourceText
+            ),
+            updatedAt: Date()
+        )
+
+        try store.insertNode(node)
+        try store.insertMessage(source)
+
+        await service.absorbTemporaryBranchSummary(record: record)
+
+        XCTAssertNil(try store.fetchActiveMemoryEntry(scope: .conversation, scopeRefId: node.id))
+    }
+
+    func testMemoryServiceSkipsMetaMemoryQuestionWithRememberThatBranchSummaryThreadMemory() async throws {
+        let store = try NodeStore(path: ":memory:")
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { nil })
+        let node = NousNode(type: .conversation, title: "Branch memory")
+        let sourceText = "Should I remember that I prefer branch ideas to stay pending until confirmed?"
+        let source = Message(nodeId: node.id, role: .user, content: sourceText)
+        let record = TemporaryBranchRecord(
+            sourceMessage: source,
+            localContext: [source],
+            messages: [
+                TemporaryBranchMessage(role: .user, content: sourceText)
+            ],
+            summary: TemporaryBranchSummary(
+                topic: "Meta memory question",
+                keyPoints: ["Question only."],
+                decisions: [],
+                openQuestions: [],
+                insights: [],
+                preview: sourceText
+            ),
+            updatedAt: Date()
+        )
+
+        try store.insertNode(node)
+        try store.insertMessage(source)
+
+        await service.absorbTemporaryBranchSummary(record: record)
+
+        XCTAssertNil(try store.fetchActiveMemoryEntry(scope: .conversation, scopeRefId: node.id))
+    }
+
     func testMemoryServiceRedactsOptOutBranchSummarySourceExcerpt() async throws {
         let store = try NodeStore(path: ":memory:")
         let service = UserMemoryService(nodeStore: store, llmServiceProvider: { nil })
@@ -656,6 +954,48 @@ final class TemporaryBranchViewModelTests: XCTestCase {
         let threadMemory = try XCTUnwrap(try store.fetchActiveMemoryEntry(scope: .conversation, scopeRefId: node.id))
         XCTAssertTrue(threadMemory.content.contains("Thread-only branch context"))
         XCTAssertNil(try store.fetchActiveMemoryEntry(scope: .global, scopeRefId: nil))
+    }
+
+    func testMemoryServiceDoesNotApplyRejectedOrUngroundedBranchCandidates() async throws {
+        let store = try NodeStore(path: ":memory:")
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { nil })
+        let node = NousNode(type: .conversation, title: "Branch thread memory")
+        let source = Message(nodeId: node.id, role: .user, content: "Thread-only branch context.")
+        let record = TemporaryBranchRecord(
+            sourceMessage: source,
+            localContext: [source],
+            messages: [
+                TemporaryBranchMessage(role: .user, content: "Thread-only branch context.")
+            ],
+            updatedAt: Date()
+        )
+        let rejectedCandidate = TemporaryBranchMemoryCandidate(
+            content: "Rejected branch candidate should not write memory.",
+            scope: .conversation,
+            kind: .thread,
+            status: .rejected,
+            confidence: 0.9,
+            reason: "Already rejected.",
+            evidenceQuote: "Thread-only branch context"
+        )
+        let ungroundedCandidate = TemporaryBranchMemoryCandidate(
+            content: "Candidate without evidence should not write memory.",
+            scope: .conversation,
+            kind: .thread,
+            confidence: 0.9,
+            reason: "Missing evidence.",
+            evidenceQuote: ""
+        )
+
+        try store.insertNode(node)
+        try store.insertMessage(source)
+
+        let didApplyRejected = await service.applyTemporaryBranchCandidate(rejectedCandidate, record: record)
+        let didApplyUngrounded = await service.applyTemporaryBranchCandidate(ungroundedCandidate, record: record)
+
+        XCTAssertFalse(didApplyRejected)
+        XCTAssertFalse(didApplyUngrounded)
+        XCTAssertNil(try store.fetchActiveMemoryEntry(scope: .conversation, scopeRefId: node.id))
     }
 }
 

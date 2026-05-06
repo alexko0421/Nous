@@ -117,6 +117,7 @@ final class AppEnvironment {
         let skillStore = SkillStore(nodeStore: nodeStore)
         let skillMatcher = SkillMatcher()
         let skillTracker = SkillTracker(store: skillStore)
+        let skillDogfoodLogger = try? SkillDogfoodLogStore.defaultStore()
         let seedSkillImporter = SeedSkillImporter(store: skillStore)
         let shadowLearningStore = ShadowLearningStore(nodeStore: nodeStore)
         let shadowLearningSignalRecorder = ShadowLearningSignalRecorder(store: shadowLearningStore)
@@ -222,6 +223,7 @@ final class AppEnvironment {
             skillStore: skillStore,
             skillMatcher: skillMatcher,
             skillTracker: skillTracker,
+            skillDogfoodLogger: skillDogfoodLogger,
             governanceTelemetry: governanceTelemetry,
             scratchPadStore: scratchPadStore,
             shadowLearningSignalRecorder: shadowLearningSignalRecorder,

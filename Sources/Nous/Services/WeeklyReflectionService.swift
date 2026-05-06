@@ -488,23 +488,37 @@ final class WeeklyReflectionService {
         struct Envelope: Decodable { let claims: [RawClaim] }
         struct RawClaim: Decodable {
             let claim: String
+            let confidence: Double
             let supporting_turn_ids: [String]
         }
         let env = try JSONDecoder().decode(Envelope.self, from: Data(rawJSON.utf8))
 
-        // Build a claim-text → [messageId] map using grounded ids only.
-        var map: [String: [UUID]] = [:]
+        // Build a claim-text queue using only raw claims that would have passed
+        // validation. Duplicate claim text is possible, so consuming a FIFO queue
+        // preserves the validator's order instead of overwriting earlier evidence.
+        var map: [String: [[UUID]]] = [:]
         for raw in env.claims {
             let trimmed = raw.claim.trimmingCharacters(in: .whitespacesAndNewlines)
-            let grounded = raw.supporting_turn_ids
+            guard raw.confidence >= ReflectionValidator.minConfidence else { continue }
+            let groundedStrings = raw.supporting_turn_ids
                 .filter { validMessageIds.contains($0) }
-                .compactMap(UUID.init(uuidString:))
-            map[trimmed] = grounded
+            var seenStrings = Set<String>()
+            let deduped = groundedStrings.filter { id in
+                if seenStrings.contains(id) { return false }
+                seenStrings.insert(id)
+                return true
+            }
+            guard deduped.count >= ReflectionValidator.minGroundedTurns else { continue }
+            let grounded = deduped.compactMap(UUID.init(uuidString:))
+            map[trimmed, default: []].append(grounded)
         }
 
         var evidence: [ReflectionEvidence] = []
         for claim in claims {
-            guard let ids = map[claim.claim] else { continue }
+            guard var queuedEvidence = map[claim.claim],
+                  !queuedEvidence.isEmpty else { continue }
+            let ids = queuedEvidence.removeFirst()
+            map[claim.claim] = queuedEvidence
             var seen = Set<UUID>()
             for messageId in ids where !seen.contains(messageId) {
                 seen.insert(messageId)

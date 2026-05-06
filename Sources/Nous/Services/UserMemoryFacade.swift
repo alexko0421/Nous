@@ -190,6 +190,10 @@ final class UserMemoryService: MemorySynthesizing, @unchecked Sendable {
         core.deleteMemoryFactEntry(id: id)
     }
 
+    func scrubProtectedMemoryDetails(messages: [Message]) -> UserMemoryCore.MemoryTrustCleanupReport {
+        core.scrubProtectedMemoryDetails(messages: messages)
+    }
+
     func contradictionRecallFacts(projectId: UUID?, conversationId: UUID) throws -> [MemoryFactEntry] {
         try contradictionService.contradictionRecallFacts(projectId: projectId, conversationId: conversationId)
     }

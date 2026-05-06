@@ -268,11 +268,12 @@ final class ChatTurnRunner {
             return nil
         }
 
-        let reviewArtifact = runSilentReviewIfNeeded(plan: plan, executionResult: executionResult)
+        let reviewRun = runSilentReviewIfNeeded(plan: plan, executionResult: executionResult)
         onTurnCognitionSnapshot(TurnCognitionSnapshotFactory.make(
             plan: plan,
             committed: committed,
-            reviewArtifact: reviewArtifact
+            reviewArtifact: reviewRun.artifact,
+            reviewerFailed: reviewRun.failed
         ))
         let contextManifest = ContextManifestFactory.make(
             plan: plan,
@@ -314,8 +315,8 @@ final class ChatTurnRunner {
     private func runSilentReviewIfNeeded(
         plan: TurnPlan,
         executionResult: TurnExecutionResult
-    ) -> CognitionArtifact? {
-        guard let cognitionReviewer else { return nil }
+    ) -> (artifact: CognitionArtifact?, failed: Bool) {
+        guard let cognitionReviewer else { return (nil, false) }
 
         do {
             if let artifact = try cognitionReviewer.review(
@@ -323,12 +324,13 @@ final class ChatTurnRunner {
                 executionResult: executionResult
             ) {
                 onReviewArtifact(artifact)
-                return artifact
+                return (artifact, false)
             }
         } catch {
             Self.debugLog("silent reviewer failed turn=\(plan.turnId) error=\(error.localizedDescription)")
+            return (nil, true)
         }
-        return nil
+        return (nil, false)
     }
 
     private static func makeAgentToolContext(plan: TurnPlan, request: TurnRequest) -> AgentToolContext {
@@ -370,10 +372,17 @@ enum TurnCognitionSnapshotFactory {
     static func make(
         plan: TurnPlan,
         committed: CommittedAssistantTurn,
-        reviewArtifact: CognitionArtifact?
+        reviewArtifact: CognitionArtifact?,
+        reviewerFailed: Bool = false
     ) -> TurnCognitionSnapshot {
         let recoveryEvent = plan.prepared.recoveryEvent
         let slowTrace = plan.promptTrace.slowCognitionTrace
+        let cognitionFrame = CognitionDirector().frame(
+            plan: plan,
+            committed: committed,
+            reviewArtifact: reviewArtifact,
+            reviewerFailed: reviewerFailed
+        )
         return TurnCognitionSnapshot(
             turnId: plan.turnId,
             conversationId: committed.node.id,
@@ -390,7 +399,8 @@ enum TurnCognitionSnapshotFactory {
             conversationRecoveryReason: recoveryEvent?.reason.rawValue,
             conversationRecoveryOriginalNodeId: recoveryEvent?.originalNodeId,
             conversationRecoveryRecoveredNodeId: recoveryEvent?.recoveredNodeId,
-            conversationRecoveryRebasedMessageCount: recoveryEvent?.rebasedMessageCount ?? 0
+            conversationRecoveryRebasedMessageCount: recoveryEvent?.rebasedMessageCount ?? 0,
+            cognitionFrame: cognitionFrame
         )
     }
 }

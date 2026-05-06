@@ -91,13 +91,13 @@ struct TemporaryBranchMemoryCandidate: Identifiable, Codable, Equatable {
         evidenceQuote: String
     ) {
         self.id = id
-        self.content = content
+        self.content = content.trimmingCharacters(in: .whitespacesAndNewlines)
         self.scope = scope
         self.kind = kind
         self.status = status
-        self.confidence = confidence
-        self.reason = reason
-        self.evidenceQuote = evidenceQuote
+        self.confidence = Self.clampedConfidence(confidence)
+        self.reason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.evidenceQuote = evidenceQuote.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     enum CodingKeys: String, CodingKey {
@@ -115,6 +115,7 @@ struct TemporaryBranchMemoryCandidate: Identifiable, Codable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         content = try container.decode(String.self, forKey: .content)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         if let scopeRaw = try container.decodeIfPresent(String.self, forKey: .scope) {
             scope = TemporaryBranchMemoryCandidateScope(rawValue: scopeRaw) ?? .ignore
         } else {
@@ -122,9 +123,16 @@ struct TemporaryBranchMemoryCandidate: Identifiable, Codable, Equatable {
         }
         kind = try container.decode(MemoryKind.self, forKey: .kind)
         status = try container.decodeIfPresent(TemporaryBranchMemoryCandidateStatus.self, forKey: .status) ?? .pending
-        confidence = try container.decode(Double.self, forKey: .confidence)
-        reason = try container.decodeIfPresent(String.self, forKey: .reason) ?? ""
-        evidenceQuote = try container.decodeIfPresent(String.self, forKey: .evidenceQuote) ?? ""
+        confidence = Self.clampedConfidence(try container.decode(Double.self, forKey: .confidence))
+        reason = (try container.decodeIfPresent(String.self, forKey: .reason) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        evidenceQuote = (try container.decodeIfPresent(String.self, forKey: .evidenceQuote) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func clampedConfidence(_ value: Double) -> Double {
+        guard value.isFinite else { return 0 }
+        return min(max(value, 0), 1)
     }
 }
 
@@ -355,6 +363,8 @@ final class TemporaryBranchMemoryEvaluator {
     }
 
     private static func shouldSurface(_ candidate: TemporaryBranchMemoryCandidate) -> Bool {
+        !candidate.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        !candidate.evidenceQuote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         candidate.confidence >= 0.55 &&
         candidate.scope != .ignore &&
         candidate.status != .applied &&
@@ -431,6 +441,7 @@ final class TemporaryBranchMemoryEvaluator {
 
     private static func looksLikeProjectDecision(_ text: String) -> Bool {
         let lower = text.lowercased()
+        guard !isQuestionLike(lower) else { return false }
         guard lower.contains("should") ||
             lower.contains("must") ||
             lower.contains("应该") ||
@@ -493,7 +504,245 @@ final class TemporaryBranchMemoryEvaluator {
             "hi", "hey", "hello", "yo", "ok", "okay", "okkk", "thanks", "thankyou",
             "lol", "haha", "哈哈", "好", "好呀", "嗯", "嗯嗯", "唔该", "唔該"
         ]
-        return lowSignalTokens.contains(normalized)
+        if lowSignalTokens.contains(normalized) { return true }
+        if looksProbeOnlyQuestion(collapsed) { return true }
+        if hasSubstantiveDurableSignal(collapsed) { return false }
+        if looksLowSignalChat(collapsed) { return true }
+
+        let lowSignalProbePhrases = [
+            "contextunclear",
+            "finalprobe",
+            "recallprobe",
+            "qaprobe",
+            "memoryprobe",
+            "测试probe",
+            "測試probe"
+        ]
+        return normalized == "probe" || lowSignalProbePhrases.contains { normalized.contains($0) }
+    }
+
+    private static func looksLowSignalChat(_ text: String) -> Bool {
+        guard !hasSubstantiveDurableSignal(text) else { return false }
+        let lower = text.lowercased()
+        let compact = lower.unicodeScalars
+            .filter { scalar in
+                !CharacterSet.whitespacesAndNewlines.contains(scalar) &&
+                !CharacterSet.punctuationCharacters.contains(scalar) &&
+                !CharacterSet.symbols.contains(scalar)
+            }
+            .map(String.init)
+            .joined()
+        let lowSignalExact: Set<String> = [
+            "hi", "hey", "hello", "yo", "ok", "okay", "okkk",
+            "thanks", "thankyou", "thx", "cool", "nice", "sure",
+            "yes", "no", "yep", "nope", "gotit", "understood",
+            "noted", "done", "makessense", "soundsgood", "good",
+            "continue", "continueplease", "继续", "繼續", "继续吧", "繼續吧",
+            "继续扫", "繼續掃", "继续扫继续扫", "繼續掃繼續掃"
+        ]
+        if lowSignalExact.contains(compact) {
+            return true
+        }
+
+        let lowSignalPhrases = [
+            "thank you",
+            "got it",
+            "makes sense",
+            "sounds good",
+            "you are right",
+            "you're right",
+            "keep going",
+            "go on",
+            "continue review",
+            "continue scanning",
+            "继续扫",
+            "繼續掃",
+            "继续找",
+            "繼續搵",
+            "继续稳",
+            "繼續穩",
+            "继续检查",
+            "繼續檢查",
+            "继续 review",
+            "繼續 review"
+        ]
+        return lowSignalPhrases.contains { lower.contains($0) }
+    }
+
+    private static func looksProbeOnlyQuestion(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        guard isQuestionLike(lower) else { return false }
+        let phrases = [
+            "based on what you know",
+            "do you remember",
+            "can you recall",
+            "previously",
+            "should nous",
+            "should memory",
+            "should we remember",
+            "should we save",
+            "should i remember",
+            "should i save",
+            "should you remember",
+            "should you save",
+            "should this be remembered",
+            "should this be saved",
+            "do we save",
+            "do i save",
+            "do you need to remember",
+            "what should nous",
+            "what should memory",
+            "what should branch",
+            "nous 应该",
+            "nous 應該",
+            "memory 应该",
+            "memory 應該",
+            "应该记",
+            "應該記",
+            "应不应该记",
+            "應不應該記",
+            "應唔應該記",
+            "该不该记",
+            "該不該記",
+            "应该保存",
+            "應該保存",
+            "你觉得",
+            "你覺得",
+            "这个 project",
+            "這個 project",
+            "这个项目",
+            "這個項目"
+        ]
+        return phrases.contains { lower.contains($0) }
+    }
+
+    private static func hasSubstantiveDurableSignal(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        let memoryMarkers = [
+            "remember that",
+            "记住",
+            "記住",
+            "记低",
+            "記低"
+        ]
+        if memoryMarkers.contains(where: { marker in
+            guard let range = lower.range(of: marker, options: [.caseInsensitive, .diacriticInsensitive]) else {
+                return false
+            }
+            let suffix = String(lower[range.upperBound...])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'`“”‘’「」『』（）()[]{}，,。.!！?？；;：:"))
+            let compact = suffix.unicodeScalars
+                .filter { scalar in
+                    !CharacterSet.whitespacesAndNewlines.contains(scalar) &&
+                    !CharacterSet.punctuationCharacters.contains(scalar) &&
+                    !CharacterSet.symbols.contains(scalar)
+                }
+                .map(String.init)
+                .joined()
+            return compact.count >= 8 && !["了吗", "了嗎", "咗咩", "未", "what", "anything", "this", "that", "it"].contains(compact)
+        }) {
+            return true
+        }
+
+        let questionLike = isQuestionLike(lower)
+        let horizonPhrases = [
+            "from now on",
+            "going forward",
+            "以后",
+            "以後",
+            "long term",
+            "长期",
+            "長期"
+        ]
+        if !questionLike, horizonPhrases.contains(where: { lower.contains($0) }) {
+            return true
+        }
+
+        guard !questionLike else { return false }
+
+        let declarativePhrases = [
+            "i prefer",
+            "my preference is",
+            "i decided",
+            "we decided",
+            "decision:",
+            "decision：",
+            "决定:",
+            "决定：",
+            "決定:",
+            "決定：",
+            "我偏好",
+            "我決定",
+            "我决定"
+        ]
+        let correctionMarkers = [
+            "correction:",
+            "correction：",
+            "修正:",
+            "修正：",
+            "更正:",
+            "更正："
+        ]
+        return declarativePhrases.contains { lower.contains($0) } ||
+            correctionMarkers.contains { lower.contains($0) }
+    }
+
+    private static func isQuestionLike(_ text: String) -> Bool {
+        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if lower.contains("?") ||
+            lower.contains("？") ||
+            lower.hasSuffix("吗") ||
+            lower.hasSuffix("嗎") ||
+            lower.hasSuffix("咩") ||
+            lower.hasSuffix("么") ||
+            lower.hasSuffix("未") {
+            return true
+        }
+
+        let questionPrefixes = [
+            "should ",
+            "do you ",
+            "can you ",
+            "could you ",
+            "would you ",
+            "what ",
+            "when ",
+            "why ",
+            "how ",
+            "where ",
+            "is ",
+            "are ",
+            "am i "
+        ]
+        if questionPrefixes.contains(where: { lower.hasPrefix($0) }) {
+            return true
+        }
+
+        let questionPhrases = [
+            " should you ",
+            " should we ",
+            " should i ",
+            " should this ",
+            "是不是",
+            "是否",
+            "有没有",
+            "有沒有",
+            "应不应该",
+            "應不應該",
+            "應唔應該",
+            "该不该",
+            "該不該",
+            "可不可以",
+            "可唔可以",
+            "能不能",
+            "能唔能",
+            "要不要",
+            "要唔要",
+            "你觉得",
+            "你覺得"
+        ]
+        return questionPhrases.contains { lower.contains($0) }
     }
 
     private static func excerpt(_ text: String, limit: Int) -> String {

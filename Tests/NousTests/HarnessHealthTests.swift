@@ -54,6 +54,27 @@ final class HarnessHealthTests: XCTestCase {
         XCTAssertTrue(result.findings.contains(.sourceSetChanged))
     }
 
+    func testBehaviorEvalChangesAreFixtureSurfaceChanges() {
+        let result = HarnessChangeClassifier.classify(
+            changedPaths: [
+                "Sources/Nous/Models/BehaviorEval.swift",
+                "Sources/Nous/Models/BehaviorDataset.swift",
+                "Sources/Nous/Services/BehaviorDatasetStudio.swift",
+                "Sources/Nous/Models/BehaviorExperiment.swift",
+                "Sources/Nous/Services/BehaviorExperimentRunner.swift",
+                "Sources/Nous/Models/BehaviorFineTuneExport.swift",
+                "Sources/Nous/Services/BehaviorFineTuneExporter.swift",
+                "Sources/Nous/Services/BehaviorLocalModelEvaluator.swift",
+                "Tests/NousTests/BehaviorEvalTests.swift"
+            ],
+            rootSwiftFiles: []
+        )
+
+        XCTAssertTrue(result.requiresFullGate)
+        XCTAssertFalse(result.hasBlockingIssues)
+        XCTAssertTrue(result.findings.contains(.fixtureSurfaceChanged))
+    }
+
     func testClassifierTracksUnclassifiedCurrentChanges() {
         let result = HarnessChangeClassifier.classify(
             changedPaths: ["docs/agentic-engineering-workflow.md"],
@@ -617,6 +638,43 @@ final class HarnessHealthTests: XCTestCase {
         XCTAssertTrue(script.contains("NOUS_DATABASE_PROFILE"))
         XCTAssertTrue(script.contains("-scheme Nous"))
         XCTAssertFalse(script.contains("count windows"))
+    }
+
+    func testHarnessDefaultsBehaviorEvalLiveModeToNever() throws {
+        let repoURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let scriptURL = repoURL.appendingPathComponent("scripts/nous_harness_check.sh")
+        let script = try String(contentsOf: scriptURL, encoding: .utf8)
+
+        XCTAssertTrue(script.contains("NOUS_BEHAVIOR_EVAL_LIVE_MODE"))
+        XCTAssertTrue(script.contains(#"DEFAULT_BEHAVIOR_EVAL_LIVE_MODE="never""#))
+        XCTAssertFalse(script.contains(#"DEFAULT_BEHAVIOR_EVAL_LIVE_MODE="auto""#))
+        XCTAssertTrue(script.contains(#"BEHAVIOR_EVAL_LIVE_MODE="${NOUS_BEHAVIOR_EVAL_LIVE_MODE:-$DEFAULT_BEHAVIOR_EVAL_LIVE_MODE}""#))
+        XCTAssertTrue(script.contains(#"run_behavior_evals quick never"#))
+        XCTAssertTrue(script.contains(#"run_behavior_evals full "$BEHAVIOR_EVAL_LIVE_MODE""#))
+    }
+
+    func testBehaviorEvalCLIDoesNotResolveAmbientProviderForOfflineRuns() throws {
+        let repoURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let main = try String(
+            contentsOf: repoURL.appendingPathComponent("Sources/BehaviorEvalRunner/main.swift"),
+            encoding: .utf8
+        )
+        let experimentCLI = try String(
+            contentsOf: repoURL.appendingPathComponent("Sources/BehaviorEvalRunner/BehaviorExperimentCLI.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(main.contains("func resolvedProviderForLiveMode("))
+        XCTAssertTrue(main.contains(#"guard live != "never" else { return nil }"#))
+        XCTAssertTrue(main.contains("resolvedProviderForLiveMode(\n        live: options.live"))
+        XCTAssertTrue(experimentCLI.contains("resolvedProviderForLiveMode(\n        live: options.live"))
+        XCTAssertFalse(experimentCLI.contains("options.provider ?? resolvedProviderFromEnvironment()"))
     }
 
     private func makeRuntimeHarnessTelemetry() -> GovernanceTelemetryStore {

@@ -89,6 +89,89 @@ struct CognitionTrace: Codable, Equatable, Sendable {
     }
 }
 
+enum CognitionOrganStatus: String, Codable, Equatable, Sendable {
+    case used
+    case skipped
+    case failed
+}
+
+struct CognitionOrganRecord: Codable, Equatable, Sendable {
+    let organ: CognitionOrgan
+    let label: String
+    let status: CognitionOrganStatus
+    let reason: String
+    let evidenceRefs: [CognitionEvidenceRef]
+    let resourceIds: [String]
+    let riskFlags: [String]
+
+    init(
+        organ: CognitionOrgan,
+        label: String,
+        status: CognitionOrganStatus,
+        reason: String,
+        evidenceRefs: [CognitionEvidenceRef] = [],
+        resourceIds: [String] = [],
+        riskFlags: [String] = []
+    ) {
+        self.organ = organ
+        self.label = label
+        self.status = status
+        self.reason = reason
+        self.evidenceRefs = evidenceRefs
+        self.resourceIds = resourceIds
+        self.riskFlags = riskFlags
+    }
+
+    @discardableResult
+    func validated() throws -> CognitionOrganRecord {
+        guard !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw CognitionValidationError.emptySummary
+        }
+        guard evidenceRefs.allSatisfy({ !$0.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+            throw CognitionValidationError.invalidEvidenceRef
+        }
+        return self
+    }
+}
+
+struct CognitionFrame: Codable, Equatable, Identifiable, Sendable {
+    static let currentVersion = 1
+
+    let id: UUID
+    let turnId: UUID
+    let conversationId: UUID
+    let assistantMessageId: UUID?
+    let frameVersion: Int
+    let records: [CognitionOrganRecord]
+    let createdAt: Date
+
+    init(
+        id: UUID = UUID(),
+        turnId: UUID,
+        conversationId: UUID,
+        assistantMessageId: UUID?,
+        frameVersion: Int = Self.currentVersion,
+        records: [CognitionOrganRecord],
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.turnId = turnId
+        self.conversationId = conversationId
+        self.assistantMessageId = assistantMessageId
+        self.frameVersion = frameVersion
+        self.records = records
+        self.createdAt = createdAt
+    }
+
+    @discardableResult
+    func validated() throws -> CognitionFrame {
+        guard frameVersion > 0 else { throw CognitionValidationError.invalidBudget }
+        try records.forEach { try $0.validated() }
+        return self
+    }
+}
+
 struct TurnCognitionSnapshot: Codable, Equatable, Sendable {
     let turnId: UUID
     let conversationId: UUID
@@ -106,6 +189,7 @@ struct TurnCognitionSnapshot: Codable, Equatable, Sendable {
     let conversationRecoveryOriginalNodeId: UUID?
     let conversationRecoveryRecoveredNodeId: UUID?
     let conversationRecoveryRebasedMessageCount: Int
+    let cognitionFrame: CognitionFrame?
     let recordedAt: Date
 
     init(
@@ -125,6 +209,7 @@ struct TurnCognitionSnapshot: Codable, Equatable, Sendable {
         conversationRecoveryOriginalNodeId: UUID? = nil,
         conversationRecoveryRecoveredNodeId: UUID? = nil,
         conversationRecoveryRebasedMessageCount: Int = 0,
+        cognitionFrame: CognitionFrame? = nil,
         recordedAt: Date = Date()
     ) {
         self.turnId = turnId
@@ -143,6 +228,7 @@ struct TurnCognitionSnapshot: Codable, Equatable, Sendable {
         self.conversationRecoveryOriginalNodeId = conversationRecoveryOriginalNodeId
         self.conversationRecoveryRecoveredNodeId = conversationRecoveryRecoveredNodeId
         self.conversationRecoveryRebasedMessageCount = conversationRecoveryRebasedMessageCount
+        self.cognitionFrame = cognitionFrame
         self.recordedAt = recordedAt
     }
 
@@ -163,6 +249,7 @@ struct TurnCognitionSnapshot: Codable, Equatable, Sendable {
         case conversationRecoveryOriginalNodeId
         case conversationRecoveryRecoveredNodeId
         case conversationRecoveryRebasedMessageCount
+        case cognitionFrame
         case recordedAt
     }
 
@@ -185,6 +272,7 @@ struct TurnCognitionSnapshot: Codable, Equatable, Sendable {
         conversationRecoveryOriginalNodeId = try container.decodeIfPresent(UUID.self, forKey: .conversationRecoveryOriginalNodeId)
         conversationRecoveryRecoveredNodeId = try container.decodeIfPresent(UUID.self, forKey: .conversationRecoveryRecoveredNodeId)
         conversationRecoveryRebasedMessageCount = try container.decodeIfPresent(Int.self, forKey: .conversationRecoveryRebasedMessageCount) ?? 0
+        cognitionFrame = try container.decodeIfPresent(CognitionFrame.self, forKey: .cognitionFrame)
         recordedAt = try container.decode(Date.self, forKey: .recordedAt)
     }
 }

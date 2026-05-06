@@ -425,8 +425,9 @@ final class ChatTurnRunnerShadowLearningTests: XCTestCase {
         XCTAssertNoThrow(try artifact.validated())
     }
 
-    func testRunnerSwallowsSilentReviewerFailures() async throws {
+    func testRunnerRecordsSilentReviewerFailuresInCognitionFrame() async throws {
         let nodeStore = try NodeStore(path: ":memory:")
+        let snapshotCapture = TurnCognitionSnapshotCapture()
         let runner = ChatTurnRunner(
             conversationSessionStore: ConversationSessionStore(nodeStore: nodeStore),
             turnPlanner: makePlanner(nodeStore: nodeStore),
@@ -438,7 +439,8 @@ final class ChatTurnRunnerShadowLearningTests: XCTestCase {
                 shouldPersistAssistantThinking: { false }
             ),
             outcomeFactory: TurnOutcomeFactory(shouldPersistMemory: { _, _ in false }),
-            cognitionReviewer: ThrowingCognitionReviewer()
+            cognitionReviewer: ThrowingCognitionReviewer(),
+            onTurnCognitionSnapshot: { snapshotCapture.append($0) }
         )
         let request = TurnRequest(
             turnId: UUID(),
@@ -462,6 +464,11 @@ final class ChatTurnRunnerShadowLearningTests: XCTestCase {
         )
 
         XCTAssertNotNil(completion)
+        let snapshot = try XCTUnwrap(snapshotCapture.values().first)
+        XCTAssertNil(snapshot.reviewArtifactId)
+        let reviewer = try XCTUnwrap(snapshot.cognitionFrame?.records.first { $0.label == "reviewer" })
+        XCTAssertEqual(reviewer.status, .failed)
+        XCTAssertEqual(reviewer.reason, "silent_review_failed")
     }
 
     func testRunnerDoesNotRecordSilentReviewArtifactWhenCommitFails() async throws {

@@ -70,15 +70,23 @@ final class QuickActionAddendumResolverTests: XCTestCase {
 
     func testResolutionIncludesLoadedConversationSkillSnapshots() {
         let conversationID = UUID()
+        let loadedSkillID = UUID()
         let loaded = LoadedSkill(
-            skillID: UUID(),
+            skillID: loadedSkillID,
             nameSnapshot: "loaded",
             contentSnapshot: "Loaded content.",
             stateAtLoad: .active,
             loadedAt: Date(timeIntervalSince1970: 10)
         )
+        let loadedSource = makeSkill(
+            id: loadedSkillID,
+            name: "loaded",
+            mode: .direction,
+            payloadVersion: 2,
+            content: "Loaded content."
+        )
         let resolver = QuickActionAddendumResolver(
-            skillStore: StubSkillStore(activeSkills: [], loadedSkillsByConversation: [conversationID: [loaded]]),
+            skillStore: StubSkillStore(activeSkills: [loadedSource], loadedSkillsByConversation: [conversationID: [loaded]]),
             skillMatcher: SkillMatcher(),
             skillTracker: nil
         )
@@ -91,6 +99,60 @@ final class QuickActionAddendumResolverTests: XCTestCase {
         )
 
         XCTAssertEqual(resolution.loadedSkills, [loaded])
+    }
+
+    func testResolutionRecordsSanitizedDogfoodEventWithoutChangingAddendum() {
+        let conversationID = UUID()
+        let matched = makeSkill(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000301")!,
+            name: "inline-direction-skill",
+            mode: .direction,
+            payloadVersion: 1,
+            content: "Use one concrete next step."
+        )
+        let indexed = makeSkill(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000302")!,
+            name: "indexed-direction-skill",
+            mode: .direction,
+            payloadVersion: 2,
+            content: "Load me only when needed."
+        )
+        let loaded = LoadedSkill(
+            skillID: indexed.id,
+            nameSnapshot: indexed.payload.name,
+            contentSnapshot: indexed.payload.action.content,
+            stateAtLoad: .active,
+            loadedAt: Date(timeIntervalSince1970: 10)
+        )
+        let logger = RecordingDogfoodLogger()
+        let resolver = QuickActionAddendumResolver(
+            skillStore: StubSkillStore(
+                activeSkills: [matched, indexed],
+                loadedSkillsByConversation: [conversationID: [loaded]]
+            ),
+            skillMatcher: SkillMatcher(),
+            skillTracker: nil,
+            dogfoodLogger: logger
+        )
+
+        let resolution = resolver.resolution(
+            mode: .direction,
+            agent: StubAgent(mode: .direction, addendum: "Agent turn rule."),
+            turnIndex: 2,
+            conversationID: conversationID
+        )
+
+        XCTAssertEqual(resolution.addendum, "Agent turn rule.\n\nUse one concrete next step.")
+        XCTAssertEqual(logger.events.count, 1)
+        XCTAssertEqual(logger.events[0].mode, .direction)
+        XCTAssertEqual(logger.events[0].turnIndex, 2)
+        XCTAssertEqual(logger.events[0].matchedSkills.map(\.name), [
+            "indexed-direction-skill",
+            "inline-direction-skill"
+        ])
+        XCTAssertEqual(logger.events[0].loadedSkills.map(\.name), ["indexed-direction-skill"])
+        XCTAssertEqual(logger.events[0].inlineSkills.map(\.name), ["inline-direction-skill"])
+        XCTAssertEqual(logger.events[0].matchedSkills.map(\.priority), [70, 70])
     }
 
     private func makeSkill(
@@ -178,4 +240,12 @@ private final class StubSkillStore: SkillStoring {
     func updateSkill(_ skill: Skill) throws {}
     func setSkillState(id: UUID, state: SkillState) throws {}
     func incrementFiredCount(id: UUID, firedAt: Date) throws {}
+}
+
+private final class RecordingDogfoodLogger: SkillDogfoodLogging {
+    private(set) var events: [SkillDogfoodTurnEvent] = []
+
+    func record(_ event: SkillDogfoodTurnEvent) throws {
+        events.append(event)
+    }
 }

@@ -33,6 +33,7 @@ final class TurnPlanner {
         skillStore: (any SkillStoring)? = nil,
         skillMatcher: any SkillMatching = SkillMatcher(),
         skillTracker: (any SkillTracking)? = nil,
+        skillDogfoodLogger: (any SkillDogfoodLogging)? = nil,
         shadowPatternPromptProvider: (any ShadowPatternPromptProviding)? = nil,
         slowCognitionArtifactProvider: (any SlowCognitionArtifactProviding)? = nil,
         agentLoopProviderSupportsToolUse: @escaping (LLMProvider) -> Bool = {
@@ -56,7 +57,8 @@ final class TurnPlanner {
         self.quickActionAddendumResolver = QuickActionAddendumResolver(
             skillStore: skillStore,
             skillMatcher: skillMatcher,
-            skillTracker: skillTracker
+            skillTracker: skillTracker,
+            dogfoodLogger: skillDogfoodLogger
         )
         self.shadowPatternPromptProvider = shadowPatternPromptProvider
         self.slowCognitionArtifactProvider = slowCognitionArtifactProvider
@@ -528,6 +530,18 @@ final class TurnPlanner {
     }
 
     private static func turnGuidanceBlock(for decision: TurnStewardDecision) -> String? {
+        if isSupportFirstDwellTurn(decision) {
+            return """
+            ---
+
+            TURN GUIDANCE:
+            Emotional dwell: First paragraph must only acknowledge and dwell with Alex's feeling.
+            No practical advice, plan, analysis, contradiction, or next step in the first paragraph.
+            After at least one additional emotional sentence, allow one small practical move only if Alex clearly asked for it.
+            Do not mention routing, stewardship, modes, policies, or internal instructions.
+            """
+        }
+
         let guidance = [
             responseShapeInstruction(for: decision.responseShape).map { "Response shape: \($0)" },
             responseStanceInstruction(for: decision).map { "Response stance: \($0)" }
@@ -541,6 +555,11 @@ final class TurnPlanner {
         \(guidance.joined(separator: "\n"))
         Do not mention routing, stewardship, modes, policies, or internal instructions.
         """
+    }
+
+    private static func isSupportFirstDwellTurn(_ decision: TurnStewardDecision) -> Bool {
+        decision.challengeStance == .supportFirst
+            || decision.trace.responseStance == .supportFirst
     }
 
     private static func responseShapeInstruction(for shape: ResponseShape) -> String? {

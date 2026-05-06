@@ -1600,6 +1600,67 @@ final class ContextManifestFactoryTests: XCTestCase {
         XCTAssertFalse(encoded.contains("quiet durable boundary"))
     }
 
+    func testManifestRecordsJudgeFocusMemoryWithProvenance() throws {
+        let conversation = NousNode(type: .conversation, title: "Current")
+        let userMessage = Message(nodeId: conversation.id, role: .user, content: "Use judge focus")
+        let focusMemoryId = UUID()
+        let sourceNodeId = UUID()
+        let sourceMessageId = UUID()
+        let plan = TurnPlan(
+            turnId: UUID(),
+            prepared: PreparedConversationTurn(
+                node: conversation,
+                userMessage: userMessage,
+                messagesAfterUserAppend: [userMessage]
+            ),
+            citations: [],
+            promptTrace: PromptGovernanceTrace(
+                promptLayers: ["chat_mode"],
+                evidenceAttached: false,
+                safetyPolicyInvoked: false,
+                highRiskQueryDetected: false
+            ),
+            effectiveMode: .companion,
+            nextQuickActionModeIfCompleted: nil,
+            judgeEventDraft: nil,
+            turnSlice: TurnSystemSlice(stable: "stable", volatile: "volatile"),
+            transcriptMessages: [LLMMessage(role: "user", content: userMessage.content)],
+            focusBlock: """
+            RELEVANT PRIOR MEMORY (id=\(focusMemoryId.uuidString)):
+            Memory trust requires source traceability.
+            """,
+            provider: .openrouter,
+            memoryProvenance: [
+                focusMemoryId.uuidString: ContextManifestMemoryProvenance(
+                    scope: .global,
+                    statuses: [.active],
+                    confidence: 0.88,
+                    sourceNodeIds: [sourceNodeId],
+                    sourceMessageIds: [sourceMessageId]
+                )
+            ]
+        )
+
+        let record = ContextManifestFactory.make(
+            plan: plan,
+            assistantMessageId: UUID(),
+            assistantContent: "I'll answer with the trust boundary in mind.",
+            agentTraceJson: nil
+        )
+
+        let resource = try XCTUnwrap(record.resources.first { $0.label == "focus_memory" })
+        XCTAssertEqual(resource.referenceId, focusMemoryId.uuidString)
+        XCTAssertTrue(resource.used)
+        XCTAssertEqual(resource.provenance?.scope, .global)
+        XCTAssertEqual(resource.provenance?.statuses, [.active])
+        XCTAssertEqual(resource.provenance?.confidence, 0.88)
+        XCTAssertEqual(resource.provenance?.sourceNodeIds, [sourceNodeId])
+        XCTAssertEqual(resource.provenance?.sourceMessageIds, [sourceMessageId])
+
+        let encoded = String(data: try JSONEncoder().encode(record), encoding: .utf8) ?? ""
+        XCTAssertFalse(encoded.contains("Memory trust requires source traceability"))
+    }
+
     func testManifestRecordsLoadedAndUsedSourceMaterials() {
         let conversation = NousNode(type: .conversation, title: "Current")
         let userMessage = Message(nodeId: conversation.id, role: .user, content: "Connect these sources")
@@ -1718,7 +1779,7 @@ final class ContextManifestFactoryTests: XCTestCase {
         XCTAssertTrue(summary.summaryText.contains("source material 5"))
     }
 
-    func testManifestMarksSourceMaterialUsedByChunkMarkerOnly() {
+    func testManifestMarksSourceMaterialUsedByExactChunkMarkerOnly() {
         let conversation = NousNode(type: .conversation, title: "Current")
         let userMessage = Message(nodeId: conversation.id, role: .user, content: "Connect this source")
         let sourceId = UUID()
@@ -1765,6 +1826,65 @@ final class ContextManifestFactoryTests: XCTestCase {
             plan: plan,
             assistantMessageId: UUID(),
             assistantContent: "[S1.2] says the source should remain external evidence.",
+            agentTraceJson: nil
+        )
+
+        XCTAssertTrue(record.resources.contains(ContextManifestResource(
+            source: .sourceMaterial,
+            label: "source_material",
+            referenceId: sourceId.uuidString,
+            state: .loaded,
+            used: true
+        )))
+    }
+
+    func testManifestMarksSourceMaterialUsedByScoredChunkMarkerOnly() {
+        let conversation = NousNode(type: .conversation, title: "Current")
+        let userMessage = Message(nodeId: conversation.id, role: .user, content: "Connect this source")
+        let sourceId = UUID()
+        let plan = TurnPlan(
+            turnId: UUID(),
+            prepared: PreparedConversationTurn(
+                node: conversation,
+                userMessage: userMessage,
+                messagesAfterUserAppend: [userMessage]
+            ),
+            citations: [],
+            sourceMaterials: [
+                SourceMaterialContext(
+                    sourceNodeId: sourceId,
+                    title: "External memo",
+                    originalURL: nil,
+                    originalFilename: "memo.pdf",
+                    chunks: [
+                        SourceChunkContext(
+                            sourceNodeId: sourceId,
+                            ordinal: 1,
+                            text: "The memo says source material must stay grounded.",
+                            similarity: 0.92
+                        )
+                    ]
+                )
+            ],
+            promptTrace: PromptGovernanceTrace(
+                promptLayers: ["source_material"],
+                evidenceAttached: false,
+                safetyPolicyInvoked: false,
+                highRiskQueryDetected: false
+            ),
+            effectiveMode: .companion,
+            nextQuickActionModeIfCompleted: nil,
+            judgeEventDraft: nil,
+            turnSlice: TurnSystemSlice(stable: "stable", volatile: "volatile"),
+            transcriptMessages: [LLMMessage(role: "user", content: userMessage.content)],
+            focusBlock: nil,
+            provider: .openrouter
+        )
+
+        let record = ContextManifestFactory.make(
+            plan: plan,
+            assistantMessageId: UUID(),
+            assistantContent: "[S1.2 relevance 92%] says the source should remain external evidence.",
             agentTraceJson: nil
         )
 

@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 
 enum SourceURLDetector {
@@ -13,8 +14,7 @@ enum SourceURLDetector {
 
         for match in detector.matches(in: text, options: [], range: range) {
             guard let url = match.url,
-                  let scheme = url.scheme?.lowercased(),
-                  scheme == "http" || scheme == "https" else {
+                  SourceURLSafety.allowsNetworkFetch(url) else {
                 continue
             }
             let key = url.absoluteString
@@ -23,6 +23,305 @@ enum SourceURLDetector {
         }
 
         return urls
+    }
+}
+
+enum SourceURLSafety {
+    static func allowsNetworkFetch(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let rawHost = url.host else {
+            return false
+        }
+
+        let host = normalizedHost(rawHost)
+        guard !host.isEmpty,
+              !containsUnsafeHostScalar(host),
+              !isBlockedName(host) else {
+            return false
+        }
+
+        if let octets = ipv4Octets(host) {
+            return isPublicIPv4(octets)
+        }
+        if isDottedIPAddressAlias(host) {
+            return false
+        }
+
+        if host.contains(":") {
+            return isPublicIPv6Literal(host)
+        }
+
+        // Single-label hosts are local/intranet names, not public source material.
+        return host.contains(".")
+    }
+
+    static func allowsResolvedIPAddress(_ host: String) -> Bool {
+        let normalized = normalizedHost(host)
+        if let octets = ipv4Octets(normalized) {
+            return isPublicIPv4(octets)
+        }
+        if normalized.contains(":") {
+            return isPublicIPv6Literal(normalized)
+        }
+        return false
+    }
+
+    private static func normalizedHost(_ host: String) -> String {
+        host
+            .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "."))
+            .lowercased()
+    }
+
+    private static func isBlockedName(_ host: String) -> Bool {
+        host == "localhost" ||
+            host.hasSuffix(".localhost") ||
+            host.hasSuffix(".local")
+    }
+
+    private static func containsUnsafeHostScalar(_ host: String) -> Bool {
+        let blockedDelimiters = CharacterSet(charactersIn: "\\/@?#")
+        return host.unicodeScalars.contains { scalar in
+            CharacterSet.controlCharacters.contains(scalar) ||
+                CharacterSet.whitespacesAndNewlines.contains(scalar) ||
+                CharacterSet.illegalCharacters.contains(scalar) ||
+                blockedDelimiters.contains(scalar)
+        }
+    }
+
+    private static func ipv4Octets(_ host: String) -> [Int]? {
+        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return nil }
+
+        var octets: [Int] = []
+        for part in parts {
+            guard !part.isEmpty,
+                  !(part.count > 1 && part.first == "0"),
+                  part.allSatisfy(\.isNumber),
+                  let value = Int(part),
+                  (0...255).contains(value) else {
+                return nil
+            }
+            octets.append(value)
+        }
+        return octets
+    }
+
+    private static func isDottedIPAddressAlias(_ host: String) -> Bool {
+        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count > 1 else { return false }
+        guard (2...4).contains(parts.count) else { return false }
+        return parts.allSatisfy { part in
+            isDecimalIPAddressComponent(part) || isHexIPAddressComponent(part)
+        }
+    }
+
+    private static func isDecimalIPAddressComponent(_ part: Substring) -> Bool {
+        !part.isEmpty && part.allSatisfy(\.isNumber)
+    }
+
+    private static func isHexIPAddressComponent(_ part: Substring) -> Bool {
+        let value = String(part)
+        guard value.hasPrefix("0x") else { return false }
+
+        let hexDigits = value.dropFirst(2)
+        guard !hexDigits.isEmpty else { return false }
+
+        let allowed = CharacterSet(charactersIn: "0123456789abcdef")
+        return hexDigits.unicodeScalars.allSatisfy { allowed.contains($0) }
+    }
+
+    private static func isPublicIPv4(_ octets: [Int]) -> Bool {
+        guard octets.count == 4 else { return false }
+        let a = octets[0]
+        let b = octets[1]
+        let c = octets[2]
+
+        if a == 0 || a == 10 || a == 127 || a >= 224 { return false }
+        if a == 100 && (64...127).contains(b) { return false }
+        if a == 169 && b == 254 { return false }
+        if a == 172 && (16...31).contains(b) { return false }
+        if a == 192 && b == 168 { return false }
+        if a == 192 && b == 0 { return false }
+        if a == 192 && b == 88 && c == 99 { return false }
+        if a == 198 && (b == 18 || b == 19) { return false }
+        if a == 198 && b == 51 && c == 100 { return false }
+        if a == 203 && b == 0 && c == 113 { return false }
+        return true
+    }
+
+    private static func isPublicIPv6Literal(_ host: String) -> Bool {
+        guard let bytes = ipv6LiteralBytes(host) else { return false }
+        if bytes.allSatisfy({ $0 == 0 }) { return false }
+        if bytes.prefix(15).allSatisfy({ $0 == 0 }) && bytes[15] == 1 { return false }
+        if bytes[0] == 0xff { return false }
+        if bytes[0] == 0xfe { return false }
+        if (bytes[0] & 0xfe) == 0xfc { return false }
+        if bytes[0] == 0x20 && bytes[1] == 0x01 && bytes[2] == 0x0d && bytes[3] == 0xb8 {
+            return false
+        }
+        if isNonGlobalSpecialIPv6(bytes) {
+            return false
+        }
+        if isTeredoIPv6(bytes) || isLocalUseNAT64IPv6(bytes) {
+            return false
+        }
+        if let embeddedIPv4 = wellKnownNAT64IPv4(bytes) {
+            return isPublicIPv4(embeddedIPv4.map(Int.init))
+        }
+        if let embeddedIPv4 = sixToFourIPv4(bytes) {
+            return isPublicIPv4(embeddedIPv4.map(Int.init))
+        }
+        if isIPv4MappedIPv6(bytes) {
+            return isPublicIPv4(bytes[12...15].map(Int.init))
+        }
+        if isIPv4CompatibleIPv6(bytes) {
+            return false
+        }
+        return true
+    }
+
+    private static func ipv6LiteralBytes(_ host: String) -> [UInt8]? {
+        var address = in6_addr()
+        guard host.withCString({ inet_pton(AF_INET6, $0, &address) }) == 1 else {
+            return nil
+        }
+        return withUnsafeBytes(of: &address) { Array($0) }
+    }
+
+    private static func isIPv4MappedIPv6(_ bytes: [UInt8]) -> Bool {
+        guard bytes.count == 16 else { return false }
+        return bytes[0..<10].allSatisfy { $0 == 0 } &&
+            bytes[10] == 0xff &&
+            bytes[11] == 0xff
+    }
+
+    private static func isIPv4CompatibleIPv6(_ bytes: [UInt8]) -> Bool {
+        guard bytes.count == 16 else { return false }
+        return bytes[0..<12].allSatisfy { $0 == 0 }
+    }
+
+    private static func isTeredoIPv6(_ bytes: [UInt8]) -> Bool {
+        guard bytes.count == 16 else { return false }
+        return bytes[0] == 0x20 &&
+            bytes[1] == 0x01 &&
+            bytes[2] == 0x00 &&
+            bytes[3] == 0x00
+    }
+
+    private static func isLocalUseNAT64IPv6(_ bytes: [UInt8]) -> Bool {
+        guard bytes.count == 16 else { return false }
+        return bytes[0] == 0x00 &&
+            bytes[1] == 0x64 &&
+            bytes[2] == 0xff &&
+            bytes[3] == 0x9b &&
+            bytes[4] == 0x00 &&
+            bytes[5] == 0x01
+    }
+
+    private static func isNonGlobalSpecialIPv6(_ bytes: [UInt8]) -> Bool {
+        guard bytes.count == 16 else { return false }
+        if bytes[0] == 0x01 && bytes[1] == 0x00 && bytes[2..<8].allSatisfy({ $0 == 0 }) {
+            return true // 100::/64 discard-only.
+        }
+        if bytes[0] == 0x01 &&
+            bytes[1] == 0x00 &&
+            bytes[2] == 0x00 &&
+            bytes[3] == 0x00 &&
+            bytes[4] == 0x00 &&
+            bytes[5] == 0x00 &&
+            bytes[6] == 0x00 &&
+            bytes[7] == 0x01 {
+            return true // 100:0:0:1::/64 dummy IPv6 prefix.
+        }
+        if bytes[0] == 0x20 && bytes[1] == 0x01 {
+            if bytes[2] == 0x00 && bytes[3] == 0x02 && bytes[4] == 0x00 && bytes[5] == 0x00 {
+                return true // 2001:2::/48 benchmarking.
+            }
+            if bytes[2] == 0x00 && (bytes[3] & 0xf0) == 0x10 {
+                return true // 2001:10::/28 deprecated ORCHID.
+            }
+        }
+        if bytes[0] == 0x3f && bytes[1] == 0xff && (bytes[2] & 0xf0) == 0x00 {
+            return true // 3fff::/20 documentation.
+        }
+        if bytes[0] == 0x5f && bytes[1] == 0x00 {
+            return true // 5f00::/16 SRv6 SIDs, not globally reachable.
+        }
+        return false
+    }
+
+    private static func wellKnownNAT64IPv4(_ bytes: [UInt8]) -> [UInt8]? {
+        guard bytes.count == 16 else { return nil }
+        let prefix: [UInt8] = [0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0]
+        guard Array(bytes[0..<12]) == prefix else { return nil }
+        return Array(bytes[12...15])
+    }
+
+    private static func sixToFourIPv4(_ bytes: [UInt8]) -> [UInt8]? {
+        guard bytes.count == 16,
+              bytes[0] == 0x20,
+              bytes[1] == 0x02 else {
+            return nil
+        }
+        return Array(bytes[2...5])
+    }
+}
+
+enum SourceDNSResolver {
+    static func resolvedAddressesArePublic(_ addresses: [String]) -> Bool {
+        !addresses.isEmpty && addresses.allSatisfy(SourceURLSafety.allowsResolvedIPAddress(_:))
+    }
+
+    static func resolvesOnlyToPublicAddresses(_ url: URL) -> Bool {
+        guard let rawHost = url.host else { return false }
+        let host = rawHost
+            .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty else { return false }
+
+        var hints = addrinfo(
+            ai_flags: AI_ADDRCONFIG,
+            ai_family: AF_UNSPEC,
+            ai_socktype: SOCK_STREAM,
+            ai_protocol: 0,
+            ai_addrlen: 0,
+            ai_canonname: nil,
+            ai_addr: nil,
+            ai_next: nil
+        )
+        var resultInfo: UnsafeMutablePointer<addrinfo>?
+        let result = getaddrinfo(host, nil, &hints, &resultInfo)
+        guard result == 0, let resultInfo else { return false }
+        defer { freeaddrinfo(resultInfo) }
+
+        var addresses: [String] = []
+        var cursor: UnsafeMutablePointer<addrinfo>? = resultInfo
+        while let current = cursor {
+            if let address = numericHost(from: current.pointee) {
+                addresses.append(address)
+            }
+            cursor = current.pointee.ai_next
+        }
+        return resolvedAddressesArePublic(addresses)
+    }
+
+    private static func numericHost(from info: addrinfo) -> String? {
+        guard let address = info.ai_addr else { return nil }
+        var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+        let result = getnameinfo(
+            address,
+            info.ai_addrlen,
+            &buffer,
+            socklen_t(buffer.count),
+            nil,
+            0,
+            NI_NUMERICHOST
+        )
+        guard result == 0 else { return nil }
+        return String(cString: buffer)
     }
 }
 
@@ -37,6 +336,7 @@ enum SourceFetchError: LocalizedError, Equatable {
     case unsupportedContent
     case emptyBody
     case tooLarge
+    case disallowedURL
 
     var errorDescription: String? {
         switch self {
@@ -48,6 +348,8 @@ enum SourceFetchError: LocalizedError, Equatable {
             return "The source did not contain readable text."
         case .tooLarge:
             return "The source was too large for V1 ingestion."
+        case .disallowedURL:
+            return "The source URL points to a local or private network address."
         }
     }
 }
@@ -58,14 +360,69 @@ protocol SourceFetching {
 
 final class SourceFetchService: SourceFetching {
     private let session: URLSession
+    private let redirectGuard: SourceFetchRedirectGuard?
     private let maxBytes: Int
+    private let resolveNetworkAddresses: Bool
+    private let dnsResolution: @Sendable (URL) -> Bool
 
-    init(session: URLSession = .shared, maxBytes: Int = 1_500_000) {
-        self.session = session
+    init(
+        session: URLSession? = nil,
+        maxBytes: Int = 1_500_000,
+        dnsResolution: @escaping @Sendable (URL) -> Bool = {
+            SourceDNSResolver.resolvesOnlyToPublicAddresses($0)
+        }
+    ) {
+        if let session {
+            self.session = session
+            self.redirectGuard = nil
+            self.resolveNetworkAddresses = false
+        } else {
+            let redirectGuard = SourceFetchRedirectGuard(dnsResolution: dnsResolution)
+            self.redirectGuard = redirectGuard
+            self.session = URLSession(
+                configuration: .ephemeral,
+                delegate: redirectGuard,
+                delegateQueue: nil
+            )
+            self.resolveNetworkAddresses = true
+        }
         self.maxBytes = maxBytes
+        self.dnsResolution = dnsResolution
+    }
+
+    init(
+        configuration: URLSessionConfiguration,
+        maxBytes: Int = 1_500_000,
+        resolveNetworkAddresses: Bool = false,
+        dnsResolution: @escaping @Sendable (URL) -> Bool = {
+            SourceDNSResolver.resolvesOnlyToPublicAddresses($0)
+        }
+    ) {
+        let redirectGuard = SourceFetchRedirectGuard(
+            resolveNetworkAddresses: resolveNetworkAddresses,
+            dnsResolution: dnsResolution
+        )
+        self.redirectGuard = redirectGuard
+        self.session = URLSession(
+            configuration: configuration,
+            delegate: redirectGuard,
+            delegateQueue: nil
+        )
+        self.maxBytes = maxBytes
+        self.resolveNetworkAddresses = resolveNetworkAddresses
+        self.dnsResolution = dnsResolution
     }
 
     func fetch(url: URL) async throws -> SourceFetchedDocument {
+        guard SourceURLSafety.allowsNetworkFetch(url) else {
+            throw SourceFetchError.disallowedURL
+        }
+        if resolveNetworkAddresses {
+            let addressesArePublic = await resolvedNetworkAddressesArePublic(url)
+            if !addressesArePublic {
+                throw SourceFetchError.disallowedURL
+            }
+        }
         try await rejectOversizedContentLength(for: url)
 
         var request = URLRequest(url: url)
@@ -100,6 +457,13 @@ final class SourceFetchService: SourceFetching {
             : Self.fallbackTitle(for: url)
 
         return SourceFetchedDocument(url: url, title: title, text: text)
+    }
+
+    private func resolvedNetworkAddressesArePublic(_ url: URL) async -> Bool {
+        let dnsResolution = dnsResolution
+        return await Task.detached(priority: .utility) {
+            dnsResolution(url)
+        }.value
     }
 
     private func cappedData(for request: URLRequest) async throws -> (Data, URLResponse) {
@@ -159,6 +523,37 @@ final class SourceFetchService: SourceFetching {
     }
 }
 
+final class SourceFetchRedirectGuard: NSObject, URLSessionTaskDelegate {
+    private let resolveNetworkAddresses: Bool
+    private let dnsResolution: @Sendable (URL) -> Bool
+
+    init(
+        resolveNetworkAddresses: Bool = true,
+        dnsResolution: @escaping @Sendable (URL) -> Bool = {
+            SourceDNSResolver.resolvesOnlyToPublicAddresses($0)
+        }
+    ) {
+        self.resolveNetworkAddresses = resolveNetworkAddresses
+        self.dnsResolution = dnsResolution
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
+        guard let url = request.url,
+              SourceURLSafety.allowsNetworkFetch(url),
+              !resolveNetworkAddresses || dnsResolution(url) else {
+            completionHandler(nil)
+            return
+        }
+        completionHandler(request)
+    }
+}
+
 protocol SourceEmbeddingProviding {
     var isLoaded: Bool { get }
     func embed(_ text: String) throws -> [Float]
@@ -194,6 +589,7 @@ final class SourceIngestionService {
         var materials: [SourceMaterialContext] = []
 
         for url in urls {
+            guard SourceURLSafety.allowsNetworkFetch(url) else { continue }
             if let existing = try existingMaterial(originalURL: url.absoluteString) {
                 materials.append(existing)
                 continue

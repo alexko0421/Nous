@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Runs the provocation fixture bank against the real judge via a dedicated
 # ad-hoc Swift entry point. Usage:
+#   ./scripts/run_provocation_fixtures.sh --dry-run
 #   ANTHROPIC_API_KEY=... ./scripts/run_provocation_fixtures.sh
 #
 # Requires the app to have been built at least once so dependencies resolve.
@@ -8,7 +9,14 @@
 set -euo pipefail
 FIXTURES_DIR="$(dirname "$0")/../Tests/NousTests/Fixtures/ProvocationScenarios"
 
-if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+DRY_RUN=false
+for arg in "$@"; do
+  if [ "$arg" = "--dry-run" ]; then
+    DRY_RUN=true
+  fi
+done
+
+if [ "$DRY_RUN" = false ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
   echo "Set ANTHROPIC_API_KEY before running." >&2
   exit 1
 fi
@@ -25,4 +33,4 @@ DERIVED=$(xcodebuild -project Nous.xcodeproj -scheme ProvocationFixtureRunner \
   -destination 'platform=macOS' -showBuildSettings -quiet \
   | grep -E "^[[:space:]]*BUILT_PRODUCTS_DIR" | sed -E 's/.*= //')
 
-"$DERIVED/ProvocationFixtureRunner" "$FIXTURES_DIR"
+"$DERIVED/ProvocationFixtureRunner" "$FIXTURES_DIR" "$@"

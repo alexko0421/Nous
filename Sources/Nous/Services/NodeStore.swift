@@ -2365,6 +2365,12 @@ final class NodeStore {
         return results
     }
 
+    func deleteMemoryObservation(id: UUID) throws {
+        let stmt = try db.prepare("DELETE FROM memory_observations WHERE id = ?;")
+        try stmt.bind(id.uuidString, at: 1)
+        try stmt.step()
+    }
+
     func appendMemoryRecallEvent(_ event: MemoryRecallEvent) throws {
         let stmt = try db.prepare("""
             INSERT INTO memory_recall_events

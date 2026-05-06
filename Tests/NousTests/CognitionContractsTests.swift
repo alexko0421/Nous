@@ -2,6 +2,75 @@ import XCTest
 @testable import Nous
 
 final class CognitionContractsTests: XCTestCase {
+    func testCognitionFrameValidatesRecordsWithoutRawPromptText() throws {
+        let frame = CognitionFrame(
+            turnId: UUID(),
+            conversationId: UUID(),
+            assistantMessageId: UUID(),
+            records: [
+                CognitionOrganRecord(
+                    organ: .coordinator,
+                    label: "turn_steward",
+                    status: .used,
+                    reason: "ordinary_chat_full_memory",
+                    evidenceRefs: [],
+                    resourceIds: ["skill:00000000-0000-0000-0000-000000000001"],
+                    riskFlags: []
+                )
+            ],
+            createdAt: Date(timeIntervalSince1970: 100)
+        )
+
+        XCTAssertNoThrow(try frame.validated())
+        let encoded = String(data: try JSONEncoder().encode(frame), encoding: .utf8)!
+        XCTAssertFalse(encoded.contains("Help me plan"))
+        XCTAssertFalse(encoded.contains("Assistant draft"))
+    }
+
+    func testCognitionFrameRejectsBlankRecordLabel() {
+        let frame = CognitionFrame(
+            turnId: UUID(),
+            conversationId: UUID(),
+            assistantMessageId: nil,
+            records: [
+                CognitionOrganRecord(
+                    organ: .coordinator,
+                    label: "   ",
+                    status: .used,
+                    reason: "ordinary_chat",
+                    evidenceRefs: [],
+                    resourceIds: [],
+                    riskFlags: []
+                )
+            ]
+        )
+
+        XCTAssertThrowsError(try frame.validated()) { error in
+            XCTAssertEqual(error as? CognitionValidationError, .emptySummary)
+        }
+    }
+
+    func testLegacyTurnCognitionSnapshotDecodesWithoutCognitionFrame() throws {
+        let json = """
+        {
+          "turnId": "00000000-0000-0000-0000-000000000101",
+          "conversationId": "00000000-0000-0000-0000-000000000102",
+          "assistantMessageId": "00000000-0000-0000-0000-000000000103",
+          "promptLayers": ["anchor", "chat_mode"],
+          "slowCognitionAttached": false,
+          "reviewArtifactId": null,
+          "reviewRiskFlags": [],
+          "reviewConfidence": null,
+          "recordedAt": 1000
+        }
+        """.data(using: .utf8)!
+
+        let snapshot = try JSONDecoder().decode(TurnCognitionSnapshot.self, from: json)
+
+        XCTAssertNil(snapshot.cognitionFrame)
+        XCTAssertEqual(snapshot.promptLayers, ["anchor", "chat_mode"])
+    }
+
     func testDurableArtifactRequiresEvidence() {
         let artifact = CognitionArtifact(
             organ: .patternAnalyst,

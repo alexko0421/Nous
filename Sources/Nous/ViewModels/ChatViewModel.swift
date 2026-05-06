@@ -48,6 +48,7 @@ final class ChatViewModel {
     private let skillStore: SkillStore?
     private let skillMatcher: SkillMatcher?
     private let skillTracker: SkillTracker?
+    private let skillDogfoodLogger: (any SkillDogfoodLogging)?
     /// Stored as a typed `Task<JudgeVerdict, Error>` — not `Task<Void, …>` — so tests can
     /// `await task.value` and inspect the verdict directly. The slot is guarded on clear:
     /// a later `send()` may have already overwritten it with a new task ID, so only the task
@@ -173,6 +174,7 @@ final class ChatViewModel {
             skillStore: skillStore,
             skillMatcher: skillMatcher ?? SkillMatcher(),
             skillTracker: skillTracker,
+            skillDogfoodLogger: skillDogfoodLogger,
             shadowPatternPromptProvider: shadowPatternPromptProvider,
             slowCognitionArtifactProvider: slowCognitionArtifactProvider,
             agentLoopProviderSupportsToolUse: { [weak self] provider in
@@ -234,6 +236,7 @@ final class ChatViewModel {
             skillStore: skillStore,
             skillMatcher: skillMatcher ?? SkillMatcher(),
             skillTracker: skillTracker,
+            skillDogfoodLogger: skillDogfoodLogger,
             cognitionReviewer: CognitionReviewer(),
             shouldSurfaceThinkingTraces: shouldPersistAssistantThinking,
             onPlanReady: { [governanceTelemetry] plan in
@@ -341,6 +344,7 @@ final class ChatViewModel {
         skillStore: SkillStore? = nil,
         skillMatcher: SkillMatcher? = nil,
         skillTracker: SkillTracker? = nil,
+        skillDogfoodLogger: (any SkillDogfoodLogging)? = nil,
         governanceTelemetry: GovernanceTelemetryStore = GovernanceTelemetryStore(),
         geminiPromptCache: GeminiPromptCacheService = GeminiPromptCacheService(),
         scratchPadStore: ScratchPadStore,
@@ -370,6 +374,7 @@ final class ChatViewModel {
         self.skillStore = skillStore
         self.skillMatcher = skillMatcher
         self.skillTracker = skillTracker
+        self.skillDogfoodLogger = skillDogfoodLogger
         self.governanceTelemetry = governanceTelemetry
         self.geminiPromptCache = geminiPromptCache
         self.scratchPadStore = scratchPadStore

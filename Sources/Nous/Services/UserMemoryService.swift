@@ -12,6 +12,16 @@ final class UserMemoryCore {
         case rejected
     }
 
+    struct MemoryTrustCleanupReport: Equatable {
+        var redactedMemoryEntryCount: Int = 0
+        var deletedMemoryFactCount: Int = 0
+        var deletedMemoryAtomCount: Int = 0
+        var deletedMemoryEdgeCount: Int = 0
+        var deletedMemoryObservationCount: Int = 0
+
+        static let empty = MemoryTrustCleanupReport()
+    }
+
     static let contradictionFactKinds: [MemoryKind] = [.decision, .boundary, .constraint]
     private static let evidenceTimestampFormatter = ISO8601DateFormatter()
 
@@ -237,6 +247,60 @@ final class UserMemoryCore {
         }
     }
 
+    func scrubProtectedMemoryDetails(messages: [Message]) -> MemoryTrustCleanupReport {
+        let turns = Self.cleanedEvidenceTurns(from: messages)
+        let privacyGuard = Self.memoryPrivacyGuard(from: turns)
+        return scrubProtectedMemoryDetails(privacyGuard: privacyGuard)
+    }
+
+    private func scrubProtectedMemoryDetails(
+        privacyGuard: MemoryPrivacyGuard
+    ) -> MemoryTrustCleanupReport {
+        guard !privacyGuard.isEmpty else { return .empty }
+
+        var report = MemoryTrustCleanupReport()
+        do {
+            for var entry in try nodeStore.fetchMemoryEntries()
+                where privacyGuard.referencesProtectedContent(entry.content) {
+                entry.content = Self.redactedLegacyMemoryContent(entry.content, privacyGuard: privacyGuard)
+                entry.updatedAt = Date()
+                try nodeStore.updateMemoryEntry(entry)
+                report.redactedMemoryEntryCount += 1
+            }
+
+            for fact in try nodeStore.fetchMemoryFactEntries()
+                where privacyGuard.referencesProtectedContent(fact.content) {
+                try nodeStore.deleteMemoryFactEntry(id: fact.id)
+                report.deletedMemoryFactCount += 1
+            }
+
+            for edge in try nodeStore.fetchMemoryEdges()
+                where privacyGuard.blocks(sourceMessageId: edge.sourceMessageId) {
+                try nodeStore.deleteMemoryEdge(id: edge.id)
+                report.deletedMemoryEdgeCount += 1
+            }
+
+            for atom in try nodeStore.fetchMemoryAtoms()
+                where privacyGuard.referencesProtectedContent(atom.statement) ||
+                    privacyGuard.blocks(sourceMessageId: atom.sourceMessageId) {
+                try nodeStore.deleteMemoryAtom(id: atom.id)
+                report.deletedMemoryAtomCount += 1
+            }
+
+            for observation in try nodeStore.fetchMemoryObservations()
+                where privacyGuard.referencesProtectedContent(observation.rawText) ||
+                    privacyGuard.blocks(sourceMessageId: observation.sourceMessageId) {
+                try nodeStore.deleteMemoryObservation(id: observation.id)
+                report.deletedMemoryObservationCount += 1
+            }
+        } catch {
+            #if DEBUG
+            print("[UserMemoryService] scrubProtectedMemoryDetails failed: \(error)")
+            #endif
+        }
+        return report
+    }
+
     /// True when this project has accumulated `threshold` or more conversation
     /// refreshes since the last `refreshProject` (or ever, if the project has
     /// never been refreshed). Backed by `project_refresh_state.counter`, which
@@ -331,6 +395,7 @@ final class UserMemoryCore {
         let privacyGuard = Self.memoryPrivacyGuard(from: recentEvidenceTurns)
         let userTurns = Self.evidencePromptTurns(from: recentEvidenceTurns)
 
+        _ = scrubProtectedMemoryDetails(messages: messages)
         guard !userTurns.isEmpty else { return }
         guard let llm = llmServiceProvider() else { return }
 
@@ -617,6 +682,11 @@ final class UserMemoryCore {
         _ candidate: TemporaryBranchMemoryCandidate,
         record: TemporaryBranchRecord
     ) -> Bool {
+        guard candidate.status == .pending || candidate.status == .accepted else { return false }
+        guard !candidate.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !candidate.evidenceQuote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
         guard let memoryScope = candidate.scope.memoryScope else { return false }
         let scopeRefId: UUID?
         switch candidate.scope {
@@ -764,6 +834,15 @@ final class UserMemoryCore {
         }
     }
 
+    private static func redactedLegacyMemoryContent(
+        _ content: String,
+        privacyGuard: MemoryPrivacyGuard
+    ) -> String {
+        let redacted = privacyGuard.redact(content)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return redacted.isEmpty ? MemoryPrivacyGuard.redactedEvidenceLine : redacted
+    }
+
     private func extractEvidenceSnippet(from node: NousNode) -> String {
         switch node.type {
         case .conversation:
@@ -776,7 +855,9 @@ final class UserMemoryCore {
         case .note:
             break
         case .source:
-            return ""
+            if let sourceChunkExcerpt = sourceChunkEvidence(nodeId: node.id) {
+                return sourceChunkExcerpt
+            }
         }
 
         for line in Self.extractSummaryLines(from: node.content, limit: 1) {
@@ -823,6 +904,16 @@ final class UserMemoryCore {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard !content.isEmpty else { continue }
             return Self.preview(content, maxChars: MemoryProjectionService.evidenceSnippetBudget)
+        }
+        return nil
+    }
+
+    private func sourceChunkEvidence(nodeId: UUID) -> String? {
+        guard let chunks = try? nodeStore.fetchSourceChunks(nodeId: nodeId) else { return nil }
+        for chunk in chunks {
+            let trimmed = chunk.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            return Self.preview(trimmed, maxChars: MemoryProjectionService.evidenceSnippetBudget)
         }
         return nil
     }
@@ -1408,7 +1499,188 @@ final class UserMemoryCore {
             "hi", "hey", "hello", "yo", "ok", "okay", "okkk", "thanks", "thankyou",
             "lol", "haha", "哈哈", "好", "好呀", "嗯", "嗯嗯", "唔该", "唔該"
         ]
-        return lowSignalTokens.contains(normalized)
+        if lowSignalTokens.contains(normalized) { return true }
+        if looksTemporaryBranchProbeOnlyQuestion(collapsed) { return true }
+        if hasSubstantiveTemporaryBranchSignal(collapsed) { return false }
+        if looksLowSignalTemporaryBranchChat(collapsed) { return true }
+
+        let lowSignalProbePhrases = [
+            "contextunclear",
+            "finalprobe",
+            "recallprobe",
+            "qaprobe",
+            "memoryprobe",
+            "测试probe",
+            "測試probe"
+        ]
+        return normalized == "probe" || lowSignalProbePhrases.contains { normalized.contains($0) }
+    }
+
+    private static func looksLowSignalTemporaryBranchChat(_ text: String) -> Bool {
+        guard !hasSubstantiveTemporaryBranchSignal(text) else { return false }
+        let lower = text.lowercased()
+        let compact = lower.unicodeScalars
+            .filter { scalar in
+                !CharacterSet.whitespacesAndNewlines.contains(scalar) &&
+                !CharacterSet.punctuationCharacters.contains(scalar) &&
+                !CharacterSet.symbols.contains(scalar)
+            }
+            .map(String.init)
+            .joined()
+        let lowSignalExact: Set<String> = [
+            "hi", "hey", "hello", "yo", "ok", "okay", "okkk",
+            "thanks", "thankyou", "thx", "cool", "nice", "sure",
+            "yes", "no", "yep", "nope", "gotit", "understood",
+            "noted", "done", "makessense", "soundsgood", "good",
+            "continue", "continueplease", "继续", "繼續", "继续吧", "繼續吧",
+            "继续扫", "繼續掃", "继续扫继续扫", "繼續掃繼續掃"
+        ]
+        if lowSignalExact.contains(compact) {
+            return true
+        }
+
+        let lowSignalPhrases = [
+            "thank you",
+            "got it",
+            "makes sense",
+            "sounds good",
+            "you are right",
+            "you're right",
+            "keep going",
+            "go on",
+            "continue review",
+            "continue scanning",
+            "继续扫",
+            "繼續掃",
+            "继续找",
+            "繼續搵",
+            "继续稳",
+            "繼續穩",
+            "继续检查",
+            "繼續檢查",
+            "继续 review",
+            "繼續 review"
+        ]
+        return lowSignalPhrases.contains { lower.contains($0) }
+    }
+
+    private static func looksTemporaryBranchProbeOnlyQuestion(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        guard isQuestionLike(lower) else { return false }
+        let phrases = [
+            "based on what you know",
+            "do you remember",
+            "can you recall",
+            "previously",
+            "should nous",
+            "should memory",
+            "should we remember",
+            "should we save",
+            "should i remember",
+            "should i save",
+            "should you remember",
+            "should you save",
+            "should this be remembered",
+            "should this be saved",
+            "do we save",
+            "do i save",
+            "do you need to remember",
+            "what should nous",
+            "what should memory",
+            "what should branch",
+            "nous 应该",
+            "nous 應該",
+            "memory 应该",
+            "memory 應該",
+            "应该记",
+            "應該記",
+            "应不应该记",
+            "應不應該記",
+            "應唔應該記",
+            "该不该记",
+            "該不該記",
+            "应该保存",
+            "應該保存",
+            "你觉得",
+            "你覺得",
+            "这个 project",
+            "這個 project",
+            "这个项目",
+            "這個項目"
+        ]
+        return phrases.contains { lower.contains($0) }
+    }
+
+    private static func hasSubstantiveTemporaryBranchSignal(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        let memoryMarkers = [
+            "remember that",
+            "记住",
+            "記住",
+            "记低",
+            "記低"
+        ]
+        if memoryMarkers.contains(where: { marker in
+            guard let range = lower.range(of: marker, options: [.caseInsensitive, .diacriticInsensitive]) else {
+                return false
+            }
+            let suffix = String(lower[range.upperBound...])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'`“”‘’「」『』（）()[]{}，,。.!！?？；;：:"))
+            let compact = suffix.unicodeScalars
+                .filter { scalar in
+                    !CharacterSet.whitespacesAndNewlines.contains(scalar) &&
+                    !CharacterSet.punctuationCharacters.contains(scalar) &&
+                    !CharacterSet.symbols.contains(scalar)
+                }
+                .map(String.init)
+                .joined()
+            return compact.count >= 8 && !["了吗", "了嗎", "咗咩", "未", "what", "anything", "this", "that", "it"].contains(compact)
+        }) {
+            return true
+        }
+
+        let questionLike = isQuestionLike(lower)
+        let horizonPhrases = [
+            "from now on",
+            "going forward",
+            "以后",
+            "以後",
+            "long term",
+            "长期",
+            "長期"
+        ]
+        if !questionLike, horizonPhrases.contains(where: { lower.contains($0) }) {
+            return true
+        }
+
+        guard !questionLike else { return false }
+
+        let declarativePhrases = [
+            "i prefer",
+            "my preference is",
+            "i decided",
+            "we decided",
+            "decision:",
+            "decision：",
+            "决定:",
+            "决定：",
+            "決定:",
+            "決定：",
+            "我偏好",
+            "我決定",
+            "我决定"
+        ]
+        let correctionMarkers = [
+            "correction:",
+            "correction：",
+            "修正:",
+            "修正：",
+            "更正:",
+            "更正："
+        ]
+        return declarativePhrases.contains { lower.contains($0) } ||
+            correctionMarkers.contains { lower.contains($0) }
     }
 
     private static func cleanedEvidenceTurns(from messages: [Message]) -> [EvidencePromptTurn] {
@@ -1499,6 +1771,33 @@ final class UserMemoryCore {
             fragments.append(fragment)
         }
 
+        func admitContext(_ raw: String) {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            admit(trimmed)
+
+            let lowercased = trimmed.lowercased()
+            for prefix in ["that ", "this ", "it ", "about "] where lowercased.hasPrefix(prefix) {
+                admit(String(trimmed.dropFirst(prefix.count)))
+            }
+
+            for delimiter in [":", "："] {
+                guard let delimiterRange = trimmed.range(of: delimiter, options: .backwards) else {
+                    continue
+                }
+                admit(String(trimmed[delimiterRange.upperBound...]))
+            }
+        }
+
+        func containsOptOut(_ raw: String) -> Bool {
+            let normalized = MemoryGraphAtomMapper.normalizedLine(raw)
+            guard !normalized.isEmpty else { return false }
+            return matchedOptOutPhrases.contains { phrase in
+                let normalizedPhrase = MemoryGraphAtomMapper.normalizedLine(phrase)
+                return !normalizedPhrase.isEmpty && normalized.contains(normalizedPhrase)
+            }
+        }
+
         for quotePattern in [
             #""([^"]{2,80})""#,
             #"'([^']{2,80})'"#,
@@ -1520,6 +1819,23 @@ final class UserMemoryCore {
         ] {
             for match in Self.regexCaptures(pattern: namedPattern, in: text) {
                 admit(match)
+            }
+        }
+
+        let segments = text
+            .components(separatedBy: CharacterSet(charactersIn: "\n。.!！?？；;"))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        for (index, segment) in segments.enumerated() where containsOptOut(segment) {
+            if index > 0 {
+                admitContext(segments[index - 1])
+            }
+            for phrase in matchedOptOutPhrases {
+                guard let range = segment.range(of: phrase, options: [.caseInsensitive, .diacriticInsensitive]) else {
+                    continue
+                }
+                admitContext(String(segment[..<range.lowerBound]))
+                admitContext(String(segment[range.upperBound...]))
             }
         }
 
@@ -1621,7 +1937,60 @@ final class UserMemoryCore {
     }
 
     private static func isQuestionLike(_ content: String) -> Bool {
-        content.contains("?") || content.contains("？")
+        let lower = content.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if lower.contains("?") ||
+            lower.contains("？") ||
+            lower.hasSuffix("吗") ||
+            lower.hasSuffix("嗎") ||
+            lower.hasSuffix("咩") ||
+            lower.hasSuffix("么") ||
+            lower.hasSuffix("未") {
+            return true
+        }
+
+        let questionPrefixes = [
+            "should ",
+            "do you ",
+            "can you ",
+            "could you ",
+            "would you ",
+            "what ",
+            "when ",
+            "why ",
+            "how ",
+            "where ",
+            "is ",
+            "are ",
+            "am i "
+        ]
+        if questionPrefixes.contains(where: { lower.hasPrefix($0) }) {
+            return true
+        }
+
+        let questionPhrases = [
+            " should you ",
+            " should we ",
+            " should i ",
+            " should this ",
+            "是不是",
+            "是否",
+            "有没有",
+            "有沒有",
+            "应不应该",
+            "應不應該",
+            "應唔應該",
+            "该不该",
+            "該不該",
+            "可不可以",
+            "可唔可以",
+            "能不能",
+            "能唔能",
+            "要不要",
+            "要唔要",
+            "你觉得",
+            "你覺得"
+        ]
+        return questionPhrases.contains { lower.contains($0) }
     }
 
     private static func verifiedDecisionChain(

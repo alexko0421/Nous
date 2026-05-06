@@ -758,6 +758,17 @@ enum ContextManifestFactory {
             ))
         }
 
+        if let focusMemoryReferenceId = focusMemoryReferenceId(from: plan.focusBlock) {
+            append(ContextManifestResource(
+                source: .memory,
+                label: "focus_memory",
+                referenceId: focusMemoryReferenceId,
+                state: .loaded,
+                used: true,
+                provenance: memoryProvenance[focusMemoryReferenceId]
+            ))
+        }
+
         if loadedPromptLayers.contains("citations") {
             let loadedCitationIds = plan.loadedCitationIds.isEmpty
                 ? Set(plan.citations.map(\.node.id))
@@ -818,6 +829,19 @@ enum ContextManifestFactory {
         )
     }
 
+    private static func focusMemoryReferenceId(from focusBlock: String?) -> String? {
+        guard let focusBlock,
+              let markerRange = focusBlock.range(of: "(id=") else {
+            return nil
+        }
+        let start = markerRange.upperBound
+        guard let end = focusBlock[start...].firstIndex(of: ")") else {
+            return nil
+        }
+        let referenceId = focusBlock[start..<end].trimmingCharacters(in: .whitespacesAndNewlines)
+        return referenceId.isEmpty ? nil : referenceId
+    }
+
     private static func toolLoadedSkillIds(from agentTraceJson: String?) -> Set<UUID> {
         Set(AgentTraceCodec.decode(agentTraceJson).compactMap { record -> UUID? in
             guard record.kind == .toolResult,
@@ -849,8 +873,11 @@ enum ContextManifestFactory {
         sourceIndex: Int,
         assistantContent: String
     ) -> Bool {
-        sourceMaterialIdentifiers(for: material, sourceIndex: sourceIndex)
-            .contains { assistantContent.containsCaseFolded($0) }
+        if sourceMaterialIdentifiers(for: material, sourceIndex: sourceIndex)
+            .contains(where: { assistantContent.containsCaseFolded($0) }) {
+            return true
+        }
+        return sourceChunkMarkerWasUsed(material, sourceIndex: sourceIndex, assistantContent: assistantContent)
     }
 
     private static func sourceMaterialIdentifiers(
@@ -867,6 +894,22 @@ enum ContextManifestFactory {
             identifiers.append(host)
         }
         return identifiers
+    }
+
+    private static func sourceChunkMarkerWasUsed(
+        _ material: SourceMaterialContext,
+        sourceIndex: Int,
+        assistantContent: String
+    ) -> Bool {
+        let sourceNumber = sourceIndex + 1
+        return material.chunks.contains { chunk in
+            let markerStem = "S\(sourceNumber).\(chunk.ordinal + 1)"
+            let pattern = "\\[" + NSRegularExpression.escapedPattern(for: markerStem) + "(?:\\s[^\\]]*)?\\]"
+            return assistantContent.range(
+                of: pattern,
+                options: [.regularExpression, .caseInsensitive]
+            ) != nil
+        }
     }
 }
 

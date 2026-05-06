@@ -14,6 +14,8 @@ fi
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DESTINATION="${XCODE_DESTINATION:-platform=macOS}"
+DEFAULT_BEHAVIOR_EVAL_LIVE_MODE="never"
+BEHAVIOR_EVAL_LIVE_MODE="${NOUS_BEHAVIOR_EVAL_LIVE_MODE:-$DEFAULT_BEHAVIOR_EVAL_LIVE_MODE}"
 RESULTS_DIR="$ROOT_DIR/results/harness"
 RESULTS_LOG="$RESULTS_DIR/runs.jsonl"
 RUN_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
@@ -21,6 +23,11 @@ STARTED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 STATUS="passed"
 FINDINGS=()
 DETAILS=()
+
+if [[ "$BEHAVIOR_EVAL_LIVE_MODE" != "never" && "$BEHAVIOR_EVAL_LIVE_MODE" != "auto" && "$BEHAVIOR_EVAL_LIVE_MODE" != "required" ]]; then
+  echo "NOUS_BEHAVIOR_EVAL_LIVE_MODE must be never, auto, or required." >&2
+  exit 2
+fi
 
 cd "$ROOT_DIR"
 
@@ -130,7 +137,7 @@ needs_xcodegen() {
   local path
   while IFS= read -r path; do
     case "$path" in
-      project.yml|Sources/*.swift|Tests/*.swift|Tests/NousTests/Fixtures/*)
+      project.yml|Tests/NousTests/Fixtures/*|Sources/*.swift|Sources/*/*.swift|Sources/*/*/*.swift|Sources/*/*/*/*.swift|Tests/*.swift|Tests/*/*.swift|Tests/*/*/*.swift|Tests/*/*/*/*.swift)
         return 0
         ;;
     esac
@@ -158,11 +165,11 @@ classify_changed_paths() {
       project.yml|Nous.xcodeproj/*)
         add_finding "project_config_changed"
         ;;
-      Sources/*.swift|Tests/*.swift)
-        add_finding "source_set_changed"
-        ;;
-      *FixtureRunner*|*Sycophancy*|Tests/NousTests/PromptGovernance*|Tests/NousTests/RuntimeQuality*)
+      *FixtureRunner*|*Sycophancy*|*BehaviorDataset*|*BehaviorExperiment*|*BehaviorEval*|*BehaviorFineTune*|*BehaviorLocalModel*|Tests/NousTests/PromptGovernance*|Tests/NousTests/RuntimeQuality*)
         add_finding "fixture_surface_changed"
+        ;;
+      Sources/*.swift|Sources/*/*.swift|Sources/*/*/*.swift|Sources/*/*/*/*.swift|Tests/*.swift|Tests/*/*.swift|Tests/*/*/*.swift|Tests/*/*/*/*.swift)
+        add_finding "source_set_changed"
         ;;
     esac
   done < <(changed_paths)
@@ -191,13 +198,36 @@ check_beads() {
 run_targeted_tests() {
   run_step "Targeted harness tests" ./scripts/test_nous.sh \
     -only-testing:NousTests/HarnessHealthTests \
+    -only-testing:NousTests/BehaviorEvalTests \
+    -only-testing:NousTests/CognitionContractsTests \
+    -only-testing:NousTests/CognitionDirectorTests \
+    -only-testing:NousTests/ContextManifestFactoryTests \
+    -only-testing:NousTests/MemoryCuratorTests \
+    -only-testing:NousTests/ReflectionValidatorTests \
+    -only-testing:NousTests/WeeklyReflectionServiceTests \
+    -only-testing:NousTests/ReflectionCascadeOrphanTests \
     -only-testing:NousTests/PromptContextAssemblerShadowLearningTests \
     -only-testing:NousTests/PromptContextAssemblerSlowCognitionTests \
     -only-testing:NousTests/PromptContextAssemblerTeachingExplanationTests \
     -only-testing:NousTests/PromptContextAssemblerSoftHardCalibrationTests \
     -only-testing:NousTests/RuntimeQualityReviewerTests \
     -only-testing:NousTests/PromptGovernanceTraceTests \
+    -only-testing:NousTests/SourceURLDetectorTests \
+    -only-testing:NousTests/SourceFetchServiceTests \
+    -only-testing:NousTests/SourceIngestionServiceTests \
+    -only-testing:NousTests/TemporaryBranchViewModelTests \
+    -only-testing:NousTests/TurnMemoryContextBuilderTests \
+    -only-testing:NousTests/TurnCognitionInspectorFeedTests \
     -only-testing:NousTests/SafetyGuardrailsTests
+}
+
+run_behavior_evals() {
+  local mode="$1"
+  local live="$2"
+  ./scripts/run_behavior_evals.sh \
+    --mode "$mode" \
+    --live "$live" \
+    --change-signature "$(change_signature)"
 }
 
 run_full_checks() {
@@ -218,6 +248,12 @@ run_full_checks() {
   run_step "Nous main window runtime smoke" ./scripts/smoke_nous_window.sh
 
   run_step "Full Nous tests" ./scripts/test_nous.sh
+
+  run_step "Behavior eval full" run_behavior_evals full "$BEHAVIOR_EVAL_LIVE_MODE"
+
+  if [[ -x "./scripts/run_provocation_fixtures.sh" ]]; then
+    run_step "Provocation fixture dry-run" ./scripts/run_provocation_fixtures.sh --dry-run
+  fi
 
   if [[ -x "./scripts/run_sycophancy_fixtures.sh" ]]; then
     run_step "Sycophancy fixture dry-run" ./scripts/run_sycophancy_fixtures.sh --dry-run --no-persist
@@ -250,6 +286,7 @@ if [[ "$MODE" == "quick" ]]; then
     add_detail "Risky prompt/model/memory/config/eval surface changed; full gate required before close."
   fi
   run_targeted_tests
+  run_step "Behavior eval quick" run_behavior_evals quick never
 else
   run_full_checks
 fi

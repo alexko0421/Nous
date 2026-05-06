@@ -1052,10 +1052,11 @@ CHAT FORMAT POLICY:
             """)
             for (sourceIndex, material) in sourceMaterials.enumerated() {
                 let sourceNumber = sourceIndex + 1
-                volatilePieces.append("[S\(sourceNumber)] \(material.title)\nSource: \(material.displaySource)")
+                volatilePieces.append("[S\(sourceNumber)] \(sourceHeaderText(material.title))\nSource: \(sourceHeaderText(material.displaySource))")
                 for chunk in material.chunks.prefix(3) {
                     let score = chunk.similarity.map { " relevance \(Int($0 * 100))%" } ?? ""
-                    volatilePieces.append("[S\(sourceNumber).\(chunk.ordinal + 1)\(score)] \(chunk.text)")
+                    let marker = "[S\(sourceNumber).\(chunk.ordinal + 1)\(score)]"
+                    volatilePieces.append(sourceChunkText(chunk.text, marker: marker))
                 }
             }
         }
@@ -1235,6 +1236,22 @@ CHAT FORMAT POLICY:
         Use this as internal orchestration only. Do not mention supervisor lanes, routing, or internal planning in the visible answer.
         \(laneGuidance)
         """
+    }
+
+    private static func sourceHeaderText(_ text: String) -> String {
+        SourceTextExtractor.normalizeWhitespace(text)
+            .components(separatedBy: .newlines)
+            .joined(separator: " / ")
+    }
+
+    private static func sourceChunkText(_ text: String, marker: String) -> String {
+        let lines = SourceTextExtractor.normalizeWhitespace(text)
+            .components(separatedBy: .newlines)
+            .filter { !$0.isEmpty }
+        guard let first = lines.first else { return marker }
+
+        let continuation = lines.dropFirst().map { "\(marker.dropLast()) cont] \($0)" }
+        return ([ "\(marker) \(first)" ] + continuation).joined(separator: "\n")
     }
 
     private static func analyticsLaneBrief(

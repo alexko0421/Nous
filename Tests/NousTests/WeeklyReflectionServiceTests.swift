@@ -223,6 +223,52 @@ final class WeeklyReflectionServiceTests: XCTestCase {
         XCTAssertEqual(fetched[0].claim, "real pattern")
     }
 
+    func testDuplicateClaimTextPreservesSeparateEvidenceRows() async throws {
+        let weekStart = makeDate(2026, 4, 13)
+        let weekEnd = makeDate(2026, 4, 20)
+        let messageIds = (0..<12).map { _ in UUID() }
+        try seedConversation(
+            projectId: nil,
+            timestamps: messageIds.enumerated().map { i, _ in
+                weekStart.addingTimeInterval(TimeInterval(i) * 3600)
+            },
+            messageIds: messageIds
+        )
+
+        let firstA = messageIds[0].uuidString
+        let firstB = messageIds[1].uuidString
+        let secondA = messageIds[2].uuidString
+        let secondB = messageIds[3].uuidString
+        llm.nextOutcome = .success(
+            text: #"""
+            {"claims":[
+              {"claim":"same pattern","confidence":0.8,"supporting_turn_ids":["\#(firstA)","\#(firstB)"],"why_non_obvious":"first reason"},
+              {"claim":"same pattern","confidence":0.9,"supporting_turn_ids":["\#(secondA)","\#(secondB)"],"why_non_obvious":"second reason"}
+            ]}
+            """#,
+            usage: nil
+        )
+
+        let service = WeeklyReflectionService(nodeStore: store, llm: llm, now: { self.now })
+        let maybeResult = try await service.runForWeek(
+            projectId: nil,
+            weekStart: weekStart,
+            weekEnd: weekEnd
+        )
+        let result = try XCTUnwrap(maybeResult)
+
+        XCTAssertEqual(result.claims.count, 2)
+        let evidenceByClaim = Dictionary(grouping: result.evidence, by: \.reflectionId)
+        XCTAssertEqual(
+            evidenceByClaim[result.claims[0].id]?.map(\.messageId),
+            [messageIds[0], messageIds[1]]
+        )
+        XCTAssertEqual(
+            evidenceByClaim[result.claims[1].id]?.map(\.messageId),
+            [messageIds[2], messageIds[3]]
+        )
+    }
+
     // MARK: Guard #2 — LLM failure
 
     func testLLMFailurePersistsFailedApiErrorAndRethrows() async throws {

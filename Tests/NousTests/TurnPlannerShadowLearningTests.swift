@@ -375,6 +375,37 @@ final class TurnPlannerShadowLearningTests: XCTestCase {
         XCTAssertFalse(plan.turnSlice.volatile.contains("RESPONSE STANCE:"))
     }
 
+    func testSupportFirstTraceSuppressesConflictingShapeGuidance() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "Support first")
+        let message = Message(nodeId: node.id, role: .user, content: "我好焦虑，但我应该点拣？")
+        let prepared = PreparedConversationTurn(node: node, userMessage: message, messagesAfterUserAppend: [message])
+        let request = self.request(input: message.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .direction,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .narrowNextStep,
+            source: .deterministic,
+            reason: "test support-first trace",
+            responseStance: .supportFirst,
+            judgePolicy: .off,
+            routerMode: .active,
+            routerSource: .deterministic
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertTrue(plan.turnSlice.volatile.contains("Emotional dwell: First paragraph must only acknowledge and dwell with Alex's feeling."))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("No practical advice, plan, analysis, contradiction, or next step in the first paragraph."))
+        XCTAssertFalse(plan.turnSlice.volatile.contains("Narrow to one concrete next step"))
+    }
+
     private func makePlanner(
         nodeStore: NodeStore,
         shadowPatternPromptProvider: (any ShadowPatternPromptProviding)?

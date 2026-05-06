@@ -117,14 +117,6 @@ final class TurnMemoryContextBuilder {
         let conversationMemory = policy.includeConversationMemory
             ? memoryProjectionService.currentConversation(nodeId: node.id)
             : nil
-        let memoryProvenance = memoryProvenanceMap(
-            policy: policy,
-            projectId: node.projectId,
-            conversationId: node.id,
-            memoryEvidence: filteredMemoryEvidence,
-            memoryGraphRecall: memoryGraphRecall
-        )
-
         let nodeHits = citations.map { $0.node.id }
         let hardRecallFacts: [MemoryFactEntry] = policy.includeContradictionRecall
             ? try contradictionMemoryService.contradictionRecallFacts(
@@ -152,6 +144,14 @@ final class TurnMemoryContextBuilder {
                 contradictionCandidateIds: contradictionCandidateIds
             )
             : []
+        let memoryProvenance = memoryProvenanceMap(
+            policy: policy,
+            projectId: node.projectId,
+            conversationId: node.id,
+            memoryEvidence: filteredMemoryEvidence,
+            memoryGraphRecall: memoryGraphRecall,
+            citablePool: citablePool
+        )
 
         return TurnMemoryContext(
             citations: citations,
@@ -210,7 +210,8 @@ final class TurnMemoryContextBuilder {
         projectId: UUID?,
         conversationId: UUID,
         memoryEvidence: [MemoryEvidenceSnippet],
-        memoryGraphRecall: [String]
+        memoryGraphRecall: [String],
+        citablePool: [CitableEntry]
     ) -> [String: ContextManifestMemoryProvenance] {
         var provenance: [String: ContextManifestMemoryProvenance] = [:]
 
@@ -237,6 +238,14 @@ final class TurnMemoryContextBuilder {
         if policy.includeContradictionRecall,
            let graphRecall = graphRecallProvenance(memoryGraphRecall) {
             provenance["memory_graph_recall"] = graphRecall
+        }
+
+        for citable in citablePool {
+            guard provenance[citable.id] == nil,
+                  let citableProvenance = citableProvenance(citable) else {
+                continue
+            }
+            provenance[citable.id] = citableProvenance
         }
 
         return provenance
@@ -296,12 +305,44 @@ final class TurnMemoryContextBuilder {
         )
     }
 
+    private func citableProvenance(_ citable: CitableEntry) -> ContextManifestMemoryProvenance? {
+        guard let id = UUID(uuidString: citable.id) else { return nil }
+        if let entry = try? nodeStore.fetchMemoryEntry(id: id) {
+            return provenance(from: entry)
+        }
+        if let fact = try? nodeStore.fetchMemoryFactEntry(id: id) {
+            return provenance(from: fact)
+        }
+        if citable.scope == .selfReflection {
+            let evidence = (try? nodeStore.fetchReflectionEvidence(reflectionIds: [id])) ?? []
+            return ContextManifestMemoryProvenance(
+                scope: .selfReflection,
+                statuses: [.active],
+                confidence: nil,
+                sourceNodeIds: [],
+                sourceMessageIds: Self.uniqueUUIDs(evidence.map(\.messageId))
+            )
+        }
+        return nil
+    }
+
     private func provenance(from entry: MemoryEntry) -> ContextManifestMemoryProvenance {
         let sourceNodeIds = Self.uniqueUUIDs(entry.sourceNodeIds)
         return ContextManifestMemoryProvenance(
             scope: entry.scope,
             statuses: [entry.status],
             confidence: entry.confidence,
+            sourceNodeIds: sourceNodeIds,
+            sourceMessageIds: sourceMessageIds(sourceNodeIds: sourceNodeIds)
+        )
+    }
+
+    private func provenance(from fact: MemoryFactEntry) -> ContextManifestMemoryProvenance {
+        let sourceNodeIds = Self.uniqueUUIDs(fact.sourceNodeIds)
+        return ContextManifestMemoryProvenance(
+            scope: fact.scope,
+            statuses: [fact.status],
+            confidence: fact.confidence,
             sourceNodeIds: sourceNodeIds,
             sourceMessageIds: sourceMessageIds(sourceNodeIds: sourceNodeIds)
         )

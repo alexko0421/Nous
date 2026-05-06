@@ -148,6 +148,66 @@ final class TurnMemoryContextBuilderTests: XCTestCase {
         XCTAssertEqual(provenance.sourceMessageIds, [sourceMessage.id])
     }
 
+    func testBuilderAttachesCitableFactProvenanceForJudgeFocus() throws {
+        let store = try NodeStore(path: ":memory:")
+        let current = NousNode(type: .conversation, title: "Current chat")
+        let source = NousNode(type: .conversation, title: "Source chat")
+        try store.insertNode(current)
+        try store.insertNode(source)
+        let sourceMessage = Message(
+            nodeId: source.id,
+            role: .user,
+            content: "Remember that memory provenance must include judge focus facts."
+        )
+        try store.insertMessage(sourceMessage)
+        let fact = MemoryFactEntry(
+            scope: .global,
+            kind: .boundary,
+            content: "Memory provenance must include judge focus facts.",
+            confidence: 0.88,
+            status: .active,
+            stability: .stable,
+            sourceNodeIds: [source.id],
+            createdAt: Date(timeIntervalSince1970: 1_000),
+            updatedAt: Date(timeIntervalSince1970: 1_000)
+        )
+        try store.insertMemoryFactEntry(fact)
+        try store.insertMemoryAtom(MemoryAtom(
+            type: .boundary,
+            statement: fact.content,
+            scope: .global,
+            status: .active,
+            confidence: 0.88,
+            sourceNodeId: source.id,
+            sourceMessageId: sourceMessage.id
+        ))
+
+        let core = UserMemoryCore(nodeStore: store, llmServiceProvider: { nil })
+        let builder = TurnMemoryContextBuilder(
+            nodeStore: store,
+            vectorStore: VectorStore(nodeStore: store),
+            embeddingService: EmbeddingService(),
+            memoryProjectionService: MemoryProjectionService(nodeStore: store),
+            contradictionMemoryService: ContradictionMemoryService(core: core)
+        )
+
+        let context = try builder.build(
+            retrievalQuery: "judge focus",
+            promptQuery: "judge focus",
+            node: current,
+            policy: .full,
+            now: Date(timeIntervalSince1970: 2_000)
+        )
+
+        XCTAssertTrue(context.citablePool.contains { $0.id == fact.id.uuidString })
+        let provenance = try XCTUnwrap(context.memoryProvenance[fact.id.uuidString])
+        XCTAssertEqual(provenance.scope, .global)
+        XCTAssertEqual(provenance.statuses, [.active])
+        XCTAssertEqual(provenance.confidence, 0.88)
+        XCTAssertEqual(provenance.sourceNodeIds, [source.id])
+        XCTAssertEqual(provenance.sourceMessageIds, [sourceMessage.id])
+    }
+
     func testBuilderFiltersUnrelatedRecentConversationMemory() throws {
         let store = try NodeStore(path: ":memory:")
         let current = NousNode(

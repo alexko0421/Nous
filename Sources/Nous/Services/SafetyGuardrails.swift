@@ -132,6 +132,8 @@ enum SafetyGuardrails {
     ]
 
     private static let hardMemoryOptOutPatterns = [
+        #"(^|[.!?。！？]\s*)(please\s+)?(don't|do not)\s+(remember|store|save|keep)\b"#,
+        #"(^|[.!?。！？]\s*)(please\s+)?never\s+(remember|store|save|keep)\b"#,
         #"do not.{0,40}(remember|store|save|keep).{0,40}(memory|long[- ]?term|durable)"#,
         #"don't.{0,40}(remember|store|save|keep).{0,40}(memory|long[- ]?term|durable)"#,
         #"不要.{0,40}(记住|記住|记低|記低|记下来|記下來|记|記|存|保存|保留).{0,40}(memory|长期记忆|長期記憶|durable)"#,

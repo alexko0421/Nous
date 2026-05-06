@@ -252,7 +252,7 @@ final class MemoryProjectionService {
 
     func memoryPersistenceDecision(messages: [Message], projectId: UUID?) -> MemoryPersistenceDecision {
         guard let latestUserMessage = messages.reversed().first(where: { $0.role == .user }) else {
-            return .persist
+            return .suppress(.unspecified)
         }
 
         let latestContent = Self.stripQuoteBlocks(latestUserMessage.content)
