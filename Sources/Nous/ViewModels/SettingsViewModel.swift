@@ -363,7 +363,7 @@ final class SettingsViewModel {
     private func makeReflectionLLMService() -> (any LLMService)? {
         let key = geminiApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return nil }
-        return GeminiLLMService(apiKey: key, model: ModelCatalog.geminiForeground)
+        return GeminiLLMService(apiKey: key, model: ModelCatalog.geminiReflection)
     }
 
     // MARK: - Private helpers
