@@ -283,6 +283,37 @@ final class SettingsViewModel {
     // MARK: - LLM factory
 
     func makeLLMService(openRouterWebSearchEnabled webSearchOverride: Bool? = nil) -> (any LLMService)? {
+        makeForegroundLLMService(openRouterWebSearchEnabled: webSearchOverride)
+    }
+
+    func makeJudgeLLMService() -> (any LLMService)? {
+        makeJudgeLLMServiceInternal()
+    }
+
+    func makeLLMService(
+        for purpose: LLMRoutingPurpose,
+        openRouterWebSearchEnabled webSearchOverride: Bool? = nil
+    ) -> (any LLMService)? {
+        switch purpose {
+        case .foreground:
+            return makeForegroundLLMService(openRouterWebSearchEnabled: webSearchOverride)
+        case .judge:
+            return makeJudgeLLMServiceInternal()
+        case .reflection:
+            return makeReflectionLLMService()
+        }
+    }
+
+    func provider(for purpose: LLMRoutingPurpose) -> LLMProvider {
+        switch purpose {
+        case .foreground, .judge:
+            return selectedProvider
+        case .reflection:
+            return .gemini
+        }
+    }
+
+    private func makeForegroundLLMService(openRouterWebSearchEnabled webSearchOverride: Bool? = nil) -> (any LLMService)? {
         switch selectedProvider {
         case .local:
             guard localLLM.isLoaded else { return nil }
@@ -306,7 +337,7 @@ final class SettingsViewModel {
         }
     }
 
-    func makeJudgeLLMService() -> (any LLMService)? {
+    private func makeJudgeLLMServiceInternal() -> (any LLMService)? {
         switch selectedProvider {
         case .local:
             return nil
@@ -327,6 +358,12 @@ final class SettingsViewModel {
                 webSearchEnabled: false
             )
         }
+    }
+
+    private func makeReflectionLLMService() -> (any LLMService)? {
+        let key = geminiApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return nil }
+        return GeminiLLMService(apiKey: key, model: ModelCatalog.geminiReflection)
     }
 
     // MARK: - Private helpers

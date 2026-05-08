@@ -260,11 +260,9 @@ final class AppEnvironment {
         // missing).
         let reflectionRollover: @Sendable () async -> Void = {
             guard settingsVM.backgroundAnalysisEnabled else { return }
-            let key = settingsVM.geminiApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !key.isEmpty else { return }
+            guard let llm = settingsVM.makeLLMService(for: .reflection) as? GeminiLLMService else { return }
             guard let (weekStart, weekEnd) = WeeklyReflectionService.previousCompletedWeek(now: Date())
             else { return }
-            let llm = GeminiLLMService(apiKey: key)
             let service = WeeklyReflectionService(
                 nodeStore: nodeStore,
                 llm: llm,
