@@ -599,6 +599,41 @@ struct ContextManifestRecord: Identifiable, Codable, Equatable {
     }
 }
 
+/// Block 7 wire: per-turn fidelity telemetry. Captures whether the model
+/// quoted Alex's own corpus and whether it leaked to borrowed authorities,
+/// so dogfooding leakage trends are observable. Pure observation; no
+/// rewrite trigger (deferred per `project_own_corpus_deferred_items.md`).
+struct CorpusFidelityRecord: Identifiable, Codable, Equatable {
+    let id: UUID
+    let turnId: UUID
+    let conversationId: UUID
+    let assistantMessageId: UUID
+    let borrowedAuthorityHits: [String]
+    let ownCorpusCitedIds: [String]
+    let ownCorpusCitationRate: Double
+    let ownCorpusAvailableCount: Int
+    let recordedAt: Date
+
+    init(
+        id: UUID = UUID(),
+        turnId: UUID,
+        conversationId: UUID,
+        assistantMessageId: UUID,
+        signal: CorpusFidelitySignal,
+        recordedAt: Date = Date()
+    ) {
+        self.id = id
+        self.turnId = turnId
+        self.conversationId = conversationId
+        self.assistantMessageId = assistantMessageId
+        self.borrowedAuthorityHits = signal.borrowedAuthorityHits
+        self.ownCorpusCitedIds = signal.ownCorpusCitedIds
+        self.ownCorpusCitationRate = signal.ownCorpusCitationRate
+        self.ownCorpusAvailableCount = signal.ownCorpusAvailableCount
+        self.recordedAt = recordedAt
+    }
+}
+
 struct ContextManifestTelemetrySummary: Equatable {
     let totalManifestCount: Int
     let totalResourceCount: Int
@@ -937,6 +972,7 @@ final class GovernanceTelemetryStore {
     private static let recentBehaviorEvalEventLimit = 100
     private static let recentContextManifestLimit = 100
     private static let recentDelegationMetricEventLimit = 100
+    private static let recentCorpusFidelityRecordLimit = 100
 
     private let defaults: UserDefaults
     private let nodeStore: NodeStore?
@@ -958,6 +994,7 @@ final class GovernanceTelemetryStore {
         static let recentBehaviorEvalEvents = "nous.governance.recentBehaviorEvalEvents"
         static let recentContextManifests = "nous.governance.recentContextManifests"
         static let recentDelegationMetricEvents = "nous.governance.recentDelegationMetricEvents"
+        static let recentCorpusFidelityRecords = "nous.governance.recentCorpusFidelityRecords"
 
         static func counter(_ counter: EvalCounter) -> String {
             "nous.governance.counter.\(counter.rawValue)"
@@ -1122,6 +1159,33 @@ final class GovernanceTelemetryStore {
     func recentContextManifests(limit: Int) -> [ContextManifestRecord] {
         guard limit > 0 else { return [] }
         return Array(storedRecentContextManifests().prefix(limit))
+    }
+
+    /// Block 7 wire: persist a CorpusFidelityRecord per turn for trend
+    /// analysis. Capped at `recentCorpusFidelityRecordLimit` (100) so the
+    /// UserDefaults blob stays bounded.
+    func recordCorpusFidelity(_ record: CorpusFidelityRecord) {
+        var records = storedRecentCorpusFidelityRecords()
+        records.insert(record, at: 0)
+        if records.count > Self.recentCorpusFidelityRecordLimit {
+            records = Array(records.prefix(Self.recentCorpusFidelityRecordLimit))
+        }
+        if let data = try? JSONEncoder().encode(records) {
+            defaults.set(data, forKey: Keys.recentCorpusFidelityRecords)
+        }
+    }
+
+    func recentCorpusFidelityRecords(limit: Int) -> [CorpusFidelityRecord] {
+        guard limit > 0 else { return [] }
+        return Array(storedRecentCorpusFidelityRecords().prefix(limit))
+    }
+
+    private func storedRecentCorpusFidelityRecords() -> [CorpusFidelityRecord] {
+        guard let data = defaults.data(forKey: Keys.recentCorpusFidelityRecords),
+              let records = try? JSONDecoder().decode([CorpusFidelityRecord].self, from: data) else {
+            return []
+        }
+        return records
     }
 
     var delegationMetricSummary: DelegationMetricSummary {

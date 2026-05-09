@@ -370,6 +370,12 @@ struct TurnPlan {
     let loadedCitationIds: Set<UUID>
     let memoryUsageHints: [ContextManifestUsageHint]
     let memoryProvenance: [String: ContextManifestMemoryProvenance]
+    /// Block 7 wire: corpus cards that reached the prompt for this turn.
+    /// Carried on the plan so post-completion telemetry (CorpusFidelityChecker)
+    /// can scan the assistant reply against the same entries the model saw.
+    /// Defaults to `.empty` so existing TurnPlan construction sites compile
+    /// without modification.
+    let corpusContext: CitableContext
 
     init(
         turnId: UUID,
@@ -390,7 +396,8 @@ struct TurnPlan {
         memoryEvidenceSourceIds: Set<UUID> = [],
         loadedCitationIds: Set<UUID> = [],
         memoryUsageHints: [ContextManifestUsageHint] = [],
-        memoryProvenance: [String: ContextManifestMemoryProvenance] = [:]
+        memoryProvenance: [String: ContextManifestMemoryProvenance] = [:],
+        corpusContext: CitableContext = .empty
     ) {
         self.turnId = turnId
         self.prepared = prepared
@@ -411,6 +418,7 @@ struct TurnPlan {
         self.loadedCitationIds = loadedCitationIds
         self.memoryUsageHints = memoryUsageHints
         self.memoryProvenance = memoryProvenance
+        self.corpusContext = corpusContext
     }
 
     init(
@@ -431,7 +439,8 @@ struct TurnPlan {
         memoryEvidenceSourceIds: Set<UUID> = [],
         loadedCitationIds: Set<UUID> = [],
         memoryUsageHints: [ContextManifestUsageHint] = [],
-        memoryProvenance: [String: ContextManifestMemoryProvenance] = [:]
+        memoryProvenance: [String: ContextManifestMemoryProvenance] = [:],
+        corpusContext: CitableContext = .empty
     ) {
         self.init(
             turnId: turnId,
@@ -452,7 +461,8 @@ struct TurnPlan {
             memoryEvidenceSourceIds: memoryEvidenceSourceIds,
             loadedCitationIds: loadedCitationIds,
             memoryUsageHints: memoryUsageHints,
-            memoryProvenance: memoryProvenance
+            memoryProvenance: memoryProvenance,
+            corpusContext: corpusContext
         )
     }
 }

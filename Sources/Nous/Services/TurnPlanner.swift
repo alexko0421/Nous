@@ -381,7 +381,8 @@ final class TurnPlanner {
                 memoryEvidenceSourceIds: promptResourceIds.memoryEvidenceSourceIds,
                 loadedCitationIds: promptResourceIds.citationIds,
                 memoryUsageHints: promptResourceIds.memoryUsageHints,
-                memoryProvenance: promptResourceIds.memoryProvenance
+                memoryProvenance: promptResourceIds.memoryProvenance,
+                corpusContext: memoryContext.corpusContext
             )
         }
 
@@ -411,7 +412,8 @@ final class TurnPlanner {
             memoryEvidenceSourceIds: promptResourceIds.memoryEvidenceSourceIds,
             loadedCitationIds: promptResourceIds.citationIds,
             memoryUsageHints: promptResourceIds.memoryUsageHints,
-            memoryProvenance: promptResourceIds.memoryProvenance
+            memoryProvenance: promptResourceIds.memoryProvenance,
+            corpusContext: memoryContext.corpusContext
         )
     }
 

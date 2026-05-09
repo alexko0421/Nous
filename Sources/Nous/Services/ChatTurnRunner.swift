@@ -20,6 +20,7 @@ final class ChatTurnRunner {
     private let onReviewArtifact: (CognitionArtifact) -> Void
     private let onTurnCognitionSnapshot: (TurnCognitionSnapshot) -> Void
     private let onContextManifest: (ContextManifestRecord) -> Void
+    private let onCorpusFidelity: (CorpusFidelityRecord) -> Void
 
     init(
         conversationSessionStore: ConversationSessionStore,
@@ -34,7 +35,8 @@ final class ChatTurnRunner {
         onPlanReady: @escaping (TurnPlan) -> Void = { _ in },
         onReviewArtifact: @escaping (CognitionArtifact) -> Void = { _ in },
         onTurnCognitionSnapshot: @escaping (TurnCognitionSnapshot) -> Void = { _ in },
-        onContextManifest: @escaping (ContextManifestRecord) -> Void = { _ in }
+        onContextManifest: @escaping (ContextManifestRecord) -> Void = { _ in },
+        onCorpusFidelity: @escaping (CorpusFidelityRecord) -> Void = { _ in }
     ) {
         self.conversationSessionStore = conversationSessionStore
         self.turnSteward = turnSteward
@@ -49,6 +51,7 @@ final class ChatTurnRunner {
         self.onReviewArtifact = onReviewArtifact
         self.onTurnCognitionSnapshot = onTurnCognitionSnapshot
         self.onContextManifest = onContextManifest
+        self.onCorpusFidelity = onCorpusFidelity
     }
 
     func run(
@@ -284,6 +287,24 @@ final class ChatTurnRunner {
         if !contextManifest.resources.isEmpty {
             onContextManifest(contextManifest)
         }
+
+        // Block 7 wire: scan the assistant reply against the corpus cards
+        // that reached the prompt and emit a fidelity signal. Telemetry-only
+        // — no rewrite trigger here per project_own_corpus_deferred_items.md.
+        // We always emit (even when corpusContext is empty) so the timeline
+        // shows a uniform record per turn; downstream filters can split
+        // turns with available corpus from those without.
+        let fidelitySignal = CorpusFidelityChecker.check(
+            reply: executionResult.assistantContent,
+            corpusContext: plan.corpusContext
+        )
+        let fidelityRecord = CorpusFidelityRecord(
+            turnId: request.turnId,
+            conversationId: prepared.node.id,
+            assistantMessageId: committed.assistantMessage.id,
+            signal: fidelitySignal
+        )
+        onCorpusFidelity(fidelityRecord)
 
         let completion = outcomeFactory.makeCompletion(
             turnId: request.turnId,

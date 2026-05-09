@@ -150,6 +150,9 @@ final class ChatViewModel {
             },
             onContextManifest: { [governanceTelemetry] record in
                 governanceTelemetry.recordContextManifest(record)
+            },
+            onCorpusFidelity: { [governanceTelemetry] record in
+                governanceTelemetry.recordCorpusFidelity(record)
             }
         )
     }

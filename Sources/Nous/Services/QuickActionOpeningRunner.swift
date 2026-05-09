@@ -277,7 +277,8 @@ final class QuickActionOpeningRunner {
             memoryEvidenceSourceIds: promptResourceIds.memoryEvidenceSourceIds,
             loadedCitationIds: promptResourceIds.citationIds,
             memoryUsageHints: promptResourceIds.memoryUsageHints,
-            memoryProvenance: promptResourceIds.memoryProvenance
+            memoryProvenance: promptResourceIds.memoryProvenance,
+            corpusContext: memoryContext.corpusContext
         )
     }
 
