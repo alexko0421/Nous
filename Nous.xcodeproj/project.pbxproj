@@ -206,6 +206,7 @@
 		841F0F6BD46EDADD470C93C9 /* BehaviorExperimentRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19120A0B49816595B7CCCD54 /* BehaviorExperimentRunner.swift */; };
 		84D65393A1EDC07A1A085F92 /* DisclosurePillMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22E214C4D044DC3B5CD211A0 /* DisclosurePillMotion.swift */; };
 		863CAC8FF7CDD184DC8C4463 /* SourceMaterial.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0F50DF7BC8B366950FD6CC5 /* SourceMaterial.swift */; };
+		9ED6F090F6DA44FFBA7A01BD /* SourceLearningMemoryModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 471DBF9FB8394EA5A1428EF8 /* SourceLearningMemoryModels.swift */; };
 		86B3CCFDF376B9329B0A6D74 /* MemoryGraphWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AE28EBC5AAB44D96CC1075E /* MemoryGraphWriter.swift */; };
 		8749380E71FC3DBCF19DCCEF /* FindContradictionsTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = A23CC3C46291FE88E3AC976A /* FindContradictionsTool.swift */; };
 		88295655EB89E93DAEFAD256 /* FinderProjectSyncServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65BFE96BBB3B4F647460E8BE /* FinderProjectSyncServiceTests.swift */; };
@@ -715,6 +716,7 @@
 		CF7B960A5DC5E42823F1CB9F /* UserMemoryScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserMemoryScheduler.swift; sourceTree = "<group>"; };
 		CFB8CC60BF05F9049729C3BD /* MemoryGraphBackfillService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryGraphBackfillService.swift; sourceTree = "<group>"; };
 		D0F50DF7BC8B366950FD6CC5 /* SourceMaterial.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceMaterial.swift; sourceTree = "<group>"; };
+		471DBF9FB8394EA5A1428EF8 /* SourceLearningMemoryModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceLearningMemoryModels.swift; sourceTree = "<group>"; };
 		D0F8F7C94A828A4010E29DF6 /* MemoryEntriesMigrator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryEntriesMigrator.swift; sourceTree = "<group>"; };
 		D108235F494686641E327542 /* ShadowLearningSignalRecorderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShadowLearningSignalRecorderTests.swift; sourceTree = "<group>"; };
 		D18F7D1D077A23BDBBD2B77A /* QuickActionAgent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickActionAgent.swift; sourceTree = "<group>"; };
@@ -1022,6 +1024,7 @@
 				45EAC5F0329B12707EBD06DB /* SkillDogfoodLog.swift */,
 				1F8584730232FFDF03E257D2 /* SkillStoreError.swift */,
 				D0F50DF7BC8B366950FD6CC5 /* SourceMaterial.swift */,
+				471DBF9FB8394EA5A1428EF8 /* SourceLearningMemoryModels.swift */,
 				43932C5BBE5AA35143E11B94 /* String+NonEmpty.swift */,
 				17614D93EBAC1A9897BEFCA2 /* TurnContracts.swift */,
 				0E6A050AA16F737C3358C75A /* TurnStewardDecision.swift */,
@@ -1772,6 +1775,7 @@
 				145E50458C84678479D45B97 /* SkillTracker.swift in Sources */,
 				E673B3A095071B5B34311CB1 /* SourceIngestionService.swift in Sources */,
 				863CAC8FF7CDD184DC8C4463 /* SourceMaterial.swift in Sources */,
+				9ED6F090F6DA44FFBA7A01BD /* SourceLearningMemoryModels.swift in Sources */,
 				7ECBC962529B157DAED7530D /* SourceTextExtractor.swift in Sources */,
 				72CAFD0435F2523B09C333D5 /* String+NonEmpty.swift in Sources */,
 				90F3DEB7C7B248585371FE51 /* StructuredLLMClient.swift in Sources */,
