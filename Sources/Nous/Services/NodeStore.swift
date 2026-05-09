@@ -70,6 +70,11 @@ struct ScratchPadStateRecord: Equatable {
 final class NodeStore {
 
     private let db: Database
+    /// Lexical (FTS5) retrieval lane. Bootstrapped after schema creation
+    /// so its triggers attach to the canonical messages/nodes/source_chunks
+    /// tables. Exposed so retrieval services (`VectorStore.searchHybrid`)
+    /// can run lexical queries without needing direct DB access.
+    let lexicalIndex: LexicalIndex
     /// Serializes multi-statement transactions on the single SQLite connection.
     /// SQLite's connection-level mutex serializes individual calls, but
     /// `BEGIN ... COMMIT` pairs are not atomic as a group: two overlapping
@@ -80,7 +85,13 @@ final class NodeStore {
 
     init(path: String) throws {
         db = try Database(path: path)
+        // Construct LexicalIndex before any throwing call below — Swift
+        // demands all stored `let` properties be assigned before any
+        // `try` can escape `init`. Bootstrap (which depends on parent
+        // tables existing) happens after createTables().
+        lexicalIndex = LexicalIndex(database: db)
         try createTables()
+        try lexicalIndex.bootstrap()
     }
 
     // MARK: - Schema
