@@ -1091,6 +1091,21 @@ CHAT FORMAT POLICY:
         // the same condition.
         if let corpusBlock {
             volatilePieces.append("---\n\nALEX'S CORPUS (atom + reflection cards, prefer over external frameworks):\n\(corpusBlock)")
+            // Block 5: own-corpus posture. Only emit when CorpusCards are
+            // actually in the prompt — without cards above, the rule has
+            // nothing to reference. Lives in volatile (NOT anchor.md, which
+            // is frozen per project_anchor_is_frozen.md). Counts toward the
+            // volatile budget, not the anchor count ceiling.
+            volatilePieces.append("""
+---
+
+PREFER OWN-CORPUS:
+When the CorpusCards above cover the same ground as a famous framework (Bezos Type 1/2, Kahneman System 1/2, Munger, "first principles", etc.), quote Alex's own wording first. Cite the famous frame only as secondary anchoring, or when Alex explicitly asks about it.
+
+Borrowed → own-corpus translation examples:
+- Instead of: "Kahneman's System 1 reaction"  →  prefer: "上次你将呢种反应叫做 'fast-mode default'，其实就系…"
+- Instead of: "Bezos's Type 1 / Type 2 decisions"  →  prefer: "你 2026-03-02 讲过 'momentum over polish' 嗰阵已经做过呢个区分…"
+""")
         }
 
         if !promptCitations.isEmpty {

@@ -500,6 +500,32 @@ final class ProvocationOrchestrationTests: XCTestCase {
                       "the recalled atom must appear verbatim in the prompt")
         XCTAssertFalse(try store.fetchMemoryRecallEvents(limit: 10).isEmpty,
                        "recall events should be recorded since the prompt now surfaces the atoms")
+        // Block 5: PREFER OWN-CORPUS posture only emits when CorpusCards
+        // are present (otherwise it has nothing to reference). When cards
+        // ARE present, the model gets the borrowed→own-corpus rule plus
+        // 2 worked translation examples nudging away from Bezos/Kahneman.
+        XCTAssertTrue(system.contains("PREFER OWN-CORPUS"),
+                      "Block 5 posture must accompany the corpus card block")
+        XCTAssertTrue(system.contains("Borrowed → own-corpus translation examples"),
+                      "Block 5 worked examples must be present so the model has concrete translations to follow")
+        XCTAssertTrue(system.contains("Kahneman") && system.contains("Bezos"),
+                      "Block 5 examples explicitly call out the famous frameworks they're nudging away from")
+    }
+
+    @MainActor
+    func testPreferOwnCorpusPostureAbsentWhenNoCardsQualify() async throws {
+        // No atoms / no reflections in store — corpus context is empty,
+        // CorpusCardFormatter returns nil, neither the cards block nor the
+        // PREFER OWN-CORPUS posture should fire (the rule would reference
+        // material that isn't in the prompt).
+        viewModel.inputText = "你記得我對 em dash 有咩偏好？"
+        await viewModel.send()
+
+        let system = llm.receivedSystem ?? ""
+        XCTAssertFalse(system.contains("ALEX'S CORPUS"),
+                       "no atoms in store → no corpus block")
+        XCTAssertFalse(system.contains("PREFER OWN-CORPUS"),
+                       "Block 5 posture must not fire without cards above to reference")
     }
 
     @MainActor
