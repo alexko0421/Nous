@@ -217,7 +217,8 @@ final class QuickActionOpeningRunner {
             matchedSkills: quickActionResolution.matchedSkills,
             quickActionAddendum: quickActionAddendum,
             allowSkillIndex: false,
-            allowInteractiveClarification: false
+            allowInteractiveClarification: false,
+            corpusContext: memoryContext.corpusContext
         )
         let promptResourceIds = PromptContextAssembler.promptResourceIds(
             operatingContext: memoryContext.operatingContext,

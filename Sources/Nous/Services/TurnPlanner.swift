@@ -289,6 +289,7 @@ final class TurnPlanner {
             allowInteractiveClarification: shouldAllowInteractiveClarification,
             shadowLearningHints: shadowLearningHints,
             slowCognitionArtifacts: slowCognitionArtifacts,
+            corpusContext: memoryContext.corpusContext,
             now: request.now
         )
         let promptResourceIds = PromptContextAssembler.promptResourceIds(

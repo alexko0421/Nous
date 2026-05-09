@@ -896,6 +896,7 @@ enum PromptContextAssembler {
         allowInteractiveClarification: Bool = false,
         shadowLearningHints: [String] = [],
         slowCognitionArtifacts: [CognitionArtifact] = [],
+        corpusContext: CitableContext = .empty,
         now: Date = Date()
     ) -> TurnSystemSlice {
         var anchorAndPolicies: [String] = []
@@ -1070,6 +1071,17 @@ CHAT FORMAT POLICY:
                     volatilePieces.append("FILE: \(attachment.name)\nContent preview unavailable. Ask Alex for the relevant excerpt if more detail is needed.")
                 }
             }
+        }
+
+        // Block 4a inject-half: own-corpus cards rendered side-by-side with the
+        // existing flat-blob memory layers + RAG citations. When non-empty,
+        // Nous sees Alex's prior atoms / reflections with full attribution
+        // (type · date · confidence) BEFORE the raw note-citation block — so
+        // the structured corpus is the first own-source the model encounters.
+        // Block 4b will flip flat globalMemory to fall back when these cards
+        // qualify; for now this is purely additive.
+        if let corpusBlock = CorpusCardFormatter.formatContext(corpusContext) {
+            volatilePieces.append("---\n\nALEX'S CORPUS (atom + reflection cards, prefer over external frameworks):\n\(corpusBlock)")
         }
 
         if !promptCitations.isEmpty {

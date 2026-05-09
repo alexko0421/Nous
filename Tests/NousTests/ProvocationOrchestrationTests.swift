@@ -470,7 +470,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
     }
 
     @MainActor
-    func testOrdinaryChatDoesNotRecordGraphRecallWhenPromptDropsGraphBlock() async throws {
+    func testOrdinaryChatRecordsRecallOnlyWhenPromptSurfacesIt() async throws {
         try store.insertMemoryAtom(MemoryAtom(
             type: .preference,
             statement: "Alex never wants em dashes in final copy.",
@@ -485,10 +485,21 @@ final class ProvocationOrchestrationTests: XCTestCase {
         await viewModel.send()
 
         let system = llm.receivedSystem ?? ""
+        // Legacy GRAPH MEMORY RECALL block remains gated to quick-action modes
+        // (PromptContextAssembler.swift:942 `activeQuickActionMode != nil`).
         XCTAssertFalse(system.contains("GRAPH MEMORY RECALL"),
-                       "ordinary chat currently drops graph recall from the prompt")
-        XCTAssertTrue(try store.fetchMemoryRecallEvents(limit: 10).isEmpty,
-                      "ordinary chat must not record graph recall events for recall the prompt never saw")
+                       "ordinary chat still drops the legacy graph recall block from the prompt")
+        // Block 4a inject-half: own-corpus cards surface atoms in default chat
+        // via the ALEX'S CORPUS volatile block. The recalled atoms are no
+        // longer phantom — they appear in the prompt under the new heading,
+        // so the recall events recorded by MemoryQueryPlanner correspond to
+        // material the model actually saw.
+        XCTAssertTrue(system.contains("ALEX'S CORPUS"),
+                      "Block 4a routes atom recall through the new corpus card block in default chat")
+        XCTAssertTrue(system.contains("Alex never wants em dashes"),
+                      "the recalled atom must appear verbatim in the prompt")
+        XCTAssertFalse(try store.fetchMemoryRecallEvents(limit: 10).isEmpty,
+                       "recall events should be recorded since the prompt now surfaces the atoms")
     }
 
     @MainActor
