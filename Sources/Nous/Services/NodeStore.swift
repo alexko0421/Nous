@@ -136,9 +136,16 @@ final class NodeStore {
                 originalFilename TEXT,
                 contentHash      TEXT NOT NULL,
                 ingestedAt       REAL NOT NULL,
-                extractionStatus TEXT NOT NULL
+                extractionStatus TEXT NOT NULL,
+                evidenceLevel    TEXT NOT NULL DEFAULT 'unknown'
             );
         """)
+
+        try ensureColumnExists(
+            table: "source_metadata",
+            column: "evidenceLevel",
+            alterSQL: "ALTER TABLE source_metadata ADD COLUMN evidenceLevel TEXT NOT NULL DEFAULT 'unknown';"
+        )
 
         try db.exec("""
             CREATE TABLE IF NOT EXISTS source_chunks (
@@ -187,10 +194,17 @@ final class NodeStore {
                 messageId    TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
                 sourceNodeId TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
                 ordinal      INTEGER NOT NULL,
+                materialJSON TEXT,
                 createdAt    REAL NOT NULL,
                 PRIMARY KEY(messageId, sourceNodeId)
             );
         """)
+
+        try ensureColumnExists(
+            table: "message_source_materials",
+            column: "materialJSON",
+            alterSQL: "ALTER TABLE message_source_materials ADD COLUMN materialJSON TEXT;"
+        )
 
         try db.exec("""
             CREATE TABLE IF NOT EXISTS temporary_branch_records (
@@ -801,15 +815,16 @@ final class NodeStore {
     func upsertSourceMetadata(_ metadata: SourceMetadata) throws {
         let stmt = try db.prepare("""
             INSERT INTO source_metadata
-                (nodeId, kind, originalURL, originalFilename, contentHash, ingestedAt, extractionStatus)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (nodeId, kind, originalURL, originalFilename, contentHash, ingestedAt, extractionStatus, evidenceLevel)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(nodeId) DO UPDATE SET
                 kind = excluded.kind,
                 originalURL = excluded.originalURL,
                 originalFilename = excluded.originalFilename,
                 contentHash = excluded.contentHash,
                 ingestedAt = excluded.ingestedAt,
-                extractionStatus = excluded.extractionStatus;
+                extractionStatus = excluded.extractionStatus,
+                evidenceLevel = excluded.evidenceLevel;
         """)
         try stmt.bind(metadata.nodeId.uuidString, at: 1)
         try stmt.bind(metadata.kind.rawValue, at: 2)
@@ -818,12 +833,13 @@ final class NodeStore {
         try stmt.bind(metadata.contentHash, at: 5)
         try stmt.bind(metadata.ingestedAt.timeIntervalSince1970, at: 6)
         try stmt.bind(metadata.extractionStatus.rawValue, at: 7)
+        try stmt.bind(metadata.evidenceLevel.rawValue, at: 8)
         try stmt.step()
     }
 
     func fetchSourceMetadata(nodeId: UUID) throws -> SourceMetadata? {
         let stmt = try db.prepare("""
-            SELECT nodeId, kind, originalURL, originalFilename, contentHash, ingestedAt, extractionStatus
+            SELECT nodeId, kind, originalURL, originalFilename, contentHash, ingestedAt, extractionStatus, evidenceLevel
             FROM source_metadata
             WHERE nodeId = ?
             LIMIT 1;
@@ -835,7 +851,7 @@ final class NodeStore {
 
     func fetchSourceMetadata(originalURL: String) throws -> SourceMetadata? {
         let stmt = try db.prepare("""
-            SELECT nodeId, kind, originalURL, originalFilename, contentHash, ingestedAt, extractionStatus
+            SELECT nodeId, kind, originalURL, originalFilename, contentHash, ingestedAt, extractionStatus, evidenceLevel
             FROM source_metadata
             WHERE originalURL = ?
             LIMIT 1;
@@ -847,7 +863,7 @@ final class NodeStore {
 
     func fetchSourceMetadata(contentHash: String) throws -> SourceMetadata? {
         let stmt = try db.prepare("""
-            SELECT nodeId, kind, originalURL, originalFilename, contentHash, ingestedAt, extractionStatus
+            SELECT nodeId, kind, originalURL, originalFilename, contentHash, ingestedAt, extractionStatus, evidenceLevel
             FROM source_metadata
             WHERE contentHash = ?
             LIMIT 1;
@@ -1135,7 +1151,8 @@ final class NodeStore {
             originalFilename: stmt.text(at: 3),
             contentHash: stmt.text(at: 4) ?? "",
             ingestedAt: Date(timeIntervalSince1970: stmt.double(at: 5)),
-            extractionStatus: SourceExtractionStatus(rawValue: stmt.text(at: 6) ?? "") ?? .failed
+            extractionStatus: SourceExtractionStatus(rawValue: stmt.text(at: 6) ?? "") ?? .failed,
+            evidenceLevel: SourceEvidenceLevel(rawValue: stmt.text(at: 7) ?? "") ?? .unknown
         )
     }
 
@@ -1170,7 +1187,8 @@ final class NodeStore {
             title: node.title,
             originalURL: metadata.originalURL,
             originalFilename: metadata.originalFilename,
-            chunks: Array(chunks)
+            chunks: Array(chunks),
+            evidenceLevel: metadata.evidenceLevel
         )
     }
 
@@ -1231,13 +1249,41 @@ final class NodeStore {
         return results
     }
 
+    func fetchMessage(id: UUID) throws -> Message? {
+        let stmt = try db.prepare("""
+            SELECT id, nodeId, role, content, timestamp, thinking_content, agent_trace_json, source
+            FROM messages WHERE id=? LIMIT 1;
+        """)
+        try stmt.bind(id.uuidString, at: 1)
+        guard try stmt.step() else { return nil }
+        let id = UUID(uuidString: stmt.text(at: 0) ?? "") ?? UUID()
+        let nodeId = UUID(uuidString: stmt.text(at: 1) ?? "") ?? UUID()
+        let role = MessageRole(rawValue: stmt.text(at: 2) ?? "") ?? .user
+        let content = stmt.text(at: 3) ?? ""
+        let timestamp = Date(timeIntervalSince1970: stmt.double(at: 4))
+        let thinkingContent = stmt.text(at: 5)
+        let agentTraceJson = stmt.text(at: 6)
+        let sourceRaw = stmt.text(at: 7) ?? "typed"
+        let source = MessageSource(rawValue: sourceRaw) ?? .typed
+        return Message(
+            id: id,
+            nodeId: nodeId,
+            role: role,
+            content: content,
+            timestamp: timestamp,
+            thinkingContent: thinkingContent,
+            agentTraceJson: agentTraceJson,
+            source: source
+        )
+    }
+
     func replaceMessageSourceMaterials(
         _ materials: [SourceMaterialContext],
         for messageId: UUID
     ) throws {
-        let uniqueSourceNodeIds = materials.reduce(into: [UUID]()) { result, material in
-            guard !result.contains(material.sourceNodeId) else { return }
-            result.append(material.sourceNodeId)
+        let uniqueMaterials = materials.reduce(into: [SourceMaterialContext]()) { result, material in
+            guard !result.contains(where: { $0.sourceNodeId == material.sourceNodeId }) else { return }
+            result.append(material)
         }
 
         try inTransaction {
@@ -1245,18 +1291,19 @@ final class NodeStore {
             try delete.bind(messageId.uuidString, at: 1)
             try delete.step()
 
-            guard !uniqueSourceNodeIds.isEmpty else { return }
+            guard !uniqueMaterials.isEmpty else { return }
 
             let createdAt = Date().timeIntervalSince1970
-            for (ordinal, sourceNodeId) in uniqueSourceNodeIds.enumerated() {
+            for (ordinal, material) in uniqueMaterials.enumerated() {
                 let insert = try db.prepare("""
-                    INSERT INTO message_source_materials (messageId, sourceNodeId, ordinal, createdAt)
-                    VALUES (?, ?, ?, ?);
+                    INSERT INTO message_source_materials (messageId, sourceNodeId, ordinal, materialJSON, createdAt)
+                    VALUES (?, ?, ?, ?, ?);
                 """)
                 try insert.bind(messageId.uuidString, at: 1)
-                try insert.bind(sourceNodeId.uuidString, at: 2)
+                try insert.bind(material.sourceNodeId.uuidString, at: 2)
                 try insert.bind(ordinal, at: 3)
-                try insert.bind(createdAt, at: 4)
+                try insert.bind(Self.encodeSourceMaterial(material), at: 4)
+                try insert.bind(createdAt, at: 5)
                 try insert.step()
             }
         }
@@ -1264,7 +1311,7 @@ final class NodeStore {
 
     func fetchMessageSourceMaterials(messageId: UUID) throws -> [SourceMaterialContext] {
         let stmt = try db.prepare("""
-            SELECT sourceNodeId
+            SELECT sourceNodeId, materialJSON
             FROM message_source_materials
             WHERE messageId = ?
             ORDER BY ordinal ASC;
@@ -1273,6 +1320,11 @@ final class NodeStore {
 
         var materials: [SourceMaterialContext] = []
         while try stmt.step() {
+            if let material = Self.decodeSourceMaterial(stmt.text(at: 1)) {
+                materials.append(material)
+                continue
+            }
+
             guard let rawId = stmt.text(at: 0),
                   let sourceNodeId = UUID(uuidString: rawId),
                   let material = try sourceMaterialContext(nodeId: sourceNodeId) else {
@@ -1281,6 +1333,20 @@ final class NodeStore {
             materials.append(material)
         }
         return materials
+    }
+
+    private static func encodeSourceMaterial(_ material: SourceMaterialContext) -> String? {
+        guard !material.chunks.isEmpty else { return nil }
+        guard let data = try? JSONEncoder().encode(material) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private static func decodeSourceMaterial(_ rawValue: String?) -> SourceMaterialContext? {
+        guard let rawValue,
+              let data = rawValue.data(using: .utf8) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(SourceMaterialContext.self, from: data)
     }
 
     func upsertTemporaryBranchRecord(_ record: TemporaryBranchRecord) throws {
