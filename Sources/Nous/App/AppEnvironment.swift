@@ -208,6 +208,17 @@ final class AppEnvironment {
             nodeStore: nodeStore,
             telemetry: governanceTelemetry
         )
+        let sourceIngestionService = SourceIngestionService(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingProvider: embeddingService,
+            onSourceNodeIngested: { node in
+                Task { @MainActor in
+                    try? graphEngine.regenerateEdges(for: node)
+                    relationRefinementQueue.enqueue(nodeId: node.id)
+                }
+            }
+        )
         let chatVM = ChatViewModel(
             nodeStore: nodeStore,
             vectorStore: vectorStore,
@@ -217,6 +228,7 @@ final class AppEnvironment {
             userMemoryService: userMemoryService,
             userMemoryScheduler: scheduler,
             conversationSessionStore: conversationSessionStore,
+            sourceIngestionService: sourceIngestionService,
             llmServiceProvider: { settingsVM.makeLLMService(openRouterWebSearchEnabled: settingsVM.openRouterWebSearchEnabled) },
             currentProviderProvider: { settingsVM.selectedProvider },
             judgeLLMServiceFactory: { settingsVM.makeJudgeLLMService() },
