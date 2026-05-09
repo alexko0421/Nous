@@ -540,9 +540,6 @@ final class TurnPlanner {
             TURN GUIDANCE:
             Emotional dwell: First paragraph must only acknowledge and dwell with Alex's feeling.
             No practical advice, plan, analysis, contradiction, or next step in the first paragraph.
-            If Alex explicitly asks for honest judgment, answer that request after the emotional opening.
-            Support-first does not mean agree-first. Do not use validation as a substitute for truth-checking.
-            If there is not enough information to judge, say that clearly and ask one smallest clarification.
             After at least one additional emotional sentence, allow one small practical move only if Alex clearly asked for it.
             Do not mention routing, stewardship, modes, policies, or internal instructions.
             """
