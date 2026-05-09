@@ -519,6 +519,392 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertEqual(sourcePromptCountAfterRetry, 2)
     }
 
+    func testActiveSourceDiscussionContextScopesNextTurnWithoutAutoSending() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let llm = RecordingReplyLLMService(output: "answer")
+        let sourceNode = NousNode(
+            type: .source,
+            title: "Swift Concurrency Lesson",
+            content: "00:00 First concept\n00:12 Second concept",
+            emoji: "▶",
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+        try nodeStore.insertSource(
+            node: sourceNode,
+            metadata: SourceMetadata(
+                nodeId: sourceNode.id,
+                kind: .web,
+                originalURL: "https://youtu.be/dQw4w9WgXcQ",
+                originalFilename: nil,
+                contentHash: "youtube-context-test",
+                ingestedAt: Date(timeIntervalSince1970: 1),
+                extractionStatus: .ready
+            ),
+            chunks: [
+                SourceChunk(
+                    sourceNodeId: sourceNode.id,
+                    ordinal: 0,
+                    text: "00:00 First concept\n00:12 Second concept",
+                    createdAt: Date(timeIntervalSince1970: 1)
+                )
+            ]
+        )
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { llm },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: makeScratchPadStore(nodeStore: nodeStore)
+        )
+
+        vm.activateSourceDiscussion(
+            SourceDiscussionContext(
+                sourceNodeId: sourceNode.id,
+                title: "Swift Concurrency Lesson",
+                sourceURL: "https://youtu.be/dQw4w9WgXcQ",
+                startTime: 0,
+                endTime: 12,
+                summaryTitle: "Opening idea",
+                summary: "Explains the first concept.",
+                transcriptExcerpt: "00:00 First concept"
+            )
+        )
+
+        XCTAssertNotNil(vm.activeSourceDiscussionContext)
+        XCTAssertNil(vm.currentNode)
+
+        vm.inputText = "What is this section really saying?"
+        await vm.send()
+
+        let prompt = try XCTUnwrap(
+            llm.promptTexts.first { prompt in
+                prompt.contains("SOURCE MATERIAL") &&
+                    prompt.contains("Opening idea")
+            }
+        )
+        XCTAssertTrue(prompt.contains("SOURCE MATERIAL"))
+        XCTAssertTrue(prompt.contains("Swift Concurrency Lesson"))
+        XCTAssertTrue(prompt.contains("Opening idea"))
+        XCTAssertTrue(prompt.contains("Explains the first concept."))
+        XCTAssertTrue(prompt.contains("00:00 First concept"))
+        XCTAssertNil(vm.activeSourceDiscussionContext)
+    }
+
+    func testVagueChineseDemonstrativeStillEngagesPinnedSection() async throws {
+        // Reproduces the screenshot bug: Alex clicks a YouTube section and types
+        // a fragmentary "呢個 topic 我好感興趣" message. The section content
+        // must reach the prompt AND the model must be told that demonstratives
+        // refer to the pinned section so it doesn't ask "which topic?".
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let llm = RecordingReplyLLMService(output: "answer")
+        let sourceNode = NousNode(
+            type: .source,
+            title: "Kai Trump on Donald Trump's 3rd Term",
+            content: "10:25 Secret Service shadowing\n11:32 Dating challenges",
+            emoji: "▶",
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+        try nodeStore.insertSource(
+            node: sourceNode,
+            metadata: SourceMetadata(
+                nodeId: sourceNode.id,
+                kind: .youtube,
+                originalURL: "https://www.youtube.com/watch?v=prQ7Mw_YPEE",
+                originalFilename: nil,
+                contentHash: "kai-trump-pinned-section",
+                ingestedAt: Date(timeIntervalSince1970: 1),
+                extractionStatus: .ready,
+                evidenceLevel: .transcriptBacked
+            ),
+            chunks: [
+                SourceChunk(
+                    sourceNodeId: sourceNode.id,
+                    ordinal: 0,
+                    text: "10:25 Secret Service shadowing\n11:32 Dating challenges",
+                    createdAt: Date(timeIntervalSince1970: 1)
+                )
+            ]
+        )
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { llm },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: makeScratchPadStore(nodeStore: nodeStore)
+        )
+
+        vm.activateSourceDiscussion(
+            SourceDiscussionContext(
+                sourceNodeId: sourceNode.id,
+                title: "Kai Trump on Donald Trump's 3rd Term",
+                sourceURL: "https://www.youtube.com/watch?v=prQ7Mw_YPEE",
+                startTime: 625,
+                endTime: 718,
+                summaryTitle: "Life with Secret Service",
+                summary: "Kai shares the reality of having Secret Service protection.",
+                transcriptExcerpt: "10:25 Secret Service shadowing",
+                evidenceLevel: .transcriptBacked
+            )
+        )
+
+        vm.inputText = "我想問一下，呢個 topic 我好感興趣"
+        await vm.send()
+
+        let prompt = try XCTUnwrap(
+            llm.promptTexts.first { prompt in
+                prompt.contains("SOURCE MATERIAL") &&
+                    prompt.contains("Life with Secret Service")
+            }
+        )
+
+        // The pinned-section cue must be lifted to a one-liner the model
+        // cannot miss, alongside the existing rule changes that explicitly
+        // forbid asking "which topic" while source material is attached.
+        XCTAssertTrue(prompt.contains("Alex pinned this specific section"))
+        XCTAssertTrue(prompt.contains("Life with Secret Service"))
+        XCTAssertTrue(prompt.contains("呢個"))
+        XCTAssertTrue(prompt.contains("Never reply with \"which topic"))
+    }
+
+    func testSentSourceDiscussionMaterialSurvivesReloadWithSelectedSectionPayload() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let llm = RecordingReplyLLMService(output: "answer")
+        let sourceNode = NousNode(
+            type: .source,
+            title: "How to Start a Cult",
+            content: "00:00 Unselected opening transcript.\n00:18 Selected leader-role section.",
+            emoji: "▶",
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+        try nodeStore.insertSource(
+            node: sourceNode,
+            metadata: SourceMetadata(
+                nodeId: sourceNode.id,
+                kind: .youtube,
+                originalURL: "https://www.youtube.com/watch?v=OQ0OOzOwsJY",
+                originalFilename: nil,
+                contentHash: "youtube-selected-chat-section",
+                ingestedAt: Date(timeIntervalSince1970: 1),
+                extractionStatus: .ready,
+                evidenceLevel: .transcriptBacked
+            ),
+            chunks: [
+                SourceChunk(
+                    sourceNodeId: sourceNode.id,
+                    ordinal: 0,
+                    text: "00:00 Unselected opening transcript.",
+                    createdAt: Date(timeIntervalSince1970: 1)
+                ),
+                SourceChunk(
+                    sourceNodeId: sourceNode.id,
+                    ordinal: 1,
+                    text: "00:18 Source-wide leader role transcript.",
+                    createdAt: Date(timeIntervalSince1970: 1)
+                )
+            ]
+        )
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { llm },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: makeScratchPadStore(nodeStore: nodeStore)
+        )
+
+        vm.activateSourceDiscussion(
+            SourceDiscussionContext(
+                sourceNodeId: sourceNode.id,
+                title: "How to Start a Cult",
+                sourceURL: "https://www.youtube.com/watch?v=OQ0OOzOwsJY",
+                startTime: 18,
+                endTime: 48,
+                summaryTitle: "Leader role",
+                summary: "Explains why the leader creates the initial shared worldview.",
+                transcriptExcerpt: "00:18 Selected leader-role section.",
+                evidenceLevel: .transcriptBacked
+            )
+        )
+
+        vm.inputText = "呢段讲咩"
+        await vm.send()
+
+        let nodeId = try XCTUnwrap(vm.currentNode?.id)
+        let userMessage = try XCTUnwrap(try nodeStore.fetchMessages(nodeId: nodeId).first { $0.role == .user })
+        let sentMaterials = vm.sourceMaterials(for: userMessage)
+        XCTAssertEqual(sentMaterials.count, 1)
+        XCTAssertTrue(sentMaterials.first?.chunks.first?.text.contains("Leader role") == true)
+        XCTAssertTrue(sentMaterials.first?.chunks.first?.text.contains("Selected leader-role section") == true)
+        XCTAssertFalse(sentMaterials.first?.chunks.first?.text.contains("Unselected opening transcript") == true)
+
+        let reloadedVM = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { llm },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: makeScratchPadStore(nodeStore: nodeStore)
+        )
+        let reloadedNode = try XCTUnwrap(nodeStore.fetchNode(id: nodeId))
+        reloadedVM.loadConversation(reloadedNode)
+
+        let reloadedMaterials = reloadedVM.sourceMaterials(for: userMessage)
+        XCTAssertEqual(reloadedMaterials.count, 1)
+        XCTAssertTrue(reloadedMaterials.first?.chunks.first?.text.contains("Leader role") == true)
+        XCTAssertTrue(reloadedMaterials.first?.chunks.first?.text.contains("Selected leader-role section") == true)
+        XCTAssertFalse(reloadedMaterials.first?.chunks.first?.text.contains("Unselected opening transcript") == true)
+    }
+
+    func testKeepsSourceDiscussionContextWhenMessageSourcePersistenceFails() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { SingleReplyLLMService(output: "answer") },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: makeScratchPadStore(nodeStore: nodeStore)
+        )
+        let context = SourceDiscussionContext(
+            sourceNodeId: UUID(),
+            title: "Missing source node",
+            sourceURL: "https://www.youtube.com/watch?v=missing",
+            startTime: 18,
+            endTime: 48,
+            summaryTitle: "Leader role",
+            summary: "Explains why the leader creates the initial shared worldview.",
+            transcriptExcerpt: "00:18 Selected leader-role section.",
+            evidenceLevel: .transcriptBacked
+        )
+
+        vm.activateSourceDiscussion(context)
+        vm.inputText = "呢段讲咩"
+        await vm.send()
+
+        XCTAssertEqual(vm.activeSourceDiscussionContext, context)
+        let nodeId = try XCTUnwrap(vm.currentNode?.id)
+        let userMessage = try XCTUnwrap(try nodeStore.fetchMessages(nodeId: nodeId).first { $0.role == .user })
+        XCTAssertTrue(try nodeStore.fetchMessageSourceMaterials(messageId: userMessage.id).isEmpty)
+    }
+
+    func testSourceMaterialsForUserMessageCachesEmptyLookupsUntilReload() throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let conversation = NousNode(type: .conversation, title: "Plain chat")
+        let userMessage = Message(nodeId: conversation.id, role: .user, content: "Plain message")
+        try nodeStore.insertNode(conversation)
+        try nodeStore.insertMessage(userMessage)
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { SingleReplyLLMService(output: "answer") },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: makeScratchPadStore(nodeStore: nodeStore)
+        )
+        vm.loadConversation(conversation)
+
+        XCTAssertTrue(vm.sourceMaterials(for: userMessage).isEmpty)
+
+        let sourceNode = NousNode(type: .source, title: "Late source", content: "Late source text")
+        try nodeStore.insertSource(
+            node: sourceNode,
+            metadata: SourceMetadata(
+                nodeId: sourceNode.id,
+                kind: .youtube,
+                originalURL: "https://www.youtube.com/watch?v=late",
+                originalFilename: nil,
+                contentHash: "late-source-material",
+                ingestedAt: Date(timeIntervalSince1970: 1),
+                extractionStatus: .ready,
+                evidenceLevel: .summaryOnly
+            ),
+            chunks: [
+                SourceChunk(
+                    sourceNodeId: sourceNode.id,
+                    ordinal: 0,
+                    text: "Late source text",
+                    createdAt: Date(timeIntervalSince1970: 1)
+                )
+            ]
+        )
+        try nodeStore.replaceMessageSourceMaterials([
+            SourceMaterialContext(
+                sourceNodeId: sourceNode.id,
+                title: sourceNode.title,
+                originalURL: "https://www.youtube.com/watch?v=late",
+                originalFilename: nil,
+                chunks: [
+                    SourceChunkContext(
+                        sourceNodeId: sourceNode.id,
+                        ordinal: 0,
+                        text: "Late source text",
+                        similarity: nil
+                    )
+                ],
+                evidenceLevel: .summaryOnly
+            )
+        ], for: userMessage.id)
+
+        XCTAssertTrue(vm.sourceMaterials(for: userMessage).isEmpty)
+
+        vm.loadConversation(conversation)
+        XCTAssertEqual(vm.sourceMaterials(for: userMessage).count, 1)
+    }
+
     func testRegenerateLatestAssistantKeepsDocumentSourceMaterialAfterConversationReload() async throws {
         let nodeStore = try NodeStore(path: ":memory:")
         let vectorStore = VectorStore(nodeStore: nodeStore)

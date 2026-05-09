@@ -226,6 +226,7 @@
 		90D7718695A28622086B6A23 /* PromptContextAssemblerShadowLearningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A822C7C86D86A0CD7F4D5CEA /* PromptContextAssemblerShadowLearningTests.swift */; };
 		90F3DEB7C7B248585371FE51 /* StructuredLLMClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DECCD1373F970E6B6A9F5A0 /* StructuredLLMClient.swift */; };
 		917E707C977F7839C5C737AA /* CorpusFidelityCheckerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD16D2F73562FF8275C55E4D /* CorpusFidelityCheckerTests.swift */; };
+		92D6303193B796CBD62BC672 /* YouTubeLearningModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D4BB48C029061ADA71B6BED /* YouTubeLearningModels.swift */; };
 		92F76A8FAFC5D150145BA795 /* CognitionContracts.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDC5EAC6993A7169ACC27159 /* CognitionContracts.swift */; };
 		932A2FDE75060AAA02E62727 /* ShadowPatternLexicon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26137825FB5673BFE50E1F52 /* ShadowPatternLexicon.swift */; };
 		93427F865D28D91ECE5588E2 /* VoiceMainWindowFocusObserverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01904F40A09389E09FB81880 /* VoiceMainWindowFocusObserverTests.swift */; };
@@ -501,6 +502,7 @@
 		3AE28EBC5AAB44D96CC1075E /* MemoryGraphWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryGraphWriter.swift; sourceTree = "<group>"; };
 		3C7BCEDA7E5B25E1B653D2F9 /* ConnectionJudge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionJudge.swift; sourceTree = "<group>"; };
 		3CAB09563BB19499C57795F0 /* KeychainSecretStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainSecretStore.swift; sourceTree = "<group>"; };
+		3D4BB48C029061ADA71B6BED /* YouTubeLearningModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YouTubeLearningModels.swift; sourceTree = "<group>"; };
 		3D5C933D2CDA967B8AAFCD32 /* ChatArea.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatArea.swift; sourceTree = "<group>"; };
 		40039D78F426BB45FC49CAA0 /* NOUSLogoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NOUSLogoView.swift; sourceTree = "<group>"; };
 		404551AD567CAB05ACFD04D4 /* AppMotion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppMotion.swift; sourceTree = "<group>"; };
@@ -1036,6 +1038,7 @@
 				0E6A050AA16F737C3358C75A /* TurnStewardDecision.swift */,
 				61F80CE82A4CBD8E318753AF /* UserMemoryProfile.swift */,
 				980D993D9778529752ED83B0 /* UserModel.swift */,
+				3D4BB48C029061ADA71B6BED /* YouTubeLearningModels.swift */,
 				B11A25A1924B0E98D75FD76B /* Agents */,
 				A0FDA2D190CCA7B7A4EBCBB2 /* Cognition */,
 				17A53B48B3F448EE829F6CF3 /* Voice */,
@@ -1828,6 +1831,7 @@
 				FCE2542CF4E2A112E7653AE2 /* WeeklyReflectionService.swift in Sources */,
 				07FFF1026087C07958572C54 /* WelcomeView.swift in Sources */,
 				3A38D50339D27DC72856B618 /* WindowConfigurator.swift in Sources */,
+				92D6303193B796CBD62BC672 /* YouTubeLearningModels.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
