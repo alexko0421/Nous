@@ -207,6 +207,9 @@
 		84D65393A1EDC07A1A085F92 /* DisclosurePillMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22E214C4D044DC3B5CD211A0 /* DisclosurePillMotion.swift */; };
 		863CAC8FF7CDD184DC8C4463 /* SourceMaterial.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0F50DF7BC8B366950FD6CC5 /* SourceMaterial.swift */; };
 		9ED6F090F6DA44FFBA7A01BD /* SourceLearningMemoryModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 471DBF9FB8394EA5A1428EF8 /* SourceLearningMemoryModels.swift */; };
+		222EA18F3BD4445BA16B55FB /* SourceLearningMemoryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A022448A53A2431DAC06B076 /* SourceLearningMemoryService.swift */; };
+		0FCD30C7BE3D4C19801A1FC8 /* SourceLearningMemoryScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CAE44F72AFE41EFAF661471 /* SourceLearningMemoryScheduler.swift */; };
+		213EAD9E517643D7B5054EE9 /* SourceLearningMemoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF0D7CBFF38A423DB3D2017C /* SourceLearningMemoryTests.swift */; };
 		86B3CCFDF376B9329B0A6D74 /* MemoryGraphWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AE28EBC5AAB44D96CC1075E /* MemoryGraphWriter.swift */; };
 		8749380E71FC3DBCF19DCCEF /* FindContradictionsTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = A23CC3C46291FE88E3AC976A /* FindContradictionsTool.swift */; };
 		88295655EB89E93DAEFAD256 /* FinderProjectSyncServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65BFE96BBB3B4F647460E8BE /* FinderProjectSyncServiceTests.swift */; };
@@ -717,6 +720,9 @@
 		CFB8CC60BF05F9049729C3BD /* MemoryGraphBackfillService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryGraphBackfillService.swift; sourceTree = "<group>"; };
 		D0F50DF7BC8B366950FD6CC5 /* SourceMaterial.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceMaterial.swift; sourceTree = "<group>"; };
 		471DBF9FB8394EA5A1428EF8 /* SourceLearningMemoryModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceLearningMemoryModels.swift; sourceTree = "<group>"; };
+		A022448A53A2431DAC06B076 /* SourceLearningMemoryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceLearningMemoryService.swift; sourceTree = "<group>"; };
+		5CAE44F72AFE41EFAF661471 /* SourceLearningMemoryScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceLearningMemoryScheduler.swift; sourceTree = "<group>"; };
+		EF0D7CBFF38A423DB3D2017C /* SourceLearningMemoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceLearningMemoryTests.swift; sourceTree = "<group>"; };
 		D0F8F7C94A828A4010E29DF6 /* MemoryEntriesMigrator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryEntriesMigrator.swift; sourceTree = "<group>"; };
 		D108235F494686641E327542 /* ShadowLearningSignalRecorderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShadowLearningSignalRecorderTests.swift; sourceTree = "<group>"; };
 		D18F7D1D077A23BDBBD2B77A /* QuickActionAgent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickActionAgent.swift; sourceTree = "<group>"; };
@@ -1185,6 +1191,8 @@
 				85017F9BC0E9A0AF5B632D15 /* SkillStore.swift */,
 				348C032C86A3F247D9DD895D /* SkillTracker.swift */,
 				0776E3D952E4CA5113D3651B /* SourceIngestionService.swift */,
+				A022448A53A2431DAC06B076 /* SourceLearningMemoryService.swift */,
+				5CAE44F72AFE41EFAF661471 /* SourceLearningMemoryScheduler.swift */,
 				720DAA997BB8394E7836A455 /* SourceTextExtractor.swift */,
 				7DECCD1373F970E6B6A9F5A0 /* StructuredLLMClient.swift */,
 				0F9A57A56B2B946AD31B58BD /* SycophancyRiskHeuristics.swift */,
@@ -1333,6 +1341,7 @@
 				9B9F11A8A57B59E6B6F05D5D /* SkillPayloadCodableTests.swift */,
 				C8F219C02BA02BC80D309274 /* SkillStoreTests.swift */,
 				030E3B0F80FF06170E1EF8F9 /* SkillTrackerTests.swift */,
+				EF0D7CBFF38A423DB3D2017C /* SourceLearningMemoryTests.swift */,
 				B55A879E5777E331AD245D81 /* SourceConnectionTests.swift */,
 				435BD1EE20784299BE724BE6 /* SourcePromptContextTests.swift */,
 				6E6AE8BAD337867D0A3C1A13 /* TemporaryBranchUILayoutTests.swift */,
@@ -1776,6 +1785,8 @@
 				E673B3A095071B5B34311CB1 /* SourceIngestionService.swift in Sources */,
 				863CAC8FF7CDD184DC8C4463 /* SourceMaterial.swift in Sources */,
 				9ED6F090F6DA44FFBA7A01BD /* SourceLearningMemoryModels.swift in Sources */,
+				222EA18F3BD4445BA16B55FB /* SourceLearningMemoryService.swift in Sources */,
+				0FCD30C7BE3D4C19801A1FC8 /* SourceLearningMemoryScheduler.swift in Sources */,
 				7ECBC962529B157DAED7530D /* SourceTextExtractor.swift in Sources */,
 				72CAFD0435F2523B09C333D5 /* String+NonEmpty.swift in Sources */,
 				90F3DEB7C7B248585371FE51 /* StructuredLLMClient.swift in Sources */,
@@ -1935,6 +1946,7 @@
 				710F27CAF3A4060C2886F172 /* SkillPayloadCodableTests.swift in Sources */,
 				A5A6447B4851C6C721B8F057 /* SkillStoreTests.swift in Sources */,
 				4A0A778C847C86E187971024 /* SkillTrackerTests.swift in Sources */,
+				213EAD9E517643D7B5054EE9 /* SourceLearningMemoryTests.swift in Sources */,
 				AEC617AD2FFCE00B880540CA /* SourceConnectionTests.swift in Sources */,
 				C6E52B48C30AE4CC2FF45A56 /* SourcePromptContextTests.swift in Sources */,
 				423D5C302D6E3345518D8034 /* TemporaryBranchUILayoutTests.swift in Sources */,

@@ -5,15 +5,18 @@ final class ContextContinuationService {
     private let scratchPadStore: ScratchPadStore
     private let userMemoryScheduler: UserMemoryScheduler
     private let governanceTelemetry: GovernanceTelemetryStore
+    private let sourceLearningScheduler: SourceLearningMemoryScheduler?
 
     init(
         scratchPadStore: ScratchPadStore,
         userMemoryScheduler: UserMemoryScheduler,
-        governanceTelemetry: GovernanceTelemetryStore
+        governanceTelemetry: GovernanceTelemetryStore,
+        sourceLearningScheduler: SourceLearningMemoryScheduler? = nil
     ) {
         self.scratchPadStore = scratchPadStore
         self.userMemoryScheduler = userMemoryScheduler
         self.governanceTelemetry = governanceTelemetry
+        self.sourceLearningScheduler = sourceLearningScheduler
     }
 
     func run(_ plan: ContextContinuationPlan) async {
@@ -23,6 +26,12 @@ final class ContextContinuationService {
                 sourceMessageId: scratchpadIngest.sourceMessageId,
                 conversationId: scratchpadIngest.conversationId
             )
+        }
+
+        if plan.memorySuppressionReason == nil,
+           let sourceLearningDigest = plan.sourceLearningDigest,
+           let sourceLearningScheduler {
+            await sourceLearningScheduler.enqueue(sourceLearningDigest)
         }
 
         guard let memoryRefresh = plan.memoryRefresh else {
