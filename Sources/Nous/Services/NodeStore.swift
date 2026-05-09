@@ -1256,7 +1256,7 @@ final class NodeStore {
         """)
         try stmt.bind(id.uuidString, at: 1)
         guard try stmt.step() else { return nil }
-        let id = UUID(uuidString: stmt.text(at: 0) ?? "") ?? UUID()
+        let rowId = UUID(uuidString: stmt.text(at: 0) ?? "") ?? UUID()
         let nodeId = UUID(uuidString: stmt.text(at: 1) ?? "") ?? UUID()
         let role = MessageRole(rawValue: stmt.text(at: 2) ?? "") ?? .user
         let content = stmt.text(at: 3) ?? ""
@@ -1266,7 +1266,7 @@ final class NodeStore {
         let sourceRaw = stmt.text(at: 7) ?? "typed"
         let source = MessageSource(rawValue: sourceRaw) ?? .typed
         return Message(
-            id: id,
+            id: rowId,
             nodeId: nodeId,
             role: role,
             content: content,
