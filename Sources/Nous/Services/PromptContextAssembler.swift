@@ -925,9 +925,18 @@ enum PromptContextAssembler {
         anchorAndPolicies.append(summaryOutputPolicy)
         anchorAndPolicies.append(conversationTitleOutputPolicy)
 
+        // Block 4b: when CorpusCardFormatter produces a renderable block,
+        // suppress the legacy globalMemory blob so the structured cards
+        // become Nous's primary "long-term memory about Alex" surface
+        // instead of double-injecting both. The flat blob still renders
+        // when no cards qualify (empty corpusContext or all entries lack
+        // attribution metadata), so default chat retains a fallback.
+        let corpusBlock = CorpusCardFormatter.formatContext(corpusContext)
+        let effectiveGlobalMemory = corpusBlock != nil ? nil : globalMemory
+
         let memoryPacket = MemoryPromptPacket(
             operatingContext: operatingContext,
-            globalMemory: globalMemory,
+            globalMemory: effectiveGlobalMemory,
             essentialStory: essentialStory,
             userModel: userModel,
             memoryEvidence: memoryEvidence,
@@ -1073,14 +1082,14 @@ CHAT FORMAT POLICY:
             }
         }
 
-        // Block 4a inject-half: own-corpus cards rendered side-by-side with the
-        // existing flat-blob memory layers + RAG citations. When non-empty,
-        // Nous sees Alex's prior atoms / reflections with full attribution
-        // (type · date · confidence) BEFORE the raw note-citation block — so
-        // the structured corpus is the first own-source the model encounters.
-        // Block 4b will flip flat globalMemory to fall back when these cards
-        // qualify; for now this is purely additive.
-        if let corpusBlock = CorpusCardFormatter.formatContext(corpusContext) {
+        // Block 4a/4b: own-corpus cards take over for the legacy globalMemory
+        // blob (suppressed above when corpusBlock is non-nil). Atoms +
+        // reflections render as typed, dated, confidence-tagged cards BEFORE
+        // the raw RAG citation block — Alex's structured corpus is the first
+        // own-source the model encounters. Note: corpusBlock was computed
+        // earlier so the suppression decision and the prompt injection share
+        // the same condition.
+        if let corpusBlock {
             volatilePieces.append("---\n\nALEX'S CORPUS (atom + reflection cards, prefer over external frameworks):\n\(corpusBlock)")
         }
 
