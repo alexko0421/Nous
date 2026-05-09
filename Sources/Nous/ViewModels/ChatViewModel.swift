@@ -34,6 +34,7 @@ final class ChatViewModel {
     private let relationRefinementQueue: GalaxyRelationRefinementQueue?
     private let userMemoryService: UserMemoryService
     private let userMemoryScheduler: UserMemoryScheduler
+    private let sourceLearningMemoryScheduler: SourceLearningMemoryScheduler?
     private let conversationSessionStore: ConversationSessionStore
     @ObservationIgnored private let explicitTurnRunner: ChatTurnRunner?
     @ObservationIgnored private let explicitTurnPlanner: TurnPlanner?
@@ -269,7 +270,8 @@ final class ChatViewModel {
         let service = ContextContinuationService(
             scratchPadStore: scratchPadStore,
             userMemoryScheduler: userMemoryScheduler,
-            governanceTelemetry: governanceTelemetry
+            governanceTelemetry: governanceTelemetry,
+            sourceLearningScheduler: sourceLearningMemoryScheduler
         )
         cachedContextContinuationService = service
         return service
@@ -333,6 +335,7 @@ final class ChatViewModel {
         relationRefinementQueue: GalaxyRelationRefinementQueue? = nil,
         userMemoryService: UserMemoryService,
         userMemoryScheduler: UserMemoryScheduler,
+        sourceLearningMemoryScheduler: SourceLearningMemoryScheduler? = nil,
         conversationSessionStore: ConversationSessionStore? = nil,
         turnRunner: ChatTurnRunner? = nil,
         turnPlanner: TurnPlanner? = nil,
@@ -366,6 +369,7 @@ final class ChatViewModel {
         self.relationRefinementQueue = relationRefinementQueue
         self.userMemoryService = userMemoryService
         self.userMemoryScheduler = userMemoryScheduler
+        self.sourceLearningMemoryScheduler = sourceLearningMemoryScheduler
         self.conversationSessionStore = conversationSessionStore ?? ConversationSessionStore(
             nodeStore: nodeStore,
             telemetry: governanceTelemetry

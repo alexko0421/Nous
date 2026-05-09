@@ -204,6 +204,11 @@ final class AppEnvironment {
         let voiceMemoryFacade = VoiceMemoryFacade(nodeStore: nodeStore)
         let voiceController = VoiceCommandController(memory: voiceMemoryFacade)
         let scheduler = UserMemoryScheduler(service: userMemoryService.synthesizer)
+        let sourceLearningMemoryService = SourceLearningMemoryService(
+            nodeStore: nodeStore,
+            llmServiceProvider: { settingsVM.makeLLMService(openRouterWebSearchEnabled: false) }
+        )
+        let sourceLearningMemoryScheduler = SourceLearningMemoryScheduler(service: sourceLearningMemoryService)
         let conversationSessionStore = ConversationSessionStore(
             nodeStore: nodeStore,
             telemetry: governanceTelemetry
@@ -227,6 +232,7 @@ final class AppEnvironment {
             relationRefinementQueue: relationRefinementQueue,
             userMemoryService: userMemoryService,
             userMemoryScheduler: scheduler,
+            sourceLearningMemoryScheduler: sourceLearningMemoryScheduler,
             conversationSessionStore: conversationSessionStore,
             sourceIngestionService: sourceIngestionService,
             llmServiceProvider: { settingsVM.makeLLMService(openRouterWebSearchEnabled: settingsVM.openRouterWebSearchEnabled) },
