@@ -513,6 +513,25 @@ final class ProvocationOrchestrationTests: XCTestCase {
     }
 
     @MainActor
+    func testNoYesManPostureFiresInOrdinaryChat() async throws {
+        // No corpus cards required — anti-yes-man fires for every ordinary
+        // chat turn because validation/amplification reflex is universal,
+        // not gated on retrieval state.
+        viewModel.inputText = "醒目嘅女仔通常都系面善嘅，你觉得呢"
+        await viewModel.send()
+
+        let system = llm.receivedSystem ?? ""
+        XCTAssertTrue(system.contains("NO YES-MAN POSTURE"),
+                      "anti-yes-man posture must fire in default chat where validation reflex is the dominant failure mode")
+        XCTAssertTrue(system.contains("Bad → Good translation examples"),
+                      "worked bad/good examples must accompany the rule — anchor.md already has the rule but no examples, which is why behavior didn't follow")
+        XCTAssertTrue(system.contains("醒目嘅女仔") || system.contains("通常"),
+                      "at least one Cantonese worked example must be visible to ground the rule in the user's own language register")
+        XCTAssertTrue(system.contains("confirmation bias") || system.contains("ideal type"),
+                      "the corrective frame (probe sample / distinguish ideal from specific) must appear")
+    }
+
+    @MainActor
     func testPreferOwnCorpusPostureAbsentWhenNoCardsQualify() async throws {
         // No atoms / no reflections in store — corpus context is empty,
         // CorpusCardFormatter returns nil, neither the cards block nor the

@@ -1108,6 +1108,39 @@ Borrowed → own-corpus translation examples:
 """)
         }
 
+        // Anti-yes-man posture. anchor.md already prohibits empty agreement
+        // and mandates push-back on unexamined assumptions, but rules without
+        // worked examples don't bite — the model defaults to validate-and-extend
+        // when Alex shares casual observations / preferences. Per
+        // validation_minimal_anchor_path.md, surgical examples succeed where
+        // structural rules don't. Lives in volatile (NOT anchor.md). Fires for
+        // ordinary chat; emotional support / excitement modes are not the
+        // primary failure surface, and anchor.md's mode rules already guide
+        // those.
+        if activeQuickActionMode == nil {
+            volatilePieces.append("""
+---
+
+NO YES-MAN POSTURE:
+When Alex shares an observation, preference, or casual claim, your default move is to PROBE the frame — not validate it with "对" / "好准" / "我理解你" then extend. Friendly amplification of his existing position is a yes-man reflex; resist.
+
+Three specific tells to catch in your own draft:
+1. Load-bearing words ("通常" / "梗系" / "成日" / "typically" / "always") that carry the claim without grounding — name the assumption even if it sounds true.
+2. Adding poetic or romantic flourish to Alex's last line ("最难得系..." / "最深嘅系..." / "其实就系..."). Resist — that's amplification dressed as insight.
+3. Saying "我理解你点解 X" before you say what you actually disagree with. If you have nothing to disagree with, the right move is usually still to probe — not soothe.
+
+Bad → Good translation examples:
+
+User: "醒目嘅女仔通常都系面善嘅"
+- Bad:  "哈哈，呢个观察有趣。面善嘅人 social awareness 高，久而久之练成…"
+- Good: "「通常」係好 load-bearing — 你 sample 几多人？大部分系 from afar 观察定系真interact 过？呢种 pattern 好容易 confirmation bias。"
+
+User: "我中意又软又硬嘅人，反差先系 depth"
+- Bad:  "我理解你点解钟意，呢种反差 itself 就系 depth 嘅 signal…"
+- Good: "你描述紧 ideal type 定 specific person？两者 attraction 来源唔同 — ideal type 系 sketch，real person 系 hard data。你近排 attracted 嘅人，几多个真符合呢个 frame，几多个系你回头 retrofit？"
+""")
+        }
+
         if !promptCitations.isEmpty {
             volatilePieces.append("---\n\nRELEVANT KNOWLEDGE FROM ALEX'S NOTES AND CONVERSATIONS:")
             for (index, result) in promptCitations.enumerated() {
