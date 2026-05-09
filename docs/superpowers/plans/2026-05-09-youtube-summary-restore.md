@@ -381,6 +381,57 @@ Phase 1 complete. The app compiles, ingestion plumbing exists, no UI surfaces it
 
 ---
 
+### Task 7.5: Lock down section boundary determinism
+
+**Why:** Live observation (2026-05-09): the same video analyzed three times returns three different segmentations because `YouTubeLearningSummaryService` is calling Gemini 2.5 Pro with stochastic sampling and zero seeding. Cheap fixes recover ~70% of run-to-run consistency. Cache (videoId-keyed) is deferred to Phase 2/3 once storage integration is settled — this task only addresses the model-level determinism.
+
+**Scope:** `Sources/Nous/Services/YouTubeLearningSummaryService.swift` only. No new files. No public API change.
+
+- [ ] **Step 1: Tighten Gemini sampling config**
+
+Edit `Self.requestBody(for:)` (around line 347) and the matching transcript-path config (find the second `generationConfig` block).
+
+Apply three changes to both `generationConfig` blocks:
+
+1. `"temperature": 0.2` → `"temperature": 0`
+2. Add `"seed": 42` (any fixed integer; document the choice in a one-line comment)
+3. `"thinkingConfig": ["thinkingBudget": 4096]` → `"thinkingConfig": ["thinkingBudget": 1024]`
+
+Rationale for thinkingBudget reduction: thinking traces are non-deterministic across calls even at temp=0; smaller budget means smaller surface for divergence. If post-fix dogfood (Step 2) shows section quality regression, raise back to 2048 then re-test. Do not exceed 2048.
+
+- [ ] **Step 2: Manual smoke — three-run consistency**
+
+Pick one 8-to-12-minute YouTube video that has clear topic shifts (e.g. an interview with multiple subjects). Trigger summary generation three times in a row from a fresh app launch each time (so no in-process cache contaminates).
+
+For each run, record the section boundaries (startTime values) into a quick scratch log.
+
+Expected: pairwise diff between any two runs is ≤ 2 seconds per boundary AND section count is identical. If boundaries drift >2 seconds OR count differs, the determinism fix is insufficient and one of the following applies: (a) Gemini is ignoring the seed (file a follow-up to verify via Gemini docs), (b) thinkingBudget needs further reduction, (c) prompt phrasing needs tightening (e.g. fix exact section count instead of a range).
+
+- [ ] **Step 3: Build + commit**
+
+```bash
+xcodebuild -project Nous.xcodeproj -scheme Nous -destination 'platform=macOS' build 2>&1 | tail -5
+```
+
+Commit message:
+
+```
+restore-yt: lock YouTube section boundary determinism
+
+Drop temperature 0.2 → 0, add seed=42, reduce thinkingBudget 4096 →
+1024 in YouTubeLearningSummaryService Gemini config. Prevents same-
+video three-run drift observed during dogfood. Cache (videoId key)
+deferred to Phase 2/3 once SourceMaterial / NodeStore integration
+settles.
+```
+
+**Out of scope (deferred):**
+- videoId-keyed cache layer (Phase 2/3 — depends on NodeStore + SourceMaterial integration points settling)
+- YouTube native chapter-marker fallback (separate feature, not a determinism fix)
+- Two-stage pipeline (deterministic boundary detection + LLM labeling) — only justified if Step 2 dogfood shows seed+temp=0 still drifts unacceptably
+
+---
+
 # Phase 2 — Source learning memory hook (Bucket B)
 
 After Phase 2, the source-learning scheduler is wired into the turn loop. Still no UI; the hook is dormant until Phase 3 activates a source.
