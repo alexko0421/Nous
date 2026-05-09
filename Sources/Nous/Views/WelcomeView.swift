@@ -28,13 +28,15 @@ enum WelcomeActionMenuHitRegion {
 struct WelcomeView: View {
     @Binding var inputText: String
     let attachments: [AttachedFileContext]
+    let sourceContext: SourceDiscussionContext?
     let onPickAttachment: () -> Void
     let onPickPhoto: () -> Void
-    let onYouTubeSummary: () -> Void = {}
+    let onYouTubeSummary: () -> Void
     let onVoice: () -> Void
     let canPickPhoto: Bool
     let isVoiceActive: Bool
     let onRemoveAttachment: (UUID) -> Void
+    let onClearSourceContext: () -> Void
     let onSend: () -> Void
     let onImageDrop: ([NSItemProvider]) -> Bool
     let onQuickActionSelected: (QuickActionMode) -> Void
@@ -66,6 +68,10 @@ struct WelcomeView: View {
         !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty
     }
 
+    private var hasComposerLinks: Bool {
+        sourceContext != nil || !attachments.isEmpty
+    }
+
     private var shouldSeparateComposerPrimaryAction: Bool {
         ComposerSeparationPolicy.shouldSeparate(
             inputText: inputText,
@@ -93,9 +99,15 @@ struct WelcomeView: View {
                     }
                     
                     VStack(spacing: 16) {
-                        if !attachments.isEmpty {
+                        if hasComposerLinks {
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack(spacing: 8) {
+                                    if let sourceContext {
+                                        SourceDiscussionLinkChip(context: sourceContext) {
+                                            onClearSourceContext()
+                                        }
+                                    }
+
                                     ForEach(attachments) { attachment in
                                         AttachmentChip(attachment: attachment) {
                                             onRemoveAttachment(attachment.id)

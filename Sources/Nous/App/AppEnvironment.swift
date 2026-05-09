@@ -32,10 +32,12 @@ struct AppDependencies {
     let backgroundAITelemetry: BackgroundAIJobTelemetryStore
     let galaxyRelationTelemetry: GalaxyRelationTelemetry
     let scratchPadStore: ScratchPadStore
+    let activeBrowserTabURLReader: ActiveBrowserTabURLReader
     let voiceController: VoiceCommandController
     let voiceTranscriptCommitter: VoiceTranscriptCommitter
     let settingsVM: SettingsViewModel
     let chatVM: ChatViewModel
+    let youtubeLearningVM: YouTubeLearningViewModel
     let noteVM: NoteViewModel
     let galaxyVM: GalaxyViewModel
     let beadsAgentWorkVM: BeadsAgentWorkViewModel
@@ -251,6 +253,18 @@ final class AppEnvironment {
             shouldUseGeminiHistoryCache: { settingsVM.geminiHistoryCacheEnabled },
             shouldPersistAssistantThinking: { settingsVM.assistantThinkingEnabled }
         )
+        let youtubeLearningVM = YouTubeLearningViewModel(
+            transcriptService: YouTubeTranscriptService(),
+            summaryService: YouTubeLearningSummaryService(
+                llmServiceProvider: { settingsVM.makeLLMService(openRouterWebSearchEnabled: false) },
+                videoAnalysisServiceProvider: {
+                    let key = settingsVM.geminiApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !key.isEmpty else { return nil }
+                    return GeminiYouTubeVideoAnalysisService(apiKey: key)
+                }
+            ),
+            sourceIngestionService: sourceIngestionService
+        )
         let voiceTranscriptCommitter = VoiceTranscriptCommitter(
             voiceController: voiceController,
             chatViewModel: chatVM
@@ -328,10 +342,12 @@ final class AppEnvironment {
             backgroundAITelemetry: backgroundAITelemetry,
             galaxyRelationTelemetry: galaxyRelationTelemetry,
             scratchPadStore: scratchPadStore,
+            activeBrowserTabURLReader: ActiveBrowserTabURLReader(),
             voiceController: voiceController,
             voiceTranscriptCommitter: voiceTranscriptCommitter,
             settingsVM: settingsVM,
             chatVM: chatVM,
+            youtubeLearningVM: youtubeLearningVM,
             noteVM: noteVM,
             galaxyVM: galaxyVM,
             beadsAgentWorkVM: beadsAgentWorkVM,
