@@ -16,6 +16,10 @@ struct TurnMemoryContext {
     let contradictionCandidateIds: Set<String>
     let citablePool: [CitableEntry]
     let memoryProvenance: [String: ContextManifestMemoryProvenance]
+    /// Block 4a side-by-side: built every turn but NOT yet injected into the
+    /// prompt. Available for tests and telemetry. Block 4a inject-half wires
+    /// it into PromptContextAssembler; Block 4b makes cards primary.
+    let corpusContext: CitableContext
 }
 
 final class TurnMemoryContextBuilder {
@@ -25,6 +29,7 @@ final class TurnMemoryContextBuilder {
     private let memoryProjectionService: MemoryProjectionService
     private let contradictionMemoryService: ContradictionMemoryService
     private let contextEvidenceSteward: ContextEvidenceSteward
+    private let citableContextBuilder: CitableContextBuilder
 
     init(
         nodeStore: NodeStore,
@@ -40,6 +45,7 @@ final class TurnMemoryContextBuilder {
         self.memoryProjectionService = memoryProjectionService
         self.contradictionMemoryService = contradictionMemoryService
         self.contextEvidenceSteward = contextEvidenceSteward
+        self.citableContextBuilder = CitableContextBuilder(nodeStore: nodeStore)
     }
 
     func build(
@@ -153,6 +159,17 @@ final class TurnMemoryContextBuilder {
             citablePool: citablePool
         )
 
+        // Block 4a side-by-side: build the corpus context every turn so it's
+        // observable in tests + telemetry. Inject-half (next commit) wires it
+        // into PromptContextAssembler; for now this is dark code in the prompt.
+        let corpusContext = citableContextBuilder.build(
+            turnText: promptQuery,
+            conversationId: node.id,
+            projectId: node.projectId,
+            queryEmbedding: queryEmbedding,
+            now: now
+        )
+
         return TurnMemoryContext(
             citations: citations,
             operatingContext: operatingContext,
@@ -168,7 +185,8 @@ final class TurnMemoryContextBuilder {
             hardRecallFacts: hardRecallFacts,
             contradictionCandidateIds: contradictionCandidateIds,
             citablePool: citablePool,
-            memoryProvenance: memoryProvenance
+            memoryProvenance: memoryProvenance,
+            corpusContext: corpusContext
         )
     }
 

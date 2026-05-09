@@ -250,6 +250,77 @@ final class TurnMemoryContextBuilderTests: XCTestCase {
         XCTAssertTrue(context.recentConversations.isEmpty)
     }
 
+    /// Block 4a build-half: TurnMemoryContext now carries a corpusContext
+    /// that the builder populates each turn from the same NodeStore. Inject-
+    /// half (next commit) wires it into PromptContextAssembler. Until then,
+    /// this test guards that the side-by-side build path remains green.
+    func testBuilderPopulatesCorpusContextSideBySide() throws {
+        let store = try NodeStore(path: ":memory:")
+        let current = NousNode(type: .conversation, title: "Decision discussion")
+        let source = NousNode(type: .conversation, title: "Earlier decision")
+        try store.insertNode(current)
+        try store.insertNode(source)
+        try store.insertMemoryAtom(MemoryAtom(
+            type: .decision,
+            statement: "Ship the notch preview before TTS, citing momentum over polish.",
+            scope: .global,
+            confidence: 0.85,
+            sourceNodeId: source.id
+        ))
+
+        let core = UserMemoryCore(nodeStore: store, llmServiceProvider: { nil })
+        let builder = TurnMemoryContextBuilder(
+            nodeStore: store,
+            vectorStore: VectorStore(nodeStore: store),
+            embeddingService: EmbeddingService(),
+            memoryProjectionService: MemoryProjectionService(nodeStore: store),
+            contradictionMemoryService: ContradictionMemoryService(core: core)
+        )
+
+        let context = try builder.build(
+            retrievalQuery: "remember the decision we made before",
+            promptQuery: "remember the decision we made before",
+            node: current,
+            policy: .full,
+            now: Date(timeIntervalSince1970: 5_000)
+        )
+
+        XCTAssertFalse(context.corpusContext.entries.isEmpty,
+                       "decisionHistory query should surface at least one atom card")
+        let admitted = try XCTUnwrap(context.corpusContext.entries.first)
+        XCTAssertEqual(admitted.atomType, .decision)
+        XCTAssertEqual(admitted.confidence, 0.85)
+        XCTAssertEqual(admitted.sourceNodeId, source.id)
+        XCTAssertEqual(context.corpusContext.manifest.intent, .decisionHistory)
+        XCTAssertGreaterThan(context.corpusContext.manifest.admittedCount, 0)
+    }
+
+    func testCorpusContextEmptyOnEmptyStore() throws {
+        let store = try NodeStore(path: ":memory:")
+        let current = NousNode(type: .conversation, title: "fresh chat")
+        try store.insertNode(current)
+
+        let core = UserMemoryCore(nodeStore: store, llmServiceProvider: { nil })
+        let builder = TurnMemoryContextBuilder(
+            nodeStore: store,
+            vectorStore: VectorStore(nodeStore: store),
+            embeddingService: EmbeddingService(),
+            memoryProjectionService: MemoryProjectionService(nodeStore: store),
+            contradictionMemoryService: ContradictionMemoryService(core: core)
+        )
+
+        let context = try builder.build(
+            retrievalQuery: "anything",
+            promptQuery: "anything",
+            node: current,
+            policy: .full,
+            now: Date(timeIntervalSince1970: 100)
+        )
+
+        XCTAssertTrue(context.corpusContext.entries.isEmpty)
+        XCTAssertEqual(context.corpusContext.manifest.totalCandidates, 0)
+    }
+
     private func memoryEntry(
         scope: MemoryScope,
         scopeRefId: UUID? = nil,
