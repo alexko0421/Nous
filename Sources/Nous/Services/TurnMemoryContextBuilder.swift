@@ -45,7 +45,10 @@ final class TurnMemoryContextBuilder {
         self.memoryProjectionService = memoryProjectionService
         self.contradictionMemoryService = contradictionMemoryService
         self.contextEvidenceSteward = contextEvidenceSteward
-        self.citableContextBuilder = CitableContextBuilder(nodeStore: nodeStore)
+        self.citableContextBuilder = CitableContextBuilder(
+            nodeStore: nodeStore,
+            lexicalIndex: nodeStore.lexicalIndex
+        )
     }
 
     func build(

@@ -18,10 +18,12 @@ import Foundation
 final class CitableContextBuilder {
     private let nodeStore: NodeStore
     private let planner: MemoryQueryPlanner
+    private let lexicalIndex: LexicalIndex?
 
-    init(nodeStore: NodeStore) {
+    init(nodeStore: NodeStore, lexicalIndex: LexicalIndex? = nil) {
         self.nodeStore = nodeStore
         self.planner = MemoryQueryPlanner(nodeStore: nodeStore)
+        self.lexicalIndex = lexicalIndex
     }
 
     /// Build the citable context for a given turn.
@@ -65,8 +67,23 @@ final class CitableContextBuilder {
             now: now
         )
 
+        // Lexical lane (Block 6 — atom hybrid retrieval). Runs FTS5 trigram
+        // search over memory_atoms.statement so CJK paraphrases hit atoms
+        // the planner's English-only embedding misses, AND so queries with
+        // no keyword-intent cue still get an atom recall lane (planner's
+        // internal vector fallback is only used when an embedding is
+        // supplied; lexical fills the no-embedding-no-intent gap). Hits
+        // outside the existing planner result set are merged below.
+        let lexicalAtomIds: [UUID] = (try? lexicalIndex?.searchMemoryAtoms(
+            query: turnText,
+            limit: atomLimit
+        ).map(\.rowId)) ?? []
+        let plannerIdSet = Set(packet.retrievedAtomIds)
+        let lexicalOnlyIds = lexicalAtomIds.filter { !plannerIdSet.contains($0) }
+        let mergedAtomIds: [UUID] = packet.retrievedAtomIds + lexicalOnlyIds
+
         let atomById: [UUID: MemoryAtom] = Self.fetchAtomsById(
-            ids: packet.retrievedAtomIds,
+            ids: mergedAtomIds,
             nodeStore: nodeStore
         )
 
@@ -77,9 +94,13 @@ final class CitableContextBuilder {
         var droppedByFloor = 0
         var ranked: [(entry: CitableEntry, score: Double)] = []
 
-        // Atom lane — iterate planner's id order so we keep its scoring
-        // intent. Final rank is recomputed below for cross-lane fairness.
-        for id in packet.retrievedAtomIds {
+        // Atom lane — iterate planner-then-lexical id order so the keyword/
+        // vector path keeps its priority for cases it can already serve, and
+        // the lexical-only union extends coverage for paraphrases / CJK
+        // queries the planner missed. Final rank is recomputed below for
+        // cross-lane fairness so a high-confidence lexical-only hit can
+        // still outrank a low-confidence planner hit.
+        for id in mergedAtomIds {
             guard let atom = atomById[id] else { continue }
             totalSeen += 1
             if atom.confidence < confidenceFloor {

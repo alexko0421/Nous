@@ -35,8 +35,10 @@ import Foundation
 final class LexicalIndex {
 
     /// Bumped when tokenizer choice or schema shape changes. Driving a
-    /// rebuild of the three virtual tables.
-    static let currentVersion: Int = 1
+    /// rebuild of the FTS5 virtual tables.
+    /// - 1: messages_fts + nodes_fts + source_chunks_fts (trigram).
+    /// - 2: adds memory_atoms_fts (trigram) for atom-level lexical recall.
+    static let currentVersion: Int = 2
 
     private let db: Database
 
@@ -81,11 +83,12 @@ final class LexicalIndex {
         for trigger in [
             "messages_fts_insert", "messages_fts_update", "messages_fts_delete",
             "nodes_fts_insert", "nodes_fts_update", "nodes_fts_delete",
-            "source_chunks_fts_insert", "source_chunks_fts_update", "source_chunks_fts_delete"
+            "source_chunks_fts_insert", "source_chunks_fts_update", "source_chunks_fts_delete",
+            "memory_atoms_fts_insert", "memory_atoms_fts_update", "memory_atoms_fts_delete"
         ] {
             try db.exec("DROP TRIGGER IF EXISTS \(trigger);")
         }
-        for table in ["messages_fts", "nodes_fts", "source_chunks_fts"] {
+        for table in ["messages_fts", "nodes_fts", "source_chunks_fts", "memory_atoms_fts"] {
             try db.exec("DROP TABLE IF EXISTS \(table);")
         }
 
@@ -117,6 +120,19 @@ final class LexicalIndex {
                 chunkId UNINDEXED,
                 sourceNodeId UNINDEXED,
                 text,
+                tokenize = 'trigram'
+            );
+        """)
+        // memory_atoms_fts indexes the atom statement (the user's distilled
+        // claims like "Alex prefers async-first teams"). Lexical lane lets
+        // CJK paraphrase / partial substring queries hit atoms that the
+        // keyword-intent classifier in MemoryQueryPlanner misses, and gives
+        // a recall path that doesn't depend on having a query embedding.
+        try db.exec("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS memory_atoms_fts USING fts5(
+                atomId UNINDEXED,
+                type UNINDEXED,
+                statement,
                 tokenize = 'trigram'
             );
         """)
@@ -185,6 +201,27 @@ final class LexicalIndex {
                 DELETE FROM source_chunks_fts WHERE chunkId = OLD.id;
             END;
         """)
+
+        // memory_atoms_fts ↔ memory_atoms (statement only — type tracks the
+        // atom kind for filterability but isn't searchable text)
+        try db.exec("""
+            CREATE TRIGGER IF NOT EXISTS memory_atoms_fts_insert AFTER INSERT ON memory_atoms BEGIN
+                INSERT INTO memory_atoms_fts(atomId, type, statement)
+                VALUES (NEW.id, NEW.type, NEW.statement);
+            END;
+        """)
+        try db.exec("""
+            CREATE TRIGGER IF NOT EXISTS memory_atoms_fts_update AFTER UPDATE OF statement ON memory_atoms BEGIN
+                DELETE FROM memory_atoms_fts WHERE atomId = OLD.id;
+                INSERT INTO memory_atoms_fts(atomId, type, statement)
+                VALUES (NEW.id, NEW.type, NEW.statement);
+            END;
+        """)
+        try db.exec("""
+            CREATE TRIGGER IF NOT EXISTS memory_atoms_fts_delete AFTER DELETE ON memory_atoms BEGIN
+                DELETE FROM memory_atoms_fts WHERE atomId = OLD.id;
+            END;
+        """)
     }
 
     private func backfillFromBackingTables() throws {
@@ -199,6 +236,10 @@ final class LexicalIndex {
         try db.exec("""
             INSERT INTO source_chunks_fts(chunkId, sourceNodeId, text)
             SELECT id, sourceNodeId, text FROM source_chunks;
+        """)
+        try db.exec("""
+            INSERT INTO memory_atoms_fts(atomId, type, statement)
+            SELECT id, type, statement FROM memory_atoms;
         """)
     }
 
@@ -218,6 +259,7 @@ final class LexicalIndex {
             case title
             case message
             case sourceChunk
+            case atom
         }
     }
 
@@ -321,6 +363,65 @@ final class LexicalIndex {
         return out
     }
 
+    /// Search memory_atoms statements. Returns hits where `rowId` is the
+    /// atom UUID (atoms aren't node-bound, so `nodeId` mirrors `rowId` for
+    /// API uniformity). Used by CitableContextBuilder to feed atom IDs into
+    /// its scoring lane alongside the planner's keyword + vector recall.
+    ///
+    /// CJK queries hit atoms via the trigram tokenizer that the planner's
+    /// English-only embedding falls down on (e.g. `面善` body containing
+    /// `面善的人通常需要 social awareness` returns 0 hits with `unicode61`
+    /// but matches with `trigram`).
+    /// Debug helper: count rows currently in memory_atoms_fts. Useful when
+    /// a unit test is asserting "lexical lane found my atom" but suspecting
+    /// the trigger didn't fire / migration didn't complete.
+    func debugMemoryAtomFtsRowCount() throws -> Int {
+        let stmt = try db.prepare("SELECT count(*) FROM memory_atoms_fts;")
+        guard try stmt.step() else { return 0 }
+        return Int(stmt.double(at: 0))
+    }
+
+    /// Debug helper: read back what the trigger actually wrote. Tests assert
+    /// the statement text round-tripped intact (UTF-8 / CJK preservation).
+    func debugMemoryAtomFtsRows() throws -> [(atomId: String, statement: String)] {
+        let stmt = try db.prepare("SELECT atomId, statement FROM memory_atoms_fts;")
+        var out: [(String, String)] = []
+        while try stmt.step() {
+            out.append((stmt.text(at: 0) ?? "", stmt.text(at: 1) ?? ""))
+        }
+        return out
+    }
+
+    func searchMemoryAtoms(
+        query: String,
+        limit: Int = 20,
+        excludeAtomIds: Set<UUID> = []
+    ) throws -> [LexicalHit] {
+        guard limit > 0, let ftsQuery = buildFTS5Query(query) else { return [] }
+
+        let stmt = try db.prepare("""
+            SELECT atomId, -bm25(memory_atoms_fts) AS score
+            FROM memory_atoms_fts
+            WHERE statement MATCH ?
+            ORDER BY bm25(memory_atoms_fts) ASC
+            LIMIT ?;
+        """)
+        try stmt.bind(ftsQuery, at: 1)
+        try stmt.bind(limit + excludeAtomIds.count, at: 2)
+
+        var out: [LexicalHit] = []
+        out.reserveCapacity(limit)
+        while try stmt.step() {
+            guard let atomIdString = stmt.text(at: 0),
+                  let atomId = UUID(uuidString: atomIdString) else { continue }
+            if excludeAtomIds.contains(atomId) { continue }
+            let score = stmt.double(at: 1)
+            out.append(LexicalHit(nodeId: atomId, rowId: atomId, score: score, kind: .atom))
+            if out.count >= limit { break }
+        }
+        return out
+    }
+
     // MARK: - Helpers
 
     /// Build an FTS5 MATCH query from a free-form natural language string.
@@ -361,8 +462,18 @@ final class LexicalIndex {
             guard isAcceptableTokenLength(run) else { continue }
             tokens.append(run)
             // For CJK-bearing runs of length ≥ 4, additionally emit every
-            // 2-char bigram. Length-3 runs are already adequately handled
-            // by the trigram tokenizer; bigram expansion would dilute BM25.
+            // 2-char bigram and every 3-char trigram. Length-3 runs are
+            // already adequately handled by the run-as-token entry above.
+            //
+            // Why both: bigrams give substring breadth for queries that
+            // share short fragments with the corpus (when FTS5's LIKE
+            // fallback for short phrases works). Trigrams give exact
+            // tokenizer matches against pure-CJK indexed content — the
+            // FTS5 trigram tokenizer indexes 3-char windows, so a 3-char
+            // query phrase can match a 3-char index trigram directly.
+            // Pure-CJK 2-char queries against pure-CJK content
+            // unreliably trip FTS5's LIKE fallback in our SQLite build,
+            // so the trigram overlay is what makes long CJK queries hit.
             if run.count >= 4, run.contains(where: Self.isCJKScalar) {
                 let chars = Array(run)
                 for i in 0..<(chars.count - 1) {
@@ -372,6 +483,14 @@ final class LexicalIndex {
                     // noise like "F-" or "1 ").
                     if bigram.contains(where: Self.isCJKScalar) {
                         tokens.append(bigram)
+                    }
+                }
+                if chars.count >= 3 {
+                    for i in 0..<(chars.count - 2) {
+                        let trigram = String(chars[i...(i + 2)])
+                        if trigram.contains(where: Self.isCJKScalar) {
+                            tokens.append(trigram)
+                        }
                     }
                 }
             }

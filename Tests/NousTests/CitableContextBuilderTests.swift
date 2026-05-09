@@ -9,7 +9,10 @@ final class CitableContextBuilderTests: XCTestCase {
     override func setUp() {
         super.setUp()
         store = try! NodeStore(path: ":memory:")
-        builder = CitableContextBuilder(nodeStore: store)
+        builder = CitableContextBuilder(
+            nodeStore: store,
+            lexicalIndex: store.lexicalIndex
+        )
     }
 
     override func tearDown() {
@@ -261,6 +264,131 @@ final class CitableContextBuilderTests: XCTestCase {
 
         XCTAssertEqual(ctx.manifest.intent, .decisionHistory)
         XCTAssertEqual(ctx.manifest.mode, .strategist)
+    }
+
+    // MARK: - Block 6 / Step 3: lexical atom recall
+
+    func testSearchMemoryAtomsDirectCJK3Char() throws {
+        // 3+ char CJK queries hit pure-CJK indexed content via the trigram
+        // tokenizer. (2-char CJK queries against pure-CJK content have a
+        // known FTS5 trigram limitation — the LIKE-fallback for short
+        // phrases is unreliable in our SQLite build. Realistic queries
+        // typically have ≥3 char overlap.)
+        let atom = MemoryAtom(
+            type: .preference,
+            statement: "面善嘅人通常有意识管理印象",
+            scope: .global,
+            confidence: 0.85
+        )
+        try store.insertMemoryAtom(atom)
+
+        let hits = try store.lexicalIndex.searchMemoryAtoms(query: "面善嘅")
+        XCTAssertFalse(hits.isEmpty,
+                       "3-char CJK substring query must hit the indexed atom")
+        XCTAssertEqual(hits.first?.rowId, atom.id)
+    }
+
+    func testSearchMemoryAtomsDirectEnglish() throws {
+        let atom = MemoryAtom(
+            type: .decision,
+            statement: "Ship before TTS, citing momentum over polish",
+            scope: .global,
+            confidence: 0.85
+        )
+        try store.insertMemoryAtom(atom)
+
+        let hits = try store.lexicalIndex.searchMemoryAtoms(query: "momentum")
+        XCTAssertFalse(hits.isEmpty,
+                       "English-only query 'momentum' must hit indexed atom")
+        XCTAssertEqual(hits.first?.rowId, atom.id)
+    }
+
+    func testFtsTriggerPopulatesIndexOnAtomInsert() throws {
+        // Sanity: confirm the AFTER INSERT trigger on memory_atoms is wired
+        // and the FTS5 table receives a row when an atom is inserted.
+        XCTAssertEqual(try store.lexicalIndex.debugMemoryAtomFtsRowCount(), 0,
+                       "fresh :memory: store should have empty memory_atoms_fts")
+        try store.insertMemoryAtom(MemoryAtom(
+            type: .preference,
+            statement: "面善嘅人通常有意识管理印象",
+            scope: .global,
+            confidence: 0.85
+        ))
+        XCTAssertEqual(try store.lexicalIndex.debugMemoryAtomFtsRowCount(), 1,
+                       "trigger must fire and add a row to memory_atoms_fts")
+    }
+
+    func testLexicalLaneSurfacesAtomMissedByPlanner() throws {
+        // Query that has NO historical-cue keyword ("remember"/"之前"/etc),
+        // so MemoryQueryPlanner falls through with no intent and no vector
+        // embedding given. Planner returns empty. Lexical lane should still
+        // hit the atom via FTS5 trigram match on its statement.
+        let atom = MemoryAtom(
+            type: .preference,
+            statement: "面善嘅人通常有意识管理印象，唔代表 confidence 真劲",
+            scope: .global,
+            confidence: 0.85
+        )
+        try store.insertMemoryAtom(atom)
+
+        // No "remember" / "之前" trigger — planner intent classifier gets
+        // nothing. Query overlap with atom: "通常有" (3 chars), well within
+        // FTS5 trigram capabilities.
+        let ctx = builder.build(
+            turnText: "面善嘅人通常有几种解读法",
+            conversationId: UUID(),
+            projectId: nil,
+            mode: .companion
+        )
+
+        XCTAssertTrue(ctx.entries.contains { $0.id == atom.id.uuidString },
+                      "lexical FTS5 lane must surface the atom even when keyword intent classifier returns empty")
+    }
+
+    func testLexicalLaneDoesNotDuplicatePlannerHits() throws {
+        // Atom that BOTH planner (via decisionHistory keyword) and lexical
+        // would surface. The merged result should contain it once, not twice.
+        let atom = MemoryAtom(
+            type: .decision,
+            statement: "Ship before TTS, citing momentum over polish.",
+            scope: .global,
+            confidence: 0.85
+        )
+        try store.insertMemoryAtom(atom)
+
+        let ctx = builder.build(
+            turnText: "remember the decision about TTS shipping",
+            conversationId: UUID(),
+            projectId: nil,
+            mode: .companion
+        )
+
+        let matchCount = ctx.entries.filter { $0.id == atom.id.uuidString }.count
+        XCTAssertEqual(matchCount, 1,
+                       "atom that hits both planner and lexical lanes must dedupe to a single CitableEntry")
+    }
+
+    func testLexicalCJKQueryHitsAtomWithoutEmbedding() throws {
+        // CJK query that an English-only embedding would miss; trigram
+        // tokenizer in memory_atoms_fts catches the substring. Query has
+        // 4-char overlap "软硬反差" with the atom statement.
+        let atom = MemoryAtom(
+            type: .preference,
+            statement: "Alex 中意软硬反差嘅人，软系外表，硬系做嘢嗰阵",
+            scope: .global,
+            confidence: 0.8
+        )
+        try store.insertMemoryAtom(atom)
+
+        let ctx = builder.build(
+            turnText: "我中意软硬反差嘅类型",
+            conversationId: UUID(),
+            projectId: nil,
+            mode: .companion
+        )
+
+        XCTAssertTrue(ctx.entries.contains { $0.id == atom.id.uuidString },
+                      "trigram FTS5 must hit 「软硬」 substring even without an embedding")
     }
 
     // MARK: - Helpers
