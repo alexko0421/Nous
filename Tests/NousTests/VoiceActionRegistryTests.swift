@@ -77,7 +77,13 @@ final class VoiceActionRegistryTests: XCTestCase {
                 "selected_project_name",
                 "sidebar_visible",
                 "scratchpad_visible",
-                "active_conversation_title"
+                "active_conversation_title",
+                "right_panel_mode",
+                "youtube_url_text",
+                "active_source_title",
+                "active_source_time_range",
+                "active_source_summary_title",
+                "active_source_evidence_level"
             ]
         )
         XCTAssertEqual(json["current_tab"] as? String, "settings")
