@@ -171,6 +171,7 @@ final class PromptContextAssemblerDirectJudgmentTests: XCTestCase {
         XCTAssertTrue(slice.volatile.contains("REALITY CONSTRAINT PROBE CONTRACT"))
         XCTAssertTrue(slice.volatile.contains("answer from the known constraint first"))
         XCTAssertTrue(slice.volatile.contains("Do not turn this into a legal conclusion"))
+        XCTAssertTrue(slice.volatile.contains("Do not provide specific course-unit, work-authorization, visa, tax, or school-policy numbers"))
         XCTAssertTrue(slice.volatile.contains("Do not lead by asking which decision"))
     }
 

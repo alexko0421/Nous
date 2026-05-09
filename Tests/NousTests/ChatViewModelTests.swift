@@ -156,6 +156,34 @@ final class CapturingSingleReplyLLMService: LLMService {
     }
 }
 
+final class RecordingReplyLLMService: LLMService {
+    private let lock = NSLock()
+    private let output: String
+    private var storedPromptTexts: [String] = []
+
+    var promptTexts: [String] {
+        lock.withLock { storedPromptTexts }
+    }
+
+    init(output: String) {
+        self.output = output
+    }
+
+    func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
+        lock.withLock {
+            storedPromptTexts.append(
+                ([system ?? ""] + messages.map(\.content))
+                    .joined(separator: "\n\n")
+            )
+        }
+        let output = self.output
+        return AsyncThrowingStream { continuation in
+            continuation.yield(output)
+            continuation.finish()
+        }
+    }
+}
+
 final class CancellationFailingLLMService: LLMService {
     func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
         throw CancellationError()
@@ -170,6 +198,12 @@ final class ChatViewModelTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         return ScratchPadStore(nodeStore: nodeStore, defaults: defaults)
+    }
+
+    private static func isDocumentSourcePrompt(_ prompt: String) -> Bool {
+        prompt.contains("SOURCE MATERIAL") &&
+            prompt.contains("report.txt") &&
+            prompt.contains("source-only late section")
     }
 
     func testChatModeDefaultsToNil() throws {
@@ -442,6 +476,103 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertTrue(storedNode.content.contains("second answer"))
         XCTAssertEqual(telemetry.behaviorEvalSummary.retryCount, 1)
         XCTAssertEqual(telemetry.behaviorEvalSummary.deleteCount, 0)
+    }
+
+    func testRegenerateLatestAssistantKeepsDocumentSourceMaterial() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let scratchPadStore = await MainActor.run { makeScratchPadStore(nodeStore: nodeStore) }
+        let llm = RecordingReplyLLMService(output: "answer")
+
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { llm },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: scratchPadStore
+        )
+
+        vm.inputText = "Connect this report"
+        await vm.send(attachments: [
+            AttachedFileContext(
+                name: "report.txt",
+                extractedText: "Report preview",
+                sourceText: "Full report says the source-only late section connects to runway decisions."
+            )
+        ])
+        XCTAssertEqual(try nodeStore.fetchAllNodes().filter { $0.type == .source }.count, 1)
+        let sourcePromptCountAfterFirstSend = llm.promptTexts.filter(Self.isDocumentSourcePrompt).count
+
+        await vm.regenerateLatestAssistant()
+
+        let sourcePromptCountAfterRetry = llm.promptTexts.filter(Self.isDocumentSourcePrompt).count
+        XCTAssertEqual(sourcePromptCountAfterFirstSend, 1)
+        XCTAssertEqual(sourcePromptCountAfterRetry, 2)
+    }
+
+    func testRegenerateLatestAssistantKeepsDocumentSourceMaterialAfterConversationReload() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let llm = RecordingReplyLLMService(output: "answer")
+
+        let firstVM = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { llm },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: makeScratchPadStore(nodeStore: nodeStore)
+        )
+
+        firstVM.inputText = "Connect this report"
+        await firstVM.send(attachments: [
+            AttachedFileContext(
+                name: "report.txt",
+                extractedText: "Report preview",
+                sourceText: "Full report says the source-only late section connects to runway decisions."
+            )
+        ])
+
+        let nodeId = try XCTUnwrap(firstVM.currentNode?.id)
+        let userMessage = try XCTUnwrap(try nodeStore.fetchMessages(nodeId: nodeId).first { $0.role == .user })
+        XCTAssertEqual(try nodeStore.fetchMessageSourceMaterials(messageId: userMessage.id).count, 1)
+
+        let reloadedVM = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { llm },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: makeScratchPadStore(nodeStore: nodeStore)
+        )
+        let reloadedNode = try XCTUnwrap(nodeStore.fetchNode(id: nodeId))
+        reloadedVM.loadConversation(reloadedNode)
+
+        await reloadedVM.regenerateLatestAssistant()
+
+        let sourcePromptCount = llm.promptTexts.filter(Self.isDocumentSourcePrompt).count
+        XCTAssertEqual(sourcePromptCount, 2)
     }
 
     func testSendRecoversRestoredConversationWhenCurrentNodeMissingFromStore() async throws {
@@ -965,6 +1096,119 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertEqual(contexts.map(\.name), ["dragged.png"])
     }
 
+    func testTextFileContextKeepsFullSourceTextBeyondChatPreview() throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nous-source-text-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        let url = folder.appendingPathComponent("long-report.txt")
+        let fullText = String(repeating: "source body ", count: 420) + "late section survives for source ingestion"
+        try Data(fullText.utf8).write(to: url)
+
+        let context = try XCTUnwrap(AttachmentExtractor.fileContexts(from: [url]).first)
+
+        XCTAssertEqual(context.extractedText?.count, 4_000)
+        XCTAssertEqual(context.sourceText, fullText)
+        XCTAssertFalse(context.extractedText?.contains("late section survives") ?? true)
+    }
+
+    func testDocumentAttachmentDuplicateCheckIncludesFullSourceText() {
+        let sharedPreview = String(repeating: "same preview ", count: 334).prefix(4_000)
+        let first = AttachedFileContext(
+            name: "report.txt",
+            extractedText: String(sharedPreview),
+            sourceText: String(sharedPreview) + " first ending"
+        )
+        let second = AttachedFileContext(
+            name: "report.txt",
+            extractedText: String(sharedPreview),
+            sourceText: String(sharedPreview) + " second ending"
+        )
+        let exactDuplicate = AttachedFileContext(
+            name: "report.txt",
+            extractedText: String(sharedPreview),
+            sourceText: String(sharedPreview) + " first ending"
+        )
+
+        XCTAssertFalse(AttachmentLimitPolicy.isDuplicateNonImageAttachment(first, of: second))
+        XCTAssertTrue(AttachmentLimitPolicy.isDuplicateNonImageAttachment(first, of: exactDuplicate))
+    }
+
+    @MainActor
+    func testSourceIngestionKeepsFailedDuplicateFilenameAttachmentInTurn() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let llm = SingleReplyLLMService(output: "I connected the source.")
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { llm },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: makeScratchPadStore(nodeStore: nodeStore)
+        )
+
+        vm.inputText = "Compare these"
+        await vm.send(attachments: [
+            AttachedFileContext(name: "report.pdf", extractedText: nil),
+            AttachedFileContext(name: "report.pdf", extractedText: "Readable report text for source ingestion.")
+        ])
+
+        let nodeId = try XCTUnwrap(vm.currentNode?.id)
+        let userMessage = try XCTUnwrap(try nodeStore.fetchMessages(nodeId: nodeId).first)
+        XCTAssertTrue(userMessage.content.contains("Files: report.pdf"))
+    }
+
+    @MainActor
+    func testSlowSourceIngestionMarksTurnGeneratingBeforeFetchCompletes() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let blockingFetcher = BlockingSourceFetcher()
+        let sourceIngestion = SourceIngestionService(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingProvider: embeddingService,
+            fetcher: blockingFetcher
+        )
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            sourceIngestionService: sourceIngestion,
+            llmServiceProvider: { SingleReplyLLMService(output: "I connected the source.") },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: makeScratchPadStore(nodeStore: nodeStore)
+        )
+
+        vm.inputText = "Read https://example.com/slow"
+        let sendTask = Task { @MainActor in
+            await vm.send()
+        }
+        await blockingFetcher.waitUntilStarted()
+
+        XCTAssertTrue(vm.isGenerating)
+
+        await blockingFetcher.finish()
+        await sendTask.value
+    }
+
     @MainActor
     func testSendPromotesHiddenChatTitleAndStripsItFromStoredAssistantMessage() async throws {
         let nodeStore = try NodeStore(path: ":memory:")
@@ -1046,5 +1290,42 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertNotNil(store.latestSummary)
         XCTAssertTrue(store.latestSummary!.markdown.hasPrefix("# 今次倾咗乜"))
         XCTAssertEqual(store.latestSummary!.sourceMessageId, msg.id)
+    }
+}
+
+private actor BlockingSourceFetcher: SourceFetching {
+    private var didStart = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var finishContinuation: CheckedContinuation<Void, Never>?
+
+    func fetch(url: URL) async throws -> SourceFetchedDocument {
+        didStart = true
+        let waiters = startWaiters
+        startWaiters = []
+        for waiter in waiters {
+            waiter.resume()
+        }
+
+        await withCheckedContinuation { continuation in
+            finishContinuation = continuation
+        }
+
+        return SourceFetchedDocument(
+            url: url,
+            title: "Slow source",
+            text: "Slow source body about connecting external material."
+        )
+    }
+
+    func waitUntilStarted() async {
+        if didStart { return }
+        await withCheckedContinuation { continuation in
+            startWaiters.append(continuation)
+        }
+    }
+
+    func finish() {
+        finishContinuation?.resume()
+        finishContinuation = nil
     }
 }

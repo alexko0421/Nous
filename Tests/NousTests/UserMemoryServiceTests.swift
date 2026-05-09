@@ -1013,6 +1013,307 @@ final class UserMemoryServiceTests: XCTestCase {
 
         let atoms = try store.fetchMemoryAtoms()
         XCTAssertFalse(atoms.contains { $0.statement.contains("蓝色火车") })
+        XCTAssertFalse(try store.fetchMemoryFactEntries().contains { $0.content.contains("蓝色火车") })
+        XCTAssertFalse(
+            try store.fetchMemoryEdges().contains { $0.sourceMessageId == forbiddenTurn.id },
+            "hard opt-out messages must not become graph edge evidence"
+        )
+    }
+
+    func testScrubProtectedMemoryDetailsRedactsLegacyDurableRows() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+        let node = NousNode(type: .conversation, title: "Legacy boundary cleanup", content: "")
+        try store.insertNode(node)
+        let forbiddenTurn = Message(
+            nodeId: node.id,
+            role: .user,
+            content: "旧测试细节：我小时候给一个玩具起名叫蓝色火车。不要记住这个具体细节。",
+            timestamp: Date(timeIntervalSince1970: 1)
+        )
+        try store.insertMessage(forbiddenTurn)
+
+        let dirtyActiveEntry = MemoryEntry(
+            scope: .conversation,
+            scopeRefId: node.id,
+            kind: .thread,
+            stability: .temporary,
+            status: .active,
+            content: "- Alex once called a toy 蓝色火车.\n- Only the memory boundary should survive.",
+            sourceNodeIds: [node.id]
+        )
+        let dirtySupersededEntry = MemoryEntry(
+            scope: .conversation,
+            scopeRefId: node.id,
+            kind: .thread,
+            stability: .temporary,
+            status: .superseded,
+            content: "- Superseded row still says 蓝色火车.",
+            sourceNodeIds: [node.id]
+        )
+        try store.insertMemoryEntry(dirtyActiveEntry)
+        try store.insertMemoryEntry(dirtySupersededEntry)
+
+        let dirtyFact = MemoryFactEntry(
+            scope: .conversation,
+            scopeRefId: node.id,
+            kind: .boundary,
+            content: "Alex had a private toy detail: 蓝色火车.",
+            confidence: 0.9,
+            stability: .stable,
+            sourceNodeIds: [node.id]
+        )
+        let cleanFact = MemoryFactEntry(
+            scope: .conversation,
+            scopeRefId: node.id,
+            kind: .boundary,
+            content: "Alex expects explicit do-not-remember boundaries to be respected.",
+            confidence: 0.9,
+            stability: .stable,
+            sourceNodeIds: [node.id]
+        )
+        try store.insertMemoryFactEntry(dirtyFact)
+        try store.insertMemoryFactEntry(cleanFact)
+
+        let dirtyAtom = MemoryAtom(
+            type: .identity,
+            statement: "Alex named a toy 蓝色火车.",
+            scope: .conversation,
+            scopeRefId: node.id,
+            sourceNodeId: node.id,
+            sourceMessageId: forbiddenTurn.id
+        )
+        let cleanAtom = MemoryAtom(
+            type: .boundary,
+            statement: "Do-not-remember boundaries should be respected.",
+            scope: .conversation,
+            scopeRefId: node.id,
+            sourceNodeId: node.id
+        )
+        try store.insertMemoryAtom(dirtyAtom)
+        try store.insertMemoryAtom(cleanAtom)
+        try store.insertMemoryEdge(MemoryEdge(
+            fromAtomId: dirtyAtom.id,
+            toAtomId: cleanAtom.id,
+            type: .about,
+            sourceMessageId: forbiddenTurn.id
+        ))
+        let dirtyObservation = MemoryObservation(
+            rawText: "Unverified raw extraction still mentions 蓝色火车.",
+            extractedType: .identity,
+            confidence: 0.4,
+            sourceNodeId: node.id,
+            sourceMessageId: forbiddenTurn.id
+        )
+        try store.insertMemoryObservation(dirtyObservation)
+
+        let report = service.scrubProtectedMemoryDetails(messages: [forbiddenTurn])
+
+        XCTAssertEqual(report.redactedMemoryEntryCount, 2)
+        XCTAssertEqual(report.deletedMemoryFactCount, 1)
+        XCTAssertEqual(report.deletedMemoryAtomCount, 1)
+        XCTAssertGreaterThanOrEqual(report.deletedMemoryEdgeCount, 1)
+        XCTAssertEqual(report.deletedMemoryObservationCount, 1)
+        XCTAssertFalse(try store.fetchMemoryEntries().contains { $0.content.contains("蓝色火车") })
+        XCTAssertTrue(try store.fetchMemoryEntries().contains {
+            $0.content.contains("[memory_boundary_redacted]")
+        })
+        XCTAssertNil(try store.fetchMemoryFactEntry(id: dirtyFact.id))
+        XCTAssertNotNil(try store.fetchMemoryFactEntry(id: cleanFact.id))
+        XCTAssertNil(try store.fetchMemoryAtom(id: dirtyAtom.id))
+        XCTAssertNotNil(try store.fetchMemoryAtom(id: cleanAtom.id))
+        XCTAssertFalse(try store.fetchMemoryEdges().contains { $0.sourceMessageId == forbiddenTurn.id })
+        XCTAssertFalse(try store.fetchMemoryObservations().contains { $0.id == dirtyObservation.id })
+    }
+
+    func testScrubProtectedMemoryDetailsUsesNearbyOptOutContextWithoutQuotes() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+        let node = NousNode(type: .conversation, title: "Generic boundary cleanup", content: "")
+        try store.insertNode(node)
+        let forbiddenTurn = Message(
+            nodeId: node.id,
+            role: .user,
+            content: "Private test detail: I prefer 3am walks. Don't remember this.",
+            timestamp: Date(timeIntervalSince1970: 1)
+        )
+        try store.insertMessage(forbiddenTurn)
+        try store.insertMemoryEntry(MemoryEntry(
+            scope: .conversation,
+            scopeRefId: node.id,
+            kind: .thread,
+            stability: .temporary,
+            status: .active,
+            content: "- I prefer 3am walks.\n- Only the opt-out boundary should survive.",
+            sourceNodeIds: [node.id]
+        ))
+        let dirtyFact = MemoryFactEntry(
+            scope: .conversation,
+            scopeRefId: node.id,
+            kind: .boundary,
+            content: "I prefer 3am walks.",
+            confidence: 0.9,
+            stability: .stable,
+            sourceNodeIds: [node.id]
+        )
+        try store.insertMemoryFactEntry(dirtyFact)
+
+        let report = service.scrubProtectedMemoryDetails(messages: [forbiddenTurn])
+
+        XCTAssertEqual(report.redactedMemoryEntryCount, 1)
+        XCTAssertEqual(report.deletedMemoryFactCount, 1)
+        XCTAssertFalse(try store.fetchMemoryEntries().contains { $0.content.contains("3am walks") })
+        XCTAssertNil(try store.fetchMemoryFactEntry(id: dirtyFact.id))
+    }
+
+    func testScrubProtectedMemoryDetailsUsesEnglishThatClauseOptOutContext() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+        let node = NousNode(type: .conversation, title: "English boundary cleanup", content: "")
+        try store.insertNode(node)
+        let forbiddenTurn = Message(
+            nodeId: node.id,
+            role: .user,
+            content: "Please don't remember that I prefer verbose implementation plans.",
+            timestamp: Date(timeIntervalSince1970: 1)
+        )
+        try store.insertMessage(forbiddenTurn)
+        try store.insertMemoryEntry(MemoryEntry(
+            scope: .conversation,
+            scopeRefId: node.id,
+            kind: .thread,
+            stability: .temporary,
+            status: .active,
+            content: "- I prefer verbose implementation plans.",
+            sourceNodeIds: [node.id]
+        ))
+        let dirtyFact = MemoryFactEntry(
+            scope: .conversation,
+            scopeRefId: node.id,
+            kind: .preference,
+            content: "I prefer verbose implementation plans.",
+            confidence: 0.9,
+            stability: .stable,
+            sourceNodeIds: [node.id]
+        )
+        try store.insertMemoryFactEntry(dirtyFact)
+
+        let report = service.scrubProtectedMemoryDetails(messages: [forbiddenTurn])
+
+        XCTAssertEqual(report.redactedMemoryEntryCount, 1)
+        XCTAssertEqual(report.deletedMemoryFactCount, 1)
+        XCTAssertFalse(try store.fetchMemoryEntries().contains {
+            $0.content.contains("verbose implementation plans")
+        })
+        XCTAssertNil(try store.fetchMemoryFactEntry(id: dirtyFact.id))
+    }
+
+    func testRefreshConversationScrubsLegacyProtectedMemoryRows() async throws {
+        let mock = QueueMockLLMService(capture: PromptSequenceCapture(), replies: [
+            "- Only the explicit do-not-remember boundary should survive.",
+            #"{"facts":[],"decision_chains":[],"semantic_atoms":[]}"#
+        ])
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+        let node = NousNode(type: .conversation, title: "Automatic cleanup", content: "")
+        try store.insertNode(node)
+        try store.insertMemoryEntry(MemoryEntry(
+            scope: .conversation,
+            scopeRefId: node.id,
+            kind: .thread,
+            stability: .temporary,
+            status: .active,
+            content: "Legacy row leaked 蓝色火车 before cleanup.",
+            sourceNodeIds: [node.id]
+        ))
+        try store.insertMemoryFactEntry(MemoryFactEntry(
+            scope: .conversation,
+            scopeRefId: node.id,
+            kind: .boundary,
+            content: "Legacy fact leaked 蓝色火车 before cleanup.",
+            confidence: 0.9,
+            stability: .stable,
+            sourceNodeIds: [node.id]
+        ))
+
+        let forbiddenTurn = Message(
+            nodeId: node.id,
+            role: .user,
+            content: "这个旧测试细节叫蓝色火车。不要记住这个具体细节，只保留边界。",
+            timestamp: Date(timeIntervalSince1970: 1)
+        )
+        let laterTurns = (0..<9).map { index in
+            Message(
+                nodeId: node.id,
+                role: .user,
+                content: "后续普通消息 \(index)：继续做 memory trust QA，不包含受保护细节。",
+                timestamp: Date(timeIntervalSince1970: TimeInterval(index + 2))
+            )
+        }
+
+        await service.refreshConversation(
+            nodeId: node.id,
+            projectId: Optional<UUID>.none,
+            messages: [forbiddenTurn] + laterTurns
+        )
+
+        XCTAssertFalse(try store.fetchMemoryEntries().contains { $0.content.contains("蓝色火车") })
+        XCTAssertFalse(try store.fetchMemoryFactEntries().contains { $0.content.contains("蓝色火车") })
+    }
+
+    func testRefreshConversationKeepsProtectedDetailsOutOfSupersededEntryHistory() async throws {
+        let capture = PromptSequenceCapture()
+        let mock = QueueMockLLMService(
+            capture: capture,
+            replies: [
+                """
+                - Alex sent a test message naming a fictional toy "蓝色火车 (Blue Train)" and explicitly instructed not to store that specific detail.
+                - Only the boundary should survive.
+                """,
+                #"{"facts":[],"decision_chains":[],"semantic_atoms":[]}"#,
+                """
+                - Alex is testing memory boundary behavior.
+                - Only the boundary should survive.
+                """,
+                #"{"facts":[],"decision_chains":[],"semantic_atoms":[]}"#
+            ]
+        )
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: { mock })
+
+        let node = NousNode(type: .conversation, title: "Boundary history redaction", content: "")
+        try store.insertNode(node)
+
+        let forbiddenTurn = Message(
+            nodeId: node.id,
+            role: .user,
+            content: "这条只是测试：我小时候给一个虚构玩具起名叫蓝色火车。不要把这个具体细节存成长期记忆。",
+            timestamp: Date(timeIntervalSince1970: 1)
+        )
+        let boundaryTurn = Message(
+            nodeId: node.id,
+            role: .user,
+            content: "可以保留的只有边界：如果我明确说不要记住，Nous 应该尊重具体内容不要 durable。",
+            timestamp: Date(timeIntervalSince1970: 2)
+        )
+
+        await service.refreshConversation(nodeId: node.id, projectId: nil, messages: [forbiddenTurn])
+        await service.refreshConversation(nodeId: node.id, projectId: nil, messages: [forbiddenTurn, boundaryTurn])
+
+        let entries = try store.fetchMemoryEntries().filter {
+            $0.scope == .conversation && $0.scopeRefId == node.id
+        }
+        XCTAssertEqual(entries.count, 2, "second refresh should keep the superseded history row inspectable")
+        XCTAssertTrue(entries.contains { $0.status == .superseded })
+        XCTAssertFalse(
+            entries.contains { $0.content.localizedCaseInsensitiveContains("蓝色火车") },
+            "protected detail must not remain in active or superseded memory_entries"
+        )
+        XCTAssertFalse(
+            entries.contains { $0.content.localizedCaseInsensitiveContains("Blue Train") },
+            "line-level redaction must also remove parenthetical translations the model attached to a protected detail"
+        )
     }
 
     func testRefreshConversationKeepsUnchangedFactActiveWithoutArchivedDuplicates() async throws {
@@ -2487,6 +2788,42 @@ final class UserMemoryServiceTests: XCTestCase {
         XCTAssertTrue(snippets.first?.snippet.contains("raw history") == true)
     }
 
+    func testSourceSnippetsUseSourceNodeChunks() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+        let node = NousNode(
+            type: .source,
+            title: "Research PDF",
+            content: ""
+        )
+        try store.insertNode(node)
+        try store.replaceSourceChunks([
+            SourceChunk(
+                sourceNodeId: node.id,
+                ordinal: 0,
+                text: "Hermes keeps durable memory useful by linking each claim back to evidence."
+            )
+        ], for: node.id)
+
+        let entry = MemoryEntry(
+            scope: .global,
+            kind: .decision,
+            stability: .stable,
+            content: "Keep memory evidence-linked.",
+            sourceNodeIds: [node.id],
+            createdAt: Date(),
+            updatedAt: Date(),
+            lastConfirmedAt: Date()
+        )
+        try store.insertMemoryEntry(entry)
+
+        let snippets = service.sourceSnippets(for: entry.id, limit: 2)
+        XCTAssertEqual(snippets.count, 1)
+        XCTAssertEqual(snippets.first?.sourceNodeId, node.id)
+        XCTAssertTrue(snippets.first?.snippet.contains("linking each claim") == true)
+    }
+
     func testFactSourceSnippetsUseLinkedSourceNodes() throws {
         let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
             MockLLMService(capture: PromptCapture(), reply: "")
@@ -2537,6 +2874,295 @@ final class UserMemoryServiceTests: XCTestCase {
         XCTAssertEqual(
             service.memoryPersistenceDecision(messages: messages, projectId: nil),
             .suppress(.hardOptOut)
+        )
+    }
+
+    func testShouldPersistMemorySuppressesProbeOnlyQuestions() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+        let node = NousNode(type: .conversation, title: "Probe chat", content: "")
+        let messages = [
+            Message(
+                nodeId: node.id,
+                role: .user,
+                content: "这个 project 现在真正目标是什么？哪些方向其实已经偏了？",
+                timestamp: Date()
+            )
+        ]
+
+        XCTAssertFalse(service.shouldPersistMemory(messages: messages, projectId: nil))
+        XCTAssertEqual(
+            service.memoryPersistenceDecision(messages: messages, projectId: nil),
+            .suppress(.unspecified)
+        )
+    }
+
+    func testShouldPersistMemorySuppressesLowSignalContextUnclearProbe() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+        let node = NousNode(type: .conversation, title: "QA probe")
+        let messages = [
+            Message(
+                nodeId: node.id,
+                role: .user,
+                content: "context unclear",
+                timestamp: Date()
+            )
+        ]
+
+        XCTAssertFalse(service.shouldPersistMemory(messages: messages, projectId: nil))
+        XCTAssertEqual(
+            service.memoryPersistenceDecision(messages: messages, projectId: nil),
+            .suppress(.unspecified)
+        )
+    }
+
+    func testShouldPersistMemorySuppressesWhenThereIsNoUserEvidence() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+
+        XCTAssertFalse(service.shouldPersistMemory(messages: [], projectId: nil))
+        XCTAssertEqual(
+            service.memoryPersistenceDecision(messages: [], projectId: nil),
+            .suppress(.unspecified)
+        )
+    }
+
+    func testShouldPersistMemorySuppressesLowSignalChatWithoutNewFact() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+        let node = NousNode(type: .conversation, title: "Low signal chat")
+
+        for text in ["ok thanks, makes sense", "继续扫继续扫"] {
+            let messages = [
+                Message(
+                    nodeId: node.id,
+                    role: .user,
+                    content: text,
+                    timestamp: Date()
+                )
+            ]
+
+            XCTAssertFalse(service.shouldPersistMemory(messages: messages, projectId: nil), text)
+            XCTAssertEqual(
+                service.memoryPersistenceDecision(messages: messages, projectId: nil),
+                .suppress(.unspecified),
+                text
+            )
+        }
+    }
+
+    func testShouldPersistMemorySuppressesMemoryStatusProbeWithRememberWord() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+        let node = NousNode(type: .conversation, title: "Memory status probe")
+        let messages = [
+            Message(
+                nodeId: node.id,
+                role: .user,
+                content: "recall probe: 你記住咗咩？",
+                timestamp: Date()
+            )
+        ]
+
+        XCTAssertFalse(service.shouldPersistMemory(messages: messages, projectId: nil))
+        XCTAssertEqual(
+            service.memoryPersistenceDecision(messages: messages, projectId: nil),
+            .suppress(.unspecified)
+        )
+    }
+
+    func testShouldPersistMemorySuppressesPunctuatedMemoryStatusProbe() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+        let node = NousNode(type: .conversation, title: "Memory status probe")
+        let messages = [
+            Message(
+                nodeId: node.id,
+                role: .user,
+                content: "memory-probe: 你記住咗咩？",
+                timestamp: Date()
+            )
+        ]
+
+        XCTAssertFalse(service.shouldPersistMemory(messages: messages, projectId: nil))
+        XCTAssertEqual(
+            service.memoryPersistenceDecision(messages: messages, projectId: nil),
+            .suppress(.unspecified)
+        )
+    }
+
+    func testShouldPersistMemorySuppressesMemoryStatusProbeWithoutQuestionMark() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+        let node = NousNode(type: .conversation, title: "Memory status probe")
+        let messages = [
+            Message(
+                nodeId: node.id,
+                role: .user,
+                content: "memory-probe: 记住",
+                timestamp: Date()
+            )
+        ]
+
+        XCTAssertFalse(service.shouldPersistMemory(messages: messages, projectId: nil))
+        XCTAssertEqual(
+            service.memoryPersistenceDecision(messages: messages, projectId: nil),
+            .suppress(.unspecified)
+        )
+    }
+
+    func testShouldPersistMemorySuppressesRecallProbeMentioningPreferenceWithoutNewFact() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+        let node = NousNode(type: .conversation, title: "Recall probe")
+        let messages = [
+            Message(
+                nodeId: node.id,
+                role: .user,
+                content: "recall probe: what is my preference?",
+                timestamp: Date()
+            )
+        ]
+
+        XCTAssertFalse(service.shouldPersistMemory(messages: messages, projectId: nil))
+        XCTAssertEqual(
+            service.memoryPersistenceDecision(messages: messages, projectId: nil),
+            .suppress(.unspecified)
+        )
+    }
+
+    func testShouldPersistMemorySuppressesRecallProbeMentioningCorrectionWithoutNewFact() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+        let node = NousNode(type: .conversation, title: "Recall probe")
+        let messages = [
+            Message(
+                nodeId: node.id,
+                role: .user,
+                content: "recall probe: what correction did I make?",
+                timestamp: Date()
+            )
+        ]
+
+        XCTAssertFalse(service.shouldPersistMemory(messages: messages, projectId: nil))
+        XCTAssertEqual(
+            service.memoryPersistenceDecision(messages: messages, projectId: nil),
+            .suppress(.unspecified)
+        )
+    }
+
+    func testShouldPersistMemorySuppressesMetaMemoryQuestionWithoutNewFact() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+        let node = NousNode(type: .conversation, title: "Meta memory question")
+        let messages = [
+            Message(
+                nodeId: node.id,
+                role: .user,
+                content: "Should Nous memory save this?",
+                timestamp: Date()
+            )
+        ]
+
+        XCTAssertFalse(service.shouldPersistMemory(messages: messages, projectId: nil))
+        XCTAssertEqual(
+            service.memoryPersistenceDecision(messages: messages, projectId: nil),
+            .suppress(.unspecified)
+        )
+    }
+
+    func testShouldPersistMemorySuppressesMetaMemoryQuestionWithoutQuestionMark() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+        let node = NousNode(type: .conversation, title: "Meta memory question")
+        let messages = [
+            Message(
+                nodeId: node.id,
+                role: .user,
+                content: "Should Nous memory save this",
+                timestamp: Date()
+            )
+        ]
+
+        XCTAssertFalse(service.shouldPersistMemory(messages: messages, projectId: nil))
+        XCTAssertEqual(
+            service.memoryPersistenceDecision(messages: messages, projectId: nil),
+            .suppress(.unspecified)
+        )
+    }
+
+    func testShouldPersistMemorySuppressesMetaMemoryQuestionWithRememberThat() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+        let node = NousNode(type: .conversation, title: "Meta memory question")
+        let messages = [
+            Message(
+                nodeId: node.id,
+                role: .user,
+                content: "Should I remember that I prefer concise implementation plans?",
+                timestamp: Date()
+            )
+        ]
+
+        XCTAssertFalse(service.shouldPersistMemory(messages: messages, projectId: nil))
+        XCTAssertEqual(
+            service.memoryPersistenceDecision(messages: messages, projectId: nil),
+            .suppress(.unspecified)
+        )
+    }
+
+    func testShouldPersistMemorySuppressesChineseMetaMemoryQuestionWithoutQuestionMark() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+        let node = NousNode(type: .conversation, title: "Meta memory question")
+        let messages = [
+            Message(
+                nodeId: node.id,
+                role: .user,
+                content: "應唔應該記住呢個",
+                timestamp: Date()
+            )
+        ]
+
+        XCTAssertFalse(service.shouldPersistMemory(messages: messages, projectId: nil))
+        XCTAssertEqual(
+            service.memoryPersistenceDecision(messages: messages, projectId: nil),
+            .suppress(.unspecified)
+        )
+    }
+
+    func testShouldPersistMemorySuppressesFutureHorizonQuestionWithoutNewFact() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+        let node = NousNode(type: .conversation, title: "Future horizon question")
+        let messages = [
+            Message(
+                nodeId: node.id,
+                role: .user,
+                content: "Going forward, should you remember this?",
+                timestamp: Date()
+            )
+        ]
+
+        XCTAssertFalse(service.shouldPersistMemory(messages: messages, projectId: nil))
+        XCTAssertEqual(
+            service.memoryPersistenceDecision(messages: messages, projectId: nil),
+            .suppress(.unspecified)
         )
     }
 

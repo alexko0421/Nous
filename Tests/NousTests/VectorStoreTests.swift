@@ -301,6 +301,45 @@ final class VectorStoreTests: XCTestCase {
         XCTAssertFalse(results[0].surfacedSnippet.contains("coffee beans"))
     }
 
+    func testSearchForChatCitationsUsesSourceChunksForExistingSourceNodes() throws {
+        let now = Date()
+        var source = NousNode(
+            type: .source,
+            title: "Long external source",
+            content: "Intro section that does not mention the later visa runway material.",
+            createdAt: now,
+            updatedAt: now
+        )
+        source.embedding = [0.0, 1.0, 0.0]
+        try nodeStore.insertNode(source)
+        try nodeStore.replaceSourceChunks([
+            SourceChunk(
+                sourceNodeId: source.id,
+                ordinal: 0,
+                text: "Intro section that does not mention the later material.",
+                embedding: [0.0, 1.0, 0.0],
+                createdAt: now
+            ),
+            SourceChunk(
+                sourceNodeId: source.id,
+                ordinal: 1,
+                text: "Deep section about F-1 visa runway and source connection work.",
+                embedding: [1.0, 0.0, 0.0],
+                createdAt: now
+            )
+        ], for: source.id)
+
+        let results = try vectorStore.searchForChatCitations(
+            query: [1.0, 0.0, 0.0],
+            queryText: "F-1 visa runway source connection",
+            topK: 3,
+            now: now
+        )
+
+        XCTAssertEqual(results.first?.node.id, source.id)
+        XCTAssertEqual(results.first?.surfacedSnippet.contains("F-1 visa runway"), true)
+    }
+
     private func insertNode(title: String, embedding: [Float], createdAt: Date) throws {
         let node = NousNode(
             type: .note,

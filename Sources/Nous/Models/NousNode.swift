@@ -3,6 +3,7 @@ import Foundation
 enum NodeType: String, Codable {
     case conversation
     case note
+    case source
 }
 
 struct NousNode: Identifiable, Codable {

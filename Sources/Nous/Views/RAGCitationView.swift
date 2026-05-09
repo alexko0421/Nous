@@ -153,7 +153,11 @@ struct RAGCitationView: View {
 
     @ViewBuilder
     private func typeBadge(for node: NousNode) -> some View {
-        let label = node.type == .conversation ? "Chat" : "Note"
+        let label: String = switch node.type {
+        case .conversation: "Chat"
+        case .note: "Note"
+        case .source: "Source"
+        }
         infoBadge(
             text: label,
             tint: AppColor.colaDarkText.opacity(0.06),

@@ -190,6 +190,10 @@ final class UserMemoryService: MemorySynthesizing, @unchecked Sendable {
         core.deleteMemoryFactEntry(id: id)
     }
 
+    func scrubProtectedMemoryDetails(messages: [Message]) -> UserMemoryCore.MemoryTrustCleanupReport {
+        core.scrubProtectedMemoryDetails(messages: messages)
+    }
+
     func contradictionRecallFacts(projectId: UUID?, conversationId: UUID) throws -> [MemoryFactEntry] {
         try contradictionService.contradictionRecallFacts(projectId: projectId, conversationId: conversationId)
     }
@@ -250,6 +254,17 @@ final class UserMemoryService: MemorySynthesizing, @unchecked Sendable {
             sourceNodeIds: sourceNodeIds,
             confirmation: confirmation
         )
+    }
+
+    func absorbTemporaryBranchSummary(record: TemporaryBranchRecord) async {
+        await synthesisService.absorbTemporaryBranchSummary(record: record)
+    }
+
+    func applyTemporaryBranchCandidate(
+        _ candidate: TemporaryBranchMemoryCandidate,
+        record: TemporaryBranchRecord
+    ) async -> Bool {
+        await synthesisService.applyTemporaryBranchCandidate(candidate, record: record)
     }
 
     static func stripQuoteBlocks(_ content: String) -> String {

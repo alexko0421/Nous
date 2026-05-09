@@ -176,4 +176,68 @@ final class WelcomeActionMenuHitRegionTests: XCTestCase {
                 + WelcomeActionMenuHitRegion.actionMenuHeight
         )
     }
+
+    func testComposerHeightTracksMultilineInputMinimum() {
+        XCTAssertEqual(
+            WelcomeActionMenuHitRegion.composerHeight,
+            ComposerTextInputMetrics.minimumControlHeight
+        )
+    }
+}
+
+final class ComposerMultilineLayoutTests: XCTestCase {
+    func testWelcomeAndChatComposersUseBoundedMultilineTextInput() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let welcomeSource = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Views/WelcomeView.swift"),
+            encoding: .utf8
+        )
+        let chatSource = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Views/ChatArea.swift"),
+            encoding: .utf8
+        )
+
+        for source in [welcomeSource, chatSource] {
+            let textFieldRange = try XCTUnwrap(source.range(of: "TextField(\"\", text:"))
+            let composerSnippet = try XCTUnwrap(composerTextFieldSnippet(in: source))
+            XCTAssertTrue(composerSnippet.contains("TextField(\"\", text:"))
+            XCTAssertTrue(composerSnippet.contains("axis: .vertical"))
+            XCTAssertTrue(composerSnippet.contains(".lineLimit(1...ComposerTextInputMetrics.maxVisibleLines)"))
+            XCTAssertTrue(composerSnippet.contains(".frame(maxWidth: .infinity, minHeight: ComposerTextInputMetrics.minimumTextHeight, alignment: .topLeading)"))
+            XCTAssertTrue(composerSnippet.contains(".fixedSize(horizontal: false, vertical: true)"))
+            XCTAssertFalse(composerSnippet.contains("maxHeight: ComposerTextInputMetrics.maximumTextHeight"))
+
+            let zStackPrefix = source[..<textFieldRange.lowerBound].suffix(500)
+            XCTAssertTrue(zStackPrefix.contains("ZStack(alignment: .topLeading)"))
+        }
+    }
+
+    private func composerTextFieldSnippet(in source: String) -> String? {
+        guard let range = source.range(of: "TextField(\"\", text:") else { return nil }
+        return String(source[range.lowerBound...].prefix(700))
+    }
+
+    func testChatComposerDoesNotShowRotatingPromptInsideConversations() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let chatSource = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Views/ChatArea.swift"),
+            encoding: .utf8
+        )
+        let welcomeSource = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Views/WelcomeView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(welcomeSource.contains("RotatingComposerPromptLabel"))
+        XCTAssertFalse(chatSource.contains("RotatingComposerPromptLabel"))
+        XCTAssertFalse(chatSource.contains("horizontalPadding: 18"))
+    }
 }

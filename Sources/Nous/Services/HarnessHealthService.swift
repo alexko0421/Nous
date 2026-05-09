@@ -206,7 +206,12 @@ final class RuntimeHarnessService: RuntimeHarnessLoading {
             lastRiskFlags: summary.lastSnapshot?.reviewRiskFlags ?? [],
             sycophancyFixtureTrend: sycophancyFixtureTrend(),
             agentToolReliability: agentToolReliabilitySummary(),
-            behaviorEval: telemetry.behaviorEvalSummary
+            behaviorEval: telemetry.behaviorEvalSummary,
+            contextManifest: telemetry.contextManifestSummary,
+            delegationMetrics: telemetry.delegationMetricSummary,
+            modelHarnessProfiles: ModelHarnessProfileCatalog.coverageSummary,
+            visibleResponseLanguageTarget: telemetry.lastPromptTrace?.visibleResponseLanguageTarget ?? .unspecified,
+            visibleResponseLanguageSource: telemetry.lastPromptTrace?.visibleResponseLanguageSource ?? .none
         )
     }
 

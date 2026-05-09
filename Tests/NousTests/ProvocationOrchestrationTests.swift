@@ -470,7 +470,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
     }
 
     @MainActor
-    func testOrdinaryChatDoesNotRecordGraphRecallWhenPromptDropsGraphBlock() async throws {
+    func testOrdinaryChatRecordsRecallOnlyWhenPromptSurfacesIt() async throws {
         try store.insertMemoryAtom(MemoryAtom(
             type: .preference,
             statement: "Alex never wants em dashes in final copy.",
@@ -485,10 +485,66 @@ final class ProvocationOrchestrationTests: XCTestCase {
         await viewModel.send()
 
         let system = llm.receivedSystem ?? ""
+        // Legacy GRAPH MEMORY RECALL block remains gated to quick-action modes
+        // (PromptContextAssembler.swift:942 `activeQuickActionMode != nil`).
         XCTAssertFalse(system.contains("GRAPH MEMORY RECALL"),
-                       "ordinary chat currently drops graph recall from the prompt")
-        XCTAssertTrue(try store.fetchMemoryRecallEvents(limit: 10).isEmpty,
-                      "ordinary chat must not record graph recall events for recall the prompt never saw")
+                       "ordinary chat still drops the legacy graph recall block from the prompt")
+        // Block 4a inject-half: own-corpus cards surface atoms in default chat
+        // via the ALEX'S CORPUS volatile block. The recalled atoms are no
+        // longer phantom — they appear in the prompt under the new heading,
+        // so the recall events recorded by MemoryQueryPlanner correspond to
+        // material the model actually saw.
+        XCTAssertTrue(system.contains("ALEX'S CORPUS"),
+                      "Block 4a routes atom recall through the new corpus card block in default chat")
+        XCTAssertTrue(system.contains("Alex never wants em dashes"),
+                      "the recalled atom must appear verbatim in the prompt")
+        XCTAssertFalse(try store.fetchMemoryRecallEvents(limit: 10).isEmpty,
+                       "recall events should be recorded since the prompt now surfaces the atoms")
+        // Block 5: PREFER OWN-CORPUS posture only emits when CorpusCards
+        // are present (otherwise it has nothing to reference). When cards
+        // ARE present, the model gets the borrowed→own-corpus rule plus
+        // 2 worked translation examples nudging away from Bezos/Kahneman.
+        XCTAssertTrue(system.contains("PREFER OWN-CORPUS"),
+                      "Block 5 posture must accompany the corpus card block")
+        XCTAssertTrue(system.contains("Borrowed → own-corpus translation examples"),
+                      "Block 5 worked examples must be present so the model has concrete translations to follow")
+        XCTAssertTrue(system.contains("Kahneman") && system.contains("Bezos"),
+                      "Block 5 examples explicitly call out the famous frameworks they're nudging away from")
+    }
+
+    @MainActor
+    func testNoYesManPostureFiresInOrdinaryChat() async throws {
+        // No corpus cards required — anti-yes-man fires for every ordinary
+        // chat turn because validation/amplification reflex is universal,
+        // not gated on retrieval state.
+        viewModel.inputText = "醒目嘅女仔通常都系面善嘅，你觉得呢"
+        await viewModel.send()
+
+        let system = llm.receivedSystem ?? ""
+        XCTAssertTrue(system.contains("NO YES-MAN POSTURE"),
+                      "anti-yes-man posture must fire in default chat where validation reflex is the dominant failure mode")
+        XCTAssertTrue(system.contains("Bad → Good translation examples"),
+                      "worked bad/good examples must accompany the rule — anchor.md already has the rule but no examples, which is why behavior didn't follow")
+        XCTAssertTrue(system.contains("醒目嘅女仔") || system.contains("通常"),
+                      "at least one Cantonese worked example must be visible to ground the rule in the user's own language register")
+        XCTAssertTrue(system.contains("confirmation bias") || system.contains("ideal type"),
+                      "the corrective frame (probe sample / distinguish ideal from specific) must appear")
+    }
+
+    @MainActor
+    func testPreferOwnCorpusPostureAbsentWhenNoCardsQualify() async throws {
+        // No atoms / no reflections in store — corpus context is empty,
+        // CorpusCardFormatter returns nil, neither the cards block nor the
+        // PREFER OWN-CORPUS posture should fire (the rule would reference
+        // material that isn't in the prompt).
+        viewModel.inputText = "你記得我對 em dash 有咩偏好？"
+        await viewModel.send()
+
+        let system = llm.receivedSystem ?? ""
+        XCTAssertFalse(system.contains("ALEX'S CORPUS"),
+                       "no atoms in store → no corpus block")
+        XCTAssertFalse(system.contains("PREFER OWN-CORPUS"),
+                       "Block 5 posture must not fire without cards above to reference")
     }
 
     @MainActor

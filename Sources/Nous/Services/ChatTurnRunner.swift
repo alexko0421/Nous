@@ -19,6 +19,8 @@ final class ChatTurnRunner {
     private let onPlanReady: (TurnPlan) -> Void
     private let onReviewArtifact: (CognitionArtifact) -> Void
     private let onTurnCognitionSnapshot: (TurnCognitionSnapshot) -> Void
+    private let onContextManifest: (ContextManifestRecord) -> Void
+    private let onCorpusFidelity: (CorpusFidelityRecord) -> Void
 
     init(
         conversationSessionStore: ConversationSessionStore,
@@ -32,7 +34,9 @@ final class ChatTurnRunner {
         shouldSurfaceThinkingTraces: @escaping () -> Bool = { true },
         onPlanReady: @escaping (TurnPlan) -> Void = { _ in },
         onReviewArtifact: @escaping (CognitionArtifact) -> Void = { _ in },
-        onTurnCognitionSnapshot: @escaping (TurnCognitionSnapshot) -> Void = { _ in }
+        onTurnCognitionSnapshot: @escaping (TurnCognitionSnapshot) -> Void = { _ in },
+        onContextManifest: @escaping (ContextManifestRecord) -> Void = { _ in },
+        onCorpusFidelity: @escaping (CorpusFidelityRecord) -> Void = { _ in }
     ) {
         self.conversationSessionStore = conversationSessionStore
         self.turnSteward = turnSteward
@@ -46,6 +50,8 @@ final class ChatTurnRunner {
         self.onPlanReady = onPlanReady
         self.onReviewArtifact = onReviewArtifact
         self.onTurnCognitionSnapshot = onTurnCognitionSnapshot
+        self.onContextManifest = onContextManifest
+        self.onCorpusFidelity = onCorpusFidelity
     }
 
     func run(
@@ -265,12 +271,40 @@ final class ChatTurnRunner {
             return nil
         }
 
-        let reviewArtifact = runSilentReviewIfNeeded(plan: plan, executionResult: executionResult)
+        let reviewRun = runSilentReviewIfNeeded(plan: plan, executionResult: executionResult)
         onTurnCognitionSnapshot(TurnCognitionSnapshotFactory.make(
             plan: plan,
             committed: committed,
-            reviewArtifact: reviewArtifact
+            reviewArtifact: reviewRun.artifact,
+            reviewerFailed: reviewRun.failed
         ))
+        let contextManifest = ContextManifestFactory.make(
+            plan: plan,
+            assistantMessageId: committed.assistantMessage.id,
+            assistantContent: executionResult.assistantContent,
+            agentTraceJson: executionResult.agentTraceJson
+        )
+        if !contextManifest.resources.isEmpty {
+            onContextManifest(contextManifest)
+        }
+
+        // Block 7 wire: scan the assistant reply against the corpus cards
+        // that reached the prompt and emit a fidelity signal. Telemetry-only
+        // — no rewrite trigger here per project_own_corpus_deferred_items.md.
+        // We always emit (even when corpusContext is empty) so the timeline
+        // shows a uniform record per turn; downstream filters can split
+        // turns with available corpus from those without.
+        let fidelitySignal = CorpusFidelityChecker.check(
+            reply: executionResult.assistantContent,
+            corpusContext: plan.corpusContext
+        )
+        let fidelityRecord = CorpusFidelityRecord(
+            turnId: request.turnId,
+            conversationId: prepared.node.id,
+            assistantMessageId: committed.assistantMessage.id,
+            signal: fidelitySignal
+        )
+        onCorpusFidelity(fidelityRecord)
 
         let completion = outcomeFactory.makeCompletion(
             turnId: request.turnId,
@@ -302,8 +336,8 @@ final class ChatTurnRunner {
     private func runSilentReviewIfNeeded(
         plan: TurnPlan,
         executionResult: TurnExecutionResult
-    ) -> CognitionArtifact? {
-        guard let cognitionReviewer else { return nil }
+    ) -> (artifact: CognitionArtifact?, failed: Bool) {
+        guard let cognitionReviewer else { return (nil, false) }
 
         do {
             if let artifact = try cognitionReviewer.review(
@@ -311,12 +345,13 @@ final class ChatTurnRunner {
                 executionResult: executionResult
             ) {
                 onReviewArtifact(artifact)
-                return artifact
+                return (artifact, false)
             }
         } catch {
             Self.debugLog("silent reviewer failed turn=\(plan.turnId) error=\(error.localizedDescription)")
+            return (nil, true)
         }
-        return nil
+        return (nil, false)
     }
 
     private static func makeAgentToolContext(plan: TurnPlan, request: TurnRequest) -> AgentToolContext {
@@ -358,10 +393,17 @@ enum TurnCognitionSnapshotFactory {
     static func make(
         plan: TurnPlan,
         committed: CommittedAssistantTurn,
-        reviewArtifact: CognitionArtifact?
+        reviewArtifact: CognitionArtifact?,
+        reviewerFailed: Bool = false
     ) -> TurnCognitionSnapshot {
         let recoveryEvent = plan.prepared.recoveryEvent
         let slowTrace = plan.promptTrace.slowCognitionTrace
+        let cognitionFrame = CognitionDirector().frame(
+            plan: plan,
+            committed: committed,
+            reviewArtifact: reviewArtifact,
+            reviewerFailed: reviewerFailed
+        )
         return TurnCognitionSnapshot(
             turnId: plan.turnId,
             conversationId: committed.node.id,
@@ -374,10 +416,12 @@ enum TurnCognitionSnapshotFactory {
             reviewArtifactId: reviewArtifact?.id,
             reviewRiskFlags: reviewArtifact?.riskFlags ?? [],
             reviewConfidence: reviewArtifact?.confidence,
+            agentCoordination: plan.promptTrace.agentCoordination,
             conversationRecoveryReason: recoveryEvent?.reason.rawValue,
             conversationRecoveryOriginalNodeId: recoveryEvent?.originalNodeId,
             conversationRecoveryRecoveredNodeId: recoveryEvent?.recoveredNodeId,
-            conversationRecoveryRebasedMessageCount: recoveryEvent?.rebasedMessageCount ?? 0
+            conversationRecoveryRebasedMessageCount: recoveryEvent?.rebasedMessageCount ?? 0,
+            cognitionFrame: cognitionFrame
         )
     }
 }
@@ -430,6 +474,7 @@ private extension TurnPlan {
             turnId: turnId,
             prepared: prepared,
             citations: citations,
+            sourceMaterials: sourceMaterials,
             promptTrace: trace,
             effectiveMode: effectiveMode,
             nextQuickActionModeIfCompleted: nextQuickActionModeIfCompleted,
@@ -439,7 +484,12 @@ private extension TurnPlan {
             transcriptMessages: transcriptMessages,
             focusBlock: focusBlock,
             provider: provider,
-            indexedSkillIds: indexedSkillIds
+            indexedSkillIds: indexedSkillIds,
+            loadedSkillIds: loadedSkillIds,
+            memoryEvidenceSourceIds: memoryEvidenceSourceIds,
+            loadedCitationIds: loadedCitationIds,
+            memoryUsageHints: memoryUsageHints,
+            memoryProvenance: memoryProvenance
         )
     }
 }

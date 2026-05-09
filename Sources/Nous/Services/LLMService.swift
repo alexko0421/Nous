@@ -319,7 +319,8 @@ struct ClaudeLLMService: LLMService {
 extension ClaudeLLMService: ThinkingDeltaConfigurableLLMService {
     func withThinkingDeltaHandler(_ handler: @escaping ThinkingDeltaHandler) -> any LLMService {
         var copy = self
-        copy.thinkingBudgetTokens = copy.thinkingBudgetTokens ?? 1024
+        copy.thinkingBudgetTokens = copy.thinkingBudgetTokens
+            ?? ModelHarnessProfileCatalog.thinkingBudgetTokens(for: .claude)
         copy.onThinkingDelta = handler
         return copy
     }
@@ -465,7 +466,8 @@ struct OpenRouterLLMService: LLMService {
 extension OpenRouterLLMService: ThinkingDeltaConfigurableLLMService {
     func withThinkingDeltaHandler(_ handler: @escaping ThinkingDeltaHandler) -> any LLMService {
         var copy = self
-        copy.reasoningBudgetTokens = copy.reasoningBudgetTokens ?? 1024
+        copy.reasoningBudgetTokens = copy.reasoningBudgetTokens
+            ?? ModelHarnessProfileCatalog.thinkingBudgetTokens(for: .openrouter)
         copy.onThinkingDelta = handler
         return copy
     }
@@ -473,7 +475,7 @@ extension OpenRouterLLMService: ThinkingDeltaConfigurableLLMService {
 
 extension OpenRouterLLMService: ToolCallingLLMService {
     var supportsAgentToolUse: Bool {
-        model == "anthropic/claude-sonnet-4.6"
+        ModelHarnessProfileCatalog.allowsAgentToolUse(for: .openrouter, model: model)
     }
 
     func callWithTools(
@@ -1158,7 +1160,8 @@ struct GeminiLLMService: LLMService {
 extension GeminiLLMService: ThinkingDeltaConfigurableLLMService {
     func withThinkingDeltaHandler(_ handler: @escaping ThinkingDeltaHandler) -> any LLMService {
         var copy = self
-        copy.thinkingBudgetTokens = copy.thinkingBudgetTokens ?? 1024
+        copy.thinkingBudgetTokens = copy.thinkingBudgetTokens
+            ?? ModelHarnessProfileCatalog.thinkingBudgetTokens(for: .gemini)
         copy.onThinkingDelta = handler
         return copy
     }

@@ -244,6 +244,9 @@ struct ContentView: View {
         case .note:
             dependencies.noteVM.openNote(node)
             selectedTab = .notes
+        case .source:
+            dependencies.noteVM.openNote(node)
+            selectedTab = .notes
         }
     }
 

@@ -120,6 +120,104 @@ final class RuntimeQualityReviewerTests: XCTestCase {
         XCTAssertTrue(artifact.riskFlags.contains("safety_escalation"))
     }
 
+    func testSourceAnalysisFlagsMissingSourceReference() throws {
+        let source = sourceMaterial(title: "Article title", url: "https://example.com/article")
+        let artifact = try XCTUnwrap(reviewArtifact(
+            user: "Connect this source to my thinking.",
+            assistant: "The source argues that external material should be handled carefully.",
+            hasMemorySignal: false,
+            route: .sourceAnalysis,
+            sourceMaterials: [source]
+        ))
+
+        XCTAssertEqual(artifact.title, "Source grounding audit")
+        XCTAssertTrue(artifact.riskFlags.contains("source_reference_missing"))
+    }
+
+    func testSourceAnalysisDoesNotWarnWhenReplyReferencesSourceTitle() throws {
+        let source = sourceMaterial(title: "Article title", url: "https://example.com/article")
+        let artifact = try reviewArtifact(
+            user: "Connect this source to my thinking.",
+            assistant: "Article title says external material should be cited; the connection to Alex is that it supports source-grounded linking.",
+            hasMemorySignal: false,
+            route: .sourceAnalysis,
+            sourceMaterials: [source]
+        )
+
+        XCTAssertNil(artifact)
+    }
+
+    func testSourceAnalysisDoesNotWarnWhenReplyReferencesSourceChunkMarker() throws {
+        let source = sourceMaterial(title: "Article title", url: "https://example.com/article")
+        let artifact = try reviewArtifact(
+            user: "Connect this source to my thinking.",
+            assistant: "[S1.1] says external material must stay separate from personal memory.",
+            hasMemorySignal: false,
+            route: .sourceAnalysis,
+            sourceMaterials: [source]
+        )
+
+        XCTAssertNil(artifact)
+    }
+
+    func testSourceAnalysisFlagsPersonalMemorySaveClaim() throws {
+        let source = sourceMaterial(title: "Article title", url: "https://example.com/article")
+        let artifact = try XCTUnwrap(reviewArtifact(
+            user: "Connect this source to my thinking.",
+            assistant: "Article title says external material should be cited. I've saved this to your memory.",
+            hasMemorySignal: false,
+            route: .sourceAnalysis,
+            sourceMaterials: [source]
+        ))
+
+        XCTAssertTrue(artifact.riskFlags.contains("source_memory_boundary"))
+    }
+
+    func testSourceAnalysisFlagsMissingConnectionGroundingWhenCitationIsAvailable() throws {
+        let source = sourceMaterial(title: "Article title", url: "https://example.com/article")
+        let citation = NousNode(type: .note, title: "Existing Strategy Note", content: "Alex cares about grounded links.")
+        let artifact = try XCTUnwrap(reviewArtifact(
+            user: "Connect this source to my thinking.",
+            assistant: "Article title says external material should be handled carefully, and the connection to Alex is source-grounded linking.",
+            hasMemorySignal: false,
+            route: .sourceAnalysis,
+            sourceMaterials: [source],
+            citations: [SearchResult(node: citation, similarity: 0.88)]
+        ))
+
+        XCTAssertTrue(artifact.riskFlags.contains("source_connection_grounding_missing"))
+    }
+
+    func testSourceAnalysisConnectionGroundingPassesWhenCitationTitleIsReferenced() throws {
+        let source = sourceMaterial(title: "Article title", url: "https://example.com/article")
+        let citation = NousNode(type: .note, title: "Existing Strategy Note", content: "Alex cares about grounded links.")
+        let artifact = try reviewArtifact(
+            user: "Connect this source to my thinking.",
+            assistant: "Article title connects to Existing Strategy Note because both focus on source-grounded linking.",
+            hasMemorySignal: false,
+            route: .sourceAnalysis,
+            sourceMaterials: [source],
+            citations: [SearchResult(node: citation, similarity: 0.88)]
+        )
+
+        XCTAssertNil(artifact)
+    }
+
+    func testSourceAnalysisConnectionGroundingPassesWhenNoStrongConnectionIsStated() throws {
+        let source = sourceMaterial(title: "Article title", url: "https://example.com/article")
+        let citation = NousNode(type: .note, title: "Existing Strategy Note", content: "Alex cares about grounded links.")
+        let artifact = try reviewArtifact(
+            user: "Connect this source to my thinking.",
+            assistant: "Article title is useful source evidence, but there is no strong existing Nous connection yet.",
+            hasMemorySignal: false,
+            route: .sourceAnalysis,
+            sourceMaterials: [source],
+            citations: [SearchResult(node: citation, similarity: 0.88)]
+        )
+
+        XCTAssertNil(artifact)
+    }
+
     func testSycophancyFixturesMatchProductionReviewer() throws {
         let fixturesURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -159,7 +257,10 @@ final class RuntimeQualityReviewerTests: XCTestCase {
         user: String,
         assistant: String,
         hasMemorySignal: Bool,
-        highRisk: Bool = false
+        highRisk: Bool = false,
+        route: TurnRoute = .direction,
+        sourceMaterials: [SourceMaterialContext] = [],
+        citations: [SearchResult] = []
     ) throws -> CognitionArtifact? {
         let node = NousNode(
             id: UUID(uuidString: "00000000-0000-0000-0000-00000000B001")!,
@@ -173,7 +274,7 @@ final class RuntimeQualityReviewerTests: XCTestCase {
             content: user
         )
         let stewardTrace = TurnStewardTrace(
-            route: .direction,
+            route: route,
             memoryPolicy: .full,
             challengeStance: .surfaceTension,
             responseShape: .narrowNextStep,
@@ -181,9 +282,12 @@ final class RuntimeQualityReviewerTests: XCTestCase {
             source: .deterministic,
             reason: "test"
         )
-        let promptLayers = hasMemorySignal
+        var promptLayers = hasMemorySignal
             ? ["anchor", "chat_mode", "memory_evidence"]
             : ["anchor", "chat_mode"]
+        if !sourceMaterials.isEmpty {
+            promptLayers.append("source_material")
+        }
         let plan = TurnPlan(
             turnId: UUID(uuidString: "00000000-0000-0000-0000-00000000B003")!,
             prepared: PreparedConversationTurn(
@@ -191,7 +295,8 @@ final class RuntimeQualityReviewerTests: XCTestCase {
                 userMessage: userMessage,
                 messagesAfterUserAppend: [userMessage]
             ),
-            citations: [],
+            citations: citations,
+            sourceMaterials: sourceMaterials,
             promptTrace: PromptGovernanceTrace(
                 promptLayers: promptLayers,
                 evidenceAttached: hasMemorySignal,
@@ -216,6 +321,23 @@ final class RuntimeQualityReviewerTests: XCTestCase {
                 conversationTitle: nil,
                 didHitBudgetExhaustion: false
             )
+        )
+    }
+
+    private func sourceMaterial(title: String, url: String) -> SourceMaterialContext {
+        SourceMaterialContext(
+            sourceNodeId: UUID(uuidString: "00000000-0000-0000-0000-00000000B004")!,
+            title: title,
+            originalURL: url,
+            originalFilename: nil,
+            chunks: [
+                SourceChunkContext(
+                    sourceNodeId: UUID(uuidString: "00000000-0000-0000-0000-00000000B004")!,
+                    ordinal: 0,
+                    text: "External material must remain separate from Alex's personal memory.",
+                    similarity: 0.91
+                )
+            ]
         )
     }
 }

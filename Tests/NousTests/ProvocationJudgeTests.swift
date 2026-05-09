@@ -45,11 +45,23 @@ final class ProvocationJudgeTests: XCTestCase {
             if let err = snapshot.2 { throw err }
             let output = snapshot.0
             let delay = snapshot.3
-            return AsyncThrowingStream { cont in
-                Task {
-                    if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
-                    cont.yield(output)
-                    cont.finish()
+            return AsyncThrowingStream { continuation in
+                let producer = Task {
+                    do {
+                        if delay > 0 {
+                            try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                        }
+                        guard !Task.isCancelled else { return }
+                        continuation.yield(output)
+                        continuation.finish()
+                    } catch is CancellationError {
+                        continuation.finish(throwing: CancellationError())
+                    } catch {
+                        continuation.finish(throwing: error)
+                    }
+                }
+                continuation.onTermination = { @Sendable _ in
+                    producer.cancel()
                 }
             }
         }
@@ -206,11 +218,13 @@ final class ProvocationJudgeTests: XCTestCase {
     }
 
     func testDefaultTimeoutAllowsNormalCloudJudgeLatency() async throws {
+        XCTAssertGreaterThanOrEqual(ProvocationJudge.defaultTimeout, 8.0)
+
         let fake = FakeLLMService(output: """
         {"tension_exists":false,"user_state":"exploring","should_provoke":false,
          "entry_id":null,"reason":"ok","inferred_mode":"companion"}
         """)
-        fake.delay = 2.0
+        fake.delay = 0.2
         let judge = ProvocationJudge(llmService: fake)
 
         let verdict = try await judge.judge(

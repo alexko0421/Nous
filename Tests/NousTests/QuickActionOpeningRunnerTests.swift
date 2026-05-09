@@ -88,6 +88,54 @@ final class QuickActionOpeningRunnerTests: XCTestCase {
         XCTAssertFalse(llm.receivedPromptText.contains("RECENT CONVERSATIONS WITH ALEX"))
     }
 
+    func testOpeningRunnerRecordsContextManifestAfterSuccessfulCommit() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let conversationStore = ConversationSessionStore(nodeStore: nodeStore)
+        let node = try conversationStore.startConversation()
+        try nodeStore.insertMemoryEntry(memoryEntry(scope: .global, content: "- Alex owns the data layer."))
+        var contextManifests: [ContextManifestRecord] = []
+
+        let runner = QuickActionOpeningRunner(
+            conversationSessionStore: conversationStore,
+            memoryContextBuilder: makeMemoryContextBuilder(nodeStore: nodeStore),
+            turnExecutor: TurnExecutor(
+                llmServiceProvider: { OpeningPromptCapturingLLM(output: "先讲一个真实问题。") },
+                shouldUseGeminiHistoryCache: { false },
+                shouldPersistAssistantThinking: { false }
+            ),
+            outcomeFactory: TurnOutcomeFactory(shouldPersistMemory: { _, _ in false }),
+            onContextManifest: { contextManifests.append($0) }
+        )
+        let turnId = UUID()
+        let sink = TurnSequencedEventSink(turnId: turnId, sink: OpeningTurnEventCapture())
+
+        let maybeCompletion = await runner.run(
+            mode: .direction,
+            node: node,
+            turnId: turnId,
+            sink: sink,
+            abortReason: { .unexpectedCancellation }
+        )
+        let completion = try XCTUnwrap(maybeCompletion)
+
+        XCTAssertEqual(contextManifests.count, 1)
+        XCTAssertEqual(contextManifests[0].turnId, turnId)
+        XCTAssertEqual(contextManifests[0].conversationId, node.id)
+        XCTAssertEqual(contextManifests[0].assistantMessageId, completion.assistantMessage.id)
+        let globalMemoryResource = try XCTUnwrap(contextManifests[0].resources.first {
+            $0.source == .memory &&
+            $0.label == "global_memory" &&
+            $0.referenceId == "global_memory" &&
+            $0.state == .loaded
+        })
+        XCTAssertFalse(globalMemoryResource.used)
+        XCTAssertEqual(globalMemoryResource.provenance?.scope, .global)
+        XCTAssertEqual(globalMemoryResource.provenance?.statuses, [.active])
+        XCTAssertEqual(globalMemoryResource.provenance?.confidence, 0.9)
+        XCTAssertEqual(globalMemoryResource.provenance?.sourceNodeIds, [])
+        XCTAssertEqual(globalMemoryResource.provenance?.sourceMessageIds, [])
+    }
+
     func testOpeningRunnerTracesSingleShotAgentCoordination() async throws {
         let nodeStore = try NodeStore(path: ":memory:")
         let conversationStore = ConversationSessionStore(nodeStore: nodeStore)
@@ -185,6 +233,42 @@ final class QuickActionOpeningRunnerTests: XCTestCase {
         XCTAssertFalse(reviewArtifact.evidenceRefs.contains { ref in
             ref.source == .message && ref.id == reviewer.reviewedUserMessageIds.first?.uuidString
         })
+    }
+
+    func testOpeningRunnerRecordsSilentReviewerFailuresInCognitionFrame() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let conversationStore = ConversationSessionStore(nodeStore: nodeStore)
+        let node = try conversationStore.startConversation()
+        let snapshotCapture = OpeningTurnCognitionSnapshotCapture()
+        let runner = QuickActionOpeningRunner(
+            conversationSessionStore: conversationStore,
+            memoryContextBuilder: makeMemoryContextBuilder(nodeStore: nodeStore),
+            turnExecutor: TurnExecutor(
+                llmServiceProvider: { OpeningPromptCapturingLLM(output: "先定一个方向。") },
+                shouldUseGeminiHistoryCache: { false },
+                shouldPersistAssistantThinking: { false }
+            ),
+            outcomeFactory: TurnOutcomeFactory(shouldPersistMemory: { _, _ in false }),
+            cognitionReviewer: OpeningThrowingCognitionReviewer(),
+            onTurnCognitionSnapshot: { snapshotCapture.append($0) }
+        )
+        let turnId = UUID()
+        let sink = TurnSequencedEventSink(turnId: turnId, sink: OpeningTurnEventCapture())
+
+        let completion = await runner.run(
+            mode: .direction,
+            node: node,
+            turnId: turnId,
+            sink: sink,
+            abortReason: { .unexpectedCancellation }
+        )
+
+        XCTAssertNotNil(completion)
+        let snapshot = try XCTUnwrap(snapshotCapture.values().first)
+        XCTAssertNil(snapshot.reviewArtifactId)
+        let reviewer = try XCTUnwrap(snapshot.cognitionFrame?.records.first { $0.label == "reviewer" })
+        XCTAssertEqual(reviewer.status, .failed)
+        XCTAssertEqual(reviewer.reason, "silent_review_failed")
     }
 
     func testOpeningRunnerDoesNotRecordReviewOrSnapshotWhenCommitFails() async throws {
@@ -326,6 +410,16 @@ private final class OpeningRecordingCognitionReviewer: CognitionReviewing {
             )
         )
     }
+}
+
+private final class OpeningThrowingCognitionReviewer: CognitionReviewing {
+    func review(plan: TurnPlan, executionResult: TurnExecutionResult) throws -> CognitionArtifact? {
+        throw OpeningReviewerTestError.boom
+    }
+}
+
+private enum OpeningReviewerTestError: Error {
+    case boom
 }
 
 private final class OpeningReviewArtifactCapture {

@@ -192,7 +192,7 @@ final class TurnExecutor {
             gemini.onUsageMetadata = { [recordGeminiUsage] usage in
                 recordGeminiUsage(usage)
             }
-            gemini.thinkingBudgetTokens = 2000
+            gemini.thinkingBudgetTokens = ModelHarnessProfileCatalog.thinkingBudgetTokens(for: .gemini)
             gemini.onBudgetExhausted = {
                 await state.markBudgetExhausted()
             }
@@ -212,7 +212,7 @@ final class TurnExecutor {
 
         if var claude = llm as? ClaudeLLMService {
             claude.cacheableSystemPrefix = cacheableSystemPrefix
-            claude.thinkingBudgetTokens = 1024
+            claude.thinkingBudgetTokens = ModelHarnessProfileCatalog.thinkingBudgetTokens(for: .claude)
             guard captureThinking else { return claude }
             claude.onThinkingDelta = { delta in
                 if let displayDelta = await state.appendThinking(
@@ -226,7 +226,7 @@ final class TurnExecutor {
         }
 
         if var openRouter = llm as? OpenRouterLLMService {
-            openRouter.reasoningBudgetTokens = 1024
+            openRouter.reasoningBudgetTokens = ModelHarnessProfileCatalog.thinkingBudgetTokens(for: .openrouter)
             guard captureThinking else { return openRouter }
             openRouter.onThinkingDelta = { delta in
                 if let displayDelta = await state.appendThinking(

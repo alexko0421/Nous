@@ -894,6 +894,189 @@ final class RAGPipelineTests: XCTestCase {
         XCTAssertTrue(context.contains("focus on the next right move"))
     }
 
+    func testAssembleContextIncludesVisibleResponseLanguagePolicy() {
+        let context = PromptContextAssembler.assembleContext(
+            currentUserInput: "Can you explain this agent harness change in plain English?",
+            globalMemory: "- Alex thinks naturally across Cantonese and English.",
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        ).combined
+
+        XCTAssertTrue(context.contains("VISIBLE RESPONSE LANGUAGE POLICY"))
+        XCTAssertTrue(context.contains("If the current user message is mostly English, answer in English"))
+        XCTAssertTrue(context.contains("Do not force Cantonese or Mandarin"))
+        XCTAssertFalse(context.contains("or Chinese just because"))
+        XCTAssertTrue(context.contains("Keep technical terms in English when they are already English"))
+    }
+
+    func testGovernanceTraceIncludesVisibleResponseLanguagePolicyLayer() {
+        let trace = PromptContextAssembler.governanceTrace(
+            currentUserInput: "Can you explain this agent harness change in plain English?",
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        )
+
+        XCTAssertTrue(trace.promptLayers.contains("visible_response_language_policy"))
+    }
+
+    func testAssembleContextIncludesCurrentVisibleResponseLanguageTargetForEnglish() {
+        let context = PromptContextAssembler.assembleContext(
+            currentUserInput: "Can you explain this agent harness change in plain English?",
+            globalMemory: "- Alex thinks naturally across Cantonese and English.",
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        ).combined
+
+        XCTAssertTrue(context.contains("CURRENT VISIBLE RESPONSE LANGUAGE TARGET"))
+        XCTAssertTrue(context.contains("Target: English"))
+        XCTAssertTrue(context.contains("Do not let internal memory, source labels, or older conversation language override this target."))
+    }
+
+    func testGovernanceTraceRecordsMixedVisibleResponseLanguageTarget() {
+        let trace = PromptContextAssembler.governanceTrace(
+            currentUserInput: "咁开始 V9 language telemetry 啦",
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        )
+
+        XCTAssertEqual(trace.visibleResponseLanguageTarget, .mixed)
+        XCTAssertEqual(trace.visibleResponseLanguageSource, .currentTurnMixed)
+        XCTAssertTrue(trace.promptLayers.contains("visible_response_language_target"))
+    }
+
+    func testVisibleResponseLanguageTargetHonorsExplicitEnglishRequest() {
+        let trace = PromptContextAssembler.governanceTrace(
+            currentUserInput: "呢段帮我用英文解释",
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        )
+
+        XCTAssertEqual(trace.visibleResponseLanguageTarget, .english)
+        XCTAssertEqual(trace.visibleResponseLanguageSource, .explicitLanguageRequest)
+    }
+
+    func testVisibleResponseLanguageTargetHonorsExplicitRequestOverCurrentSurface() {
+        let context = PromptContextAssembler.assembleContext(
+            currentUserInput: "用英文讲下呢个 language harness",
+            globalMemory: "- Alex usually writes to Nous in Cantonese.",
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        ).combined
+        let trace = PromptContextAssembler.governanceTrace(
+            currentUserInput: "用英文讲下呢个 language harness",
+            globalMemory: "- Alex usually writes to Nous in Cantonese.",
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        )
+
+        XCTAssertEqual(trace.visibleResponseLanguageTarget, .english)
+        XCTAssertEqual(trace.visibleResponseLanguageSource, .explicitLanguageRequest)
+        XCTAssertTrue(context.contains("Target: English"))
+        XCTAssertTrue(context.contains("Reason: explicit language request"))
+    }
+
+    func testVisibleResponseLanguageTargetUsesCurrentCantoneseOverMemory() {
+        let context = PromptContextAssembler.assembleContext(
+            currentUserInput: "咁呢个语言层系咪会跟住我哋讲嘢",
+            globalMemory: "- Alex wants polished English for international users.",
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        ).combined
+        let trace = PromptContextAssembler.governanceTrace(
+            currentUserInput: "咁呢个语言层系咪会跟住我哋讲嘢",
+            globalMemory: "- Alex wants polished English for international users.",
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        )
+
+        XCTAssertEqual(trace.visibleResponseLanguageTarget, .cantonese)
+        XCTAssertEqual(trace.visibleResponseLanguageSource, .currentTurnCantonese)
+        XCTAssertTrue(context.contains("Target: Cantonese"))
+        XCTAssertTrue(context.contains("Reason: current message uses Cantonese"))
+    }
+
+    func testVisibleResponseLanguageTargetUsesCurrentMandarinOverMemory() {
+        let context = PromptContextAssembler.assembleContext(
+            currentUserInput: "我们现在继续升级这个语言层",
+            globalMemory: "- Alex usually chats in Cantonese and English.",
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        ).combined
+        let trace = PromptContextAssembler.governanceTrace(
+            currentUserInput: "我们现在继续升级这个语言层",
+            globalMemory: "- Alex usually chats in Cantonese and English.",
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        )
+
+        XCTAssertEqual(trace.visibleResponseLanguageTarget, .mandarin)
+        XCTAssertEqual(trace.visibleResponseLanguageSource, .currentTurnMandarin)
+        XCTAssertTrue(context.contains("Target: Mandarin"))
+        XCTAssertTrue(context.contains("Reason: current message uses Mandarin"))
+    }
+
+    func testVisibleResponseLanguageTargetUsesMandarinInsteadOfGenericChinese() {
+        let context = PromptContextAssembler.assembleContext(
+            currentUserInput: "请用普通话解释这个 agent harness 升级",
+            globalMemory: "- Alex thinks naturally across Cantonese and English.",
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        ).combined
+        let trace = PromptContextAssembler.governanceTrace(
+            currentUserInput: "请用普通话解释这个 agent harness 升级",
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        )
+
+        XCTAssertEqual(trace.visibleResponseLanguageTarget, .mandarin)
+        XCTAssertEqual(trace.visibleResponseLanguageSource, .explicitLanguageRequest)
+        XCTAssertTrue(context.contains("Target: Mandarin"))
+        XCTAssertFalse(context.contains("Target: Chinese"))
+    }
+
     func testAssembleContextInvokesHighRiskSafetyModeWhenQueryIsDangerous() {
         let context = PromptContextAssembler.assembleContext(
             currentUserInput: "I want to kill myself tonight.",

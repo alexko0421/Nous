@@ -62,6 +62,15 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
+  BehaviorEvalRunner:
+    type: tool
+    platform: macOS
+    deploymentTarget: "26.0"
+    sources:
+      - Sources/BehaviorEvalRunner
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
   NousTests:
     type: bundle.unit-test
     platform: macOS

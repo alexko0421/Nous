@@ -31,6 +31,20 @@ final class TurnStewardTests: XCTestCase {
         XCTAssertEqual(decision.trace.reason, "active quick action mode")
     }
 
+    func testActivePlanQuickActionWithDistressKeepsPlanRouteButAnswersNow() {
+        let decision = TurnSteward(routerModeProvider: { .active }).steer(
+            prepared: preparedTurn(userText: "我好焦虑，帮我 plan this week"),
+            request: request(input: "我好焦虑，帮我 plan this week", activeQuickActionMode: .plan)
+        )
+
+        XCTAssertEqual(decision.route, .plan)
+        XCTAssertEqual(decision.memoryPolicy, .full)
+        XCTAssertEqual(decision.challengeStance, .supportFirst)
+        XCTAssertEqual(decision.responseShape, .answerNow)
+        XCTAssertEqual(decision.judgePolicy, .off)
+        XCTAssertEqual(decision.trace.responseStance, .supportFirst)
+    }
+
     func testExplicitBrainstormRoutesLean() {
         let decision = steward.steer(
             prepared: preparedTurn(userText: "brainstorm a few ideas"),
@@ -67,6 +81,114 @@ final class TurnStewardTests: XCTestCase {
         XCTAssertEqual(decision.responseShape, .narrowNextStep)
     }
 
+    func testSourceMaterialsRouteToSourceAnalysis() {
+        let sourceNodeId = UUID()
+        let decision = steward.steer(
+            prepared: preparedTurn(userText: "what connects here?"),
+            request: request(
+                input: "what connects here?",
+                sourceMaterials: [
+                    SourceMaterialContext(
+                        sourceNodeId: sourceNodeId,
+                        title: "External essay",
+                        originalURL: "https://example.com/essay",
+                        originalFilename: nil,
+                        chunks: [
+                            SourceChunkContext(
+                                sourceNodeId: sourceNodeId,
+                                ordinal: 0,
+                                text: "External essay chunk about connecting ideas.",
+                                similarity: nil
+                            )
+                        ]
+                    )
+                ]
+            )
+        )
+
+        XCTAssertEqual(decision.route, .sourceAnalysis)
+        XCTAssertEqual(decision.memoryPolicy, .full)
+        XCTAssertEqual(decision.responseShape, .answerNow)
+        XCTAssertEqual(decision.supervisorLanes, [.source, .memory, .project, .analytics, .reflection])
+        XCTAssertEqual(decision.trace.supervisorLanes, decision.supervisorLanes)
+    }
+
+    func testSourceMaterialsKeepJudgeEngaged() {
+        let sourceNodeId = UUID()
+        let decision = steward.steer(
+            prepared: preparedTurn(userText: "what connects here?"),
+            request: request(
+                input: "what connects here?",
+                sourceMaterials: [
+                    SourceMaterialContext(
+                        sourceNodeId: sourceNodeId,
+                        title: "External essay",
+                        originalURL: "https://example.com/essay",
+                        originalFilename: nil,
+                        chunks: [
+                            SourceChunkContext(
+                                sourceNodeId: sourceNodeId,
+                                ordinal: 0,
+                                text: "External essay chunk about connecting ideas.",
+                                similarity: nil
+                            )
+                        ]
+                    )
+                ]
+            )
+        )
+
+        XCTAssertEqual(decision.challengeStance, .surfaceTension)
+        XCTAssertEqual(decision.judgePolicy, .visibleTension)
+    }
+
+    func testActiveSupportFirstRouterDoesNotEraseSourceAnalysisLane() async {
+        let sourceNodeId = UUID()
+        let decision = await TurnSteward(
+            routerModeProvider: { .active }
+        ).steerForTurn(
+            prepared: preparedTurn(userText: "我好焦虑，帮我 connect this source"),
+            request: request(
+                input: "我好焦虑，帮我 connect this source",
+                sourceMaterials: [
+                    SourceMaterialContext(
+                        sourceNodeId: sourceNodeId,
+                        title: "External essay",
+                        originalURL: "https://example.com/essay",
+                        originalFilename: nil,
+                        chunks: [
+                            SourceChunkContext(
+                                sourceNodeId: sourceNodeId,
+                                ordinal: 0,
+                                text: "External essay chunk about connecting ideas.",
+                                similarity: nil
+                            )
+                        ]
+                    )
+                ]
+            )
+        )
+
+        XCTAssertEqual(decision.route, .sourceAnalysis)
+        XCTAssertEqual(decision.trace.responseStance, .supportFirst)
+        XCTAssertTrue(decision.supervisorLanes.contains(.source))
+        XCTAssertEqual(decision.trace.supervisorLanes, decision.supervisorLanes)
+    }
+
+    func testPlanRouteActivatesProjectSupervisorLanes() {
+        let decision = steward.steer(
+            prepared: preparedTurn(userText: "help me plan the next phase"),
+            request: request(input: "help me plan the next phase")
+        )
+
+        XCTAssertEqual(decision.route, .plan)
+        XCTAssertTrue(decision.supervisorLanes.contains(.memory))
+        XCTAssertTrue(decision.supervisorLanes.contains(.project))
+        XCTAssertTrue(decision.supervisorLanes.contains(.analytics))
+        XCTAssertTrue(decision.supervisorLanes.contains(.reflection))
+        XCTAssertFalse(decision.supervisorLanes.contains(.source))
+    }
+
     func testEmotionalDistressSupportFirst() {
         let decision = steward.steer(
             prepared: preparedTurn(userText: "我好攰，感觉顶唔顺"),
@@ -77,6 +199,32 @@ final class TurnStewardTests: XCTestCase {
         XCTAssertEqual(decision.memoryPolicy, .conversationOnly)
         XCTAssertEqual(decision.challengeStance, .supportFirst)
         XCTAssertEqual(decision.responseShape, .answerNow)
+    }
+
+    func testDistressPlusDecisionKeepsDirectionRouteButAnswersNow() {
+        let decision = steward.steer(
+            prepared: preparedTurn(userText: "我好焦虑，但我应该点拣？"),
+            request: request(input: "我好焦虑，但我应该点拣？")
+        )
+
+        XCTAssertEqual(decision.route, .direction)
+        XCTAssertEqual(decision.memoryPolicy, .full)
+        XCTAssertEqual(decision.challengeStance, .supportFirst)
+        XCTAssertEqual(decision.responseShape, .answerNow)
+        XCTAssertEqual(decision.judgePolicy, .off)
+    }
+
+    func testDistressPlusPlanKeepsPlanRouteButAnswersNow() {
+        let decision = steward.steer(
+            prepared: preparedTurn(userText: "我好攰，帮我 plan this week"),
+            request: request(input: "我好攰，帮我 plan this week")
+        )
+
+        XCTAssertEqual(decision.route, .plan)
+        XCTAssertEqual(decision.memoryPolicy, .full)
+        XCTAssertEqual(decision.challengeStance, .supportFirst)
+        XCTAssertEqual(decision.responseShape, .answerNow)
+        XCTAssertEqual(decision.judgePolicy, .off)
     }
 
     func testMemoryOptOutForFreshBrainstorm() {
@@ -395,7 +543,10 @@ final class TurnStewardTests: XCTestCase {
         )
 
         XCTAssertEqual(classifier.callCount, 0)
+        XCTAssertEqual(decision.route, .direction)
+        XCTAssertEqual(decision.memoryPolicy, .full)
         XCTAssertEqual(decision.trace.responseStance, .supportFirst)
+        XCTAssertEqual(decision.responseShape, .answerNow)
         XCTAssertEqual(decision.trace.judgePolicy, .off)
         XCTAssertEqual(decision.judgePolicy, .off)
         XCTAssertEqual(decision.challengeStance, .supportFirst)
@@ -429,6 +580,34 @@ final class TurnStewardTests: XCTestCase {
         XCTAssertEqual(decision.challengeStance, .useSilently)
         XCTAssertEqual(decision.judgePolicy, .off)
         XCTAssertEqual(decision.trace.reason, "ordinary chat default")
+    }
+
+    func testClassifierSupportFirstWithoutDistressUsesConversationOnlyMemory() async {
+        let classifier = StubSpeechActClassifier(
+            output: SpeechActClassifierOutput(
+                stance: .supportFirst,
+                confidence: 0.93,
+                softerFallback: .companion,
+                reason: "classifier saw support need"
+            )
+        )
+        let steward = TurnSteward(
+            routerModeProvider: { .active },
+            currentProviderProvider: { .gemini },
+            classifier: classifier
+        )
+
+        let decision = await steward.steerForTurn(
+            prepared: preparedTurn(userText: "你觉得我应该点样处理呢件事？"),
+            request: request(input: "你觉得我应该点样处理呢件事？")
+        )
+
+        XCTAssertEqual(classifier.callCount, 1)
+        XCTAssertEqual(decision.route, .ordinaryChat)
+        XCTAssertEqual(decision.memoryPolicy, .conversationOnly)
+        XCTAssertEqual(decision.trace.responseStance, .supportFirst)
+        XCTAssertEqual(decision.responseShape, .answerNow)
+        XCTAssertEqual(decision.judgePolicy, .off)
     }
 
     func testMediumClassifierConfidenceUsesSofterFallback() async {
@@ -598,7 +777,8 @@ final class TurnStewardTests: XCTestCase {
 
     private func request(
         input: String,
-        activeQuickActionMode: QuickActionMode? = nil
+        activeQuickActionMode: QuickActionMode? = nil,
+        sourceMaterials: [SourceMaterialContext] = []
     ) -> TurnRequest {
         TurnRequest(
             turnId: UUID(),
@@ -611,6 +791,7 @@ final class TurnStewardTests: XCTestCase {
             ),
             inputText: input,
             attachments: [],
+            sourceMaterials: sourceMaterials,
             now: Date()
         )
     }

@@ -15,7 +15,7 @@ enum TopicEmojiResolver {
         ("🏃", ["health", "workout", "gym", "run", "sleep", "diet", "body", "exercise", "健身", "运动", "運動", "睡眠", "健康"]),
         ("✍️", ["write", "writing", "essay", "note", "journal", "post", "article", "文案", "写作", "寫作", "文章"]),
     ]
-    static let allowedEmojis = Set(rules.map(\.emoji) + ["💬", "📝"])
+    static let allowedEmojis = Set(rules.map(\.emoji) + ["💬", "📝", "🔗", "📄"])
 
     static func emoji(for node: NousNode) -> String {
         if let stored = storedEmoji(from: node.emoji) {
@@ -39,6 +39,13 @@ enum TopicEmojiResolver {
     }
 
     static func fallbackEmoji(for type: NodeType) -> String {
-        type == .conversation ? "💬" : "📝"
+        switch type {
+        case .conversation:
+            return "💬"
+        case .note:
+            return "📝"
+        case .source:
+            return "🔗"
+        }
     }
 }

@@ -158,6 +158,56 @@ enum MemoryFactDebugFormatting {
     }
 }
 
+enum MemoryCuratorReviewDebugFormatting {
+    static func entries(
+        from sortedEntries: [MemoryEntry],
+        plan: MemoryCuratorReviewPlan
+    ) -> [MemoryEntry] {
+        let planEntries = plan.items.map(\.entry)
+        let planEntryIds = Set(planEntries.map(\.id))
+        let statusReviewEntries = sortedEntries.filter { entry in
+            guard planEntryIds.contains(entry.id) == false else { return false }
+            return entry.status == .conflicted || entry.status == .expired
+        }
+        return planEntries + statusReviewEntries
+    }
+
+    static func item(
+        for entry: MemoryEntry,
+        in plan: MemoryCuratorReviewPlan
+    ) -> MemoryCuratorReviewItem? {
+        plan.items.first { $0.entry.id == entry.id }
+    }
+
+    static func note(for item: MemoryCuratorReviewItem) -> String {
+        "\(issueDisplay(item.issue)): \(item.reason)"
+    }
+
+    static func allowsConfirm(for item: MemoryCuratorReviewItem) -> Bool {
+        switch item.issue {
+        case .staleConfirmation, .lowConfidence:
+            return true
+        case .expiredStillActive, .missingSourceEvidence, .possibleDuplicate:
+            return false
+        }
+    }
+
+    private static func issueDisplay(_ issue: MemoryCuratorReviewIssue) -> String {
+        switch issue {
+        case .expiredStillActive:
+            return "Expired active memory"
+        case .staleConfirmation:
+            return "Needs confirmation"
+        case .missingSourceEvidence:
+            return "Missing source evidence"
+        case .lowConfidence:
+            return "Low confidence"
+        case .possibleDuplicate:
+            return "Possible duplicate"
+        }
+    }
+}
+
 struct MemoryDebugInspector: View {
     let nodeStore: NodeStore
     let skillStore: SkillStore
@@ -199,7 +249,7 @@ struct MemoryDebugInspector: View {
             case .conversation:
                 return "Memory local to one thread."
             case .review:
-                return "Conflicted or expired notes worth checking."
+                return "Expired, stale, unsourced, low-confidence, or conflicted memory worth checking."
             }
         }
     }
@@ -211,6 +261,7 @@ struct MemoryDebugInspector: View {
 
     @State private var entries: [MemoryEntry] = []
     @State private var factEntries: [MemoryFactEntry] = []
+    @State private var reviewPlan = MemoryCuratorReviewPlan(generatedAt: .distantPast, items: [])
     @State private var skills: [Skill] = []
     @State private var shadowPatterns: [ShadowLearningPattern] = []
     @State private var learningEvents: [LearningEvent] = []
@@ -671,7 +722,7 @@ struct MemoryDebugInspector: View {
     }
 
     private var reviewEntries: [MemoryEntry] {
-        sortedEntries.filter { $0.status == .conflicted || $0.status == .expired }
+        MemoryCuratorReviewDebugFormatting.entries(from: sortedEntries, plan: reviewPlan)
     }
 
     private var entriesForFocus: [MemoryEntry] {
@@ -693,6 +744,24 @@ struct MemoryDebugInspector: View {
         filteredEntries.first(where: { $0.id == selectedEntryId })
     }
 
+    private func curatorReviewItem(for entry: MemoryEntry) -> MemoryCuratorReviewItem? {
+        MemoryCuratorReviewDebugFormatting.item(for: entry, in: reviewPlan)
+    }
+
+    private func displayReviewNote(for entry: MemoryEntry) -> String? {
+        if let item = curatorReviewItem(for: entry) {
+            return MemoryCuratorReviewDebugFormatting.note(for: item)
+        }
+        guard entry.status != .active else { return nil }
+        return reviewNote(for: entry)
+    }
+
+    private func allowsConfirm(for entry: MemoryEntry) -> Bool {
+        guard entry.status == .active else { return false }
+        guard let item = curatorReviewItem(for: entry) else { return true }
+        return MemoryCuratorReviewDebugFormatting.allowsConfirm(for: item)
+    }
+
     @ViewBuilder
     private func entryRow(_ entry: MemoryEntry) -> some View {
         let isSelected = selectedEntryId == entry.id
@@ -709,7 +778,9 @@ struct MemoryDebugInspector: View {
 
                     Spacer(minLength: 0)
 
-                    if entry.status != .active {
+                    if curatorReviewItem(for: entry) != nil {
+                        badge(text: "Review", tint: Color.red.opacity(0.14), textColor: .red)
+                    } else if entry.status != .active {
                         badge(text: statusDisplay(entry.status), tint: statusTint(entry.status), textColor: statusTextColor(entry.status))
                     }
                 }
@@ -727,10 +798,10 @@ struct MemoryDebugInspector: View {
                     Text("\(sourceSummary(for: entry)) · Updated \(Self.relative(entry.updatedAt))")
                         .font(.system(size: 11, design: .rounded))
                         .foregroundColor(AppColor.secondaryText)
-                    if let reviewNote = reviewNote(for: entry), entry.status != .active {
+                    if let reviewNote = displayReviewNote(for: entry) {
                         Text(reviewNote)
                             .font(.system(size: 11, weight: .medium, design: .rounded))
-                            .foregroundColor(statusTextColor(entry.status))
+                            .foregroundColor(curatorReviewItem(for: entry) == nil ? statusTextColor(entry.status) : .red)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -757,6 +828,9 @@ struct MemoryDebugInspector: View {
             VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) {
+                        if curatorReviewItem(for: entry) != nil {
+                            badge(text: "Review", tint: Color.red.opacity(0.14), textColor: .red)
+                        }
                         if entry.status != .active {
                             badge(text: statusDisplay(entry.status), tint: statusTint(entry.status), textColor: statusTextColor(entry.status))
                         }
@@ -814,7 +888,13 @@ struct MemoryDebugInspector: View {
                     if let expiresAt = entry.expiresAt {
                         detailStatCard(title: "Expires", value: timestamp(expiresAt))
                     }
-                    if let reviewNote = reviewNote(for: entry), entry.status != .active {
+                    if let item = curatorReviewItem(for: entry) {
+                        detailStatCard(
+                            title: "Review",
+                            value: MemoryCuratorReviewDebugFormatting.note(for: item),
+                            accent: Color.red.opacity(0.05)
+                        )
+                    } else if let reviewNote = reviewNote(for: entry), entry.status != .active {
                         detailStatCard(title: "Review", value: reviewNote, accent: statusBackground(entry.status))
                     }
                 }
@@ -850,7 +930,7 @@ struct MemoryDebugInspector: View {
             }
 
             HStack(spacing: 10) {
-                if entry.status == .active {
+                if allowsConfirm(for: entry) {
                     smallActionButton(
                         title: "Confirm",
                         tint: AppColor.colaOrange.opacity(0.15),
@@ -1445,6 +1525,7 @@ struct MemoryDebugInspector: View {
         do {
             entries = userMemoryService.allMemoryEntries()
             factEntries = try nodeStore.fetchMemoryFactEntries()
+            reviewPlan = try MemoryCuratorReviewService(nodeStore: nodeStore).makePlan()
             #if DEBUG
             skills = try skillStore.fetchAllSkills(userId: "alex")
             if let shadowLearningStore {
@@ -1611,8 +1692,8 @@ struct MemoryDebugInspector: View {
     }
 
     private func detailStatusLine(for entry: MemoryEntry) -> String {
-        if let reviewNote = reviewNote(for: entry), entry.status != .active {
-            return reviewNote
+        if let note = displayReviewNote(for: entry) {
+            return note
         }
         return "This memory is still active in Nous's read path."
     }
@@ -2069,6 +2150,9 @@ struct TurnCognitionInspectorTab: View {
             }
 
             VStack(alignment: .leading, spacing: 4) {
+                Text(row.organSummary)
+                    .foregroundColor(AppColor.colaDarkText)
+                Text(row.organDetail)
                 Text(row.slowCognitionDetail)
                 Text(row.reviewStatus)
                 Text(row.recoveryStatus)

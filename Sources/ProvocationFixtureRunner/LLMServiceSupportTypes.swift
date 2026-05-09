@@ -102,3 +102,20 @@ struct TurnSystemSlice: Equatable {
             .joined(separator: "\n\n")
     }
 }
+
+enum ModelHarnessProfileCatalog {
+    static func thinkingBudgetTokens(for provider: LLMProvider) -> Int? {
+        switch provider {
+        case .gemini:
+            return 2000
+        case .claude, .openrouter:
+            return 1024
+        case .local, .openai:
+            return nil
+        }
+    }
+
+    static func allowsAgentToolUse(for provider: LLMProvider, model: String?) -> Bool {
+        provider == .openrouter && model == "anthropic/claude-sonnet-4.6"
+    }
+}

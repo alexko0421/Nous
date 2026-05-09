@@ -23,7 +23,7 @@ final class TurnCognitionInspectorFeedTests: XCTestCase {
             recordedAt: now.addingTimeInterval(-300)
         )
 
-        let rows = TurnCognitionInspectorFeedFormatting.rows(from: [newer, older], now: now)
+        let rows = TurnCognitionInspectorFeedFormatting.rows(from: [older, newer], now: now)
 
         XCTAssertEqual(rows.map(\.turnId), [newer.turnId, older.turnId])
         XCTAssertEqual(rows[0].relativeTime, "5m ago")
@@ -100,6 +100,20 @@ final class TurnCognitionInspectorFeedTests: XCTestCase {
 
     func testRowsDoNotExposePromptText() {
         let now = Date(timeIntervalSince1970: 10_000)
+        let frame = CognitionFrame(
+            turnId: UUID(uuidString: "00000000-0000-0000-0000-000000000306")!,
+            conversationId: UUID(uuidString: "00000000-0000-0000-0000-000000001306")!,
+            assistantMessageId: UUID(uuidString: "00000000-0000-0000-0000-000000002306")!,
+            records: [
+                CognitionOrganRecord(
+                    organ: .reviewer,
+                    label: "reviewer",
+                    status: .failed,
+                    reason: "Help me plan\nAssistant draft"
+                )
+            ],
+            createdAt: now
+        )
         let rows = TurnCognitionInspectorFeedFormatting.rows(
             from: [
                 snapshot(
@@ -109,6 +123,7 @@ final class TurnCognitionInspectorFeedTests: XCTestCase {
                     slowCognitionArtifactId: UUID(uuidString: "00000000-0000-0000-0000-000000000406")!,
                     slowCognitionEvidenceRefCount: 1,
                     reviewRiskFlags: ["unsupported_memory_reference"],
+                    cognitionFrame: frame,
                     recordedAt: now
                 )
             ],
@@ -122,11 +137,81 @@ final class TurnCognitionInspectorFeedTests: XCTestCase {
             rows[0].reviewStatus,
             rows[0].recoveryStatus,
             rows[0].riskSummary,
-            rows[0].promptLayerSummary
+            rows[0].promptLayerSummary,
+            rows[0].organSummary,
+            rows[0].organDetail
         ].joined(separator: " ")
 
         XCTAssertFalse(visibleFields.contains("Help me plan"))
         XCTAssertFalse(visibleFields.contains("Assistant draft"))
+        XCTAssertTrue(rows[0].organDetail.contains("redacted reason"))
+    }
+
+    func testRowsSummarizeCognitionFrameOrgans() {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let frame = CognitionFrame(
+            turnId: UUID(uuidString: "00000000-0000-0000-0000-000000000501")!,
+            conversationId: UUID(uuidString: "00000000-0000-0000-0000-000000000502")!,
+            assistantMessageId: UUID(uuidString: "00000000-0000-0000-0000-000000000503")!,
+            records: [
+                CognitionOrganRecord(
+                    organ: .coordinator,
+                    label: "turn_steward",
+                    status: .used,
+                    reason: "ordinary_chat"
+                ),
+                CognitionOrganRecord(
+                    organ: .reviewer,
+                    label: "provocation_judge",
+                    status: .skipped,
+                    reason: "provider_local"
+                ),
+                CognitionOrganRecord(
+                    organ: .reviewer,
+                    label: "reviewer",
+                    status: .failed,
+                    reason: "bad_json"
+                )
+            ],
+            createdAt: now
+        )
+        let row = TurnCognitionInspectorFeedFormatting.rows(
+            from: [
+                snapshot(
+                    suffix: "501",
+                    promptLayers: ["anchor"],
+                    slowCognitionAttached: false,
+                    cognitionFrame: frame,
+                    recordedAt: now
+                )
+            ],
+            now: now
+        )[0]
+
+        XCTAssertEqual(row.organSummary, "3 organs: 1 used, 1 skipped, 1 failed")
+        XCTAssertEqual(row.reviewStatus, "Review failed")
+        XCTAssertTrue(row.organDetail.contains("turn steward used"))
+        XCTAssertTrue(row.organDetail.contains("provocation judge skipped: provider local"))
+        XCTAssertTrue(row.organDetail.contains("reviewer failed: bad json"))
+    }
+
+    func testRowsHandleMissingCognitionFrame() {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let row = TurnCognitionInspectorFeedFormatting.rows(
+            from: [
+                snapshot(
+                    suffix: "502",
+                    promptLayers: ["anchor"],
+                    slowCognitionAttached: false,
+                    cognitionFrame: nil,
+                    recordedAt: now
+                )
+            ],
+            now: now
+        )[0]
+
+        XCTAssertEqual(row.organSummary, "No cognition frame")
+        XCTAssertEqual(row.organDetail, "No organ trace")
     }
 
     private func makeTelemetry() -> GovernanceTelemetryStore {
@@ -147,6 +232,7 @@ final class TurnCognitionInspectorFeedTests: XCTestCase {
         reviewConfidence: Double? = nil,
         conversationRecoveryReason: String? = nil,
         conversationRecoveryRebasedMessageCount: Int = 0,
+        cognitionFrame: CognitionFrame? = nil,
         recordedAt: Date
     ) -> TurnCognitionSnapshot {
         TurnCognitionSnapshot(
@@ -165,6 +251,7 @@ final class TurnCognitionInspectorFeedTests: XCTestCase {
             conversationRecoveryOriginalNodeId: nil,
             conversationRecoveryRecoveredNodeId: nil,
             conversationRecoveryRebasedMessageCount: conversationRecoveryRebasedMessageCount,
+            cognitionFrame: cognitionFrame,
             recordedAt: recordedAt
         )
     }

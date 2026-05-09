@@ -37,6 +37,9 @@ final class TurnSteward {
         let normalized = request.inputText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let deterministic = deterministicResponseStance(for: normalized).result
         if deterministic.stance == .supportFirst {
+            if legacy.route == .sourceAnalysis {
+                return legacy.withRouterTrace(mode: mode, routing: deterministic)
+            }
             if mode == .active {
                 return activeDecision(
                     from: legacy,
@@ -77,6 +80,9 @@ final class TurnSteward {
         let normalized = text.lowercased()
         let deterministic = deterministicResponseStance(for: normalized).result
         if deterministic.stance == .supportFirst {
+            if legacy.route == .sourceAnalysis {
+                return legacy.withRouterTrace(mode: mode, routing: deterministic)
+            }
             if mode == .active {
                 return activeDecision(
                     from: legacy,
@@ -121,6 +127,17 @@ final class TurnSteward {
         let text = request.inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalized = text.lowercased()
 
+        if !request.sourceMaterials.isEmpty {
+            return TurnStewardDecision(
+                route: .sourceAnalysis,
+                memoryPolicy: .full,
+                challengeStance: .surfaceTension,
+                responseShape: .answerNow,
+                source: .deterministic,
+                reason: "source material attached"
+            )
+        }
+
         let route = route(for: normalized)
         let memoryOptOut = containsAny(normalized, in: Self.memoryOptOutCues)
         let distress = containsAny(normalized, in: Self.distressCues)
@@ -162,7 +179,7 @@ final class TurnSteward {
                 route: .plan,
                 memoryPolicy: memoryOptOut ? .lean : .full,
                 challengeStance: distress ? .supportFirst : .surfaceTension,
-                responseShape: .producePlan,
+                responseShape: distress ? .answerNow : .producePlan,
                 source: .deterministic,
                 reason: "explicit plan cue"
             )
@@ -171,9 +188,18 @@ final class TurnSteward {
                 route: .direction,
                 memoryPolicy: memoryOptOut ? .lean : .full,
                 challengeStance: distress ? .supportFirst : .surfaceTension,
-                responseShape: .narrowNextStep,
+                responseShape: distress ? .answerNow : .narrowNextStep,
                 source: .deterministic,
                 reason: "explicit direction cue"
+            )
+        case .sourceAnalysis:
+            return TurnStewardDecision(
+                route: .sourceAnalysis,
+                memoryPolicy: .full,
+                challengeStance: .surfaceTension,
+                responseShape: .answerNow,
+                source: .deterministic,
+                reason: "source material attached"
             )
         case .ordinaryChat:
             return TurnStewardDecision(
@@ -384,9 +410,12 @@ final class TurnSteward {
 
         switch routing.stance {
         case .supportFirst:
+            let hasDeterministicDistress = containsAny(normalizedText, in: Self.distressCues)
+            let preserveDistressRoute = legacy.challengeStance == .supportFirst
+                || (hasDeterministicDistress && (legacy.route == .plan || legacy.route == .direction))
             return TurnStewardDecision(
-                route: .ordinaryChat,
-                memoryPolicy: .conversationOnly,
+                route: preserveDistressRoute ? legacy.route : .ordinaryChat,
+                memoryPolicy: preserveDistressRoute ? legacy.memoryPolicy : .conversationOnly,
                 challengeStance: .supportFirst,
                 responseShape: .answerNow,
                 source: legacy.trace.source,
@@ -479,6 +508,9 @@ final class TurnSteward {
         } else {
             switch legacy.route {
             case .plan, .direction:
+                stance = .softAnalysis
+                softerFallback = .reflective
+            case .sourceAnalysis:
                 stance = .softAnalysis
                 softerFallback = .reflective
             case .brainstorm, .ordinaryChat:

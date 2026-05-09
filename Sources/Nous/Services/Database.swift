@@ -92,6 +92,14 @@ final class Statement {
         self.stmt = stmt
     }
 
+    /// Extract human-readable SQLite error message from the prepared
+    /// statement's database connection. Useful when stepFailed surfaces
+    /// only a numeric rc.
+    private var lastErrorMessage: String {
+        guard let conn = sqlite3_db_handle(stmt) else { return "no connection" }
+        return String(cString: sqlite3_errmsg(conn))
+    }
+
     deinit {
         sqlite3_finalize(stmt)
     }
@@ -189,7 +197,7 @@ final class Statement {
         case SQLITE_ROW:  return true
         case SQLITE_DONE: return false
         default:
-            throw DatabaseError.stepFailed("sqlite3_step rc=\(rc)")
+            throw DatabaseError.stepFailed("sqlite3_step rc=\(rc): \(lastErrorMessage)")
         }
     }
 

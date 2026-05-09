@@ -9,11 +9,18 @@ enum AttachmentExtractor {
     private static let maxTextFileBytes = 200_000
     fileprivate static let maxPreviewCharacters = 4_000
 
+    private struct ExtractedFileText {
+        let preview: String?
+        let sourceText: String?
+    }
+
     static func fileContexts(from urls: [URL]) -> [AttachedFileContext] {
         urls.map { url in
-            AttachedFileContext(
+            let extracted = extractText(from: url)
+            return AttachedFileContext(
                 name: url.lastPathComponent,
-                extractedText: extractText(from: url)
+                extractedText: extracted.preview,
+                sourceText: extracted.sourceText
             )
         }
     }
@@ -69,7 +76,7 @@ enum AttachmentExtractor {
         return contexts
     }
 
-    private static func extractText(from url: URL) -> String? {
+    private static func extractText(from url: URL) -> ExtractedFileText {
         let didAccess = url.startAccessingSecurityScopedResource()
         defer {
             if didAccess {
@@ -80,28 +87,38 @@ enum AttachmentExtractor {
         let pathExtension = url.pathExtension.lowercased()
 
         if pathExtension == "pdf" {
-            return PDFDocument(url: url)?.string?.attachmentPreview
+            return documentText(PDFDocument(url: url)?.string)
         }
 
         if let type = UTType(filenameExtension: pathExtension),
            type.conforms(to: .image),
            let data = try? Data(contentsOf: url) {
-            return extractText(fromImageData: data)
+            return ExtractedFileText(
+                preview: extractText(fromImageData: data),
+                sourceText: nil
+            )
         }
 
         guard let data = try? Data(contentsOf: url),
               data.count <= maxTextFileBytes else {
-            return nil
+            return ExtractedFileText(preview: nil, sourceText: nil)
         }
 
         for encoding in [String.Encoding.utf8, .unicode, .utf16, .ascii] {
-            if let text = String(data: data, encoding: encoding),
-               let preview = text.attachmentPreview {
-                return preview
+            if let text = String(data: data, encoding: encoding) {
+                return documentText(text)
             }
         }
 
-        return nil
+        return ExtractedFileText(preview: nil, sourceText: nil)
+    }
+
+    private static func documentText(_ text: String?) -> ExtractedFileText {
+        let sourceText = text?.sourceDocumentText
+        return ExtractedFileText(
+            preview: sourceText?.attachmentPreview,
+            sourceText: sourceText
+        )
     }
 
     private static func isImageFileURL(_ url: URL) -> Bool {
@@ -209,6 +226,19 @@ enum AttachmentLimitPolicy {
         return acceptedAttachments
     }
 
+    static func isDuplicateNonImageAttachment(
+        _ attachment: AttachedFileContext,
+        of existingAttachment: AttachedFileContext
+    ) -> Bool {
+        guard !isImageAttachment(attachment),
+              !isImageAttachment(existingAttachment) else {
+            return false
+        }
+        return attachment.name == existingAttachment.name &&
+            attachment.extractedText == existingAttachment.extractedText &&
+            attachment.sourceText == existingAttachment.sourceText
+    }
+
     static func remainingImageSlots(in attachments: [AttachedFileContext]) -> Int {
         max(0, maxImageAttachments - attachments.filter(isImageAttachment).count)
     }
@@ -224,6 +254,12 @@ enum AttachmentLimitPolicy {
 }
 
 private extension String {
+    var sourceDocumentText: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return trimmed
+    }
+
     var attachmentPreview: String? {
         let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }

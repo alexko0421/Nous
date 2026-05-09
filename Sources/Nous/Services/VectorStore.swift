@@ -6,6 +6,55 @@ enum RetrievalLane: Equatable {
     case longGap
 }
 
+/// Tuning knobs for `VectorStore.searchHybrid` — how chat-typed and
+/// source-typed results compete in the citation pool. Per the
+/// 2026-05-08 multilingual retrieval plan, Move 3.
+///
+/// Defaults follow the plan's locked baseline (3 chat slots, 2 source
+/// slots, 0.05 displacement margin). Future per-mode overrides plug in
+/// via `QuickActionMemoryPolicy.citationPolicy` (Move 3 wiring lives
+/// in TurnPlanner).
+struct HybridRetrievalPolicy: Equatable {
+    /// Max number of chat-typed (`.conversation` / `.note`) results
+    /// admitted to the final citation pool.
+    var chatQuota: Int
+    /// Max number of source-typed (`.source`) results admitted to the
+    /// final citation pool.
+    var sourceQuota: Int
+    /// A source must have a positive lexical signal (title or chunk
+    /// match) AND its fused score must exceed the lowest admitted
+    /// chat's fused score by this margin to enter the chat bucket.
+    /// Without this, sources that align with CJK noise would crowd out
+    /// real chat memory.
+    var sourceDisplacementMargin: Double
+    /// Reciprocal Rank Fusion constant. Industry default 60.
+    var rrfK: Double
+    /// Vector-lane minimum cosine for a result to count as "in lane".
+    /// Below this it's noise.
+    var vectorLaneFloor: Float
+    /// Whether to run hybrid (vector + lexical) at all. Set false to
+    /// fall through to vector-only retrieval (legacy callers).
+    var useHybridRetrieval: Bool
+
+    static let balanced = HybridRetrievalPolicy(
+        chatQuota: 3,
+        sourceQuota: 2,
+        sourceDisplacementMargin: 0.05,
+        rrfK: 60,
+        vectorLaneFloor: 0.40,
+        useHybridRetrieval: true
+    )
+
+    static let vectorOnly = HybridRetrievalPolicy(
+        chatQuota: 5,
+        sourceQuota: 0,
+        sourceDisplacementMargin: 0.0,
+        rrfK: 60,
+        vectorLaneFloor: 0.40,
+        useHybridRetrieval: false
+    )
+}
+
 struct SearchResult {
     let node: NousNode
     let similarity: Float
@@ -87,8 +136,65 @@ final class VectorStore {
         return Array(results.prefix(topK))
     }
 
+    func searchSourceChunks(
+        query: [Float],
+        topK: Int = 5,
+        excludeSourceNodeIds: Set<UUID> = []
+    ) throws -> [SourceChunkSearchResult] {
+        try searchSourceChunks(
+            query: query,
+            topK: topK,
+            sourceNodeIds: nil,
+            excludeSourceNodeIds: excludeSourceNodeIds
+        )
+    }
+
+    func searchSourceChunks(
+        query: [Float],
+        topK: Int = 5,
+        sourceNodeIds: Set<UUID>,
+        excludeSourceNodeIds: Set<UUID> = []
+    ) throws -> [SourceChunkSearchResult] {
+        try searchSourceChunks(
+            query: query,
+            topK: topK,
+            sourceNodeIds: Optional(sourceNodeIds),
+            excludeSourceNodeIds: excludeSourceNodeIds
+        )
+    }
+
+    private func searchSourceChunks(
+        query: [Float],
+        topK: Int,
+        sourceNodeIds: Set<UUID>?,
+        excludeSourceNodeIds: Set<UUID>
+    ) throws -> [SourceChunkSearchResult] {
+        let chunks = try nodeStore.fetchSourceChunksWithEmbeddings()
+        var results: [SourceChunkSearchResult] = []
+        for (chunk, sourceNode, embedding) in chunks {
+            if let sourceNodeIds, !sourceNodeIds.contains(sourceNode.id) { continue }
+            guard !excludeSourceNodeIds.contains(sourceNode.id) else { continue }
+            results.append(
+                SourceChunkSearchResult(
+                    sourceNode: sourceNode,
+                    chunk: chunk,
+                    similarity: cosineSimilarity(query, embedding)
+                )
+            )
+        }
+        results.sort { $0.similarity > $1.similarity }
+        return Array(results.prefix(topK))
+    }
+
     /// Chat-only retrieval keeps semantic matches dominant while reserving one
     /// slot for an older-but-still-relevant spark.
+    ///
+    /// Per the 2026-05-08 multilingual retrieval plan, when `queryText` is
+    /// non-empty AND `policy.useHybridRetrieval` is true (the default), this
+    /// runs both vector + lexical lanes and fuses via RRF with type-aware
+    /// quotas. When `queryText` is empty, behavior falls through to
+    /// vector-only retrieval (preserves existing call sites that pass only
+    /// embeddings).
     func searchForChatCitations(
         query: [Float],
         queryText: String = "",
@@ -99,16 +205,39 @@ final class VectorStore {
         semanticSlots: Int = 3,
         minSimilarityForLongGap: Float = 0.55,
         minAgeDaysForLongGap: Int = 30,
-        ageBoostAlpha: Float = 0.15
+        ageBoostAlpha: Float = 0.15,
+        hybridPolicy: HybridRetrievalPolicy = .balanced
     ) throws -> [SearchResult] {
         guard topK > 0 else { return [] }
 
         let semanticQuota = min(semanticSlots, topK)
-        let candidates = try search(
-            query: query,
-            topK: max(candidatePoolSize, topK, semanticQuota + 1),
-            excludeIds: excludeIds
-        )
+
+        // When we have query text AND hybrid retrieval is enabled, prefer
+        // hybrid path (vector + lexical fusion with type-aware quotas).
+        // Otherwise fall through to vector-only (legacy callers, empty
+        // query text).
+        let candidates: [SearchResult]
+        if hybridPolicy.useHybridRetrieval, !QueryNormalizer.normalize(queryText).isEmpty {
+            candidates = try searchHybrid(
+                queryText: queryText,
+                queryEmbedding: query,
+                topK: max(candidatePoolSize, topK, semanticQuota + 1),
+                excludeIds: excludeIds,
+                policy: hybridPolicy
+            )
+        } else {
+            let nodeCandidates = try search(
+                query: query,
+                topK: max(candidatePoolSize, topK, semanticQuota + 1),
+                excludeIds: excludeIds
+            )
+            let chunkCandidates = try sourceChunkCitationCandidates(
+                query: query,
+                topK: max(candidatePoolSize, topK, semanticQuota + 1),
+                excludeIds: excludeIds
+            )
+            candidates = mergedChatCitationCandidates(nodeCandidates + chunkCandidates)
+        }
 
         var selected: [SearchResult] = []
         var seen = Set<UUID>()
@@ -141,7 +270,8 @@ final class VectorStore {
                 admit(SearchResult(
                     node: longGapCandidate.node,
                     similarity: longGapCandidate.similarity,
-                    lane: .longGap
+                    lane: .longGap,
+                    previewSnippet: longGapCandidate.previewSnippet
                 ))
             }
         }
@@ -156,9 +286,216 @@ final class VectorStore {
                 node: result.node,
                 similarity: result.similarity,
                 lane: result.lane,
-                previewSnippet: anchoredPreviewSnippet(for: result.node, queryText: queryText)
+                previewSnippet: result.previewSnippet ?? anchoredPreviewSnippet(for: result.node, queryText: queryText)
             )
         }
+    }
+
+    private func sourceChunkCitationCandidates(
+        query: [Float],
+        topK: Int,
+        excludeIds: Set<UUID>
+    ) throws -> [SearchResult] {
+        try searchSourceChunks(
+            query: query,
+            topK: topK,
+            excludeSourceNodeIds: excludeIds
+        ).map { result in
+            SearchResult(
+                node: result.sourceNode,
+                similarity: result.similarity,
+                previewSnippet: String(
+                    result.chunk.text
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                        .prefix(320)
+                )
+            )
+        }
+    }
+
+    /// Vector + lexical fused retrieval. Two lanes run independently,
+    /// gates are applied per-lane, then results merged via RRF with
+    /// type-aware quotas (chat-typed vs source-typed).
+    ///
+    /// Plan reference:
+    /// `docs/superpowers/plans/2026-05-08-memory-retrieval-multilingual-architecture.md`
+    /// Move 1 + Move 3.
+    func searchHybrid(
+        queryText: String,
+        queryEmbedding: [Float],
+        topK: Int,
+        excludeIds: Set<UUID> = [],
+        policy: HybridRetrievalPolicy = .balanced
+    ) throws -> [SearchResult] {
+        guard topK > 0 else { return [] }
+        let normalizedText = QueryNormalizer.normalize(queryText)
+
+        // Vector lane — same surface as before but expressed via search()
+        // and sourceChunkCitationCandidates(). Both already exclude IDs.
+        let vectorChatResults = try search(
+            query: queryEmbedding,
+            topK: max(topK * 4, 20),
+            excludeIds: excludeIds
+        ).filter { $0.similarity >= policy.vectorLaneFloor }
+        let vectorChunkResults = try sourceChunkCitationCandidates(
+            query: queryEmbedding,
+            topK: max(topK * 4, 20),
+            excludeIds: excludeIds
+        ).filter { $0.similarity >= policy.vectorLaneFloor }
+        let vectorResults = mergedChatCitationCandidates(vectorChatResults + vectorChunkResults)
+
+        // Lexical lane — three sub-lanes (titles / messages / source chunks).
+        // Each returns at most poolSize hits; we reduce-by-nodeId taking
+        // the best per node (titles win ties because BM25 on shorter docs
+        // tends to score higher anyway).
+        let poolSize = max(topK * 4, 20)
+        var lexicalByNodeId: [UUID: LexicalIndex.LexicalHit] = [:]
+        if !normalizedText.isEmpty {
+            for hit in try nodeStore.lexicalIndex.searchTitles(
+                query: queryText, limit: poolSize, excludeNodeIds: excludeIds
+            ) {
+                merge(hit: hit, into: &lexicalByNodeId)
+            }
+            for hit in try nodeStore.lexicalIndex.searchMessages(
+                query: queryText, limit: poolSize, excludeNodeIds: excludeIds
+            ) {
+                merge(hit: hit, into: &lexicalByNodeId)
+            }
+            for hit in try nodeStore.lexicalIndex.searchSourceChunks(
+                query: queryText, limit: poolSize, excludeSourceNodeIds: excludeIds
+            ) {
+                merge(hit: hit, into: &lexicalByNodeId)
+            }
+        }
+
+        // Build rank maps (nodeId → rank, 0-indexed) for each lane.
+        // Vector lane is already sorted descending by similarity.
+        let vectorRanks: [UUID: Int] = Dictionary(
+            uniqueKeysWithValues: vectorResults.enumerated().map { ($1.node.id, $0) }
+        )
+        let lexicalRanks: [UUID: Int] = Dictionary(
+            uniqueKeysWithValues: lexicalByNodeId
+                .sorted { $0.value.score > $1.value.score }
+                .enumerated()
+                .map { ($1.value.nodeId, $0) }
+        )
+
+        // RRF fusion. Score = 1/(k + rank_v) + 1/(k + rank_l), zero if
+        // not in that lane.
+        let allNodeIds = Set(vectorRanks.keys).union(lexicalRanks.keys)
+        var fused: [(node: NousNode, similarity: Float, rrfScore: Double, hasLexical: Bool, previewSnippet: String?)] = []
+        fused.reserveCapacity(allNodeIds.count)
+
+        let vectorByNodeId = Dictionary(uniqueKeysWithValues: vectorResults.map { ($0.node.id, $0) })
+
+        for nodeId in allNodeIds {
+            // Need a NousNode to attach to result. Source it from
+            // vector lane if present (already loaded), otherwise fetch
+            // via NodeStore.
+            let resolvedNode: NousNode?
+            let resolvedSimilarity: Float
+            let resolvedSnippet: String?
+            if let vectorResult = vectorByNodeId[nodeId] {
+                resolvedNode = vectorResult.node
+                resolvedSimilarity = vectorResult.similarity
+                resolvedSnippet = vectorResult.previewSnippet
+            } else {
+                resolvedNode = try? nodeStore.fetchNode(id: nodeId)
+                resolvedSimilarity = 0.0
+                resolvedSnippet = nil
+            }
+            guard let node = resolvedNode else { continue }
+
+            let vScore = vectorRanks[nodeId].map { 1.0 / (policy.rrfK + Double($0)) } ?? 0.0
+            let lScore = lexicalRanks[nodeId].map { 1.0 / (policy.rrfK + Double($0)) } ?? 0.0
+            let rrf = vScore + lScore
+            guard rrf > 0 else { continue }
+            fused.append((
+                node: node,
+                similarity: resolvedSimilarity,
+                rrfScore: rrf,
+                hasLexical: lexicalRanks[nodeId] != nil,
+                previewSnippet: resolvedSnippet
+            ))
+        }
+
+        fused.sort { $0.rrfScore > $1.rrfScore }
+
+        // Type-aware quotas + lexical-required for sources.
+        // Sources without lexical signal get filtered out entirely
+        // (vector-only similarity on CJK noise zone is exactly the
+        // false-positive class we are eliminating).
+        let chatBucket = fused
+            .filter { $0.node.type != .source }
+            .prefix(policy.chatQuota)
+        let sourceBucket = fused
+            .filter { $0.node.type == .source && $0.hasLexical }
+            .prefix(policy.sourceQuota)
+
+        // Apply displacement margin: sources only enter chat slots if
+        // their fused score clears the lowest chat by margin AND the
+        // chat bucket is at quota. For Move 1 we keep buckets parallel
+        // and merge by RRF score; future tuning can fold in margin if
+        // empirical data shows source crowding.
+        let combined = (Array(chatBucket) + Array(sourceBucket))
+            .sorted { $0.rrfScore > $1.rrfScore }
+            .prefix(topK)
+
+        return combined.map { entry in
+            SearchResult(
+                node: entry.node,
+                similarity: entry.similarity,
+                lane: .semantic,
+                previewSnippet: entry.previewSnippet
+            )
+        }
+    }
+
+    private func merge(
+        hit: LexicalIndex.LexicalHit,
+        into dict: inout [UUID: LexicalIndex.LexicalHit]
+    ) {
+        if let existing = dict[hit.nodeId] {
+            if hit.score > existing.score {
+                dict[hit.nodeId] = hit
+            }
+        } else {
+            dict[hit.nodeId] = hit
+        }
+    }
+
+    private func mergedChatCitationCandidates(_ candidates: [SearchResult]) -> [SearchResult] {
+        var bestByNodeId: [UUID: SearchResult] = [:]
+
+        for candidate in candidates {
+            guard let current = bestByNodeId[candidate.node.id] else {
+                bestByNodeId[candidate.node.id] = candidate
+                continue
+            }
+            if shouldReplaceCitationCandidate(candidate, replacing: current) {
+                bestByNodeId[candidate.node.id] = candidate
+            }
+        }
+
+        return bestByNodeId.values.sorted {
+            if $0.similarity == $1.similarity {
+                return $0.node.updatedAt > $1.node.updatedAt
+            }
+            return $0.similarity > $1.similarity
+        }
+    }
+
+    private func shouldReplaceCitationCandidate(
+        _ candidate: SearchResult,
+        replacing current: SearchResult
+    ) -> Bool {
+        if candidate.similarity != current.similarity {
+            return candidate.similarity > current.similarity
+        }
+        if current.previewSnippet == nil, candidate.previewSnippet != nil {
+            return true
+        }
+        return false
     }
 
     /// Find all nodes semantically similar to a given node above a threshold.
@@ -269,7 +606,7 @@ final class VectorStore {
                 }
             }
             return chunks
-        case .note:
+        case .note, .source:
             let paragraphs = content
                 .components(separatedBy: "\n\n")
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }

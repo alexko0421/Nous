@@ -18,6 +18,42 @@ final class PromptGovernanceTraceTests: XCTestCase {
         XCTAssertNil(trace.turnSteward)
         XCTAssertNil(trace.agentCoordination)
         XCTAssertNil(trace.citationTrace)
+        XCTAssertEqual(trace.visibleResponseLanguageTarget, .unspecified)
+        XCTAssertEqual(trace.visibleResponseLanguageSource, .none)
+    }
+
+    func testDecodesLegacyChineseLanguageTargetAsMandarin() throws {
+        let json = """
+        {
+          "promptLayers": ["anchor", "chat_mode", "visible_response_language_target"],
+          "evidenceAttached": false,
+          "safetyPolicyInvoked": false,
+          "highRiskQueryDetected": false,
+          "visibleResponseLanguageTarget": "chinese"
+        }
+        """.data(using: .utf8)!
+
+        let trace = try JSONDecoder().decode(PromptGovernanceTrace.self, from: json)
+
+        XCTAssertEqual(trace.visibleResponseLanguageTarget, .mandarin)
+        XCTAssertEqual(trace.visibleResponseLanguageSource, .legacyTrace)
+    }
+
+    func testEncodesAndDecodesVisibleResponseLanguageSource() throws {
+        let trace = PromptGovernanceTrace(
+            promptLayers: ["anchor", "chat_mode", "visible_response_language_target"],
+            evidenceAttached: false,
+            safetyPolicyInvoked: false,
+            highRiskQueryDetected: false,
+            visibleResponseLanguageTarget: .cantonese,
+            visibleResponseLanguageSource: .currentTurnCantonese
+        )
+
+        let data = try JSONEncoder().encode(trace)
+        let decoded = try JSONDecoder().decode(PromptGovernanceTrace.self, from: data)
+
+        XCTAssertEqual(decoded.visibleResponseLanguageTarget, .cantonese)
+        XCTAssertEqual(decoded.visibleResponseLanguageSource, .currentTurnCantonese)
     }
 
     func testEncodesAndDecodesTurnStewardTrace() throws {
@@ -35,7 +71,8 @@ final class PromptGovernanceTraceTests: XCTestCase {
             routerSource: .deterministic,
             confidence: nil,
             softerFallback: nil,
-            fallbackUsed: false
+            fallbackUsed: false,
+            supervisorLanes: [.memory, .project]
         )
         let trace = PromptGovernanceTrace(
             promptLayers: ["anchor", "turn_steward"],
@@ -49,6 +86,7 @@ final class PromptGovernanceTraceTests: XCTestCase {
         let decoded = try JSONDecoder().decode(PromptGovernanceTrace.self, from: data)
 
         XCTAssertEqual(decoded.turnSteward, stewardTrace)
+        XCTAssertEqual(decoded.turnSteward?.supervisorLanes, [.memory, .project])
     }
 
     func testDecodesLegacyTurnStewardTraceWithoutResponseStanceFields() throws {
@@ -74,6 +112,7 @@ final class PromptGovernanceTraceTests: XCTestCase {
         XCTAssertNil(decoded.confidence)
         XCTAssertNil(decoded.softerFallback)
         XCTAssertNil(decoded.fallbackUsed)
+        XCTAssertEqual(decoded.supervisorLanes, [])
     }
 
     func testEncodesAndDecodesCitationTrace() throws {
@@ -138,7 +177,8 @@ final class PromptGovernanceTraceTests: XCTestCase {
             responseShape: .narrowNextStep,
             projectSignalKind: nil,
             source: .deterministic,
-            reason: "explicit direction cue"
+            reason: "explicit direction cue",
+            supervisorLanes: [.memory, .project, .analytics, .reflection]
         )
 
         let trace = PromptContextAssembler.governanceTrace(
@@ -152,7 +192,101 @@ final class PromptGovernanceTraceTests: XCTestCase {
         )
 
         XCTAssertTrue(trace.promptLayers.contains("turn_steward"))
+        XCTAssertTrue(trace.promptLayers.contains("supervisor_routing"))
+        XCTAssertFalse(trace.hasMemorySignal)
         XCTAssertEqual(trace.turnSteward, stewardTrace)
+    }
+
+    func testGovernanceTraceAddsAnalyticsLaneBriefLayerOnlyWhenAnalyticsLaneActive() {
+        let analyticsTrace = TurnStewardTrace(
+            route: .sourceAnalysis,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            projectSignalKind: nil,
+            source: .deterministic,
+            reason: "source material attached",
+            supervisorLanes: [.source, .memory, .project, .analytics, .reflection]
+        )
+        let memoryOnlyTrace = TurnStewardTrace(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            projectSignalKind: nil,
+            source: .deterministic,
+            reason: "ordinary chat default",
+            supervisorLanes: [.memory]
+        )
+
+        let analytics = PromptContextAssembler.governanceTrace(
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil,
+            turnSteward: analyticsTrace
+        )
+        let memoryOnly = PromptContextAssembler.governanceTrace(
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil,
+            turnSteward: memoryOnlyTrace
+        )
+
+        XCTAssertTrue(analytics.promptLayers.contains("analytics_lane_brief"))
+        XCTAssertFalse(analytics.hasMemorySignal)
+        XCTAssertFalse(memoryOnly.promptLayers.contains("analytics_lane_brief"))
+    }
+
+    func testGovernanceTraceAddsReflectionGroundingGateLayerOnlyWhenReflectionLaneActive() {
+        let reflectionTrace = TurnStewardTrace(
+            route: .sourceAnalysis,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            projectSignalKind: nil,
+            source: .deterministic,
+            reason: "source material attached",
+            supervisorLanes: [.source, .memory, .project, .analytics, .reflection]
+        )
+        let memoryOnlyTrace = TurnStewardTrace(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            projectSignalKind: nil,
+            source: .deterministic,
+            reason: "ordinary chat default",
+            supervisorLanes: [.memory]
+        )
+
+        let reflection = PromptContextAssembler.governanceTrace(
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil,
+            turnSteward: reflectionTrace
+        )
+        let memoryOnly = PromptContextAssembler.governanceTrace(
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil,
+            turnSteward: memoryOnlyTrace
+        )
+
+        XCTAssertTrue(reflection.promptLayers.contains("reflection_grounding_gate"))
+        XCTAssertFalse(reflection.hasMemorySignal)
+        XCTAssertFalse(memoryOnly.promptLayers.contains("reflection_grounding_gate"))
     }
 
     func testGovernanceTraceAddsOperatingContextLayerOnlyWhenNonEmpty() {
@@ -924,6 +1058,64 @@ final class GovernanceTelemetryStoreTests: XCTestCase {
         )
     }
 
+    func testBehaviorEvalClassifierDoesNotTreatChineseAffirmationAsCorrection() {
+        XCTAssertEqual(
+            BehaviorEvalClassifier.classifyUserFollowUp("冇錯，继续做 V5。"),
+            .continued
+        )
+        XCTAssertEqual(
+            BehaviorEvalClassifier.classifyUserFollowUp("没错，下一步。"),
+            .continued
+        )
+        XCTAssertEqual(
+            BehaviorEvalClassifier.classifyUserFollowUp("不错，继续。"),
+            .continued
+        )
+        XCTAssertEqual(
+            BehaviorEvalClassifier.classifyUserFollowUp("不是错，继续。"),
+            .continued
+        )
+        XCTAssertEqual(
+            BehaviorEvalClassifier.classifyUserFollowUp("唔係錯，继续。"),
+            .continued
+        )
+        XCTAssertEqual(
+            BehaviorEvalClassifier.classifyUserFollowUp("冇錯，但呢個地方错了，要改。"),
+            .correction
+        )
+    }
+
+    func testBehaviorEvalClassifierDoesNotTreatEnglishAffirmationAsCorrection() {
+        XCTAssertEqual(
+            BehaviorEvalClassifier.classifyUserFollowUp("Actually yes, keep going."),
+            .continued
+        )
+        XCTAssertEqual(
+            BehaviorEvalClassifier.classifyUserFollowUp("I mean yes, that works. Continue."),
+            .continued
+        )
+        XCTAssertEqual(
+            BehaviorEvalClassifier.classifyUserFollowUp("Actually, this is correct. Next step."),
+            .continued
+        )
+        XCTAssertEqual(
+            BehaviorEvalClassifier.classifyUserFollowUp("Not wrong, just continue from there."),
+            .continued
+        )
+        XCTAssertEqual(
+            BehaviorEvalClassifier.classifyUserFollowUp("No, I meant compare the risks, not the price."),
+            .correction
+        )
+        XCTAssertEqual(
+            BehaviorEvalClassifier.classifyUserFollowUp("I mean compare the risks, not the price."),
+            .correction
+        )
+        XCTAssertEqual(
+            BehaviorEvalClassifier.classifyUserFollowUp("Actually no, that's wrong."),
+            .correction
+        )
+    }
+
     func testBehaviorEvalTelemetryStoresBoundedCategoricalSignalsWithoutPromptText() throws {
         let telemetry = makeTelemetry()
         let event = BehaviorEvalEvent(
@@ -965,6 +1157,204 @@ final class GovernanceTelemetryStoreTests: XCTestCase {
         XCTAssertEqual(events.first?.recordedAt, Date(timeIntervalSince1970: 104))
         XCTAssertEqual(events.last?.recordedAt, Date(timeIntervalSince1970: 5))
         XCTAssertEqual(telemetry.behaviorEvalSummary.totalOutcomeCount, 100)
+    }
+
+    func testContextManifestTelemetryStoresBoundedResourceSignalsWithoutPromptText() throws {
+        let telemetry = makeTelemetry()
+        let turnId = UUID(uuidString: "00000000-0000-0000-0000-000000000B01")!
+        let conversationId = UUID(uuidString: "00000000-0000-0000-0000-000000000B02")!
+        let assistantMessageId = UUID(uuidString: "00000000-0000-0000-0000-000000000B03")!
+        let citationId = UUID(uuidString: "00000000-0000-0000-0000-000000000B04")!
+        let skillId = UUID(uuidString: "00000000-0000-0000-0000-000000000B05")!
+        let record = ContextManifestRecord(
+            turnId: turnId,
+            conversationId: conversationId,
+            assistantMessageId: assistantMessageId,
+            resources: [
+                ContextManifestResource(
+                    source: .memory,
+                    label: "global_memory",
+                    referenceId: "global_memory",
+                    state: .loaded,
+                    used: false
+                ),
+                ContextManifestResource(
+                    source: .citation,
+                    label: "node",
+                    referenceId: citationId.uuidString,
+                    state: .loaded,
+                    used: true
+                ),
+                ContextManifestResource(
+                    source: .skill,
+                    label: "quick_action_skill",
+                    referenceId: skillId.uuidString,
+                    state: .indexed,
+                    used: false
+                )
+            ],
+            recordedAt: Date(timeIntervalSince1970: 20)
+        )
+
+        telemetry.recordContextManifest(record)
+
+        XCTAssertEqual(telemetry.recentContextManifests(limit: 10), [record])
+        XCTAssertEqual(telemetry.contextManifestSummary.totalManifestCount, 1)
+        XCTAssertEqual(telemetry.contextManifestSummary.loadedMemoryCount, 1)
+        XCTAssertEqual(telemetry.contextManifestSummary.loadedCitationCount, 1)
+        XCTAssertEqual(telemetry.contextManifestSummary.indexedSkillCount, 1)
+        XCTAssertEqual(telemetry.contextManifestSummary.usedCitationCount, 1)
+
+        let encoded = String(data: try JSONEncoder().encode(telemetry.recentContextManifests(limit: 10)), encoding: .utf8) ?? ""
+        XCTAssertFalse(encoded.contains("Alex wants raw SQLite ownership."))
+        XCTAssertFalse(encoded.contains("Architecture Decision"))
+        XCTAssertFalse(encoded.contains("Loaded direction content"))
+    }
+
+    func testContextManifestTelemetryIgnoresEmptyRecordsForQuietState() {
+        let telemetry = makeTelemetry()
+        telemetry.recordContextManifest(ContextManifestRecord(
+            turnId: UUID(),
+            conversationId: UUID(),
+            assistantMessageId: UUID(),
+            resources: []
+        ))
+
+        XCTAssertTrue(telemetry.recentContextManifests(limit: 10).isEmpty)
+        XCTAssertEqual(telemetry.contextManifestSummary.totalManifestCount, 0)
+        XCTAssertEqual(telemetry.contextManifestSummary.totalResourceCount, 0)
+        XCTAssertEqual(telemetry.contextManifestSummary.summaryText, "No context manifest signals recorded.")
+    }
+
+    func testContextManifestTelemetryKeepsMostRecentHundredSignals() {
+        let telemetry = makeTelemetry()
+
+        for offset in 0..<105 {
+            telemetry.recordContextManifest(ContextManifestRecord(
+                turnId: UUID(),
+                conversationId: UUID(),
+                assistantMessageId: UUID(),
+                resources: [
+                    ContextManifestResource(
+                        source: .memory,
+                        label: "global_memory",
+                        referenceId: "global_memory",
+                        state: .loaded,
+                        used: false
+                    )
+                ],
+                recordedAt: Date(timeIntervalSince1970: TimeInterval(offset))
+            ))
+        }
+
+        let records = telemetry.recentContextManifests(limit: 200)
+
+        XCTAssertEqual(records.count, 100)
+        XCTAssertEqual(records.first?.recordedAt, Date(timeIntervalSince1970: 104))
+        XCTAssertEqual(records.last?.recordedAt, Date(timeIntervalSince1970: 5))
+        XCTAssertEqual(telemetry.contextManifestSummary.totalManifestCount, 100)
+        XCTAssertEqual(telemetry.contextManifestSummary.totalResourceCount, 100)
+    }
+
+    func testDelegationMetricsTrackCoordinationVerifierAndOutcomeWithoutPromptText() throws {
+        let telemetry = makeTelemetry()
+        let assistantMessageId = UUID(uuidString: "00000000-0000-0000-0000-000000000D01")!
+        let userMessageId = UUID(uuidString: "00000000-0000-0000-0000-000000000D02")!
+        let snapshot = TurnCognitionSnapshot(
+            turnId: UUID(uuidString: "00000000-0000-0000-0000-000000000D03")!,
+            conversationId: UUID(uuidString: "00000000-0000-0000-0000-000000000D04")!,
+            assistantMessageId: assistantMessageId,
+            promptLayers: ["anchor", "agent_coordination"],
+            slowCognitionAttached: false,
+            reviewArtifactId: UUID(uuidString: "00000000-0000-0000-0000-000000000D05")!,
+            reviewRiskFlags: ["unsupported_memory_reference"],
+            reviewConfidence: 0.72,
+            agentCoordination: AgentCoordinationTrace(
+                executionMode: .toolLoop,
+                quickActionMode: .direction,
+                provider: .openrouter,
+                reason: .explicitQuickActionToolLoop,
+                indexedSkillCount: 2
+            ),
+            recordedAt: Date(timeIntervalSince1970: 40)
+        )
+
+        telemetry.recordTurnCognitionSnapshot(snapshot)
+
+        XCTAssertEqual(telemetry.recentDelegationMetricEvents(limit: 10).count, 1)
+        XCTAssertEqual(telemetry.delegationMetricSummary.delegatedTurnCount, 1)
+        XCTAssertEqual(telemetry.delegationMetricSummary.verifierTurnCount, 1)
+        XCTAssertEqual(telemetry.delegationMetricSummary.evaluatedDelegatedTurnCount, 0)
+
+        telemetry.recordBehaviorEvalEvent(BehaviorEvalEvent(
+            conversationId: snapshot.conversationId,
+            assistantMessageId: assistantMessageId,
+            userMessageId: userMessageId,
+            outcome: .correction,
+            latencySeconds: 18,
+            recordedAt: Date(timeIntervalSince1970: 58)
+        ))
+
+        let events = telemetry.recentDelegationMetricEvents(limit: 10)
+        XCTAssertEqual(events.first?.outcome, .correction)
+        XCTAssertEqual(events.first?.outcomeLatencySeconds, 18)
+        XCTAssertEqual(telemetry.delegationMetricSummary.evaluatedDelegatedTurnCount, 1)
+        XCTAssertEqual(telemetry.delegationMetricSummary.delegatedReworkCount, 1)
+        XCTAssertEqual(telemetry.delegationMetricSummary.evaluatedVerifierTurnCount, 1)
+        XCTAssertEqual(telemetry.delegationMetricSummary.verifierReworkCount, 1)
+
+        let encoded = String(data: try JSONEncoder().encode(events), encoding: .utf8) ?? ""
+        XCTAssertFalse(encoded.contains("Actually"))
+        XCTAssertFalse(encoded.contains("wrong"))
+        XCTAssertFalse(encoded.contains("Alex wants raw SQLite ownership."))
+    }
+
+    func testDelegationMetricsPreserveReworkWhenLaterFollowUpContinues() {
+        let telemetry = makeTelemetry()
+        let assistantMessageId = UUID(uuidString: "00000000-0000-0000-0000-000000000D11")!
+        let snapshot = TurnCognitionSnapshot(
+            turnId: UUID(uuidString: "00000000-0000-0000-0000-000000000D12")!,
+            conversationId: UUID(uuidString: "00000000-0000-0000-0000-000000000D13")!,
+            assistantMessageId: assistantMessageId,
+            promptLayers: ["anchor", "agent_coordination"],
+            slowCognitionAttached: false,
+            reviewArtifactId: nil,
+            reviewRiskFlags: [],
+            reviewConfidence: nil,
+            agentCoordination: AgentCoordinationTrace(
+                executionMode: .toolLoop,
+                quickActionMode: .direction,
+                provider: .openrouter,
+                reason: .explicitQuickActionToolLoop,
+                indexedSkillCount: 1
+            ),
+            recordedAt: Date(timeIntervalSince1970: 10)
+        )
+
+        telemetry.recordTurnCognitionSnapshot(snapshot)
+        telemetry.recordBehaviorEvalEvent(BehaviorEvalEvent(
+            conversationId: snapshot.conversationId,
+            assistantMessageId: assistantMessageId,
+            userMessageId: UUID(uuidString: "00000000-0000-0000-0000-000000000D14")!,
+            outcome: .retry,
+            latencySeconds: 4,
+            recordedAt: Date(timeIntervalSince1970: 14)
+        ))
+        telemetry.recordBehaviorEvalEvent(BehaviorEvalEvent(
+            conversationId: snapshot.conversationId,
+            assistantMessageId: assistantMessageId,
+            userMessageId: UUID(uuidString: "00000000-0000-0000-0000-000000000D15")!,
+            outcome: .continued,
+            latencySeconds: 9,
+            recordedAt: Date(timeIntervalSince1970: 19)
+        ))
+
+        let events = telemetry.recentDelegationMetricEvents(limit: 10)
+
+        XCTAssertEqual(events.first?.outcome, .retry)
+        XCTAssertEqual(events.first?.outcomeLatencySeconds, 4)
+        XCTAssertEqual(telemetry.delegationMetricSummary.evaluatedDelegatedTurnCount, 1)
+        XCTAssertEqual(telemetry.delegationMetricSummary.delegatedReworkCount, 1)
     }
 
     private func makeTelemetry() -> GovernanceTelemetryStore {

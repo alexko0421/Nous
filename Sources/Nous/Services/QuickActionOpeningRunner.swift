@@ -12,6 +12,7 @@ final class QuickActionOpeningRunner {
     private let onPlanReady: (TurnPlan) -> Void
     private let onReviewArtifact: (CognitionArtifact) -> Void
     private let onTurnCognitionSnapshot: (TurnCognitionSnapshot) -> Void
+    private let onContextManifest: (ContextManifestRecord) -> Void
 
     init(
         conversationSessionStore: ConversationSessionStore,
@@ -22,11 +23,13 @@ final class QuickActionOpeningRunner {
         skillStore: (any SkillStoring)? = nil,
         skillMatcher: any SkillMatching = SkillMatcher(),
         skillTracker: (any SkillTracking)? = nil,
+        skillDogfoodLogger: (any SkillDogfoodLogging)? = nil,
         cognitionReviewer: (any CognitionReviewing)? = nil,
         shouldSurfaceThinkingTraces: @escaping () -> Bool = { true },
         onPlanReady: @escaping (TurnPlan) -> Void = { _ in },
         onReviewArtifact: @escaping (CognitionArtifact) -> Void = { _ in },
-        onTurnCognitionSnapshot: @escaping (TurnCognitionSnapshot) -> Void = { _ in }
+        onTurnCognitionSnapshot: @escaping (TurnCognitionSnapshot) -> Void = { _ in },
+        onContextManifest: @escaping (ContextManifestRecord) -> Void = { _ in }
     ) {
         self.conversationSessionStore = conversationSessionStore
         self.memoryContextBuilder = memoryContextBuilder
@@ -36,13 +39,15 @@ final class QuickActionOpeningRunner {
         self.quickActionAddendumResolver = QuickActionAddendumResolver(
             skillStore: skillStore,
             skillMatcher: skillMatcher,
-            skillTracker: skillTracker
+            skillTracker: skillTracker,
+            dogfoodLogger: skillDogfoodLogger
         )
         self.cognitionReviewer = cognitionReviewer
         self.shouldSurfaceThinkingTraces = shouldSurfaceThinkingTraces
         self.onPlanReady = onPlanReady
         self.onReviewArtifact = onReviewArtifact
         self.onTurnCognitionSnapshot = onTurnCognitionSnapshot
+        self.onContextManifest = onContextManifest
     }
 
     func run(
@@ -103,7 +108,7 @@ final class QuickActionOpeningRunner {
             return nil
         }
 
-        let reviewArtifact = runSilentReviewIfNeeded(
+        let reviewRun = runSilentReviewIfNeeded(
             plan: plan,
             executionResult: executionResult,
             committed: committed
@@ -111,8 +116,18 @@ final class QuickActionOpeningRunner {
         onTurnCognitionSnapshot(TurnCognitionSnapshotFactory.make(
             plan: plan,
             committed: committed,
-            reviewArtifact: reviewArtifact
+            reviewArtifact: reviewRun.artifact,
+            reviewerFailed: reviewRun.failed
         ))
+        let contextManifest = ContextManifestFactory.make(
+            plan: plan,
+            assistantMessageId: committed.assistantMessage.id,
+            assistantContent: executionResult.assistantContent,
+            agentTraceJson: executionResult.agentTraceJson
+        )
+        if !contextManifest.resources.isEmpty {
+            onContextManifest(contextManifest)
+        }
 
         let completion = outcomeFactory.makeCompletion(
             turnId: turnId,
@@ -129,8 +144,8 @@ final class QuickActionOpeningRunner {
         plan: TurnPlan,
         executionResult: TurnExecutionResult,
         committed: CommittedAssistantTurn
-    ) -> CognitionArtifact? {
-        guard let cognitionReviewer else { return nil }
+    ) -> (artifact: CognitionArtifact?, failed: Bool) {
+        guard let cognitionReviewer else { return (nil, false) }
 
         do {
             if let artifact = try cognitionReviewer.review(
@@ -142,14 +157,15 @@ final class QuickActionOpeningRunner {
                     assistantMessage: committed.assistantMessage
                 )
                 onReviewArtifact(auditedArtifact)
-                return auditedArtifact
+                return (auditedArtifact, false)
             }
         } catch {
             #if DEBUG
             NSLog("[NousTurn] opening silent reviewer failed turn=%@ error=%@", plan.turnId.uuidString, error.localizedDescription)
             #endif
+            return (nil, true)
         }
-        return nil
+        return (nil, false)
     }
 
     private func makePlan(mode: QuickActionMode, node: NousNode, turnId: UUID) throws -> TurnPlan {
@@ -201,7 +217,22 @@ final class QuickActionOpeningRunner {
             matchedSkills: quickActionResolution.matchedSkills,
             quickActionAddendum: quickActionAddendum,
             allowSkillIndex: false,
-            allowInteractiveClarification: false
+            allowInteractiveClarification: false,
+            corpusContext: memoryContext.corpusContext
+        )
+        let promptResourceIds = PromptContextAssembler.promptResourceIds(
+            operatingContext: memoryContext.operatingContext,
+            globalMemory: memoryContext.globalMemory,
+            essentialStory: memoryContext.essentialStory,
+            userModel: memoryContext.userModel,
+            memoryEvidence: memoryContext.memoryEvidence,
+            memoryGraphRecall: memoryContext.memoryGraphRecall,
+            projectMemory: memoryContext.projectMemory,
+            conversationMemory: memoryContext.conversationMemory,
+            recentConversations: memoryContext.recentConversations,
+            citations: memoryContext.citations,
+            projectGoal: memoryContext.projectGoal,
+            memoryProvenance: memoryContext.memoryProvenance
         )
         let promptTrace = PromptContextAssembler.governanceTrace(
             chatMode: .companion,
@@ -241,7 +272,13 @@ final class QuickActionOpeningRunner {
             turnSlice: turnSlice,
             transcriptMessages: [LLMMessage(role: "user", content: openingText)],
             focusBlock: nil,
-            provider: provider
+            provider: provider,
+            loadedSkillIds: Set(quickActionResolution.loadedSkills.map(\.skillID)),
+            memoryEvidenceSourceIds: promptResourceIds.memoryEvidenceSourceIds,
+            loadedCitationIds: promptResourceIds.citationIds,
+            memoryUsageHints: promptResourceIds.memoryUsageHints,
+            memoryProvenance: promptResourceIds.memoryProvenance,
+            corpusContext: memoryContext.corpusContext
         )
     }
 

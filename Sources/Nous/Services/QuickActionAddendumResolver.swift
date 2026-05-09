@@ -10,17 +10,20 @@ final class QuickActionAddendumResolver {
     private let skillStore: (any SkillStoring)?
     private let skillMatcher: any SkillMatching
     private let skillTracker: (any SkillTracking)?
+    private let dogfoodLogger: (any SkillDogfoodLogging)?
     private let userId: String
 
     init(
         skillStore: (any SkillStoring)? = nil,
         skillMatcher: any SkillMatching = SkillMatcher(),
         skillTracker: (any SkillTracking)? = nil,
+        dogfoodLogger: (any SkillDogfoodLogging)? = nil,
         userId: String = "alex"
     ) {
         self.skillStore = skillStore
         self.skillMatcher = skillMatcher
         self.skillTracker = skillTracker
+        self.dogfoodLogger = dogfoodLogger
         self.userId = userId
     }
 
@@ -49,6 +52,12 @@ final class QuickActionAddendumResolver {
         let loaded = loadedSkills(conversationID: conversationID)
         let addendum = combinedAddendum(
             agentAddendum: agentAddendum,
+            matchedSkills: matched,
+            loadedSkills: loaded
+        )
+        recordDogfoodEvent(
+            mode: mode,
+            turnIndex: turnIndex,
             matchedSkills: matched,
             loadedSkills: loaded
         )
@@ -100,7 +109,7 @@ final class QuickActionAddendumResolver {
         let matched = skillMatcher.matchingSkills(
             from: active,
             context: SkillMatchContext(mode: mode, turnIndex: turnIndex),
-            cap: 5
+            cap: skillCap(for: mode)
         )
 
         #if DEBUG
@@ -108,6 +117,15 @@ final class QuickActionAddendumResolver {
         #endif
 
         return matched
+    }
+
+    private func skillCap(for mode: QuickActionMode?) -> Int {
+        switch mode {
+        case .direction, .plan:
+            6
+        case .brainstorm, .none:
+            5
+        }
     }
 
     private func loadedSkills(conversationID: UUID?) -> [LoadedSkill] {
@@ -119,5 +137,53 @@ final class QuickActionAddendumResolver {
             print("[QuickActionAddendumResolver] failed to load conversation skills: \(error)")
             return []
         }
+    }
+
+    private func recordDogfoodEvent(
+        mode: QuickActionMode?,
+        turnIndex: Int,
+        matchedSkills: [Skill],
+        loadedSkills: [LoadedSkill]
+    ) {
+        guard let dogfoodLogger,
+              let mode else { return }
+
+        let loadedIDs = Set(loadedSkills.map(\.skillID))
+        let event = SkillDogfoodTurnEvent(
+            id: UUID(),
+            recordedAt: Date(),
+            mode: mode,
+            turnIndex: turnIndex,
+            matchedSkills: matchedSkills.map(skillReference),
+            loadedSkills: loadedSkills.map(loadedSkillReference),
+            inlineSkills: matchedSkills
+                .filter { $0.payload.payloadVersion == 1 }
+                .filter { !loadedIDs.contains($0.id) }
+                .map(skillReference)
+        )
+
+        do {
+            try dogfoodLogger.record(event)
+        } catch {
+            print("[SkillDogfoodLogStore] failed to record turn event: \(error)")
+        }
+    }
+
+    private func skillReference(_ skill: Skill) -> SkillDogfoodSkillReference {
+        SkillDogfoodSkillReference(
+            id: skill.id,
+            name: skill.payload.name,
+            priority: skill.payload.trigger.priority
+        )
+    }
+
+    private func loadedSkillReference(_ loaded: LoadedSkill) -> SkillDogfoodSkillReference {
+        let fetched = try? skillStore?.fetchSkill(id: loaded.skillID)
+        let priority = fetched?.payload.trigger.priority ?? 0
+        return SkillDogfoodSkillReference(
+            id: loaded.skillID,
+            name: loaded.nameSnapshot,
+            priority: priority
+        )
     }
 }

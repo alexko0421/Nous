@@ -14,12 +14,12 @@ struct CitationTrace: Equatable, Codable {
     let maxSimilarity: Double
 }
 
-enum AgentExecutionMode: String, Codable, Equatable {
+enum AgentExecutionMode: String, Codable, Equatable, Sendable {
     case singleShot
     case toolLoop
 }
 
-enum AgentCoordinationReason: String, Codable, Equatable {
+enum AgentCoordinationReason: String, Codable, Equatable, Sendable {
     case ordinaryChatSingleShot
     case modeSingleShotByContract
     case providerCannotUseToolLoop
@@ -28,7 +28,7 @@ enum AgentCoordinationReason: String, Codable, Equatable {
     case inferredQuickActionLazySkill
 }
 
-struct AgentCoordinationTrace: Equatable, Codable {
+struct AgentCoordinationTrace: Equatable, Codable, Sendable {
     let executionMode: AgentExecutionMode
     let quickActionMode: QuickActionMode?
     let provider: LLMProvider
@@ -49,6 +49,102 @@ struct SlowCognitionPromptTrace: Equatable, Codable {
         self.evidenceRefIds = artifact.evidenceRefs.map(\.id)
         self.evidenceRefCount = artifact.evidenceRefs.count
         self.confidence = artifact.confidence
+    }
+}
+
+enum VisibleResponseLanguageTarget: String, Equatable, Codable, Sendable {
+    case unspecified
+    case english
+    case cantonese
+    case mandarin
+    case mixed
+
+    private enum LegacyRawValue {
+        static let chinese = "chinese"
+    }
+
+    var promptLabel: String {
+        switch self {
+        case .unspecified:
+            return "Unspecified"
+        case .english:
+            return "English"
+        case .cantonese:
+            return "Cantonese"
+        case .mandarin:
+            return "Mandarin"
+        case .mixed:
+            return "Mixed"
+        }
+    }
+
+    var promptGuidance: String {
+        switch self {
+        case .unspecified:
+            return "Use the stable visible response language policy."
+        case .english:
+            return "Answer in English unless the user explicitly asks otherwise."
+        case .cantonese:
+            return "Answer naturally in Cantonese unless the user explicitly asks otherwise."
+        case .mandarin:
+            return "Answer naturally in Mandarin unless the user explicitly asks otherwise."
+        case .mixed:
+            return "Mirror the user's natural mix across English, Cantonese, and Mandarin; keep technical terms in English when that is clearer."
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        if rawValue == LegacyRawValue.chinese {
+            self = .mandarin
+            return
+        }
+        guard let target = Self(rawValue: rawValue) else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Unknown visible response language target: \(rawValue)"
+            )
+        }
+        self = target
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
+enum VisibleResponseLanguageSource: String, Equatable, Codable, Sendable {
+    case none
+    case explicitLanguageRequest
+    case currentTurnEnglish
+    case currentTurnCantonese
+    case currentTurnMandarin
+    case currentTurnMixed
+    case legacyTrace
+
+    var promptReason: String? {
+        switch self {
+        case .none:
+            return nil
+        case .explicitLanguageRequest:
+            return "explicit language request"
+        case .currentTurnEnglish:
+            return "current message uses English"
+        case .currentTurnCantonese:
+            return "current message uses Cantonese"
+        case .currentTurnMandarin:
+            return "current message uses Mandarin"
+        case .currentTurnMixed:
+            return "current message uses a natural mix"
+        case .legacyTrace:
+            return "legacy trace"
+        }
+    }
+
+    var summaryLabel: String? {
+        promptReason
     }
 }
 
@@ -77,6 +173,8 @@ struct PromptGovernanceTrace: Equatable, Codable {
     let agentCoordination: AgentCoordinationTrace?
     let citationTrace: CitationTrace?
     let slowCognitionTrace: SlowCognitionPromptTrace?
+    let visibleResponseLanguageTarget: VisibleResponseLanguageTarget
+    let visibleResponseLanguageSource: VisibleResponseLanguageSource
 
     var hasMemorySignal: Bool {
         evidenceAttached || promptLayers.contains { Self.memorySignalLayers.contains($0) }
@@ -90,7 +188,9 @@ struct PromptGovernanceTrace: Equatable, Codable {
         turnSteward: TurnStewardTrace? = nil,
         agentCoordination: AgentCoordinationTrace? = nil,
         citationTrace: CitationTrace? = nil,
-        slowCognitionTrace: SlowCognitionPromptTrace? = nil
+        slowCognitionTrace: SlowCognitionPromptTrace? = nil,
+        visibleResponseLanguageTarget: VisibleResponseLanguageTarget = .unspecified,
+        visibleResponseLanguageSource: VisibleResponseLanguageSource = .none
     ) {
         self.promptLayers = promptLayers
         self.evidenceAttached = evidenceAttached
@@ -100,6 +200,8 @@ struct PromptGovernanceTrace: Equatable, Codable {
         self.agentCoordination = agentCoordination
         self.citationTrace = citationTrace
         self.slowCognitionTrace = slowCognitionTrace
+        self.visibleResponseLanguageTarget = visibleResponseLanguageTarget
+        self.visibleResponseLanguageSource = visibleResponseLanguageSource
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -111,6 +213,8 @@ struct PromptGovernanceTrace: Equatable, Codable {
         case agentCoordination
         case citationTrace
         case slowCognitionTrace
+        case visibleResponseLanguageTarget
+        case visibleResponseLanguageSource
     }
 
     init(from decoder: Decoder) throws {
@@ -123,6 +227,15 @@ struct PromptGovernanceTrace: Equatable, Codable {
         agentCoordination = try container.decodeIfPresent(AgentCoordinationTrace.self, forKey: .agentCoordination)
         citationTrace = try container.decodeIfPresent(CitationTrace.self, forKey: .citationTrace)
         slowCognitionTrace = try container.decodeIfPresent(SlowCognitionPromptTrace.self, forKey: .slowCognitionTrace)
+        let decodedLanguageTarget = try container.decodeIfPresent(
+            VisibleResponseLanguageTarget.self,
+            forKey: .visibleResponseLanguageTarget
+        ) ?? .unspecified
+        visibleResponseLanguageTarget = decodedLanguageTarget
+        visibleResponseLanguageSource = try container.decodeIfPresent(
+            VisibleResponseLanguageSource.self,
+            forKey: .visibleResponseLanguageSource
+        ) ?? (decodedLanguageTarget == .unspecified ? .none : .legacyTrace)
     }
 }
 

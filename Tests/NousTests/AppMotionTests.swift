@@ -96,8 +96,8 @@ final class AppMotionTests: XCTestCase {
 
     @MainActor
     func testMainWindowOpensAsCompactFocusedSurface() {
-        XCTAssertEqual(NousMainWindowController.defaultSize.width, 790)
-        XCTAssertEqual(NousMainWindowController.defaultSize.height, 650)
+        XCTAssertEqual(NousMainWindowController.defaultSize.width, 900)
+        XCTAssertEqual(NousMainWindowController.defaultSize.height, 690)
         XCTAssertEqual(NousMainWindowController.minimumSize.width, 760)
         XCTAssertEqual(NousMainWindowController.minimumSize.height, 600)
     }

@@ -83,10 +83,10 @@ struct TurnOutcomeFactory: Sendable {
                 stableSystem: stableSystem,
                 persistedMessages: committed.messagesAfterAssistantAppend
             ),
-            embeddingRefresh: EmbeddingRefreshRequest(
+            embeddingRefresh: memoryDecision.shouldPersist ? EmbeddingRefreshRequest(
                 nodeId: committed.node.id,
                 fullContent: committed.messagesAfterAssistantAppend.map(\.content).joined(separator: "\n")
-            ),
+            ) : nil,
             emojiRefresh: ConversationEmojiRefreshRequest(
                 node: committed.node,
                 messages: committed.messagesAfterAssistantAppend

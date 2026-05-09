@@ -16,6 +16,8 @@ struct TurnCognitionInspectorRow: Identifiable, Equatable {
     let recoveryStatus: String
     let riskSummary: String
     let promptLayerSummary: String
+    let organSummary: String
+    let organDetail: String
     let hasSlowSource: Bool
     let hasReviewRisk: Bool
     let hadConversationRecovery: Bool
@@ -23,7 +25,7 @@ struct TurnCognitionInspectorRow: Identifiable, Equatable {
 
 enum TurnCognitionInspectorFeedFormatting {
     static func rows(from snapshots: [TurnCognitionSnapshot], now: Date = Date()) -> [TurnCognitionInspectorRow] {
-        snapshots.map { snapshot in
+        snapshots.sorted { $0.recordedAt > $1.recordedAt }.map { snapshot in
             let evidenceCount = max(
                 snapshot.slowCognitionEvidenceRefCount,
                 snapshot.slowCognitionEvidenceRefIds.count
@@ -46,6 +48,8 @@ enum TurnCognitionInspectorFeedFormatting {
                 recoveryStatus: recoveryStatus(snapshot),
                 riskSummary: riskSummary(snapshot.reviewRiskFlags),
                 promptLayerSummary: promptLayerSummary(snapshot.promptLayers.count),
+                organSummary: organSummary(snapshot.cognitionFrame),
+                organDetail: organDetail(snapshot.cognitionFrame),
                 hasSlowSource: hasSlowSource,
                 hasReviewRisk: hasReviewRisk,
                 hadConversationRecovery: hadConversationRecovery
@@ -73,6 +77,11 @@ enum TurnCognitionInspectorFeedFormatting {
     }
 
     private static func reviewStatus(_ snapshot: TurnCognitionSnapshot) -> String {
+        if snapshot.cognitionFrame?.records.contains(where: {
+            $0.organ == .reviewer && $0.label == "reviewer" && $0.status == .failed
+        }) == true {
+            return "Review failed"
+        }
         guard snapshot.reviewArtifactId != nil else { return "Not reviewed" }
         if !snapshot.reviewRiskFlags.isEmpty {
             let count = snapshot.reviewRiskFlags.count
@@ -109,6 +118,25 @@ enum TurnCognitionInspectorFeedFormatting {
         "\(count) prompt \(plural("layer", count))"
     }
 
+    private static func organSummary(_ frame: CognitionFrame?) -> String {
+        guard let frame else { return "No cognition frame" }
+        let used = frame.records.filter { $0.status == .used }.count
+        let skipped = frame.records.filter { $0.status == .skipped }.count
+        let failed = frame.records.filter { $0.status == .failed }.count
+        let count = frame.records.count
+        return "\(count) \(plural("organ", count)): \(used) used, \(skipped) skipped, \(failed) failed"
+    }
+
+    private static func organDetail(_ frame: CognitionFrame?) -> String {
+        guard let frame else { return "No organ trace" }
+        guard !frame.records.isEmpty else { return "No organ records" }
+        return frame.records
+            .map { record in
+                "\(display(record.label)) \(record.status.rawValue): \(safeReason(record.reason))"
+            }
+            .joined(separator: ", ")
+    }
+
     private static func relative(_ date: Date, now: Date) -> String {
         let seconds = max(0, Int(now.timeIntervalSince(date)))
         if seconds == 0 { return "now" }
@@ -123,6 +151,35 @@ enum TurnCognitionInspectorFeedFormatting {
 
     private static func display(_ raw: String) -> String {
         raw.replacingOccurrences(of: "_", with: " ")
+    }
+
+    private static func safeReason(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              trimmed.count <= 160,
+              !trimmed.contains(where: \.isNewline) else {
+            return "redacted reason"
+        }
+        let tokens = trimmed.split(separator: " ")
+        guard !tokens.isEmpty,
+              tokens.allSatisfy(isMachineToken(_:)) else {
+            return "redacted reason"
+        }
+        return display(trimmed)
+    }
+
+    private static func isMachineToken(_ token: Substring) -> Bool {
+        guard token.contains("_") || token.contains(":") else { return false }
+        return token.unicodeScalars.allSatisfy { scalar in
+            switch scalar.value {
+            case 48...57, 97...122:
+                return true
+            case 45, 46, 58, 95:
+                return true
+            default:
+                return false
+            }
+        }
     }
 
     private static func plural(_ singular: String, _ count: Int) -> String {

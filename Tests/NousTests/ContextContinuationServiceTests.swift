@@ -167,6 +167,10 @@ final class ContextContinuationServiceTests: XCTestCase {
 
         XCTAssertNil(completion.continuationPlan.memoryRefresh)
         XCTAssertEqual(completion.continuationPlan.memorySuppressionReason, .sensitiveConsentRequired)
+        XCTAssertNil(
+            completion.housekeepingPlan.embeddingRefresh,
+            "suppressed memory turns must not enqueue a full-transcript embedding candidate"
+        )
     }
 
     func testRunEnqueuesMemoryRefreshWhenRequested() async throws {

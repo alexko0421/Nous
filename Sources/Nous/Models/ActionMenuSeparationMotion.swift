@@ -114,3 +114,45 @@ struct ComposerPrimaryActionMotion {
         isSeparated && canAct ? separatedGlowOpacity : 0
     }
 }
+
+struct ComposerLeadingActionMotion {
+    let separatedScale: CGFloat
+    let separatedYOffset: CGFloat
+    let separatedTintAlpha: CGFloat
+    let separatedFillOpacity: Double
+    let separatedGlowOpacity: Double
+
+    init(
+        separatedScale: CGFloat = 1.035,
+        separatedYOffset: CGFloat = -0.8,
+        separatedTintAlpha: CGFloat = 0.38,
+        separatedFillOpacity: Double = 0.28,
+        separatedGlowOpacity: Double = 0.055
+    ) {
+        self.separatedScale = separatedScale
+        self.separatedYOffset = separatedYOffset
+        self.separatedTintAlpha = separatedTintAlpha
+        self.separatedFillOpacity = separatedFillOpacity
+        self.separatedGlowOpacity = separatedGlowOpacity
+    }
+
+    func scale(isSeparated: Bool) -> CGFloat {
+        isSeparated ? separatedScale : 1
+    }
+
+    func yOffset(isSeparated: Bool) -> CGFloat {
+        isSeparated ? separatedYOffset : 0
+    }
+
+    func tintAlpha(isSeparated: Bool) -> CGFloat {
+        isSeparated ? separatedTintAlpha : 0
+    }
+
+    func fillOpacity(isSeparated: Bool) -> Double {
+        isSeparated ? separatedFillOpacity : 0
+    }
+
+    func glowOpacity(isSeparated: Bool) -> Double {
+        isSeparated ? separatedGlowOpacity : 0
+    }
+}

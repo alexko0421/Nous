@@ -294,6 +294,9 @@ struct AgentWorkView: View {
             snapshot.riskFlagSummary,
             snapshot.agentToolReliability.summaryText,
             snapshot.behaviorEval.summaryText,
+            snapshot.contextManifest.summaryText,
+            snapshot.delegationMetrics.summaryText,
+            snapshot.modelHarnessProfiles.summaryText,
             snapshot.sycophancyFixtureTrend
         ].joined(separator: " · ")
     }
@@ -329,6 +332,9 @@ struct AgentWorkView: View {
     }
 
     private func runtimeColor(_ snapshot: RuntimeHarnessSnapshot) -> Color {
+        if !snapshot.modelHarnessProfiles.isComplete {
+            return AppColor.colaOrange
+        }
         if snapshot.agentToolReliability.unknownErrorCount > 0 {
             return AppColor.colaOrange
         }
@@ -342,6 +348,9 @@ struct AgentWorkView: View {
     }
 
     private func runtimeIcon(_ snapshot: RuntimeHarnessSnapshot) -> String {
+        if !snapshot.modelHarnessProfiles.isComplete {
+            return "exclamationmark.bubble"
+        }
         if snapshot.agentToolReliability.unknownErrorCount > 0 {
             return "exclamationmark.bubble"
         }

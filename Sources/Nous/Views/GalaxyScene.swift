@@ -287,6 +287,8 @@ final class GalaxyScene: SKScene {
             return neutralConversationNode(alpha: alpha)
         case .note:
             return neutralNoteNode(alpha: alpha)
+        case .source:
+            return galaxyAmber(alpha: alpha * 0.92)
         }
     }
 
