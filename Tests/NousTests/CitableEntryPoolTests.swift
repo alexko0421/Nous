@@ -301,6 +301,154 @@ final class CitableEntryPoolTests: XCTestCase {
                        "free-chat reflections must not leak into a project's pool")
     }
 
+    // MARK: - Block 1: atom-level metadata propagation
+
+    func testCitableEntryPreservesMetadataFromMemoryEntry() throws {
+        let nodeA = UUID()
+        let nodeB = UUID()
+        let confirmed = Date(timeIntervalSince1970: 5_000)
+        let updated = Date(timeIntervalSince1970: 6_000)
+        let entry = MemoryEntry(
+            scope: .global, kind: .preference, stability: .stable,
+            content: "Alex prefers async-first teams.",
+            confidence: 0.85,
+            sourceNodeIds: [nodeA, nodeB],
+            updatedAt: updated,
+            lastConfirmedAt: confirmed
+        )
+        try store.insertMemoryEntry(entry)
+
+        let pool = try service.citableEntryPool(
+            projectId: nil,
+            conversationId: UUID(),
+            nodeHits: [nodeA],
+            capacity: 10
+        )
+
+        let match = try XCTUnwrap(pool.first { $0.id == entry.id.uuidString })
+        XCTAssertEqual(match.confidence, 0.85)
+        XCTAssertEqual(match.sourceNodeId, nodeA, "sourceNodeId should pick first of sourceNodeIds")
+        XCTAssertEqual(match.recordedAt, confirmed, "recordedAt should prefer lastConfirmedAt over updatedAt")
+        XCTAssertNil(match.atomType, "non-atom entries leave atomType nil")
+        XCTAssertNil(match.eventTime, "MemoryEntry has no eventTime")
+    }
+
+    func testCitableEntryFallsBackToUpdatedAtWhenNoLastConfirmed() throws {
+        let nodeA = UUID()
+        let updated = Date(timeIntervalSince1970: 7_000)
+        let entry = MemoryEntry(
+            scope: .global, kind: .preference, stability: .stable,
+            content: "x",
+            sourceNodeIds: [nodeA],
+            updatedAt: updated,
+            lastConfirmedAt: nil
+        )
+        try store.insertMemoryEntry(entry)
+
+        let pool = try service.citableEntryPool(
+            projectId: nil,
+            conversationId: UUID(),
+            nodeHits: [nodeA],
+            capacity: 10
+        )
+
+        let match = try XCTUnwrap(pool.first { $0.id == entry.id.uuidString })
+        XCTAssertEqual(match.recordedAt, updated)
+    }
+
+    func testCitableEntryPreservesMetadataFromReflectionClaim() throws {
+        let recorded = Date(timeIntervalSince1970: 8_000)
+        let (_, claim) = try seedReflection(
+            projectId: nil,
+            claim: "Across three conversations this week, you grounded decisions in environment first.",
+            status: .active,
+            createdAt: recorded
+        )
+
+        let pool = try service.citableEntryPool(
+            projectId: nil,
+            conversationId: UUID(),
+            nodeHits: [],
+            capacity: 10
+        )
+
+        let match = try XCTUnwrap(pool.first { $0.id == claim.id.uuidString })
+        XCTAssertEqual(match.confidence, 0.8, "reflection claim confidence should propagate")
+        XCTAssertEqual(match.recordedAt, recorded, "recordedAt should match claim.createdAt")
+        XCTAssertEqual(match.scope, .selfReflection)
+        XCTAssertEqual(match.promptAnnotation, "weekly-reflection")
+    }
+
+    func testCitableEntryDirectConstructionRoundTrip() {
+        let nodeId = UUID()
+        let eventTime = Date(timeIntervalSince1970: 1_000)
+        let recorded = Date(timeIntervalSince1970: 2_000)
+        let entry = CitableEntry(
+            id: "atom-1",
+            text: "Your decisions tend to lag when meaning is unclear.",
+            scope: .global,
+            kind: nil,
+            promptAnnotation: "atom-recall",
+            confidence: 0.78,
+            eventTime: eventTime,
+            sourceNodeId: nodeId,
+            atomType: .insight,
+            recordedAt: recorded
+        )
+
+        XCTAssertEqual(entry.id, "atom-1")
+        XCTAssertEqual(entry.confidence, 0.78)
+        XCTAssertEqual(entry.eventTime, eventTime)
+        XCTAssertEqual(entry.sourceNodeId, nodeId)
+        XCTAssertEqual(entry.atomType, .insight)
+        XCTAssertEqual(entry.recordedAt, recorded)
+
+        // Equatable round-trip: identical fields produce equal entries.
+        let twin = CitableEntry(
+            id: "atom-1",
+            text: "Your decisions tend to lag when meaning is unclear.",
+            scope: .global,
+            kind: nil,
+            promptAnnotation: "atom-recall",
+            confidence: 0.78,
+            eventTime: eventTime,
+            sourceNodeId: nodeId,
+            atomType: .insight,
+            recordedAt: recorded
+        )
+        XCTAssertEqual(entry, twin)
+
+        // Equatable distinguishes on the new fields: differing confidence is not equal.
+        let other = CitableEntry(
+            id: "atom-1",
+            text: "Your decisions tend to lag when meaning is unclear.",
+            scope: .global,
+            kind: nil,
+            promptAnnotation: "atom-recall",
+            confidence: 0.51,
+            eventTime: eventTime,
+            sourceNodeId: nodeId,
+            atomType: .insight,
+            recordedAt: recorded
+        )
+        XCTAssertNotEqual(entry, other)
+    }
+
+    func testLegacyConstructionWithoutNewFieldsLeavesThemNil() {
+        let entry = CitableEntry(
+            id: "legacy",
+            text: "old call site",
+            scope: .global
+        )
+        XCTAssertNil(entry.confidence)
+        XCTAssertNil(entry.eventTime)
+        XCTAssertNil(entry.sourceNodeId)
+        XCTAssertNil(entry.atomType)
+        XCTAssertNil(entry.recordedAt)
+        XCTAssertNil(entry.kind)
+        XCTAssertNil(entry.promptAnnotation)
+    }
+
     // MARK: - Helpers
 
     @discardableResult

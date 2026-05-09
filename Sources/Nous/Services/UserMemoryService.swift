@@ -2354,7 +2354,10 @@ extension UserMemoryCore {
                 id: entry.id.uuidString,
                 text: entry.content,
                 scope: entry.scope,
-                kind: entry.kind
+                kind: entry.kind,
+                confidence: entry.confidence,
+                sourceNodeId: entry.sourceNodeIds.first,
+                recordedAt: entry.lastConfirmedAt ?? entry.updatedAt
             ))
         }
 
@@ -2365,7 +2368,10 @@ extension UserMemoryCore {
                 text: fact.content,
                 scope: fact.scope,
                 kind: fact.kind,
-                promptAnnotation: contradictionCandidateIds.contains(fact.id.uuidString) ? "contradiction-candidate" : nil
+                promptAnnotation: contradictionCandidateIds.contains(fact.id.uuidString) ? "contradiction-candidate" : nil,
+                confidence: fact.confidence,
+                sourceNodeId: fact.sourceNodeIds.first,
+                recordedAt: fact.updatedAt
             ))
         }
 
@@ -2405,7 +2411,9 @@ extension UserMemoryCore {
                     text: claim.claim,
                     scope: .selfReflection,
                     kind: nil,
-                    promptAnnotation: "weekly-reflection"
+                    promptAnnotation: "weekly-reflection",
+                    confidence: claim.confidence,
+                    recordedAt: claim.createdAt
                 ))
                 if out.count > countBefore {
                     admittedReflections += 1
