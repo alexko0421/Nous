@@ -30,6 +30,7 @@ struct WelcomeView: View {
     let attachments: [AttachedFileContext]
     let onPickAttachment: () -> Void
     let onPickPhoto: () -> Void
+    let onYouTubeSummary: () -> Void = {}
     let onVoice: () -> Void
     let canPickPhoto: Bool
     let isVoiceActive: Bool
@@ -227,6 +228,10 @@ struct WelcomeView: View {
                     },
                     onPhoto: {
                         onPickPhoto()
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isActionMenuExpanded = false }
+                    },
+                    onYouTube: {
+                        onYouTubeSummary()
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isActionMenuExpanded = false }
                     },
                     onVoice: {

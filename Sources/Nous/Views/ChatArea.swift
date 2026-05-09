@@ -475,6 +475,7 @@ struct ChatArea: View {
                                     isPhotosPickerPresented = true
                                     withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isActionMenuExpanded = false }
                                 },
+                                onYouTube: {},
                                 onVoice: {
                                     onToggleVoiceMode()
                                     withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isActionMenuExpanded = false }
@@ -1398,6 +1399,7 @@ struct ActionMenuCapsule: View {
     let isExpanded: Bool
     let onFile: () -> Void
     let onPhoto: () -> Void
+    let onYouTube: () -> Void
     let onVoice: () -> Void
     let canPickPhoto: Bool
 
@@ -1431,10 +1433,20 @@ struct ActionMenuCapsule: View {
             ActionMenuDivider(isExpanded: isExpanded)
 
             ActionMenuButton(
+                icon: "play.rectangle",
+                title: "YouTube",
+                isExpanded: isExpanded,
+                separationIndex: 2,
+                action: onYouTube
+            )
+
+            ActionMenuDivider(isExpanded: isExpanded)
+
+            ActionMenuButton(
                 icon: "mic",
                 title: "Voice",
                 isExpanded: isExpanded,
-                separationIndex: 2,
+                separationIndex: 3,
                 action: onVoice
             )
         }
