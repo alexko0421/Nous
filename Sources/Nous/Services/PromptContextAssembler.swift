@@ -480,6 +480,15 @@ enum PromptContextAssembler {
     Do not force a checklist onto pure emotional support, style demonstrations, or open reflection. In those cases, keep the ending human and grounded, but still avoid mechanical interview-style follow-up questions.
     """
 
+    private static let enumerableListFormatPolicy = """
+    ---
+
+    ENUMERABLE LIST FORMAT POLICY:
+    When you list 3 or more discrete sections, steps, options, or parts — items Alex might later reference by ordinal ("第二个", "第 3 部分", "the second one") — use a numbered markdown list (`1. …`, `2. …`, `3. …`). Plain newline-separated lines force Alex to count and break ordinal reference.
+    For free-flowing prose, examples woven into a paragraph, single observations, or 1–2 items, keep natural sentence flow — do not force numbering.
+    Emphasis still uses 「」, never `**bold**`.
+    """
+
     private static let stoicGroundingPolicy = """
     ---
 
@@ -971,6 +980,7 @@ enum PromptContextAssembler {
         anchorAndPolicies.append(userAddressPolicy)
         anchorAndPolicies.append(visibleResponseLanguagePolicy)
         anchorAndPolicies.append(answerClosurePolicy)
+        anchorAndPolicies.append(enumerableListFormatPolicy)
         anchorAndPolicies.append(stoicGroundingPolicy)
         anchorAndPolicies.append(realWorldDecisionPolicy)
         anchorAndPolicies.append(summaryOutputPolicy)
@@ -1711,7 +1721,7 @@ User: "我中意又软又硬嘅人，反差先系 depth"
         slowCognitionArtifacts: [CognitionArtifact] = [],
         now: Date = Date()
     ) -> PromptGovernanceTrace {
-        var layers = ["anchor", "memory_interpretation_policy", "core_safety_policy", "user_address_policy", "visible_response_language_policy", "answer_closure_policy", "stoic_grounding_policy", "real_world_decision_policy", "summary_output_policy", "conversation_title_output_policy", "chat_mode"]
+        var layers = ["anchor", "memory_interpretation_policy", "core_safety_policy", "user_address_policy", "visible_response_language_policy", "answer_closure_policy", "enumerable_list_format_policy", "stoic_grounding_policy", "real_world_decision_policy", "summary_output_policy", "conversation_title_output_policy", "chat_mode"]
         let highRiskQueryDetected = SafetyGuardrails.isHighRiskQuery(currentUserInput)
         let visibleLanguageDecision: VisibleResponseLanguageDecision = {
             if let override = visibleLanguageTargetOverride {

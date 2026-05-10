@@ -223,4 +223,17 @@ final class PromptContextAssemblerVisibleLanguageTests: XCTestCase {
         )
         XCTAssertEqual(target(in: slice), "Cantonese")
     }
+
+    // MARK: - Enumerable list format policy
+
+    /// Policy must be present in stable so the LLM emits numbered lists when listing
+    /// 3+ discrete sections (e.g. article breakdown that Alex then references with
+    /// "第二个部分"). Lives in stable so it survives across all chat modes.
+    func testEnumerableListFormatPolicyIsPresentInStable() {
+        let slice = assemble("hi")
+        XCTAssertTrue(slice.stable.contains("ENUMERABLE LIST FORMAT POLICY"),
+                      "Stable system prompt must include the numbered-list rule.")
+        XCTAssertTrue(slice.stable.contains("numbered markdown list"),
+                      "Policy must direct the model toward `1. 2. 3.` numbering for discrete enumerations.")
+    }
 }
