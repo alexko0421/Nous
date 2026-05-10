@@ -229,6 +229,32 @@ struct TurnPrepared {
     let citations: [SearchResult]
     let promptTrace: PromptGovernanceTrace
     let effectiveMode: ChatMode
+    /// Block 4b Phase 1A — atom + reflection cards paired with their resolved
+    /// source nodes. Carried alongside legacy `citations` so the UI can
+    /// cascade-render atom cards primary and fall back to citations when the
+    /// corpus lane is empty. Defaults to `[]` so existing call sites compile
+    /// unchanged.
+    let resolvedCorpusEntries: [ResolvedCitableEntry]
+
+    init(
+        turnId: UUID,
+        node: NousNode,
+        userMessage: Message,
+        messagesAfterUserAppend: [Message],
+        citations: [SearchResult],
+        promptTrace: PromptGovernanceTrace,
+        effectiveMode: ChatMode,
+        resolvedCorpusEntries: [ResolvedCitableEntry] = []
+    ) {
+        self.turnId = turnId
+        self.node = node
+        self.userMessage = userMessage
+        self.messagesAfterUserAppend = messagesAfterUserAppend
+        self.citations = citations
+        self.promptTrace = promptTrace
+        self.effectiveMode = effectiveMode
+        self.resolvedCorpusEntries = resolvedCorpusEntries
+    }
 }
 
 struct TurnUserMessageAppended {
@@ -376,6 +402,10 @@ struct TurnPlan {
     /// Defaults to `.empty` so existing TurnPlan construction sites compile
     /// without modification.
     let corpusContext: CitableContext
+    /// Block 4b Phase 1A — `corpusContext.entries` paired with their resolved
+    /// source nodes. UI consumes this for atom-card chips; defaults to `[]`
+    /// so existing TurnPlan construction sites compile unchanged.
+    let resolvedCorpusEntries: [ResolvedCitableEntry]
 
     init(
         turnId: UUID,
@@ -397,7 +427,8 @@ struct TurnPlan {
         loadedCitationIds: Set<UUID> = [],
         memoryUsageHints: [ContextManifestUsageHint] = [],
         memoryProvenance: [String: ContextManifestMemoryProvenance] = [:],
-        corpusContext: CitableContext = .empty
+        corpusContext: CitableContext = .empty,
+        resolvedCorpusEntries: [ResolvedCitableEntry] = []
     ) {
         self.turnId = turnId
         self.prepared = prepared
@@ -419,6 +450,7 @@ struct TurnPlan {
         self.memoryUsageHints = memoryUsageHints
         self.memoryProvenance = memoryProvenance
         self.corpusContext = corpusContext
+        self.resolvedCorpusEntries = resolvedCorpusEntries
     }
 
     init(
@@ -440,7 +472,8 @@ struct TurnPlan {
         loadedCitationIds: Set<UUID> = [],
         memoryUsageHints: [ContextManifestUsageHint] = [],
         memoryProvenance: [String: ContextManifestMemoryProvenance] = [:],
-        corpusContext: CitableContext = .empty
+        corpusContext: CitableContext = .empty,
+        resolvedCorpusEntries: [ResolvedCitableEntry] = []
     ) {
         self.init(
             turnId: turnId,
@@ -462,7 +495,8 @@ struct TurnPlan {
             loadedCitationIds: loadedCitationIds,
             memoryUsageHints: memoryUsageHints,
             memoryProvenance: memoryProvenance,
-            corpusContext: corpusContext
+            corpusContext: corpusContext,
+            resolvedCorpusEntries: resolvedCorpusEntries
         )
     }
 }

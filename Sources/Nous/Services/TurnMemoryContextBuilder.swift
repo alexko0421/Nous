@@ -20,6 +20,12 @@ struct TurnMemoryContext {
     /// prompt. Available for tests and telemetry. Block 4a inject-half wires
     /// it into PromptContextAssembler; Block 4b makes cards primary.
     let corpusContext: CitableContext
+    /// Block 4b Phase 1A — `corpusContext.entries` paired with their resolved
+    /// source nodes (when `sourceNodeId` is non-nil and the node still exists).
+    /// Reflection claims pass through with `node = nil`. Surfaced here so
+    /// `TurnPlan` / `TurnPrepared` carry a UI-ready shape without leaking
+    /// `NodeStore` access into view models.
+    let resolvedCorpusEntries: [ResolvedCitableEntry]
 }
 
 final class TurnMemoryContextBuilder {
@@ -173,6 +179,11 @@ final class TurnMemoryContextBuilder {
             now: now
         )
 
+        let resolvedCorpusEntries = Self.resolveCorpusEntries(
+            corpusContext.entries,
+            nodeStore: nodeStore
+        )
+
         return TurnMemoryContext(
             citations: citations,
             operatingContext: operatingContext,
@@ -189,8 +200,37 @@ final class TurnMemoryContextBuilder {
             contradictionCandidateIds: contradictionCandidateIds,
             citablePool: citablePool,
             memoryProvenance: memoryProvenance,
-            corpusContext: corpusContext
+            corpusContext: corpusContext,
+            resolvedCorpusEntries: resolvedCorpusEntries
         )
+    }
+
+    /// Resolve each `CitableEntry` against the node store. Reflection claims
+    /// (`sourceNodeId == nil`) and stale ids (node deleted since the atom was
+    /// recorded) pass through with `node = nil`. Single batched dictionary
+    /// lookup keeps DB access at one query per turn even at the `cardCap=8`
+    /// ceiling. Errors from `fetchNode` are swallowed individually so a single
+    /// stale id never breaks the whole resolution.
+    static func resolveCorpusEntries(
+        _ entries: [CitableEntry],
+        nodeStore: NodeStore
+    ) -> [ResolvedCitableEntry] {
+        let uniqueIds: [UUID] = {
+            var seen = Set<UUID>()
+            return entries.compactMap(\.sourceNodeId).filter { seen.insert($0).inserted }
+        }()
+        var lookup: [UUID: NousNode] = [:]
+        for id in uniqueIds {
+            if let node = try? nodeStore.fetchNode(id: id) {
+                lookup[id] = node
+            }
+        }
+        return entries.map { entry in
+            ResolvedCitableEntry(
+                entry: entry,
+                node: entry.sourceNodeId.flatMap { lookup[$0] }
+            )
+        }
     }
 
     static func citationExclusionIds(

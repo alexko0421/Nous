@@ -17,6 +17,11 @@ final class ChatViewModel {
     var currentAgentTrace: [AgentTraceRecord] = []
     var didHitBudgetExhaustion: Bool = false
     var citations: [SearchResult] = []
+    /// Block 4b Phase 1A — atom + reflection cards paired with their resolved
+    /// source nodes. Populated alongside `citations` from `TurnPrepared`. UI
+    /// consumption is dark code in Phase 1A; Phase 1B wires it into the chip
+    /// area via a cascade computed property.
+    var resolvedCorpusEntries: [ResolvedCitableEntry] = []
     var activeQuickActionMode: QuickActionMode?
     var activeChatMode: ChatMode? = nil
     var defaultProjectId: UUID?
@@ -408,6 +413,7 @@ final class ChatViewModel {
         scratchPadStore.activate(conversationId: nil)
         messages = []
         citations = []
+        resolvedCorpusEntries = []
         currentResponse = ""
         currentThinking = ""
         currentThinkingStartedAt = nil
@@ -439,6 +445,7 @@ final class ChatViewModel {
         scratchPadStore.activate(conversationId: node.id)
         messages = []
         citations = []
+        resolvedCorpusEntries = []
         currentResponse = ""
         currentThinking = ""
         currentThinkingStartedAt = nil
@@ -460,6 +467,7 @@ final class ChatViewModel {
         scratchPadStore.activate(conversationId: node.id)
         messages = (try? nodeStore.fetchMessages(nodeId: node.id)) ?? []
         citations = []
+        resolvedCorpusEntries = []
         currentResponse = ""
         currentThinking = ""
         currentThinkingStartedAt = nil
@@ -929,6 +937,7 @@ final class ChatViewModel {
         currentNode = updatedNode
         messages = retainedMessages
         citations = []
+        resolvedCorpusEntries = []
         currentResponse = ""
         currentThinking = ""
         currentThinkingStartedAt = nil
@@ -1023,6 +1032,7 @@ final class ChatViewModel {
             currentNode = prepared.node
             messages = prepared.messagesAfterUserAppend
             citations = prepared.citations
+            resolvedCorpusEntries = prepared.resolvedCorpusEntries
             lastPromptGovernanceTrace = prepared.promptTrace
             if !prepared.messagesAfterUserAppend.isEmpty {
                 activeChatMode = prepared.effectiveMode

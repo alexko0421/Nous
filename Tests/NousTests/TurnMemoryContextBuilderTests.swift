@@ -319,6 +319,143 @@ final class TurnMemoryContextBuilderTests: XCTestCase {
 
         XCTAssertTrue(context.corpusContext.entries.isEmpty)
         XCTAssertEqual(context.corpusContext.manifest.totalCandidates, 0)
+        XCTAssertTrue(context.resolvedCorpusEntries.isEmpty)
+    }
+
+    // MARK: - resolveCorpusEntries (Block 4b Phase 1A)
+
+    func testResolveCorpusEntriesPairsAtomWithExistingNode() throws {
+        let store = try NodeStore(path: ":memory:")
+        let source = NousNode(type: .conversation, title: "Earlier chat")
+        try store.insertNode(source)
+
+        let entry = CitableEntry(
+            id: UUID().uuidString,
+            text: "Networking events feel like a stage to me.",
+            scope: .global,
+            promptAnnotation: "atom-recall",
+            confidence: 0.82,
+            sourceNodeId: source.id,
+            atomType: .insight,
+            recordedAt: Date(timeIntervalSince1970: 1_000)
+        )
+
+        let resolved = TurnMemoryContextBuilder.resolveCorpusEntries(
+            [entry],
+            nodeStore: store
+        )
+
+        XCTAssertEqual(resolved.count, 1)
+        XCTAssertEqual(resolved[0].entry.id, entry.id)
+        XCTAssertEqual(resolved[0].node?.id, source.id)
+        XCTAssertEqual(resolved[0].node?.title, "Earlier chat")
+    }
+
+    func testResolveCorpusEntriesPassesThroughStaleSourceNodeIdsAsNilNode() throws {
+        let store = try NodeStore(path: ":memory:")
+        let staleId = UUID()
+
+        let entry = CitableEntry(
+            id: UUID().uuidString,
+            text: "An atom whose source has since been deleted.",
+            scope: .global,
+            promptAnnotation: "atom-recall",
+            confidence: 0.75,
+            sourceNodeId: staleId,
+            atomType: .preference
+        )
+
+        let resolved = TurnMemoryContextBuilder.resolveCorpusEntries(
+            [entry],
+            nodeStore: store
+        )
+
+        XCTAssertEqual(resolved.count, 1)
+        XCTAssertNil(resolved[0].node, "Stale sourceNodeId should resolve to node=nil")
+        XCTAssertEqual(resolved[0].entry.id, entry.id)
+    }
+
+    func testResolveCorpusEntriesPassesThroughReflectionsWithNilNode() throws {
+        let store = try NodeStore(path: ":memory:")
+
+        let reflection = CitableEntry(
+            id: UUID().uuidString,
+            text: "You return to the same fear of being seen as performative.",
+            scope: .selfReflection,
+            promptAnnotation: "weekly-reflection",
+            confidence: 0.9,
+            sourceNodeId: nil,
+            atomType: nil,
+            recordedAt: Date(timeIntervalSince1970: 2_000)
+        )
+
+        let resolved = TurnMemoryContextBuilder.resolveCorpusEntries(
+            [reflection],
+            nodeStore: store
+        )
+
+        XCTAssertEqual(resolved.count, 1)
+        XCTAssertNil(resolved[0].node)
+        XCTAssertEqual(resolved[0].entry.scope, .selfReflection)
+    }
+
+    func testResolveCorpusEntriesDedupesNodeFetchesAcrossMultipleAtoms() throws {
+        let store = try NodeStore(path: ":memory:")
+        let source = NousNode(type: .conversation, title: "Shared source")
+        try store.insertNode(source)
+
+        let entryA = CitableEntry(
+            id: UUID().uuidString,
+            text: "First atom from shared source.",
+            scope: .global,
+            promptAnnotation: "atom-recall",
+            confidence: 0.8,
+            sourceNodeId: source.id,
+            atomType: .decision
+        )
+        let entryB = CitableEntry(
+            id: UUID().uuidString,
+            text: "Second atom from same shared source.",
+            scope: .global,
+            promptAnnotation: "atom-recall",
+            confidence: 0.7,
+            sourceNodeId: source.id,
+            atomType: .insight
+        )
+
+        let resolved = TurnMemoryContextBuilder.resolveCorpusEntries(
+            [entryA, entryB],
+            nodeStore: store
+        )
+
+        XCTAssertEqual(resolved.count, 2)
+        XCTAssertEqual(resolved[0].node?.id, source.id)
+        XCTAssertEqual(resolved[1].node?.id, source.id)
+    }
+
+    func testResolveCorpusEntriesPreservesEntryOrder() throws {
+        let store = try NodeStore(path: ":memory:")
+        let source = NousNode(type: .conversation, title: "Source")
+        try store.insertNode(source)
+
+        let entries: [CitableEntry] = (0..<3).map { idx in
+            CitableEntry(
+                id: "atom-\(idx)",
+                text: "atom \(idx)",
+                scope: .global,
+                promptAnnotation: "atom-recall",
+                confidence: 0.8,
+                sourceNodeId: source.id,
+                atomType: .insight
+            )
+        }
+
+        let resolved = TurnMemoryContextBuilder.resolveCorpusEntries(
+            entries,
+            nodeStore: store
+        )
+
+        XCTAssertEqual(resolved.map(\.entry.id), ["atom-0", "atom-1", "atom-2"])
     }
 
     private func memoryEntry(
