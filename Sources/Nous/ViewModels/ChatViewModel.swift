@@ -91,6 +91,10 @@ final class ChatViewModel {
     private let heartbeatCoordinator: HeartbeatCoordinator?
     private let shouldUseGeminiHistoryCache: () -> Bool
     private let shouldPersistAssistantThinking: () -> Bool
+    /// Factory for the manual `/reflect` command. Returns `nil` when the
+    /// Gemini API key is unset; the command then surfaces a configuration
+    /// hint instead of attempting an LLM call.
+    private let perConversationReflectionServiceFactory: () -> PerConversationReflectionService?
     @ObservationIgnored private var cachedTurnPlanner: TurnPlanner?
     @ObservationIgnored private var cachedTurnExecutor: TurnExecutor?
     @ObservationIgnored private var cachedQuickActionOpeningRunner: QuickActionOpeningRunner?
@@ -391,6 +395,7 @@ final class ChatViewModel {
         heartbeatCoordinator: HeartbeatCoordinator? = nil,
         shouldUseGeminiHistoryCache: @escaping () -> Bool = { true },
         shouldPersistAssistantThinking: @escaping () -> Bool = { true },
+        perConversationReflectionServiceFactory: @escaping () -> PerConversationReflectionService? = { nil },
         defaultProjectId: UUID? = nil
     ) {
         self.nodeStore = nodeStore
@@ -421,6 +426,7 @@ final class ChatViewModel {
         self.heartbeatCoordinator = heartbeatCoordinator
         self.shouldUseGeminiHistoryCache = shouldUseGeminiHistoryCache
         self.shouldPersistAssistantThinking = shouldPersistAssistantThinking
+        self.perConversationReflectionServiceFactory = perConversationReflectionServiceFactory
         self.defaultProjectId = defaultProjectId
         self.explicitTurnRunner = turnRunner
         self.explicitTurnPlanner = turnPlanner
@@ -677,6 +683,18 @@ final class ChatViewModel {
         let limitedAttachments = AttachmentLimitPolicy.limitingImageAttachments(attachments)
         guard (!inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !limitedAttachments.isEmpty), !isGenerating else { return }
 
+        // Manual `/reflect` slash command (Block 8 lite, dogfood-only). Runs
+        // PerConversationReflectionPrompt against the current conversation
+        // on Gemini and surfaces the claim as a transient assistant message.
+        // Result is NOT persisted to the reflection_claim table — see
+        // PerConversationReflectionService for rationale.
+        let trimmedInput = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedInput == "/reflect" && limitedAttachments.isEmpty {
+            inputText = ""
+            await runReflectCommand()
+            return
+        }
+
         let responseTaskId = UUID()
         inFlightResponseAbortReason = nil
         let responseTask = Task { @MainActor [weak self] in
@@ -690,6 +708,69 @@ final class ChatViewModel {
         if inFlightResponseTaskId == nil {
             inFlightResponseAbortReason = nil
         }
+    }
+
+    /// Runs `PerConversationReflectionService` over the current conversation
+    /// and appends the result as an in-memory assistant message. No
+    /// persistence: the reflection lives only until the conversation is
+    /// reloaded. See `PerConversationReflectionService` for why we don't
+    /// write to `reflection_claim` in v1.
+    @MainActor
+    private func runReflectCommand() async {
+        guard let node = currentNode else {
+            appendReflectionNotice("Reflection · 需要先选定一个对话先得。")
+            return
+        }
+        guard let service = perConversationReflectionServiceFactory() else {
+            appendReflectionNotice("Reflection · 未设定 Gemini API key，去 Settings 加咗先再试。")
+            return
+        }
+        let snapshot = messages
+        guard snapshot.count >= PerConversationReflectionService.manualTriggerMinimumTurns else {
+            appendReflectionNotice("Reflection · 呢段对话仲短（\(snapshot.count) turns），最少要 \(PerConversationReflectionService.manualTriggerMinimumTurns) 才好捞 pattern。")
+            return
+        }
+
+        isGenerating = true
+        defer { isGenerating = false }
+
+        do {
+            let output = try await service.run(
+                conversationId: node.id,
+                conversationTitle: node.title,
+                messages: snapshot
+            )
+            if let claim = output.claim {
+                let body = "Reflection · 「\(claim.claim)」\n\n— \(claim.whyNonObvious)"
+                appendReflectionNotice(body)
+            } else {
+                let reasonHint: String
+                switch output.rejectionReason {
+                case .lowConfidence: reasonHint = "（信心唔够）"
+                case .unsupported: reasonHint = "（引用唔够实）"
+                case .apiError: reasonHint = "（API 出错）"
+                case .generic, .none: reasonHint = ""
+                }
+                appendReflectionNotice("Reflection · 暂时未见到非显然嘅 pattern\(reasonHint)。")
+            }
+        } catch let err as PerConversationReflectionService.ServiceError {
+            appendReflectionNotice("Reflection · \(err.localizedDescription)")
+        } catch {
+            appendReflectionNotice("Reflection · 失败：\(error.localizedDescription)")
+        }
+    }
+
+    @MainActor
+    private func appendReflectionNotice(_ body: String) {
+        let nodeId = currentNode?.id ?? UUID()
+        let message = Message(
+            nodeId: nodeId,
+            role: .assistant,
+            content: body,
+            timestamp: Date(),
+            source: .typed
+        )
+        messages.append(message)
     }
 
     @MainActor

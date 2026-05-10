@@ -231,7 +231,12 @@ final class AppEnvironment {
             slowCognitionArtifactProvider: slowCognitionArtifactProvider,
             heartbeatCoordinator: heartbeatCoordinator,
             shouldUseGeminiHistoryCache: { settingsVM.geminiHistoryCacheEnabled },
-            shouldPersistAssistantThinking: { settingsVM.assistantThinkingEnabled }
+            shouldPersistAssistantThinking: { settingsVM.assistantThinkingEnabled },
+            perConversationReflectionServiceFactory: {
+                let key = settingsVM.geminiApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !key.isEmpty else { return nil }
+                return PerConversationReflectionService(llm: GeminiLLMService(apiKey: key))
+            }
         )
         let voiceTranscriptCommitter = VoiceTranscriptCommitter(
             voiceController: voiceController,

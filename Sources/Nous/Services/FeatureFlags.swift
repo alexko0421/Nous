@@ -13,11 +13,16 @@ enum FeatureFlags {
     private static let atomCardsKey = "AtomCardsEnabled"
 
     /// Phase 1B: when true, the chat citation chip area renders atom-level
-    /// `CorpusAtomCardListView` (own-corpus retrieval). When false (default),
-    /// the legacy `RAGCitationView` keeps rendering conversation-level
-    /// citations. Default flips to true in Phase 1D after dogfood.
+    /// `CorpusAtomCardListView` (own-corpus retrieval). When false, the legacy
+    /// `RAGCitationView` keeps rendering conversation-level citations.
+    /// Default flipped to true 2026-05-10 (Phase 1D dogfood ship). Users who
+    /// previously opted out via `defaults write … AtomCardsEnabled -bool NO`
+    /// keep that override; users who never touched the key now see atom cards.
     static var atomCardsEnabled: Bool {
-        UserDefaults.standard.bool(forKey: atomCardsKey)
+        if UserDefaults.standard.object(forKey: atomCardsKey) == nil {
+            return true
+        }
+        return UserDefaults.standard.bool(forKey: atomCardsKey)
     }
 
     /// Test-only override hook. Tests set this to drive cascade behavior
