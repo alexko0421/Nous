@@ -357,12 +357,20 @@ enum PromptContextAssembler {
             isChineseScalar(scalar)
         }.count
         let hasCantoneseMarker = containsAny(trimmed, cantoneseMarkers)
+        let hasMandarinMarker = containsAny(trimmed, mandarinMarkers)
 
         if chineseCount > 0 && latinCount == 0 {
             if hasCantoneseMarker {
                 return VisibleResponseLanguageDecision(target: .cantonese, source: .currentTurnCantonese)
             }
-            return VisibleResponseLanguageDecision(target: .mandarin, source: .currentTurnMandarin)
+            if hasMandarinMarker {
+                return VisibleResponseLanguageDecision(target: .mandarin, source: .currentTurnMandarin)
+            }
+            // Nous is a Cantonese-first private instrument. Ambiguous pure-Chinese
+            // input (no Cantonese-specific marker like 嘅/咁/啲, no Mandarin-specific
+            // marker like 这/什么/没) defaults to Cantonese rather than Mandarin so
+            // shared-character messages like "解释下呢一篇" stay in Alex's voice.
+            return VisibleResponseLanguageDecision(target: .cantonese, source: .currentTurnCantonese)
         }
         if latinCount > 0 && chineseCount == 0 {
             if latinCount >= 2 {
@@ -383,7 +391,10 @@ enum PromptContextAssembler {
                 return VisibleResponseLanguageDecision(target: .english, source: .currentTurnEnglish)
             }
             if chineseCount >= latinCount * 2 {
-                return VisibleResponseLanguageDecision(target: .mandarin, source: .currentTurnMandarin)
+                if hasMandarinMarker {
+                    return VisibleResponseLanguageDecision(target: .mandarin, source: .currentTurnMandarin)
+                }
+                return VisibleResponseLanguageDecision(target: .cantonese, source: .currentTurnCantonese)
             }
             return VisibleResponseLanguageDecision(target: .mixed, source: .currentTurnMixed)
         }
@@ -407,6 +418,24 @@ enum PromptContextAssembler {
         "啦",
         "嚟",
         "畀"
+    ]
+
+    /// Distinctly Mandarin tokens. Presence flips ambiguous pure-Chinese (and
+    /// chinese-dominant mixed) input from the new Cantonese default to Mandarin.
+    /// Kept conservative — only characters/words that almost never appear in
+    /// natural written Cantonese chat. Both Simplified and Traditional forms
+    /// are listed because some Mandarin/Taiwanese testers write in Traditional.
+    private static let mandarinMarkers = [
+        "这",
+        "這",
+        "什么",
+        "什麼",
+        "怎么",
+        "怎麼",
+        "没",
+        "沒",
+        "们",
+        "們"
     ]
 
     private static func containsAny(_ text: String, _ needles: [String]) -> Bool {

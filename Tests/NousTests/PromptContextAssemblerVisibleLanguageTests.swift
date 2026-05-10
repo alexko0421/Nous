@@ -48,6 +48,26 @@ final class PromptContextAssemblerVisibleLanguageTests: XCTestCase {
         XCTAssertEqual(target(in: slice), "Mandarin")
     }
 
+    /// Cantonese-first default for ambiguous pure-Chinese input. The screenshot bug
+    /// was "解释下呢一篇" — has the Cantonese 呢 but none of the strong markers
+    /// (嘅/咁/啲…), so under the old default it fell through to Mandarin and the
+    /// reply came back in 普通话. With the new Cantonese-first default, ambiguous
+    /// pure-Chinese (no Mandarin-specific marker either) targets Cantonese.
+    func testAmbiguousPureChineseDefaultsToCantonese() {
+        XCTAssertEqual(target(in: assemble("解释下呢一篇")), "Cantonese")
+        XCTAssertEqual(target(in: assemble("睇下呢个")), "Cantonese")
+        XCTAssertEqual(target(in: assemble("帮我想下")), "Cantonese")
+    }
+
+    /// Mandarin-specific markers (这/什么/怎么/没/们 + Traditional variants) flip
+    /// ambiguous Chinese back to Mandarin. Keeps Mandarin testers covered.
+    func testMandarinSpecificMarkerFlipsAmbiguousChineseToMandarin() {
+        XCTAssertEqual(target(in: assemble("帮我看一下这个")), "Mandarin")
+        XCTAssertEqual(target(in: assemble("这是什么意思")), "Mandarin")
+        XCTAssertEqual(target(in: assemble("我们一起讨论")), "Mandarin")
+        XCTAssertEqual(target(in: assemble("還沒想好怎麼做")), "Mandarin")
+    }
+
     // MARK: - Short-input thresholds
 
     /// Boundary: 2-character English greetings ("hi", "ok", "yo", "no") cross the
