@@ -1,7 +1,7 @@
 # Edge Inference Feedback Ledger — Design Spec
 
 **Date**: 2026-05-09
-**Status**: approved
+**Status**: shipped (Phase A)
 **Phase**: A (telemetry + feedback infrastructure; precursor to Phase A2 threshold/prompt tuning)
 
 ---
