@@ -13,6 +13,13 @@ struct CorpusAtomCardListView: View {
     let entries: [ResolvedCitableEntry]
     @Binding var isExpanded: Bool
     var onOpenSource: (NousNode) -> Void = { _ in }
+    /// Phase A chat citation feedback wiring. All three must be non-nil
+    /// for the per-row thumb to render — during streaming (before the
+    /// assistant message is persisted) the turnId is unavailable so the
+    /// thumb stays hidden.
+    var conversationId: UUID? = nil
+    var turnId: UUID? = nil
+    var feedbackStore: CitationFeedbackStore? = nil
 
     @State private var hoveredEntryId: String?
     @State private var popoverEntryId: String?
@@ -109,6 +116,10 @@ struct CorpusAtomCardListView: View {
                         )
                         .animation(.easeOut(duration: 0.15), value: hoveredEntryId)
                 }
+            }
+
+            if let feedbackView = thumbFeedbackView(for: resolved) {
+                HStack { Spacer(); feedbackView }
             }
         }
         .padding(.horizontal, 18)
@@ -241,4 +252,53 @@ struct CorpusAtomCardListView: View {
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter
     }()
+
+    /// Phase A per-row thumb feedback. Returns nil when wiring is incomplete
+    /// (streaming draft) or when the entry id can't be parsed as a UUID
+    /// (sidecar facts) — citation_feedback keys on UUIDs.
+    @ViewBuilder
+    private func thumbFeedbackView(for resolved: ResolvedCitableEntry) -> AnyView? {
+        guard let conv = conversationId,
+              let turn = turnId,
+              let store = feedbackStore,
+              let atomId = UUID(uuidString: resolved.entry.id)
+        else { return nil }
+
+        let view = ThumbFeedbackView(
+            verdict: Binding(
+                get: {
+                    (try? store.fetch(conversationId: conv, turnId: turn, atomId: atomId))?.verdict ?? .unset
+                },
+                set: { newVerdict in
+                    let currentNote = (try? store.fetch(conversationId: conv, turnId: turn, atomId: atomId))?.note ?? ""
+                    try? store.upsert(
+                        conversationId: conv,
+                        turnId: turn,
+                        atomId: atomId,
+                        verdict: newVerdict,
+                        note: currentNote.isEmpty ? nil : currentNote
+                    )
+                }
+            ),
+            note: Binding(
+                get: {
+                    (try? store.fetch(conversationId: conv, turnId: turn, atomId: atomId))?.note ?? ""
+                },
+                set: { newNote in
+                    let currentVerdict = (try? store.fetch(conversationId: conv, turnId: turn, atomId: atomId))?.verdict ?? .unset
+                    try? store.upsert(
+                        conversationId: conv,
+                        turnId: turn,
+                        atomId: atomId,
+                        verdict: currentVerdict,
+                        note: newNote.isEmpty ? nil : newNote
+                    )
+                }
+            ),
+            style: .chat,
+            telemetry: nil,
+            onChange: { _, _ in }
+        )
+        return AnyView(view)
+    }
 }

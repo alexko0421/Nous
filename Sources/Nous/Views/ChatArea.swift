@@ -142,7 +142,7 @@ struct ChatArea: View {
                                                 onOpenBranch: { openTemporaryBranch(from: msg) }
                                             )
                                             if shouldShowRelevantChats(after: msg) {
-                                                attributionView(for: vm.primaryAttribution)
+                                                attributionView(for: vm.primaryAttribution, turnId: msg.id)
                                                     .padding(.top, 8)
                                             }
                                             if msg.role == .assistant {
@@ -881,13 +881,19 @@ struct ChatArea: View {
     }
 
     @ViewBuilder
-    private func attributionView(for attribution: AttributionDisplay) -> some View {
+    private func attributionView(
+        for attribution: AttributionDisplay,
+        turnId: UUID? = nil
+    ) -> some View {
         switch attribution {
         case .atomCards(let entries):
             CorpusAtomCardListView(
                 entries: entries,
                 isExpanded: $isRelevantChatsExpanded,
-                onOpenSource: onNavigateToNode
+                onOpenSource: onNavigateToNode,
+                conversationId: vm.currentNode?.id,
+                turnId: turnId,
+                feedbackStore: vm.citationFeedbackStore
             )
         case .legacyCitations(let citations):
             RAGCitationView(
