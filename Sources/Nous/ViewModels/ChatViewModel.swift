@@ -1069,12 +1069,8 @@ final class ChatViewModel {
             messages = appended.messagesAfterUserAppend
             if let materials = pendingSourceMaterialsByTurnId.removeValue(forKey: envelope.turnId),
                !materials.isEmpty {
-                let didRemember = rememberSourceMaterials(materials, for: appended.userMessage.id)
-                if didRemember,
-                   let context = pendingSourceDiscussionContextByTurnId.removeValue(forKey: envelope.turnId),
-                   activeSourceDiscussionContext == context {
-                    activeSourceDiscussionContext = nil
-                }
+                rememberSourceMaterials(materials, for: appended.userMessage.id)
+                pendingSourceDiscussionContextByTurnId.removeValue(forKey: envelope.turnId)
             }
         case .prepared(let prepared):
             currentNode = prepared.node

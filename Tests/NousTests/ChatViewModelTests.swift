@@ -598,7 +598,8 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertTrue(prompt.contains("Opening idea"))
         XCTAssertTrue(prompt.contains("Explains the first concept."))
         XCTAssertTrue(prompt.contains("00:00 First concept"))
-        XCTAssertNil(vm.activeSourceDiscussionContext)
+        XCTAssertNotNil(vm.activeSourceDiscussionContext)
+        XCTAssertEqual(vm.activeSourceDiscussionContext?.summaryTitle, "Opening idea")
     }
 
     func testVagueChineseDemonstrativeStillEngagesPinnedSection() async throws {
