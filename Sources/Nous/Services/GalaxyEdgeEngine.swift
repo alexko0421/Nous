@@ -6,19 +6,22 @@ final class GalaxyEdgeEngine {
     private let relationJudge: GalaxyRelationJudge
     private let connectionJudge: ConnectionJudge
     private let telemetry: GalaxyRelationTelemetry?
+    private let judgeTraceWriter: EdgeJudgeTraceStore?
 
     init(
         nodeStore: NodeStore,
         vectorStore: VectorStore,
         relationJudge: GalaxyRelationJudge,
         connectionJudge: ConnectionJudge = ConnectionJudge(),
-        telemetry: GalaxyRelationTelemetry? = nil
+        telemetry: GalaxyRelationTelemetry? = nil,
+        judgeTraceWriter: EdgeJudgeTraceStore? = nil
     ) {
         self.nodeStore = nodeStore
         self.vectorStore = vectorStore
         self.relationJudge = relationJudge
         self.connectionJudge = connectionJudge
         self.telemetry = telemetry
+        self.judgeTraceWriter = judgeTraceWriter
     }
 
     func generateSemanticEdges(
@@ -48,6 +51,17 @@ final class GalaxyEdgeEngine {
                 verdict: rawVerdict
             )
             guard assessment.decision == .accept, let verdict = assessment.verdict else {
+                // Connection judge rejected even though relation judge produced
+                // a verdict. Distinct rejection reason from "judge returned nil"
+                // (which is traced inside GalaxyRelationJudge.judge itself).
+                try? judgeTraceWriter?.append(
+                    sourceId: node.id,
+                    targetId: neighbor.node.id,
+                    relationKind: nil,
+                    judgePath: .fallback,
+                    similarity: Double(neighbor.similarity),
+                    confidence: nil
+                )
                 continue
             }
 

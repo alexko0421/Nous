@@ -37,16 +37,19 @@ final class GalaxyRelationJudge {
     private let llmServiceProvider: (() -> (any LLMService)?)?
     private let telemetry: GalaxyRelationTelemetry?
     private let backgroundTelemetry: (any BackgroundAIJobTelemetryRecording)?
+    private let judgeTraceWriter: EdgeJudgeTraceStore?
 
     init(
         minimumTopicSimilarity: Float = GalaxyRelationTuning.semanticThreshold,
         telemetry: GalaxyRelationTelemetry? = nil,
         backgroundTelemetry: (any BackgroundAIJobTelemetryRecording)? = nil,
+        judgeTraceWriter: EdgeJudgeTraceStore? = nil,
         llmServiceProvider: (() -> (any LLMService)?)? = nil
     ) {
         self.minimumTopicSimilarity = minimumTopicSimilarity
         self.telemetry = telemetry
         self.backgroundTelemetry = backgroundTelemetry
+        self.judgeTraceWriter = judgeTraceWriter
         self.llmServiceProvider = llmServiceProvider
     }
 
@@ -63,15 +66,39 @@ final class GalaxyRelationJudge {
             targetAtoms: targetAtoms
         ) {
             telemetry?.record(.localVerdict)
+            try? judgeTraceWriter?.append(
+                sourceId: source.id,
+                targetId: target.id,
+                relationKind: atomVerdict.relationKind.rawValue,
+                judgePath: .atom,
+                similarity: Double(similarity),
+                confidence: Double(atomVerdict.confidence)
+            )
             return atomVerdict
         }
 
         guard similarity >= minimumTopicSimilarity else {
             telemetry?.record(.localNil)
+            try? judgeTraceWriter?.append(
+                sourceId: source.id,
+                targetId: target.id,
+                relationKind: nil,
+                judgePath: .fallback,
+                similarity: Double(similarity),
+                confidence: nil
+            )
             return nil
         }
 
         telemetry?.record(.localVerdict)
+        try? judgeTraceWriter?.append(
+            sourceId: source.id,
+            targetId: target.id,
+            relationKind: GalaxyRelationKind.topicSimilarity.rawValue,
+            judgePath: .fallback,
+            similarity: Double(similarity),
+            confidence: Double(similarity)
+        )
         return GalaxyRelationVerdict(
             relationKind: .topicSimilarity,
             confidence: similarity,
@@ -111,6 +138,14 @@ final class GalaxyRelationJudge {
                 targetAtoms: targetAtoms
             )
             telemetry?.record(verdict == nil ? .llmNil : .llmVerdict)
+            try? judgeTraceWriter?.append(
+                sourceId: source.id,
+                targetId: target.id,
+                relationKind: verdict?.relationKind.rawValue,
+                judgePath: .llm,
+                similarity: Double(similarity),
+                confidence: verdict.map { Double($0.confidence) }
+            )
             recordBackgroundRun(
                 status: .completed,
                 startedAt: startedAt,
