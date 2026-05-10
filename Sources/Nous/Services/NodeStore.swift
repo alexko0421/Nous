@@ -637,6 +637,64 @@ final class NodeStore {
         try db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_reflection_runs_unique ON reflection_runs(COALESCE(project_id, ''), week_start, week_end);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_reflection_claim_run ON reflection_claim(run_id);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_reflection_claim_status ON reflection_claim(status);")
+
+        // Edge inference feedback ledger (Phase A) — see
+        // docs/superpowers/specs/2026-05-09-edge-inference-feedback-ledger-design.md.
+        // Two parallel ledgers (per-edge + per-citation), each split into
+        // user-verdict (upsert) and system-telemetry (append-only) tables.
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS edge_feedback (
+                node_a_id      TEXT NOT NULL,
+                node_b_id      TEXT NOT NULL,
+                relation_kind  TEXT NOT NULL,
+                verdict        TEXT NOT NULL,
+                note           TEXT,
+                verdict_at     REAL NOT NULL,
+                verdict_count  INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY (node_a_id, node_b_id, relation_kind)
+            );
+        """)
+
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS citation_feedback (
+                conversation_id TEXT NOT NULL,
+                turn_id         TEXT NOT NULL,
+                atom_id         TEXT NOT NULL,
+                verdict         TEXT NOT NULL,
+                note            TEXT,
+                verdict_at      REAL NOT NULL,
+                PRIMARY KEY (conversation_id, turn_id, atom_id)
+            );
+        """)
+
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS edge_judge_trace (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                node_a_id     TEXT NOT NULL,
+                node_b_id     TEXT NOT NULL,
+                relation_kind TEXT,
+                judge_path    TEXT NOT NULL,
+                similarity    REAL NOT NULL,
+                confidence    REAL,
+                judged_at     REAL NOT NULL
+            );
+        """)
+
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_edge_judge_trace_pair_time ON edge_judge_trace (node_a_id, node_b_id, judged_at DESC);")
+
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS citation_judge_trace (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id TEXT NOT NULL,
+                turn_id         TEXT NOT NULL,
+                atom_id         TEXT NOT NULL,
+                confidence      REAL NOT NULL,
+                was_displayed   INTEGER NOT NULL,
+                judged_at       REAL NOT NULL
+            );
+        """)
+
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_citation_judge_trace_turn_time ON citation_judge_trace (turn_id, judged_at);")
     }
 
     /// Direct access for migrator (transaction control, table-exists probing).
