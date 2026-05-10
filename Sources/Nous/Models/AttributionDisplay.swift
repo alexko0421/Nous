@@ -28,18 +28,32 @@ extension AttributionDisplay {
 
     /// Pure cascade decision used by `ChatViewModel.primaryAttribution`.
     /// Flag off → legacy is the only path. Flag on → atom cards win when
-    /// the corpus lane has entries, legacy citations are the fallback.
+    /// the corpus lane has entries that clear the UI confidence floor and
+    /// fit under the UI cap; otherwise legacy citations are the fallback.
     /// Both empty → `.none` so the chip area collapses cleanly.
+    ///
+    /// Floor + cap are stricter than the prompt-side gates by design:
+    /// - Prompt floor 0.6 (`CitableContextBuilder` default): broader recall
+    ///   helps the model stay grounded even on near-threshold atoms.
+    /// - UI floor 0.7 (this default): a wrong card is worse than no card —
+    ///   we'd rather collapse the chip area than mislead the reader.
+    /// - UI cap 5: matches the legacy `topK=5` so the chip bar visual
+    ///   weight stays consistent across the cascade switch.
     static func cascade(
         flagEnabled: Bool,
         resolvedCorpusEntries: [ResolvedCitableEntry],
-        citations: [SearchResult]
+        citations: [SearchResult],
+        minConfidence: Double = 0.7,
+        maxAtomCards: Int = 5
     ) -> AttributionDisplay {
         guard flagEnabled else {
             return citations.isEmpty ? .none : .legacyCitations(citations)
         }
-        if !resolvedCorpusEntries.isEmpty {
-            return .atomCards(resolvedCorpusEntries)
+        let displayable = resolvedCorpusEntries
+            .filter { ($0.entry.confidence ?? 1.0) >= minConfidence }
+            .prefix(maxAtomCards)
+        if !displayable.isEmpty {
+            return .atomCards(Array(displayable))
         }
         return citations.isEmpty ? .none : .legacyCitations(citations)
     }

@@ -93,7 +93,9 @@ struct CorpusAtomCardListView: View {
                 Text(resolved.entry.text)
                     .font(.system(size: 13, weight: .regular, design: .rounded))
                     .foregroundStyle(AppColor.colaDarkText)
-                    .lineLimit(3)
+                    // Non-clickable rows (reflections, atoms with deleted source nodes)
+                    // have no popover or click-to-source path, so show more inline.
+                    .lineLimit(isClickable ? 3 : 6)
                     .multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
