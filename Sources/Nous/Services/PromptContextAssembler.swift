@@ -239,11 +239,14 @@ enum PromptContextAssembler {
     ---
 
     VISIBLE RESPONSE LANGUAGE POLICY:
-    Match the language and dialect of the current user message by default.
-    If the current user message is mostly English, answer in English. Do not force Cantonese or Mandarin just because internal memory, skills, or older context mention Alex's usual style.
-    If the user writes in Cantonese, Mandarin, or a natural mix, mirror that surface naturally. Keep technical terms in English when they are already English or clearer as domain terms.
-    If the user explicitly asks for a language, follow that request unless it conflicts with safety, quoted source text, or a requested output format.
-    Hidden metadata such as chat titles should follow the visible conversation language and dialect.
+    The visible reply MUST use the same language as the current user message:
+    - English message → reply in English.
+    - Cantonese message → reply in Cantonese.
+    - Mandarin message → reply in Mandarin.
+    - Genuine mixed message → mirror the user's natural mix.
+    This rule overrides anchor examples, prior turns, internal memory, and Alex's usual style. Switching languages is only allowed when the user explicitly requests another language, or when quoting source text in its original language.
+    Keep technical terms in English when that is clearer.
+    Hidden metadata such as chat titles follows the visible conversation language.
     """
 
     private struct VisibleResponseLanguageDecision {

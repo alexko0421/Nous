@@ -155,4 +155,15 @@ final class PromptContextAssemblerVisibleLanguageTests: XCTestCase {
         XCTAssertTrue(slice.stable.contains("VISIBLE RESPONSE LANGUAGE POLICY"),
                       "Stable policy must remain even when no per-turn target is injected.")
     }
+
+    /// The stable policy must phrase the rule as a hard requirement (MUST) rather than
+    /// a soft default. Soft wording ("by default", "match... unless") gave the LLM
+    /// room to drift back to Alex's usual Cantonese voice on English input.
+    func testStableLanguagePolicyUsesHardRuleWording() {
+        let slice = assemble("hi")
+        XCTAssertTrue(slice.stable.contains("MUST use the same language"),
+                      "Stable policy must phrase language matching as a hard rule, not a default.")
+        XCTAssertTrue(slice.stable.contains("overrides anchor examples"),
+                      "Stable policy must explicitly override anchor / memory / prior-turn drift.")
+    }
 }

@@ -906,10 +906,11 @@ final class RAGPipelineTests: XCTestCase {
         ).combined
 
         XCTAssertTrue(context.contains("VISIBLE RESPONSE LANGUAGE POLICY"))
-        XCTAssertTrue(context.contains("If the current user message is mostly English, answer in English"))
-        XCTAssertTrue(context.contains("Do not force Cantonese or Mandarin"))
+        XCTAssertTrue(context.contains("MUST use the same language as the current user message"))
+        XCTAssertTrue(context.contains("English message → reply in English"))
+        XCTAssertTrue(context.contains("overrides anchor examples"))
         XCTAssertFalse(context.contains("or Chinese just because"))
-        XCTAssertTrue(context.contains("Keep technical terms in English when they are already English"))
+        XCTAssertTrue(context.contains("Keep technical terms in English when that is clearer"))
     }
 
     func testGovernanceTraceIncludesVisibleResponseLanguagePolicyLayer() {
