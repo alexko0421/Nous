@@ -13,10 +13,51 @@ final class GalaxyViewModel {
 
     private let nodeStore: NodeStore
     private let graphEngine: GraphEngine
+    /// Phase A galaxy feedback ledger — see
+    /// docs/superpowers/specs/2026-05-09-edge-inference-feedback-ledger-design.md.
+    /// `feedbackStore` is read by the inspector ThumbFeedbackView via
+    /// `feedback(for:)` and written via `upsertEdgeFeedback(...)`;
+    /// `traceStore` provides the telemetry strip via `telemetry(for:)`.
+    private let feedbackStore: EdgeFeedbackStore
+    private let traceStore: EdgeJudgeTraceStore
 
     init(nodeStore: NodeStore, graphEngine: GraphEngine) {
         self.nodeStore = nodeStore
         self.graphEngine = graphEngine
+        self.feedbackStore = EdgeFeedbackStore(nodeStore: nodeStore)
+        self.traceStore = EdgeJudgeTraceStore(nodeStore: nodeStore)
+    }
+
+    func feedback(for edge: NodeEdge) -> EdgeFeedbackRow? {
+        try? feedbackStore.fetch(
+            sourceId: edge.sourceId,
+            targetId: edge.targetId,
+            relationKind: edge.relationKind.rawValue
+        )
+    }
+
+    func telemetry(for edge: NodeEdge) -> TelemetryStrip? {
+        guard let trace = try? traceStore.latest(sourceId: edge.sourceId, targetId: edge.targetId) else {
+            return nil
+        }
+        let priorCount = feedback(for: edge)?.verdictCount ?? 0
+        return TelemetryStrip(
+            similarity: trace.similarity,
+            judgePath: trace.judgePath,
+            confidence: trace.confidence,
+            judgedAt: trace.judgedAt,
+            priorVerdictCount: priorCount
+        )
+    }
+
+    func upsertEdgeFeedback(edge: NodeEdge, verdict: ThumbVerdict, note: String) {
+        try? feedbackStore.upsert(
+            sourceId: edge.sourceId,
+            targetId: edge.targetId,
+            relationKind: edge.relationKind.rawValue,
+            verdict: verdict,
+            note: note.isEmpty ? nil : note
+        )
     }
 
     func load() {

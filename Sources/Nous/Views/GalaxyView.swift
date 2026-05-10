@@ -161,6 +161,32 @@ struct GalaxyView: View {
                             .lineSpacing(2)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+
+                    if let edge = selectedEdge {
+                        Divider().background(GalaxyPalette.stroke)
+
+                        ThumbFeedbackView(
+                            verdict: Binding(
+                                get: { vm.feedback(for: edge)?.verdict ?? .unset },
+                                set: { newVerdict in
+                                    let currentNote = vm.feedback(for: edge)?.note ?? ""
+                                    vm.upsertEdgeFeedback(edge: edge, verdict: newVerdict, note: currentNote)
+                                }
+                            ),
+                            note: Binding(
+                                get: { vm.feedback(for: edge)?.note ?? "" },
+                                set: { newNote in
+                                    let currentVerdict = vm.feedback(for: edge)?.verdict ?? .unset
+                                    vm.upsertEdgeFeedback(edge: edge, verdict: currentVerdict, note: newNote)
+                                }
+                            ),
+                            style: .galaxy,
+                            telemetry: vm.telemetry(for: edge),
+                            onChange: { verdict, note in
+                                vm.upsertEdgeFeedback(edge: edge, verdict: verdict, note: note)
+                            }
+                        )
+                    }
                 }
             }
             .scrollIndicators(.hidden)
