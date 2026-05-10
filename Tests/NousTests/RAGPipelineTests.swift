@@ -943,8 +943,11 @@ final class RAGPipelineTests: XCTestCase {
     }
 
     func testGovernanceTraceRecordsMixedVisibleResponseLanguageTarget() {
+        // Genuinely balanced input: no Cantonese marker, neither script reaches the 2:1
+        // dominance ratio. Earlier inputs like "咁开始 V9 language telemetry 啦" now
+        // correctly classify as Cantonese (咁/啦 are Cantonese markers).
         let trace = PromptContextAssembler.governanceTrace(
-            currentUserInput: "咁开始 V9 language telemetry 啦",
+            currentUserInput: "Hi 你好",
             globalMemory: nil,
             projectMemory: nil,
             conversationMemory: nil,

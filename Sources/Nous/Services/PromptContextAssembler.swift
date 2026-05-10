@@ -353,18 +353,36 @@ enum PromptContextAssembler {
         let chineseCount = trimmed.unicodeScalars.filter { scalar in
             isChineseScalar(scalar)
         }.count
+        let hasCantoneseMarker = containsAny(trimmed, cantoneseMarkers)
 
-        if latinCount > 0 && chineseCount > 0 {
-            return VisibleResponseLanguageDecision(target: .mixed, source: .currentTurnMixed)
-        }
-        if chineseCount > 0 {
-            if containsAny(trimmed, cantoneseMarkers) {
+        if chineseCount > 0 && latinCount == 0 {
+            if hasCantoneseMarker {
                 return VisibleResponseLanguageDecision(target: .cantonese, source: .currentTurnCantonese)
             }
             return VisibleResponseLanguageDecision(target: .mandarin, source: .currentTurnMandarin)
         }
-        if latinCount >= 3 {
-            return VisibleResponseLanguageDecision(target: .english, source: .currentTurnEnglish)
+        if latinCount > 0 && chineseCount == 0 {
+            if latinCount >= 2 {
+                return VisibleResponseLanguageDecision(target: .english, source: .currentTurnEnglish)
+            }
+            return VisibleResponseLanguageDecision(target: .unspecified, source: .none)
+        }
+        if latinCount > 0 && chineseCount > 0 {
+            // Cantonese markers (嘅/咁/啲/喺/系咪/我哋…) are unambiguous: if present, the
+            // turn is Cantonese, even with English tokens like "app" or "React".
+            if hasCantoneseMarker {
+                return VisibleResponseLanguageDecision(target: .cantonese, source: .currentTurnCantonese)
+            }
+            // No Cantonese marker: use a 2:1 dominance ratio so a single proper noun
+            // or technical term in the other script (e.g. "Tell me about 醒目女仔",
+            // "我想了解 React 这个框架") doesn't flip the turn to Mixed.
+            if latinCount >= chineseCount * 2 {
+                return VisibleResponseLanguageDecision(target: .english, source: .currentTurnEnglish)
+            }
+            if chineseCount >= latinCount * 2 {
+                return VisibleResponseLanguageDecision(target: .mandarin, source: .currentTurnMandarin)
+            }
+            return VisibleResponseLanguageDecision(target: .mixed, source: .currentTurnMixed)
         }
         return VisibleResponseLanguageDecision(target: .unspecified, source: .none)
     }
