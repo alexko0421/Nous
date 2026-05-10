@@ -142,12 +142,8 @@ struct ChatArea: View {
                                                 onOpenBranch: { openTemporaryBranch(from: msg) }
                                             )
                                             if shouldShowRelevantChats(after: msg) {
-                                                RAGCitationView(
-                                                    citations: vm.citations,
-                                                    isExpanded: $isRelevantChatsExpanded,
-                                                    onOpenSource: onNavigateToNode
-                                                )
-                                                .padding(.top, 8)
+                                                attributionView(for: vm.primaryAttribution)
+                                                    .padding(.top, 8)
                                             }
                                             if msg.role == .assistant {
                                                 HStack(spacing: 4) {
@@ -263,13 +259,9 @@ struct ChatArea: View {
                                             timestamp: Date(),
                                             onOpenBranch: nil
                                         )
-                                        if !vm.citations.isEmpty {
-                                            RAGCitationView(
-                                                citations: vm.citations,
-                                                isExpanded: $isRelevantChatsExpanded,
-                                                onOpenSource: onNavigateToNode
-                                            )
-                                            .padding(.top, 4)
+                                        if vm.primaryAttribution != .none {
+                                            attributionView(for: vm.primaryAttribution)
+                                                .padding(.top, 4)
                                         }
                                     }
                                     .blur(radius: branchBackgroundBlurRadius)
@@ -884,8 +876,28 @@ struct ChatArea: View {
     private func shouldShowRelevantChats(after message: Message) -> Bool {
         message.role == .assistant &&
         message.id == vm.messages.last(where: { $0.role == .assistant })?.id &&
-        !vm.citations.isEmpty &&
+        vm.primaryAttribution != .none &&
         !vm.isGenerating
+    }
+
+    @ViewBuilder
+    private func attributionView(for attribution: AttributionDisplay) -> some View {
+        switch attribution {
+        case .atomCards(let entries):
+            CorpusAtomCardListView(
+                entries: entries,
+                isExpanded: $isRelevantChatsExpanded,
+                onOpenSource: onNavigateToNode
+            )
+        case .legacyCitations(let citations):
+            RAGCitationView(
+                citations: citations,
+                isExpanded: $isRelevantChatsExpanded,
+                onOpenSource: onNavigateToNode
+            )
+        case .none:
+            EmptyView()
+        }
     }
 
     private func scrollToBottom(with proxy: ScrollViewProxy) {
