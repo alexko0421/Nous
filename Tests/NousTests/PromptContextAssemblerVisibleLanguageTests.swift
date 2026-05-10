@@ -166,4 +166,41 @@ final class PromptContextAssemblerVisibleLanguageTests: XCTestCase {
         XCTAssertTrue(slice.stable.contains("overrides anchor examples"),
                       "Stable policy must explicitly override anchor / memory / prior-turn drift.")
     }
+
+    // MARK: - Quick action opening override
+
+    /// Quick-action opening turns pass a synthetic English instruction as the seed.
+    /// Without an override that would classify the turn as English under the hardened
+    /// MUST rule, forcing the LLM to greet Alex in English. The override must let the
+    /// runner force Cantonese (anchor voice) regardless of the synthetic input.
+    func testVisibleLanguageOverrideForcesCantoneseDespiteEnglishInput() {
+        let slice = PromptContextAssembler.assembleContext(
+            currentUserInput: "Alex just entered the Brainstorm mode from the welcome screen. Read his recent conversations.",
+            visibleLanguageTargetOverride: .cantonese,
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        )
+        XCTAssertEqual(target(in: slice), "Cantonese",
+                       "Override must beat the heuristic — opening turns must default to anchor voice.")
+    }
+
+    /// Override also works when no currentUserInput is supplied (the path the runner
+    /// actually takes — passes nil and forces Cantonese).
+    func testVisibleLanguageOverrideForcesCantoneseWhenInputIsNil() {
+        let slice = PromptContextAssembler.assembleContext(
+            currentUserInput: nil,
+            visibleLanguageTargetOverride: .cantonese,
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        )
+        XCTAssertEqual(target(in: slice), "Cantonese")
+    }
 }

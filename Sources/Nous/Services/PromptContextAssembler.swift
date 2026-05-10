@@ -895,6 +895,7 @@ enum PromptContextAssembler {
     static func assembleContext(
         chatMode: ChatMode = .companion,
         currentUserInput: String? = nil,
+        visibleLanguageTargetOverride: VisibleResponseLanguageTarget? = nil,
         operatingContext: OperatingContext? = nil,
         globalMemory: String?,
         essentialStory: String? = nil,
@@ -968,7 +969,12 @@ enum PromptContextAssembler {
         )
         let promptCitations = memoryPacket.filteredCitations(citations)
         slowMemory.append(contentsOf: memoryPacket.stableBlocks)
-        let visibleLanguageDecision = visibleResponseLanguageDecision(for: currentUserInput)
+        let visibleLanguageDecision: VisibleResponseLanguageDecision = {
+            if let override = visibleLanguageTargetOverride {
+                return VisibleResponseLanguageDecision(target: override, source: .quickActionOpeningDefault)
+            }
+            return visibleResponseLanguageDecision(for: currentUserInput)
+        }()
 
         if !memoryGraphRecall.isEmpty, activeQuickActionMode != nil {
             volatilePieces.append("---\n\nGRAPH MEMORY RECALL:")
@@ -1600,6 +1606,7 @@ User: "我中意又软又硬嘅人，反差先系 depth"
     static func governanceTrace(
         chatMode: ChatMode = .companion,
         currentUserInput: String? = nil,
+        visibleLanguageTargetOverride: VisibleResponseLanguageTarget? = nil,
         operatingContext: OperatingContext? = nil,
         globalMemory: String?,
         essentialStory: String? = nil,
@@ -1624,6 +1631,7 @@ User: "我中意又软又硬嘅人，反差先系 depth"
         governanceTrace(
             chatMode: chatMode,
             currentUserInput: currentUserInput,
+            visibleLanguageTargetOverride: visibleLanguageTargetOverride,
             operatingContext: operatingContext,
             globalMemory: globalMemory,
             essentialStory: essentialStory,
@@ -1651,6 +1659,7 @@ User: "我中意又软又硬嘅人，反差先系 depth"
     static func governanceTrace(
         chatMode: ChatMode = .companion,
         currentUserInput: String? = nil,
+        visibleLanguageTargetOverride: VisibleResponseLanguageTarget? = nil,
         operatingContext: OperatingContext? = nil,
         globalMemory: String?,
         essentialStory: String? = nil,
@@ -1675,7 +1684,12 @@ User: "我中意又软又硬嘅人，反差先系 depth"
     ) -> PromptGovernanceTrace {
         var layers = ["anchor", "memory_interpretation_policy", "core_safety_policy", "user_address_policy", "visible_response_language_policy", "answer_closure_policy", "stoic_grounding_policy", "real_world_decision_policy", "summary_output_policy", "conversation_title_output_policy", "chat_mode"]
         let highRiskQueryDetected = SafetyGuardrails.isHighRiskQuery(currentUserInput)
-        let visibleLanguageDecision = visibleResponseLanguageDecision(for: currentUserInput)
+        let visibleLanguageDecision: VisibleResponseLanguageDecision = {
+            if let override = visibleLanguageTargetOverride {
+                return VisibleResponseLanguageDecision(target: override, source: .quickActionOpeningDefault)
+            }
+            return visibleResponseLanguageDecision(for: currentUserInput)
+        }()
         let memoryPacket = MemoryPromptPacket(
             operatingContext: operatingContext,
             globalMemory: globalMemory,
