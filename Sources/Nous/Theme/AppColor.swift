@@ -98,6 +98,11 @@ struct AppColor {
     static let galaxyBackground = Color(red: 26/255, green: 26/255, blue: 46/255)
     static let galaxyNodeGlow = Color(red: 243/255, green: 131/255, blue: 53/255)
 
+    // Morandi dusty rose — galaxy edge `roseLine` and shared feedback UI
+    // selected state. Matches GalaxyScene.roseLine RGB so galaxy inspector
+    // and chat thumb feedback share one accent across surfaces.
+    static let dustyRose = Color(red: 205/255, green: 137/255, blue: 156/255)
+
     // Welcome/chat dark theme
     static let inkBackground = Color(red: 24/255, green: 24/255, blue: 26/255)
     static let inkPanel = Color(red: 31/255, green: 31/255, blue: 33/255)
