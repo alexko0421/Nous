@@ -97,6 +97,16 @@ final class ChatViewModel {
     @ObservationIgnored private var cachedContextContinuationService: ContextContinuationService?
     @ObservationIgnored private var cachedTurnHousekeepingService: TurnHousekeepingService?
     @ObservationIgnored private var cachedSourceIngestionService: SourceIngestionService?
+
+    /// Phase A chat citation trace + feedback stores. Built lazily off
+    /// the shared NodeStore. The emitter writes one telemetry row per
+    /// candidate atom on each `.completed` turn event; the feedback
+    /// store is exposed so `CorpusAtomCardListView` can mount per-row
+    /// thumb feedback.
+    @ObservationIgnored private lazy var citationTraceEmitter = CitationTraceEmitter(
+        traceStore: CitationJudgeTraceStore(nodeStore: nodeStore)
+    )
+    @ObservationIgnored lazy var citationFeedbackStore = CitationFeedbackStore(nodeStore: nodeStore)
     private var memoryProjectionService: MemoryProjectionService {
         userMemoryService.projectionReader
     }
@@ -1078,6 +1088,7 @@ final class ChatViewModel {
             currentNode = completion.node
             messages = completion.messagesAfterAssistantAppend
             activeQuickActionMode = completion.nextQuickActionMode
+            emitCitationTrace(for: completion)
             currentResponse = ""
             currentThinking = ""
             currentThinkingStartedAt = nil
@@ -1100,6 +1111,37 @@ final class ChatViewModel {
             didHitBudgetExhaustion = false
             presentAssistantFailure("Error: \(failure.message)")
         }
+    }
+
+    /// Phase A chat citation telemetry. Snapshots the cascade decision
+    /// for this assistant turn and writes one trace row per candidate
+    /// atom — including atoms filtered out by the UI confidence floor.
+    /// Non-UUID-shaped citable entry ids (sidecar facts) are skipped
+    /// since the trace table keys on UUIDs.
+    @MainActor
+    private func emitCitationTrace(for completion: TurnCompletion) {
+        guard !resolvedCorpusEntries.isEmpty else { return }
+
+        let displayedAtomIds: Set<UUID> = {
+            switch primaryAttribution {
+            case .atomCards(let entries):
+                return Set(entries.compactMap { UUID(uuidString: $0.entry.id) })
+            case .legacyCitations, .none:
+                return []
+            }
+        }()
+
+        let candidates: [(atomId: UUID, confidence: Double)] = resolvedCorpusEntries.compactMap { resolved in
+            guard let atomId = UUID(uuidString: resolved.entry.id) else { return nil }
+            return (atomId: atomId, confidence: resolved.entry.confidence ?? 0.0)
+        }
+
+        try? citationTraceEmitter.emit(
+            conversationId: completion.node.id,
+            turnId: completion.assistantMessage.id,
+            candidates: candidates,
+            displayedIds: displayedAtomIds
+        )
     }
 
     @MainActor
