@@ -12,6 +12,7 @@
 		00590D3A6EED1746D81A6921 /* GalaxySceneContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F929EE116210CE8825174593 /* GalaxySceneContainer.swift */; };
 		0086C377BD08E88CD4FD3CD7 /* nous_logo_transparent.png in Resources */ = {isa = PBXBuildFile; fileRef = 38B7D56F90C5FFE216C57E1A /* nous_logo_transparent.png */; };
 		02967200F617A33CB9522076 /* NodeEdge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98307413B1A35533835FC1ED /* NodeEdge.swift */; };
+		02B779BE345A2651B4FB2D14 /* CitationJudgeTraceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD486DF53D75FBD080ABD10A /* CitationJudgeTraceStore.swift */; };
 		0368105FC6C747D5942AFFF1 /* AppMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 404551AD567CAB05ACFD04D4 /* AppMotion.swift */; };
 		0653418426872F9E471DFC9F /* GalaxyPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C1B76A282D5CDC10E130478 /* GalaxyPresentationTests.swift */; };
 		06BE03A1B50A0BDC7B80B7F9 /* ChatTurnRunnerShadowLearningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A026B58B79F1E74CE18DF3F0 /* ChatTurnRunnerShadowLearningTests.swift */; };
@@ -301,6 +302,7 @@
 		BE5DF397ACFA889FD33CB9B1 /* BehaviorEval.swift in Sources */ = {isa = PBXBuildFile; fileRef = 823A8AFA13E5CFEE94A2F253 /* BehaviorEval.swift */; };
 		BE708E4323D55286FEF8C0A3 /* HeartbeatCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECC59DC757F085BD2CA1B5A1 /* HeartbeatCoordinator.swift */; };
 		BE9D211E760DD51A5EB2B016 /* MemoryEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B872B69D5BB39FAE69D8EAB /* MemoryEntry.swift */; };
+		BEF76B1BB0F0CDB7F4370B89 /* CitationJudgeTraceStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 612C832E7CAC0A63A6E32F71 /* CitationJudgeTraceStoreTests.swift */; };
 		BF1028C33700AB8FBCF0251F /* TurnPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AB8C6C71AC65652DAD1E73A /* TurnPlanner.swift */; };
 		BF333AA6397742DA5B3D762A /* CitableContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8593E9A50877CCFDC517D906 /* CitableContext.swift */; };
 		BF6E900131DDFA0EC574E970 /* CorpusCardFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7C6033AA40BC1D6DD27C0CD /* CorpusCardFormatter.swift */; };
@@ -574,6 +576,7 @@
 		60337BBB3C88565635D1C1C1 /* GalaxyRelationTuning.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalaxyRelationTuning.swift; sourceTree = "<group>"; };
 		603848DA5F2646476CEFD703 /* QuickActionOpeningRunnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickActionOpeningRunnerTests.swift; sourceTree = "<group>"; };
 		607D48B98D68733B72FB2E30 /* PromptContextAssemblerTeachingExplanationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptContextAssemblerTeachingExplanationTests.swift; sourceTree = "<group>"; };
+		612C832E7CAC0A63A6E32F71 /* CitationJudgeTraceStoreTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CitationJudgeTraceStoreTests.swift; sourceTree = "<group>"; };
 		61F80CE82A4CBD8E318753AF /* UserMemoryProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserMemoryProfile.swift; sourceTree = "<group>"; };
 		629341ADDFEBDA82351115CF /* VoiceNotchPanelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceNotchPanelController.swift; sourceTree = "<group>"; };
 		6316ADE0D18392F2ECC68C9A /* CitableContextBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CitableContextBuilder.swift; sourceTree = "<group>"; };
@@ -807,6 +810,7 @@
 		FC78BB757520B4712C6C8AAC /* AgentTraceAccordion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTraceAccordion.swift; sourceTree = "<group>"; };
 		FD0963174B69820BF333349E /* QuickActionAgentsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickActionAgentsTests.swift; sourceTree = "<group>"; };
 		FD16D2F73562FF8275C55E4D /* CorpusFidelityCheckerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CorpusFidelityCheckerTests.swift; sourceTree = "<group>"; };
+		FD486DF53D75FBD080ABD10A /* CitationJudgeTraceStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CitationJudgeTraceStore.swift; sourceTree = "<group>"; };
 		FEA896134861BEAADF98E800 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		FEADD90223D5DCBFDE74F5DE /* Accelerate.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Accelerate.framework; path = System/Library/Frameworks/Accelerate.framework; sourceTree = SDKROOT; };
 		FFA7FC708EEBC903409D5DD9 /* WindowConfigurator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowConfigurator.swift; sourceTree = "<group>"; };
@@ -1240,6 +1244,7 @@
 				640BB2FAE8483BD3F2943042 /* EdgeFeedbackStore.swift */,
 				E3BE54E29014431887519E53 /* CitationFeedbackStore.swift */,
 				B6ABAECF517B0E56D475FBE4 /* EdgeJudgeTraceStore.swift */,
+				FD486DF53D75FBD080ABD10A /* CitationJudgeTraceStore.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -1393,6 +1398,7 @@
 				76041CCAA40C365D14AD0DD2 /* EdgeFeedbackStoreTests.swift */,
 				4123CE7A5609C262A0C954F4 /* CitationFeedbackStoreTests.swift */,
 				72DE16E138B5BE68FF2BC374 /* EdgeJudgeTraceStoreTests.swift */,
+				612C832E7CAC0A63A6E32F71 /* CitationJudgeTraceStoreTests.swift */,
 			);
 			name = NousTests;
 			path = Tests/NousTests;
@@ -1855,6 +1861,7 @@
 				42CCEFC3AA730D64B0F770E4 /* EdgeFeedbackStore.swift in Sources */,
 				C384255D16C2EB02ACE4AD2B /* CitationFeedbackStore.swift in Sources */,
 				56386AA36C902D11A2115CC8 /* EdgeJudgeTraceStore.swift in Sources */,
+				02B779BE345A2651B4FB2D14 /* CitationJudgeTraceStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -2005,6 +2012,7 @@
 				90E27CEC9539C9E0C2FA845D /* EdgeFeedbackStoreTests.swift in Sources */,
 				BB4A28E9B3EF50478E1EA9C5 /* CitationFeedbackStoreTests.swift in Sources */,
 				56896E33088B3AED735DF217 /* EdgeJudgeTraceStoreTests.swift in Sources */,
+				BEF76B1BB0F0CDB7F4370B89 /* CitationJudgeTraceStoreTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
