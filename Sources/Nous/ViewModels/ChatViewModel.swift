@@ -597,6 +597,13 @@ final class ChatViewModel {
 
         let responseTaskId = UUID()
         inFlightResponseAbortReason = nil
+        // Capture the originating session at spawn time so a background
+        // completion (user navigated away mid-turn) still flips
+        // `hasUnseenCompletion` on the conversation where the turn started.
+        let originatingConversationId = currentNode?.id
+        let originatingSession = originatingConversationId.map {
+            conversationSessionStore.streamingSession(for: $0)
+        }
         let responseTask = Task { @MainActor [weak self] in
             guard let self else { return }
             await self.runQuickActionConversation(mode, responseTaskId: responseTaskId)
@@ -604,6 +611,15 @@ final class ChatViewModel {
         inFlightResponseTask = responseTask
         inFlightResponseTaskId = responseTaskId
         await responseTask.value
+        let viewingNow = (currentNode?.id == originatingConversationId)
+        let surfacedError = originatingSession?.captureFinish(
+            turnId: responseTaskId,
+            viewingNow: viewingNow,
+            error: nil
+        )
+        if let surfacedError {
+            NSLog("[NousTurn] background turn surfaced error: %@", String(describing: surfacedError))
+        }
         clearInFlightResponseTaskIfOwned(responseTaskId)
         if inFlightResponseTaskId == nil {
             inFlightResponseAbortReason = nil
@@ -786,6 +802,13 @@ final class ChatViewModel {
 
         let responseTaskId = UUID()
         inFlightResponseAbortReason = nil
+        // Capture the originating session at spawn time so a background
+        // completion (user navigated away mid-turn) still flips
+        // `hasUnseenCompletion` on the conversation where the turn started.
+        let originatingConversationId = currentNode?.id
+        let originatingSession = originatingConversationId.map {
+            conversationSessionStore.streamingSession(for: $0)
+        }
         let responseTask = Task { @MainActor [weak self] in
             guard let self else { return }
             await self.runSend(attachments: limitedAttachments, responseTaskId: responseTaskId)
@@ -793,6 +816,15 @@ final class ChatViewModel {
         inFlightResponseTask = responseTask
         inFlightResponseTaskId = responseTaskId
         await responseTask.value
+        let viewingNow = (currentNode?.id == originatingConversationId)
+        let surfacedError = originatingSession?.captureFinish(
+            turnId: responseTaskId,
+            viewingNow: viewingNow,
+            error: nil
+        )
+        if let surfacedError {
+            NSLog("[NousTurn] background turn surfaced error: %@", String(describing: surfacedError))
+        }
         clearInFlightResponseTaskIfOwned(responseTaskId)
         if inFlightResponseTaskId == nil {
             inFlightResponseAbortReason = nil
@@ -949,6 +981,13 @@ final class ChatViewModel {
 
         let responseTaskId = UUID()
         inFlightResponseAbortReason = nil
+        // Capture the originating session at spawn time so a background
+        // completion (user navigated away mid-turn) still flips
+        // `hasUnseenCompletion` on the conversation where the turn started.
+        let originatingConversationId = currentNode?.id
+        let originatingSession = originatingConversationId.map {
+            conversationSessionStore.streamingSession(for: $0)
+        }
         let responseTask = Task { @MainActor [weak self] in
             guard let self else { return }
             await self.runRegenerateLatestAssistant(responseTaskId: responseTaskId)
@@ -956,6 +995,15 @@ final class ChatViewModel {
         inFlightResponseTask = responseTask
         inFlightResponseTaskId = responseTaskId
         await responseTask.value
+        let viewingNow = (currentNode?.id == originatingConversationId)
+        let surfacedError = originatingSession?.captureFinish(
+            turnId: responseTaskId,
+            viewingNow: viewingNow,
+            error: nil
+        )
+        if let surfacedError {
+            NSLog("[NousTurn] background turn surfaced error: %@", String(describing: surfacedError))
+        }
         clearInFlightResponseTaskIfOwned(responseTaskId)
         if inFlightResponseTaskId == nil {
             inFlightResponseAbortReason = nil

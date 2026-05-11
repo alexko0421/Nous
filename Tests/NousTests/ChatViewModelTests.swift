@@ -1293,6 +1293,49 @@ final class ChatViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func test_backgroundTurnCompletion_setsHasUnseenCompletion() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { nil },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: makeScratchPadStore(nodeStore: nodeStore)
+        )
+
+        let nodeA = NousNode(type: .conversation, title: "A")
+        try nodeStore.insertNode(nodeA)
+        let nodeB = NousNode(type: .conversation, title: "B")
+        try nodeStore.insertNode(nodeB)
+
+        vm.loadConversation(nodeA)
+        let sessionA = try XCTUnwrap(vm.currentStreamingSession)
+
+        let turnId = UUID()
+        let task = Task<Void, Never> { }
+        sessionA.beginTurn(turnId: turnId, task: task)
+
+        // Switch to B BEFORE the simulated finish.
+        vm.loadConversation(nodeB)
+
+        // Simulate the originating turn finishing in the background.
+        _ = sessionA.captureFinish(turnId: turnId, viewingNow: false, error: nil)
+
+        XCTAssertTrue(sessionA.hasUnseenCompletion)
+    }
+
+    @MainActor
     func test_loadConversation_doesNotCancelInFlightTaskOnOtherConversation() async throws {
         let nodeStore = try NodeStore(path: ":memory:")
         let vectorStore = VectorStore(nodeStore: nodeStore)

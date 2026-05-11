@@ -93,6 +93,57 @@ final class ConversationStreamingSessionTests: XCTestCase {
         XCTAssertTrue(surfaced is E)
     }
 
+    func test_captureFinish_matchingTurn_setsUnseenWhenNotViewing() {
+        let session = ConversationStreamingSession(conversationId: UUID())
+        let turnId = UUID()
+        session.beginTurn(turnId: turnId, task: Task<Void, Never> { })
+
+        let surfaced = session.captureFinish(turnId: turnId, viewingNow: false)
+
+        XCTAssertTrue(session.hasUnseenCompletion)
+        XCTAssertFalse(session.isGenerating)
+        XCTAssertNil(session.inFlightTask)
+        XCTAssertNil(session.inFlightTurnId)
+        XCTAssertNil(surfaced)
+    }
+
+    func test_captureFinish_matchingTurn_viewingNow_doesNotSetUnseen() {
+        let session = ConversationStreamingSession(conversationId: UUID())
+        let turnId = UUID()
+        session.beginTurn(turnId: turnId, task: Task<Void, Never> { })
+
+        _ = session.captureFinish(turnId: turnId, viewingNow: true)
+
+        XCTAssertFalse(session.hasUnseenCompletion)
+        XCTAssertFalse(session.isGenerating)
+    }
+
+    func test_captureFinish_mismatchedTurn_noOp() {
+        let session = ConversationStreamingSession(conversationId: UUID())
+        let originalTurnId = UUID()
+        session.beginTurn(turnId: originalTurnId, task: Task<Void, Never> { })
+
+        let supersededReturn = session.captureFinish(turnId: UUID(), viewingNow: false)
+
+        XCTAssertNil(supersededReturn)
+        XCTAssertTrue(session.isGenerating)
+        XCTAssertEqual(session.inFlightTurnId, originalTurnId)
+        XCTAssertFalse(session.hasUnseenCompletion)
+    }
+
+    func test_captureFinish_withError_recordsErrorAndReturnsIt() {
+        struct E: Error, Equatable {}
+        let session = ConversationStreamingSession(conversationId: UUID())
+        let turnId = UUID()
+        session.beginTurn(turnId: turnId, task: Task<Void, Never> { })
+
+        let surfaced = session.captureFinish(turnId: turnId, viewingNow: false, error: E())
+
+        XCTAssertTrue(session.hasUnseenCompletion)
+        XCTAssertTrue(session.lastError is E)
+        XCTAssertTrue(surfaced is E)
+    }
+
     func test_cancel_cancelsTask() async {
         let session = ConversationStreamingSession(conversationId: UUID())
         let started = expectation(description: "task started")

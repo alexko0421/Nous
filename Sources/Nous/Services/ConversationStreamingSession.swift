@@ -85,4 +85,23 @@ extension ConversationStreamingSession {
         lastError = nil
         return err
     }
+
+    /// Marks this turn finished unless it has been superseded by a different
+    /// in-flight turn on this session. A `nil` `inFlightTurnId` is treated as
+    /// "no contention" — the slot may have been migrated to another session
+    /// (see `bindStreamingSession` in `ChatViewModel`) and the originating
+    /// session still owns the unseen-completion flag. Returns `lastError`
+    /// if any.
+    @discardableResult
+    func captureFinish(turnId: UUID, viewingNow: Bool, error: Error? = nil) -> Error? {
+        if let inFlight = inFlightTurnId, inFlight != turnId {
+            return nil
+        }
+        if let error {
+            failTurn(error, viewingNow: viewingNow)
+        } else {
+            finishTurn(viewingNow: viewingNow)
+        }
+        return viewingNow ? nil : lastError
+    }
 }
