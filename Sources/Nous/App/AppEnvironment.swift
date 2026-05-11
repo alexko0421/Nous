@@ -27,6 +27,7 @@ struct AppDependencies {
     let conversationTitleBackfill: ConversationTitleBackfillService
     let memoryGraphMessageBackfill: MemoryGraphMessageBackfillService
     let memoryAtomEmbeddingBackfill: MemoryAtomEmbeddingBackfillService
+    let embeddingMigrationRunner: EmbeddingMigrationRunner
     let userMemoryService: UserMemoryService
     let governanceTelemetry: GovernanceTelemetryStore
     let backgroundAITelemetry: BackgroundAIJobTelemetryStore
@@ -191,6 +192,13 @@ final class AppEnvironment {
                 return try? embeddingService.embed(text)
             }
         )
+        let embeddingMigrationRunner = EmbeddingMigrationRunner(
+            nodeStore: nodeStore,
+            embed: { [embeddingService] text in
+                guard embeddingService.isLoaded else { return nil }
+                return try? embeddingService.embed(text)
+            }
+        )
         let governanceTelemetry = GovernanceTelemetryStore(nodeStore: nodeStore)
         let scratchPadStore = ScratchPadStore(nodeStore: nodeStore)
         let userMemoryService = UserMemoryService(
@@ -314,6 +322,7 @@ final class AppEnvironment {
             conversationTitleBackfill: conversationTitleBackfill,
             memoryGraphMessageBackfill: memoryGraphMessageBackfill,
             memoryAtomEmbeddingBackfill: memoryAtomEmbeddingBackfill,
+            embeddingMigrationRunner: embeddingMigrationRunner,
             userMemoryService: userMemoryService,
             governanceTelemetry: governanceTelemetry,
             backgroundAITelemetry: backgroundAITelemetry,

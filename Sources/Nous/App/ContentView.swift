@@ -497,6 +497,13 @@ struct ContentView: View {
             _ = try? dependencies.memoryAtomEmbeddingBackfill.runIfNeeded()
         }
 
+        Task.detached(priority: .utility) {
+            // Re-embed atoms whose signature is stale (e.g. model upgraded).
+            // Bounded to 256 atoms per launch; resumes across restarts since
+            // each updated row commits independently.
+            _ = try? dependencies.embeddingMigrationRunner.runIfNeeded(maxAtoms: 256)
+        }
+
         if let rollover = dependencies.weeklyReflectionRollover {
             Task.detached(priority: .utility) {
                 await rollover()
