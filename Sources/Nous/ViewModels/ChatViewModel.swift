@@ -42,23 +42,9 @@ final class ChatViewModel {
     /// cascade behind `FeatureFlags.atomCardsEnabled`.
     var resolvedCorpusEntries: [ResolvedCitableEntry] = []
 
-    /// Block 4b Phase 1B — cascade decision for the chip area. When the
-    /// flag is off, the legacy conversation-level citations render as
-    /// before. When the flag is on and the corpus lane has entries, atom
-    /// cards become primary; the legacy citations fall back only when the
-    /// corpus lane is empty. Mirrors the prompt-side suppression in
-    /// `PromptContextAssembler.swift:945-946`.
-    ///
-    /// Phase 1C will add a UI-side confidence floor (0.7) and UI cap (5)
-    /// here; Phase 1B is structurally complete with no quality gates so
-    /// the cascade itself can be verified independently.
-    var primaryAttribution: AttributionDisplay {
-        AttributionDisplay.cascade(
-            flagEnabled: FeatureFlags.resolvedAtomCardsEnabled,
-            resolvedCorpusEntries: resolvedCorpusEntries,
-            citations: citations
-        )
-    }
+    /// Attribution chips are hidden — retrieval runs fully in background.
+    /// `cascade()` logic is preserved in `AttributionDisplay` for future use.
+    var primaryAttribution: AttributionDisplay { .none }
 
     var activeQuickActionMode: QuickActionMode?
     var activeChatMode: ChatMode? = nil
@@ -98,9 +84,20 @@ final class ChatViewModel {
     /// that still owns the slot clears it (see `inFlightJudgeTaskId` guard in `send()`).
     @ObservationIgnored nonisolated(unsafe) private var inFlightJudgeTask: Task<JudgeVerdict, Error>?
     @ObservationIgnored nonisolated(unsafe) private var inFlightJudgeTaskId: UUID?
-    @ObservationIgnored nonisolated(unsafe) private var inFlightResponseTask: Task<Void, Never>?
-    @ObservationIgnored nonisolated(unsafe) private var inFlightResponseTaskId: UUID?
-    @ObservationIgnored nonisolated(unsafe) private var inFlightResponseAbortReason: TurnAbortReason?
+    private var inFlightResponseTask: Task<Void, Never>? {
+        get { currentStreamingSession?.inFlightTask }
+        set { currentStreamingSession?.inFlightTask = newValue }
+    }
+
+    private var inFlightResponseTaskId: UUID? {
+        get { currentStreamingSession?.inFlightTurnId }
+        set { currentStreamingSession?.inFlightTurnId = newValue }
+    }
+
+    private var inFlightResponseAbortReason: TurnAbortReason? {
+        get { currentStreamingSession?.inFlightAbortReason }
+        set { currentStreamingSession?.inFlightAbortReason = newValue }
+    }
     private let governanceTelemetry: GovernanceTelemetryStore
     private let geminiPromptCache: GeminiPromptCacheService
     private let scratchPadStore: ScratchPadStore
@@ -541,9 +538,26 @@ final class ChatViewModel {
     /// ...). Must be called immediately after every assignment to
     /// `currentNode`; without it, the forwarded setters silently no-op
     /// against a nil session. See Task 4 (cross-window streaming).
+    ///
+    /// When this rebinds the session mid-turn (e.g. the recovery path
+    /// in `runSend` swaps the missing/restored node for a freshly-created
+    /// one inside `.userMessageAppended`), the in-flight task slots are
+    /// migrated to the new session so `isActiveResponseTask` continues
+    /// to recognize the running turn after the rebind.
     @MainActor
     private func bindStreamingSession(for node: NousNode) {
-        currentStreamingSession = conversationSessionStore.streamingSession(for: node.id)
+        let newSession = conversationSessionStore.streamingSession(for: node.id)
+        if let previous = currentStreamingSession,
+           previous !== newSession,
+           let turnId = previous.inFlightTurnId {
+            newSession.inFlightTurnId = turnId
+            newSession.inFlightTask = previous.inFlightTask
+            newSession.inFlightAbortReason = previous.inFlightAbortReason
+            previous.inFlightTurnId = nil
+            previous.inFlightTask = nil
+            previous.inFlightAbortReason = nil
+        }
+        currentStreamingSession = newSession
     }
 
     func activateQuickActionMode(_ mode: QuickActionMode) {
@@ -553,6 +567,15 @@ final class ChatViewModel {
     @MainActor
     func beginQuickActionConversation(_ mode: QuickActionMode) async {
         guard !isGenerating else { return }
+
+        // Pre-create the conversation at the spawn site so the in-flight
+        // task slot writes below land on a bound streaming session. Quick
+        // actions always start a fresh conversation, so this is
+        // unconditional. The duplicate bootstrap inside
+        // `runQuickActionConversation` is intentionally removed.
+        startNewConversation(projectId: defaultProjectId, cancelInFlightWork: false)
+        activeQuickActionMode = mode
+        inputText = ""
 
         let responseTaskId = UUID()
         inFlightResponseAbortReason = nil
@@ -573,10 +596,9 @@ final class ChatViewModel {
     private func runQuickActionConversation(_ mode: QuickActionMode, responseTaskId: UUID) async {
         guard isActiveResponseTask(responseTaskId) else { return }
 
-        // Quick actions are a launch path, not the lasting chat label.
-        startNewConversation(projectId: defaultProjectId, cancelInFlightWork: false)
-        activeQuickActionMode = mode
-        inputText = ""
+        // Conversation bootstrap moved to `beginQuickActionConversation`
+        // so the in-flight task slots have a bound streaming session
+        // before they're written.
 
         guard let node = currentNode else { return }
 
@@ -726,6 +748,22 @@ final class ChatViewModel {
             inputText = ""
             await runReflectCommand()
             return
+        }
+
+        // Pre-bind a streaming session at the spawn site so the in-flight
+        // task slot writes below land on a real session. Without this, the
+        // forwarded setters silently no-op against a nil session and the
+        // active-task guard in `runSend` rejects the turn. The duplicate
+        // bootstrap inside `runSend` is intentionally removed so we don't
+        // create the conversation twice.
+        if currentNode == nil {
+            startNewConversation(projectId: defaultProjectId, cancelInFlightWork: false)
+        } else if currentStreamingSession == nil, let node = currentNode {
+            // currentNode was set without going through
+            // startNewConversation/loadConversation (e.g. test scaffolding
+            // or a restored-conversation scenario). Bind here so the
+            // forwarded slots have somewhere to live.
+            bindStreamingSession(for: node)
         }
 
         let responseTaskId = UUID()
@@ -911,9 +949,8 @@ final class ChatViewModel {
         let query = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard (!query.isEmpty || !attachments.isEmpty), isActiveResponseTask(responseTaskId) else { return }
 
-        if currentNode == nil {
-            startNewConversation(projectId: defaultProjectId, cancelInFlightWork: false)
-        }
+        // Conversation bootstrap moved to `send()` so the in-flight task
+        // slots have a bound streaming session before they're written.
 
         inputText = ""
         isGenerating = true
