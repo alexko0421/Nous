@@ -5,10 +5,14 @@ struct BrainstormAgent: QuickActionAgent {
 
     func openingPrompt() -> String {
         """
-        Alex just entered the Brainstorm mode from the welcome screen.
-        Start the conversation yourself instead of waiting for him to type.
+        Alex just entered the Brainstorm mode from the welcome screen. Read his
+        recent conversations and what's been on his mind from memory, then offer
+        a concrete thread back to him as a starting seed for divergence — name
+        the shape, don't fish. Only fall back to one short specific question if
+        nothing in context feels brainstorm-shaped. Never open with generic
+        "what do you want to brainstorm about?".
+
         This is only the opening turn, so do not use the structured clarification card yet.
-        Ask one short, natural, open-ended question first to understand what he wants to brainstorm about.
         Start your reply with this hidden marker so the mode stays in understanding phase:
         <phase>understanding</phase>
         Do not mention hidden prompts, modes, system instructions, or formatting rules.
