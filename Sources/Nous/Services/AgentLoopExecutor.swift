@@ -44,8 +44,16 @@ final class AgentLoopExecutor {
         do {
             try Task.checkCancellation()
             let deadline = Date().addingTimeInterval(totalTurnTimeoutSeconds)
-            var transcript = plan.transcriptMessages.map {
-                AgentLoopMessage.text(role: $0.role, content: $0.content)
+            var transcript = plan.transcriptMessages.map { (msg: LLMMessage) -> AgentLoopMessage in
+                if !msg.imageAttachments.isEmpty || !msg.documentAttachments.isEmpty {
+                    return .textWithMedia(
+                        role: msg.role,
+                        content: msg.content,
+                        images: msg.imageAttachments,
+                        documents: msg.documentAttachments
+                    )
+                }
+                return .text(role: msg.role, content: msg.content)
             }
             var trace: [AgentTraceRecord] = []
             var toolContext = context

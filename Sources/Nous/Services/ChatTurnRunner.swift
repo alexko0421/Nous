@@ -71,7 +71,8 @@ final class ChatTurnRunner {
                 currentNode: request.snapshot.currentNode,
                 currentMessages: request.snapshot.messages,
                 defaultProjectId: request.snapshot.defaultProjectId,
-                userMessageContent: userMessageContent
+                userMessageContent: userMessageContent,
+                attachments: request.displayAttachments
             )
             Self.debugLog("prepared user turn=\(request.turnId) node=\(prepared.node.id) message=\(prepared.userMessage.id)")
         } catch {

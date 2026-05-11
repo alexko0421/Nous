@@ -122,6 +122,7 @@ final class ConversationSessionStore {
         currentMessages: [Message],
         defaultProjectId: UUID?,
         userMessageContent: String,
+        attachments: [AttachedFileContext] = [],
         newConversationTitle: String = "New Conversation"
     ) throws -> PreparedConversationTurn {
         let recovered = try recoverCurrentConversationIfNeeded(
@@ -137,7 +138,8 @@ final class ConversationSessionStore {
             nodeId: node.id,
             role: .user,
             content: userMessageContent,
-            timestamp: now()
+            timestamp: now(),
+            attachments: attachments
         )
         try nodeStore.insertMessage(userMessage)
 

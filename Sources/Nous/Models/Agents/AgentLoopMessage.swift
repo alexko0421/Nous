@@ -2,6 +2,12 @@ import Foundation
 
 enum AgentLoopMessage: Equatable, Sendable {
     case text(role: String, content: String)
+    case textWithMedia(
+        role: String,
+        content: String,
+        images: [LLMImageAttachment],
+        documents: [LLMDocumentAttachment]
+    )
     case assistantToolCalls(
         content: String?,
         toolCalls: [AgentToolCall],

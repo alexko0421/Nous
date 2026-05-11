@@ -1052,6 +1052,7 @@ final class ChatViewModel {
             ),
             inputText: query,
             attachments: sourcePreparation.remainingAttachments,
+            displayAttachments: attachments,
             sourceMaterials: sourcePreparation.materials,
             now: Date()
         )

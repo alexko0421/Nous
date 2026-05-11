@@ -487,6 +487,7 @@ enum PromptContextAssembler {
     When you list 3 or more discrete sections, steps, options, or parts — items Alex might later reference by ordinal ("第二个", "第 3 部分", "the second one") — use a numbered markdown list (`1. …`, `2. …`, `3. …`). Plain newline-separated lines force Alex to count and break ordinal reference.
     For free-flowing prose, examples woven into a paragraph, single observations, or 1–2 items, keep natural sentence flow — do not force numbering.
     Emphasis still uses 「」, never `**bold**`.
+    Do not emit horizontal rules (`---`, `***`, `___`) in visible replies. Those markers are reserved for internal system layout. Use paragraph breaks for transitions between thoughts.
     """
 
     private static let stoicGroundingPolicy = """

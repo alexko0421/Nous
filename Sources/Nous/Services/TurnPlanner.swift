@@ -638,9 +638,42 @@ final class TurnPlanner {
 
     private func transcriptMessages(from messages: [Message]) -> [LLMMessage] {
         messages.map { message in
-            LLMMessage(
+            let images = message.role == .user
+                ? Self.imageAttachments(from: message.attachments)
+                : []
+            let documents = message.role == .user
+                ? Self.documentAttachments(from: message.attachments)
+                : []
+            return LLMMessage(
                 role: message.role == .user ? "user" : "assistant",
-                content: message.content
+                content: message.content,
+                imageAttachments: images,
+                documentAttachments: documents
+            )
+        }
+    }
+
+    static func imageAttachments(from attachments: [AttachedFileContext]) -> [LLMImageAttachment] {
+        attachments.compactMap { attachment in
+            guard attachment.kind == .image,
+                  let data = attachment.imageData,
+                  !data.isEmpty else { return nil }
+            return LLMImageAttachment(
+                data: data,
+                mimeType: attachment.imageMimeType ?? "image/png"
+            )
+        }
+    }
+
+    static func documentAttachments(from attachments: [AttachedFileContext]) -> [LLMDocumentAttachment] {
+        attachments.compactMap { attachment in
+            guard attachment.kind == .pdf,
+                  let data = attachment.pdfData,
+                  !data.isEmpty else { return nil }
+            return LLMDocumentAttachment(
+                data: data,
+                mimeType: "application/pdf",
+                filename: attachment.name
             )
         }
     }

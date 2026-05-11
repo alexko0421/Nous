@@ -16,11 +16,42 @@ enum AttachmentExtractor {
 
     static func fileContexts(from urls: [URL]) -> [AttachedFileContext] {
         urls.map { url in
+            let pathExtension = url.pathExtension.lowercased()
             let extracted = extractText(from: url)
+
+            if pathExtension == "pdf" {
+                let didAccess = url.startAccessingSecurityScopedResource()
+                defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
+                let pdfData = try? Data(contentsOf: url)
+                return AttachedFileContext(
+                    name: url.lastPathComponent,
+                    extractedText: extracted.preview,
+                    sourceText: extracted.sourceText,
+                    kind: .pdf,
+                    pdfData: pdfData
+                )
+            }
+
+            if let type = UTType(filenameExtension: pathExtension), type.conforms(to: .image) {
+                let didAccess = url.startAccessingSecurityScopedResource()
+                defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
+                let data = try? Data(contentsOf: url)
+                let mime = type.preferredMIMEType ?? "image/png"
+                return AttachedFileContext(
+                    name: url.lastPathComponent,
+                    extractedText: extracted.preview,
+                    sourceText: extracted.sourceText,
+                    kind: .image,
+                    imageData: data,
+                    imageMimeType: mime
+                )
+            }
+
             return AttachedFileContext(
                 name: url.lastPathComponent,
                 extractedText: extracted.preview,
-                sourceText: extracted.sourceText
+                sourceText: extracted.sourceText,
+                kind: .textFile
             )
         }
     }
@@ -33,18 +64,23 @@ enum AttachmentExtractor {
         var contexts: [AttachedFileContext] = []
 
         for (index, item) in items.enumerated() {
-            let fileExtension = item.supportedContentTypes.first?.preferredFilenameExtension ?? "jpeg"
+            let utType = item.supportedContentTypes.first
+            let fileExtension = utType?.preferredFilenameExtension ?? "jpeg"
+            let mime = utType?.preferredMIMEType ?? "image/jpeg"
             let name = "Photo \(index + 1).\(fileExtension)"
 
             guard let data = try? await item.loadTransferable(type: Data.self) else {
-                contexts.append(AttachedFileContext(name: name, extractedText: nil))
+                contexts.append(AttachedFileContext(name: name, extractedText: nil, kind: .image))
                 continue
             }
 
             contexts.append(
                 AttachedFileContext(
                     name: name,
-                    extractedText: extractText(fromImageData: data)
+                    extractedText: extractText(fromImageData: data),
+                    kind: .image,
+                    imageData: data,
+                    imageMimeType: mime
                 )
             )
         }
@@ -64,10 +100,44 @@ enum AttachmentExtractor {
 
             guard let data = await droppedImageData(from: provider) else { continue }
             let fileExtension = preferredImageFileExtension(from: provider)
+            let mime = preferredImageMimeType(from: provider) ?? "image/png"
             contexts.append(
                 AttachedFileContext(
                     name: "Dropped Image \(imageDataIndex).\(fileExtension)",
-                    extractedText: extractText(fromImageData: data)
+                    extractedText: extractText(fromImageData: data),
+                    kind: .image,
+                    imageData: data,
+                    imageMimeType: mime
+                )
+            )
+            imageDataIndex += 1
+        }
+
+        return contexts
+    }
+
+    /// Generalized drop handler: any file URL (image, PDF, text) plus inline image data.
+    /// PDFs and text files come through here too, not just images.
+    static func droppedAttachmentContexts(from providers: [NSItemProvider]) async -> [AttachedFileContext] {
+        var contexts: [AttachedFileContext] = []
+        var imageDataIndex = 1
+
+        for provider in providers {
+            if let fileURL = await droppedFileURL(from: provider) {
+                contexts.append(contentsOf: fileContexts(from: [fileURL]))
+                continue
+            }
+
+            guard let data = await droppedImageData(from: provider) else { continue }
+            let fileExtension = preferredImageFileExtension(from: provider)
+            let mime = preferredImageMimeType(from: provider) ?? "image/png"
+            contexts.append(
+                AttachedFileContext(
+                    name: "Dropped Image \(imageDataIndex).\(fileExtension)",
+                    extractedText: extractText(fromImageData: data),
+                    kind: .image,
+                    imageData: data,
+                    imageMimeType: mime
                 )
             )
             imageDataIndex += 1
@@ -189,12 +259,28 @@ enum AttachmentExtractor {
             .first { $0.conforms(to: .image) }?
             .preferredFilenameExtension ?? "png"
     }
+
+    private static func preferredImageMimeType(from provider: NSItemProvider) -> String? {
+        provider.registeredTypeIdentifiers
+            .compactMap(UTType.init)
+            .first { $0.conforms(to: .image) }?
+            .preferredMIMEType
+    }
 }
 
 enum AttachmentDropSupport {
+    /// Composer image-only drop targets (used where only images make sense).
     static let acceptedTypeIdentifiers = [
         UTType.fileURL.identifier,
         UTType.image.identifier
+    ]
+
+    /// Whole-chat-surface drop targets — any file (image, PDF, text) + inline image data.
+    static let allFileTypeIdentifiers = [
+        UTType.fileURL.identifier,
+        UTType.image.identifier,
+        UTType.pdf.identifier,
+        UTType.data.identifier
     ]
 }
 

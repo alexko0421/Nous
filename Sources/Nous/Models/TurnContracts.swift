@@ -119,6 +119,7 @@ struct TurnRequest {
     let snapshot: TurnSessionSnapshot
     let inputText: String
     let attachments: [AttachedFileContext]
+    let displayAttachments: [AttachedFileContext]
     let sourceMaterials: [SourceMaterialContext]
     let now: Date
 
@@ -127,6 +128,7 @@ struct TurnRequest {
         snapshot: TurnSessionSnapshot,
         inputText: String,
         attachments: [AttachedFileContext],
+        displayAttachments: [AttachedFileContext]? = nil,
         sourceMaterials: [SourceMaterialContext] = [],
         now: Date
     ) {
@@ -134,6 +136,7 @@ struct TurnRequest {
         self.snapshot = snapshot
         self.inputText = inputText
         self.attachments = attachments
+        self.displayAttachments = displayAttachments ?? attachments
         self.sourceMaterials = sourceMaterials
         self.now = now
     }

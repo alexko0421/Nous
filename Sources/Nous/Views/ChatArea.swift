@@ -25,6 +25,7 @@ struct ChatArea: View {
     @State private var downvoteFeedbackReason: JudgeFeedbackReason?
     @State private var downvoteFeedbackNote: String = ""
     @State private var temporaryBranch = TemporaryBranchViewModel()
+    @State private var isFocusedSourceExpanded = false
     @FocusState private var isComposerFocused: Bool
     @Namespace private var composerPrimaryActionNamespace
 
@@ -640,24 +641,15 @@ struct ChatArea: View {
     private var temporaryBranchFocusedSourceLane: some View {
         if let sourceMessage = temporaryBranch.sourceMessage {
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 14) {
-                    MessageBubble(
-                        text: sourceMessage.content,
-                        thinkingContent: sourceMessage.thinkingContent,
-                        thinkingStartedAt: nil,
-                        agentTraceRecords: sourceMessage.decodedAgentTraceRecords,
-                        isThinkingStreaming: false,
-                        isAgentTraceStreaming: false,
-                        isUser: sourceMessage.role == .user,
-                        source: sourceMessage.source,
-                        timestamp: sourceMessage.timestamp,
-                        onOpenBranch: nil
-                    )
+                VStack(alignment: .leading, spacing: 10) {
+                    focusedSourceBubble(for: sourceMessage)
+                    focusedSourceToggleButton(for: sourceMessage)
 
                     TemporaryBranchTranscript(
                         branch: temporaryBranch,
                         onRegenerate: regenerateTemporaryBranchAssistant
                     )
+                    .padding(.top, 4)
                 }
                 .frame(maxWidth: composerMaxWidth, alignment: .leading)
                 .padding(.horizontal, 36)
@@ -674,7 +666,92 @@ struct ChatArea: View {
         }
     }
 
+    private func shouldOfferFocusedSourceToggle(_ message: Message) -> Bool {
+        message.content.count > TemporaryBranchMembraneStyle.focusedSourceToggleThresholdChars
+    }
+
+    @ViewBuilder
+    private func focusedSourceBubble(for sourceMessage: Message) -> some View {
+        let bubble = MessageBubble(
+            text: sourceMessage.content,
+            thinkingContent: sourceMessage.thinkingContent,
+            thinkingStartedAt: nil,
+            agentTraceRecords: sourceMessage.decodedAgentTraceRecords,
+            isThinkingStreaming: false,
+            isAgentTraceStreaming: false,
+            isUser: sourceMessage.role == .user,
+            source: sourceMessage.source,
+            timestamp: sourceMessage.timestamp,
+            onOpenBranch: nil
+        )
+
+        if shouldOfferFocusedSourceToggle(sourceMessage) {
+            if isFocusedSourceExpanded {
+                ScrollView(.vertical, showsIndicators: true) {
+                    bubble
+                }
+                .frame(maxHeight: TemporaryBranchMembraneStyle.focusedSourceExpandedMaxHeight)
+            } else {
+                bubble
+                    .frame(
+                        maxHeight: TemporaryBranchMembraneStyle.focusedSourceCollapsedMaxHeight,
+                        alignment: .top
+                    )
+                    .clipped()
+                    .mask(
+                        VStack(spacing: 0) {
+                            Rectangle().fill(Color.black)
+                            LinearGradient(
+                                colors: [.black, .clear],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                            .frame(height: 28)
+                        }
+                    )
+            }
+        } else {
+            bubble
+        }
+    }
+
+    @ViewBuilder
+    private func focusedSourceToggleButton(for sourceMessage: Message) -> some View {
+        if shouldOfferFocusedSourceToggle(sourceMessage) {
+            Button(action: {
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.84)) {
+                    isFocusedSourceExpanded.toggle()
+                }
+            }) {
+                HStack(spacing: 12) {
+                    focusedSourceFoldRule
+                    HStack(spacing: 6) {
+                        Text(isFocusedSourceExpanded ? "收起" : "展开")
+                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .tracking(0.5)
+                        Image(systemName: isFocusedSourceExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                    .foregroundStyle(AppColor.colaDarkText.opacity(0.55))
+                    focusedSourceFoldRule
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(isFocusedSourceExpanded ? "Collapse source preview" : "Expand full source")
+        }
+    }
+
+    private var focusedSourceFoldRule: some View {
+        Rectangle()
+            .fill(AppColor.panelStroke.opacity(0.75))
+            .frame(height: 1.75)
+    }
+
     private func openTemporaryBranch(from message: Message) {
+        isFocusedSourceExpanded = false
         withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
             temporaryBranch.open(from: message, in: vm.messages)
         }
@@ -683,6 +760,7 @@ struct ChatArea: View {
     private func closeTemporaryBranch() {
         let recordToEvaluate = temporaryBranch.presentedRecordSnapshot()
         persistPresentedTemporaryBranch()
+        isFocusedSourceExpanded = false
         withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
             temporaryBranch.close()
         }

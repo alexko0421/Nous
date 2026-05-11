@@ -182,6 +182,12 @@ final class NodeStore {
             alterSQL: "ALTER TABLE messages ADD COLUMN source TEXT NOT NULL DEFAULT 'typed';"
         )
 
+        try ensureColumnExists(
+            table: "messages",
+            column: "attachments_json",
+            alterSQL: "ALTER TABLE messages ADD COLUMN attachments_json TEXT;"
+        )
+
         try db.exec("""
             CREATE TABLE IF NOT EXISTS message_source_materials (
                 messageId    TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
@@ -1251,8 +1257,8 @@ final class NodeStore {
 
     func insertMessage(_ message: Message) throws {
         let stmt = try db.prepare("""
-            INSERT INTO messages (id, nodeId, role, content, timestamp, thinking_content, agent_trace_json, source)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+            INSERT INTO messages (id, nodeId, role, content, timestamp, thinking_content, agent_trace_json, source, attachments_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
         """)
         try stmt.bind(message.id.uuidString, at: 1)
         try stmt.bind(message.nodeId.uuidString, at: 2)
@@ -1262,8 +1268,22 @@ final class NodeStore {
         try stmt.bind(message.thinkingContent, at: 6)
         try stmt.bind(message.agentTraceJson, at: 7)
         try stmt.bind(message.source.rawValue, at: 8)
+        try stmt.bind(Self.encodeAttachments(message.attachments), at: 9)
         try stmt.step()
         notifyNodesDidChange()
+    }
+
+    private static func encodeAttachments(_ attachments: [AttachedFileContext]) -> String? {
+        guard !attachments.isEmpty else { return nil }
+        let encoder = JSONEncoder()
+        guard let data = try? encoder.encode(attachments) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private static func decodeAttachments(_ json: String?) -> [AttachedFileContext] {
+        guard let json,
+              let data = json.data(using: .utf8) else { return [] }
+        return (try? JSONDecoder().decode([AttachedFileContext].self, from: data)) ?? []
     }
 
     func deleteMessage(id: UUID) throws {
@@ -1275,7 +1295,7 @@ final class NodeStore {
 
     func fetchMessages(nodeId: UUID) throws -> [Message] {
         let stmt = try db.prepare("""
-            SELECT id, nodeId, role, content, timestamp, thinking_content, agent_trace_json, source
+            SELECT id, nodeId, role, content, timestamp, thinking_content, agent_trace_json, source, attachments_json
             FROM messages WHERE nodeId=? ORDER BY timestamp ASC;
         """)
         try stmt.bind(nodeId.uuidString, at: 1)
@@ -1290,6 +1310,7 @@ final class NodeStore {
             let agentTraceJson = stmt.text(at: 6)
             let sourceRaw = stmt.text(at: 7) ?? "typed"
             let source = MessageSource(rawValue: sourceRaw) ?? .typed
+            let attachments = Self.decodeAttachments(stmt.text(at: 8))
             results.append(Message(
                 id: id,
                 nodeId: nId,
@@ -1298,7 +1319,8 @@ final class NodeStore {
                 timestamp: timestamp,
                 thinkingContent: thinkingContent,
                 agentTraceJson: agentTraceJson,
-                source: source
+                source: source,
+                attachments: attachments
             ))
         }
         return results
