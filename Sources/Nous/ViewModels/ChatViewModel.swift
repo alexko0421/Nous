@@ -530,13 +530,17 @@ final class ChatViewModel {
     }
 
     @MainActor
-    func loadConversation(_ node: NousNode, cancelInFlightWork: Bool = true) {
+    func loadConversation(_ node: NousNode, cancelInFlightWork: Bool = false) {
         if cancelInFlightWork {
             cancelInFlightResponse(clearDraft: true, reason: .conversationSwitched)
-            cancelInFlightJudge()  // switching conversations invalidates any pending verdict
         }
+        cancelInFlightJudge()  // judges are conversation-scoped; always invalidate on switch
         currentNode = node
         bindStreamingSession(for: node)
+        if let surfacedError = currentStreamingSession?.markViewed() {
+            NSLog("[NousTurn] background turn error surfaced on conversation enter: %@",
+                  String(describing: surfacedError))
+        }
         scratchPadStore.activate(conversationId: node.id)
         messages = (try? nodeStore.fetchMessages(nodeId: node.id)) ?? []
         citations = []

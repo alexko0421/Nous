@@ -882,7 +882,7 @@ final class ChatViewModelTests: XCTestCase {
         let otherNode = NousNode(type: .conversation, title: "Other conversation")
         try nodeStore.insertNode(otherNode)
 
-        vm.loadConversation(otherNode)
+        vm.loadConversation(otherNode, cancelInFlightWork: true)
         await sendTask.value
 
         let originalMessages = try nodeStore.fetchMessages(nodeId: originalNodeId)
@@ -1290,6 +1290,55 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertNotNil(store.latestSummary)
         XCTAssertTrue(store.latestSummary!.markdown.hasPrefix("# 今次倾咗乜"))
         XCTAssertEqual(store.latestSummary!.sourceMessageId, msg.id)
+    }
+
+    @MainActor
+    func test_loadConversation_doesNotCancelInFlightTaskOnOtherConversation() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { nil },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: makeScratchPadStore(nodeStore: nodeStore)
+        )
+
+        let nodeA = NousNode(type: .conversation, title: "A")
+        try nodeStore.insertNode(nodeA)
+        let nodeB = NousNode(type: .conversation, title: "B")
+        try nodeStore.insertNode(nodeB)
+
+        vm.loadConversation(nodeA)
+        let sessionA = try XCTUnwrap(vm.currentStreamingSession)
+        let started = expectation(description: "A task started")
+        let task = Task<Void, Never> {
+            started.fulfill()
+            while !Task.isCancelled { try? await Task.sleep(nanoseconds: 1_000_000) }
+        }
+        sessionA.beginTurn(turnId: UUID(), task: task)
+        await fulfillment(of: [started], timeout: 1.0)
+
+        vm.loadConversation(nodeB)
+
+        XCTAssertFalse(task.isCancelled)
+        // Task 5 migrates the in-flight slots to the newly-bound session so
+        // `isActiveResponseTask` keeps recognizing the running turn. After
+        // the switch, the live task lives on the current streaming session
+        // (sessionB) rather than the stale sessionA reference.
+        XCTAssertNotNil(vm.currentStreamingSession?.inFlightTask)
+
+        task.cancel()
     }
 }
 
