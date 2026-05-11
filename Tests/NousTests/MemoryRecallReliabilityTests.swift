@@ -111,7 +111,16 @@ final class MemoryRecallTestEnv {
     }
 
     func extractAtomFrom(userMessage: String) throws -> MemoryAtom {
-        fatalError("unimplemented — Task 3.3")
+        let atom = MemoryAtom(
+            type: .belief,
+            statement: userMessage,
+            scope: .conversation,
+            scopeRefId: UUID(),
+            confidence: 0.8,
+            verbatimQuote: userMessage
+        )
+        try nodeStore.insertMemoryAtom(atom)
+        return atom
     }
 
     func setCurrentSignature(_ sig: String) { currentSignature = sig }
