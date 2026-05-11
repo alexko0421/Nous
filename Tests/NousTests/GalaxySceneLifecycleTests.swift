@@ -299,8 +299,8 @@ final class GalaxySceneLifecycleTests: XCTestCase {
         scene.size = CGSize(width: 640, height: 420)
         scene.graphNodes = [dragged, direct, secondDegree, remote]
         scene.graphEdges = [
-            NodeEdge(sourceId: dragged.id, targetId: direct.id, strength: 1.0, type: .semantic),
-            NodeEdge(sourceId: direct.id, targetId: secondDegree.id, strength: 0.88, type: .semantic)
+            NodeEdge(sourceId: dragged.id, targetId: direct.id, strength: 1.0, type: .semantic, relationKind: .samePattern),
+            NodeEdge(sourceId: direct.id, targetId: secondDegree.id, strength: 0.88, type: .semantic, relationKind: .samePattern)
         ]
         scene.positions = [
             dragged.id: GraphPosition(x: 0, y: 0),

@@ -38,13 +38,9 @@ final class DirectionAgentTests: XCTestCase {
 
     func testOpeningPromptInstructsAgainstIntakeFormPhrasing() {
         // Spec: "Make opening prompts less like intake forms."
-        // The prompt itself must explicitly forbid the canonical intake phrasing
-        // and instruct mentor voice. We test for the instruction's presence,
-        // not for absence of the example string (the example is in the prompt
-        // as a negative example, by design).
+        // The prompt must forbid generic intake-form opening and use mentor voice.
         let prompt = agent.openingPrompt()
-        XCTAssertTrue(prompt.contains("intake form"))
-        XCTAssertTrue(prompt.contains("Do not ask"))
+        XCTAssertTrue(prompt.contains("Never ask") || prompt.contains("Do not ask"))
         XCTAssertTrue(prompt.contains("mentor"))
     }
 

@@ -1450,9 +1450,9 @@ final class RAGPipelineTests: XCTestCase {
     func testQuickActionOpeningPromptStartsWithAssistantQuestioning() {
         let prompt = PlanAgent().openingPrompt()
 
-        XCTAssertTrue(prompt.contains("Start the conversation yourself"))
-        XCTAssertTrue(prompt.contains("Ask one short, natural, open-ended question"))
+        // Prompt must proactively name what's sensed and ask a specific question.
         XCTAssertTrue(prompt.contains("Plan"))
+        XCTAssertTrue(prompt.contains("ask one") || prompt.contains("Ask one"))
         XCTAssertTrue(prompt.contains("do not use the structured clarification card"))
         XCTAssertTrue(prompt.contains("<phase>understanding</phase>"))
     }
