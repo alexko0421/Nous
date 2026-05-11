@@ -10,12 +10,31 @@ final class ChatViewModel {
     var currentNode: NousNode?
     var messages: [Message] = []
     var inputText: String = ""
-    var isGenerating: Bool = false
-    var currentResponse: String = ""
-    var currentThinking: String = ""
-    var currentThinkingStartedAt: Date?
-    var currentAgentTrace: [AgentTraceRecord] = []
-    var didHitBudgetExhaustion: Bool = false
+    @ObservationIgnored private(set) var currentStreamingSession: ConversationStreamingSession?
+    var isGenerating: Bool {
+        get { currentStreamingSession?.isGenerating ?? false }
+        set { currentStreamingSession?.isGenerating = newValue }
+    }
+    var currentResponse: String {
+        get { currentStreamingSession?.currentResponse ?? "" }
+        set { currentStreamingSession?.currentResponse = newValue }
+    }
+    var currentThinking: String {
+        get { currentStreamingSession?.currentThinking ?? "" }
+        set { currentStreamingSession?.currentThinking = newValue }
+    }
+    var currentThinkingStartedAt: Date? {
+        get { currentStreamingSession?.currentThinkingStartedAt }
+        set { currentStreamingSession?.currentThinkingStartedAt = newValue }
+    }
+    var currentAgentTrace: [AgentTraceRecord] {
+        get { currentStreamingSession?.currentAgentTrace ?? [] }
+        set { currentStreamingSession?.currentAgentTrace = newValue }
+    }
+    var didHitBudgetExhaustion: Bool {
+        get { currentStreamingSession?.didHitBudgetExhaustion ?? false }
+        set { currentStreamingSession?.didHitBudgetExhaustion = newValue }
+    }
     var citations: [SearchResult] = []
     /// Block 4b Phase 1A — atom + reflection cards paired with their resolved
     /// source nodes. Populated alongside `citations` from `TurnPrepared`.
@@ -482,6 +501,7 @@ final class ChatViewModel {
             projectId: projectId
         ) else { return }
         currentNode = node
+        currentStreamingSession = conversationSessionStore.streamingSession(for: node.id)
         scratchPadStore.activate(conversationId: node.id)
         messages = []
         citations = []
@@ -504,15 +524,11 @@ final class ChatViewModel {
             cancelInFlightJudge()  // switching conversations invalidates any pending verdict
         }
         currentNode = node
+        currentStreamingSession = conversationSessionStore.streamingSession(for: node.id)
         scratchPadStore.activate(conversationId: node.id)
         messages = (try? nodeStore.fetchMessages(nodeId: node.id)) ?? []
         citations = []
         resolvedCorpusEntries = []
-        currentResponse = ""
-        currentThinking = ""
-        currentThinkingStartedAt = nil
-        currentAgentTrace = []
-        didHitBudgetExhaustion = false
         activeQuickActionMode = nil
         activeChatMode = (try? nodeStore.latestChatMode(forNode: node.id)) ?? nil
         pendingSourceMaterialsByTurnId.removeAll()
