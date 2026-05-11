@@ -2,19 +2,6 @@ import XCTest
 @testable import Nous
 
 final class MemoryRecallReliabilityTests: XCTestCase {
-    /// Deterministic stub. Keys that share the leading "topic-X-" prefix
-    /// share an embedding vector — this models a multilingual model that
-    /// places Cantonese / English paraphrases near each other.
-    final class StubEmbedder {
-        private static let dim = 8
-        func embed(_ text: String) -> [Float] {
-            var vec = [Float](repeating: 0, count: Self.dim)
-            for topic in ["topic-A", "topic-B", "topic-C", "topic-D"] {
-                if text.contains(topic) { vec[Int(topic.last!.asciiValue! % UInt8(Self.dim))] = 1; break }
-            }
-            return vec
-        }
-    }
 
     func test_assertion_1_cantonese_2char_keyword_surfaces_chat_atoms() throws {
         let env = try MemoryRecallTestEnv.make()  // helper to be created
@@ -71,30 +58,61 @@ final class MemoryRecallReliabilityTests: XCTestCase {
 
 // MARK: - Test environment stub (bodies unimplemented — Task 1.2+)
 
+/// Shared stub embedder — placed here (outside the test class) so
+/// `MemoryRecallTestEnv` can reference it without qualifying the name.
+final class StubEmbedder {
+    private static let dim = 8
+    func embed(_ text: String) -> [Float] {
+        var vec = [Float](repeating: 0, count: Self.dim)
+        for topic in ["topic-A", "topic-B", "topic-C", "topic-D"] {
+            if text.contains(topic) { vec[Int(topic.last!.asciiValue! % UInt8(Self.dim))] = 1; break }
+        }
+        return vec
+    }
+}
+
 final class MemoryRecallTestEnv {
+    let nodeStore: NodeStore
+    let embedder: StubEmbedder
+    var currentSignature: String = "test-sig-v1"
+
+    init(nodeStore: NodeStore, embedder: StubEmbedder) {
+        self.nodeStore = nodeStore
+        self.embedder = embedder
+    }
+
     static func make() throws -> MemoryRecallTestEnv {
-        fatalError("unimplemented — Task 1.2+")
+        let store = try NodeStore(path: ":memory:")
+        return MemoryRecallTestEnv(nodeStore: store, embedder: StubEmbedder())
     }
 
     func seedAtom(text: String, scope: MemoryScope, conv: String, signature: String? = nil) {
-        fatalError("unimplemented — Task 1.2+")
+        var atom = MemoryAtom(
+            type: .belief,
+            statement: text,
+            scope: scope
+        )
+        atom.embedding = embedder.embed(text)
+        atom.embeddingSignature = signature ?? currentSignature
+        try? nodeStore.insertMemoryAtom(atom)
     }
 
     func retrieve(query: String) throws -> [MemoryAtom] {
-        fatalError("unimplemented — Task 1.2+")
+        let vec = embedder.embed(query)
+        return try nodeStore.fetchMemoryAtomsNearest(
+            embedding: vec, topK: 10, activeSignature: currentSignature
+        )
     }
 
     /// `quickActionMode` is `QuickActionMode?` — nil means default/standard chat mode.
     /// `QuickActionMode` was confirmed in Sources/Nous/Models/QuickActionMode.swift.
     func buildPromptContext(quickActionMode: QuickActionMode?, query: String) throws -> String {
-        fatalError("unimplemented — Task 1.2+")
+        fatalError("unimplemented — Task 2.3")
     }
 
     func extractAtomFrom(userMessage: String) throws -> MemoryAtom {
-        fatalError("unimplemented — Task 1.2+")
+        fatalError("unimplemented — Task 3.3")
     }
 
-    func setCurrentSignature(_ sig: String) {
-        fatalError("unimplemented — Task 1.2+")
-    }
+    func setCurrentSignature(_ sig: String) { currentSignature = sig }
 }
