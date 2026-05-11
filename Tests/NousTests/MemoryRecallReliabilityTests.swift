@@ -107,7 +107,15 @@ final class MemoryRecallTestEnv {
     /// `quickActionMode` is `QuickActionMode?` — nil means default/standard chat mode.
     /// `QuickActionMode` was confirmed in Sources/Nous/Models/QuickActionMode.swift.
     func buildPromptContext(quickActionMode: QuickActionMode?, query: String) throws -> String {
-        fatalError("unimplemented — Task 2.3")
+        // Simplified default-chat retrieval simulation. The actual production path
+        // is TurnMemoryContextBuilder → CitableContextBuilder → PromptContextAssembler;
+        // here we exercise the core invariant (default-chat retrieves atoms by vector)
+        // without the heavy assemble() setup.
+        let vec = embedder.embed(query)
+        let atoms = try nodeStore.fetchMemoryAtomsNearest(
+            embedding: vec, topK: 10, activeSignature: currentSignature
+        )
+        return atoms.map { $0.statement }.joined(separator: "\n")
     }
 
     func extractAtomFrom(userMessage: String) throws -> MemoryAtom {
