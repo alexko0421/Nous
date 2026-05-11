@@ -33,6 +33,7 @@ final class EmbeddingMigrationRunner {
         guard maxAtoms > 0 else { return report }
 
         let atoms = try nodeStore.fetchMemoryAtoms()
+        print("[migration] START scan=\(atoms.count) cap=\(maxAtoms) sig=\(activeSignature)")
         var processed = 0
         for var atom in atoms {
             if processed >= maxAtoms { break }
@@ -49,6 +50,9 @@ final class EmbeddingMigrationRunner {
             }
             guard let vector = embed(statement) else {
                 report.failed += 1
+                if report.failed <= 3 {
+                    print("[migration] FAIL embed returned nil for: \(statement.prefix(40))")
+                }
                 continue
             }
             atom.embedding = vector
@@ -58,6 +62,7 @@ final class EmbeddingMigrationRunner {
             report.reembedded += 1
             processed += 1
         }
+        print("[migration] DONE scanned=\(report.scanned) reembedded=\(report.reembedded) skipped_current=\(report.skippedAlreadyCurrent) skipped_empty=\(report.skippedEmptyStatement) failed=\(report.failed)")
         return report
     }
 }

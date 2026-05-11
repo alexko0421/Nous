@@ -499,9 +499,14 @@ struct ContentView: View {
 
         Task.detached(priority: .utility) {
             // Re-embed atoms whose signature is stale (e.g. model upgraded).
-            // Bounded to 256 atoms per launch; resumes across restarts since
-            // each updated row commits independently.
-            _ = try? dependencies.embeddingMigrationRunner.runIfNeeded(maxAtoms: 256)
+            // Bounded per launch; resumes across restarts since each updated
+            // row commits independently. Wait for the embedder to finish
+            // loading first — otherwise embed() returns nil for every row
+            // and the runner exits having marked the whole corpus failed.
+            for _ in 0..<120 where !dependencies.embeddingService.isLoaded {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+            _ = try? dependencies.embeddingMigrationRunner.runIfNeeded(maxAtoms: 5000)
         }
 
         if let rollover = dependencies.weeklyReflectionRollover {

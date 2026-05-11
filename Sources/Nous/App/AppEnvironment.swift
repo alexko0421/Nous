@@ -183,7 +183,11 @@ final class AppEnvironment {
         let memoryGraphMessageBackfill = MemoryGraphMessageBackfillService(
             nodeStore: nodeStore,
             llmServiceProvider: { settingsVM.makeLLMService(openRouterWebSearchEnabled: false) },
-            backgroundTelemetry: backgroundAITelemetry
+            backgroundTelemetry: backgroundAITelemetry,
+            embed: { [embeddingService] text in
+                guard embeddingService.isLoaded else { return nil }
+                return try? embeddingService.embed(text)
+            }
         )
         let memoryAtomEmbeddingBackfill = MemoryAtomEmbeddingBackfillService(
             nodeStore: nodeStore,

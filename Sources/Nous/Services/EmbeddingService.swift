@@ -14,10 +14,10 @@ final class EmbeddingService {
     private(set) var isLoading = false
     private(set) var downloadProgress: Double = 0
 
-    static let defaultModelId = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    static let defaultModelId = "intfloat/multilingual-e5-small"
     static let embeddingDimension = 384
     static let currentSignature: String =
-        "paraphrase-multilingual-minilm-l12-v2-384-mean-norm-noprefix"
+        "multilingual-e5-small-384-mean-norm-passage-prefix"
 
     func loadModel(id: String = defaultModelId) async throws {
         guard !isLoaded && !isLoading else { return }
@@ -43,7 +43,11 @@ final class EmbeddingService {
         guard let model, let tokenizer, let pooler else {
             throw EmbeddingError.modelNotLoaded
         }
-        let tokens = tokenizer.encode(text: text)
+        // E5 models expect a "passage: " or "query: " prefix. We use "passage: "
+        // for both atoms and queries — atom recall is essentially passage-vs-passage
+        // similarity, and consistent prefixing is what the signature records.
+        let prefixed = "passage: " + text
+        let tokens = tokenizer.encode(text: prefixed)
         // Model expects shape [batch, sequence] — wrap in a batch of 1
         let inputIds = MLXArray(tokens).reshaped([1, tokens.count])
         let output = model(inputIds, positionIds: nil, tokenTypeIds: nil, attentionMask: nil)

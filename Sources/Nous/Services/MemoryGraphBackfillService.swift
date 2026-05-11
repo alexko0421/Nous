@@ -11,9 +11,14 @@ struct MemoryGraphBackfillReport: Equatable {
 
 final class MemoryGraphBackfillService {
     private let nodeStore: NodeStore
+    private let embed: (String) -> [Float]?
 
-    init(nodeStore: NodeStore) {
+    init(
+        nodeStore: NodeStore,
+        embed: @escaping (String) -> [Float]? = { _ in nil }
+    ) {
         self.nodeStore = nodeStore
+        self.embed = embed
     }
 
     @discardableResult
@@ -27,7 +32,7 @@ final class MemoryGraphBackfillService {
             let groups = Dictionary(grouping: facts, by: Self.identityKey(for:))
             report.groupedFacts = groups.count
 
-            let writer = MemoryGraphWriter(nodeStore: nodeStore)
+            let writer = MemoryGraphWriter(nodeStore: nodeStore, embed: embed)
             var atoms = try nodeStore.fetchMemoryAtoms()
             var writeResult = MemoryGraphWriteResult()
 
