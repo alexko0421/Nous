@@ -250,6 +250,9 @@ struct LeftSidebar: View {
     @State private var favorites: [NousNode] = []
     @State private var recents: [NousNode] = []
     @State private var showProjectList = false
+    @State private var renameTarget: NousNode?
+    @State private var searchQuery: String = ""
+    @State private var searchResults: [NousNode] = []
 
     var body: some View {
         NativeGlassPanel(
@@ -260,21 +263,28 @@ struct LeftSidebar: View {
                 MacOSTrafficLights()
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.top, 26)
-                    .padding(.bottom, 24)
+                    .padding(.bottom, 28)
 
-                HStack(spacing: 12) {
-                    NavIconButton(
-                        icon: GalaxyIcon(color: AppColor.colaDarkText.opacity(0.8)),
-                        label: "Galaxy",
-                        action: { selectedTab = .galaxy }
-                    )
-                    NavIconButton(
-                        icon: ProjectIcon(color: AppColor.colaDarkText.opacity(0.8)),
-                        label: "Project",
-                        action: { showProjectList.toggle() }
-                    )
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(AppColor.colaDarkText.opacity(0.5))
+                    TextField("Search", text: $searchQuery)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 13, design: .rounded))
+                        .foregroundColor(AppColor.colaDarkText)
                 }
-                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(AppColor.colaDarkText.opacity(0.06))
+                )
+                .overlay(
+                    Capsule(style: .continuous)
+                        .stroke(AppColor.panelStroke.opacity(0.6), lineWidth: 1)
+                )
+                .padding(.horizontal, 16)
                 .padding(.bottom, 14)
 
                 SidebarDivider()
@@ -304,7 +314,38 @@ struct LeftSidebar: View {
                 SidebarDivider()
                     .padding(.bottom, 14)
 
-                if showProjectList {
+                if !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    ScrollView(.vertical, showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Results")
+                                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                .foregroundColor(AppColor.colaDarkText.opacity(0.6))
+
+                            if searchResults.isEmpty {
+                                Text("No matches")
+                                    .font(.system(size: 12, design: .rounded))
+                                    .foregroundColor(AppColor.colaDarkText.opacity(0.4))
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                            } else {
+                                ForEach(searchResults) { node in
+                                    let session: ConversationStreamingSession? = {
+                                        guard node.type == .conversation else { return nil }
+                                        return conversationSessionStore.streamingSession(for: node.id)
+                                    }()
+                                    SidebarNodeItem(
+                                        node: node,
+                                        isSelected: selectedNodeId == node.id,
+                                        streamingSession: session,
+                                        action: { onNodeSelected?(node) }
+                                    )
+                                }
+                            }
+                        }
+                        .padding(.leading, 20)
+                        .padding(.trailing, 8)
+                    }
+                } else if showProjectList {
                     ProjectListView(nodeStore: nodeStore, selectedProjectId: $selectedProjectId)
                 } else {
                     ScrollView(.vertical, showsIndicators: false) {
@@ -348,6 +389,11 @@ struct LeftSidebar: View {
                                         action: { onNodeSelected?(node) }
                                     )
                                     .contextMenu {
+                                        Button {
+                                            renameTarget = node
+                                        } label: {
+                                            Label("Rename", systemImage: "pencil")
+                                        }
                                         Button(role: .destructive) {
                                             try? nodeStore.deleteNode(id: node.id)
                                             loadData()
@@ -414,12 +460,49 @@ struct LeftSidebar: View {
             )
         ) { _ in
             loadData()
+            if !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                runSearch()
+            }
+        }
+        .onChange(of: searchQuery) { _, _ in
+            runSearch()
+        }
+        .sheet(item: $renameTarget) { node in
+            RenameConversationSheet(node: node) { newTitle in
+                var updated = node
+                updated.title = newTitle
+                updated.updatedAt = Date()
+                try? nodeStore.updateNode(updated)
+                loadData()
+            }
         }
     }
 
     private func loadData() {
         favorites = (try? nodeStore.fetchFavorites()) ?? []
         recents = (try? nodeStore.fetchRecents(limit: 20)) ?? []
+    }
+
+    private func runSearch() {
+        let trimmed = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            searchResults = []
+            return
+        }
+
+        let titleHits = (try? nodeStore.lexicalIndex.searchTitles(query: trimmed, limit: 30)) ?? []
+        let messageHits = (try? nodeStore.lexicalIndex.searchMessages(query: trimmed, limit: 30)) ?? []
+
+        var seen = Set<UUID>()
+        var hits: [NousNode] = []
+        for hit in titleHits + messageHits {
+            guard !seen.contains(hit.nodeId) else { continue }
+            seen.insert(hit.nodeId)
+            if let node = try? nodeStore.fetchNode(id: hit.nodeId), node.type == .conversation {
+                hits.append(node)
+            }
+        }
+        searchResults = hits
     }
 }
 
@@ -472,6 +555,60 @@ struct SidebarNodeItem: View {
         .scaleEffect(isHovered ? 1.03 : 1.0)
         .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isHovered)
         .onHover { isHovered = $0 }
+    }
+}
+
+// MARK: - RenameConversationSheet
+
+struct RenameConversationSheet: View {
+    let node: NousNode
+    let onSave: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var text: String
+
+    init(node: NousNode, onSave: @escaping (String) -> Void) {
+        self.node = node
+        self.onSave = onSave
+        _text = State(initialValue: node.title)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Rename conversation")
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundColor(AppColor.colaDarkText)
+
+            TextField("Title", text: $text)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 13, design: .rounded))
+                .onSubmit { commit() }
+
+            HStack(spacing: 8) {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Save") { commit() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(trimmed.isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 360)
+    }
+
+    private var trimmed: String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func commit() {
+        let value = trimmed
+        guard !value.isEmpty, value != node.title else {
+            dismiss()
+            return
+        }
+        onSave(value)
+        dismiss()
     }
 }
 
