@@ -14,8 +14,10 @@ final class EmbeddingService {
     private(set) var isLoading = false
     private(set) var downloadProgress: Double = 0
 
-    static let defaultModelId = "sentence-transformers/all-MiniLM-L6-v2"
+    static let defaultModelId = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     static let embeddingDimension = 384
+    static let currentSignature: String =
+        "paraphrase-multilingual-minilm-l12-v2-384-mean-norm-noprefix"
 
     func loadModel(id: String = defaultModelId) async throws {
         guard !isLoaded && !isLoading else { return }
