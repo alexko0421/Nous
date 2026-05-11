@@ -1016,7 +1016,7 @@ enum PromptContextAssembler {
             return visibleResponseLanguageDecision(for: currentUserInput)
         }()
 
-        if !memoryGraphRecall.isEmpty, activeQuickActionMode != nil {
+        if !memoryGraphRecall.isEmpty {
             volatilePieces.append("---\n\nGRAPH MEMORY RECALL:")
             for recall in memoryGraphRecall {
                 volatilePieces.append(recall)
@@ -1751,7 +1751,7 @@ User: "我中意又软又硬嘅人，反差先系 depth"
         if let projectMemory, !projectMemory.isEmpty { layers.append("project_memory") }
         if let conversationMemory, !conversationMemory.isEmpty { layers.append("conversation_memory") }
         if !promptMemoryEvidence.isEmpty { layers.append("memory_evidence") }
-        if !memoryGraphRecall.isEmpty, activeQuickActionMode != nil { layers.append("memory_graph_recall") }
+        if !memoryGraphRecall.isEmpty { layers.append("memory_graph_recall") }
         if memoryPacket.promptUserModelBlock != nil { layers.append("user_model") }
         if let projectGoal, !projectGoal.isEmpty { layers.append("project_goal") }
         if !promptRecentConversations.isEmpty { layers.append("recent_conversations") }

@@ -485,10 +485,10 @@ final class ProvocationOrchestrationTests: XCTestCase {
         await viewModel.send()
 
         let system = llm.receivedSystem ?? ""
-        // Legacy GRAPH MEMORY RECALL block remains gated to quick-action modes
-        // (PromptContextAssembler.swift:942 `activeQuickActionMode != nil`).
-        XCTAssertFalse(system.contains("GRAPH MEMORY RECALL"),
-                       "ordinary chat still drops the legacy graph recall block from the prompt")
+        // Block 4b flip: GRAPH MEMORY RECALL block is now injected in default chat
+        // (activeQuickActionMode != nil gate removed in PromptContextAssembler.swift:952).
+        XCTAssertTrue(system.contains("GRAPH MEMORY RECALL"),
+                      "ordinary chat now surfaces the graph recall block (Block 4b flip)")
         // Block 4a inject-half: own-corpus cards surface atoms in default chat
         // via the ALEX'S CORPUS volatile block. The recalled atoms are no
         // longer phantom — they appear in the prompt under the new heading,
