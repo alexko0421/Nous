@@ -238,6 +238,7 @@ struct MacOSTrafficLights: View {
 
 struct LeftSidebar: View {
     let nodeStore: NodeStore
+    let conversationSessionStore: ConversationSessionStore
     @Binding var selectedTab: MainTab
     @Binding var selectedProjectId: UUID?
     let selectedNodeId: UUID?
@@ -323,6 +324,9 @@ struct LeftSidebar: View {
                                         SidebarNodeItem(
                                             node: node,
                                             isSelected: selectedNodeId == node.id,
+                                            streamingSession: node.type == .conversation
+                                                ? conversationSessionStore.streamingSession(for: node.id)
+                                                : nil,
                                             action: { onNodeSelected?(node) }
                                         )
                                     }
@@ -338,6 +342,9 @@ struct LeftSidebar: View {
                                     SidebarNodeItem(
                                         node: node,
                                         isSelected: selectedNodeId == node.id,
+                                        streamingSession: node.type == .conversation
+                                            ? conversationSessionStore.streamingSession(for: node.id)
+                                            : nil,
                                         action: { onNodeSelected?(node) }
                                     )
                                     .contextMenu {
@@ -421,15 +428,26 @@ struct LeftSidebar: View {
 struct SidebarNodeItem: View {
     let node: NousNode
     let isSelected: Bool
+    let streamingSession: ConversationStreamingSession?
     let action: () -> Void
     @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
-            Text(node.title)
-                .font(.system(size: 12, weight: .medium, design: .rounded))
-                .foregroundColor(isSelected ? AppColor.colaOrange : AppColor.secondaryText)
-                .lineLimit(1)
+            HStack(spacing: 0) {
+                Text(node.title)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundColor(isSelected ? AppColor.colaOrange : AppColor.secondaryText)
+                    .lineLimit(1)
+
+                if let streamingSession, streamingSession.hasUnseenCompletion {
+                    Circle()
+                        .fill(AppColor.colaOrange)
+                        .frame(width: 5, height: 5)
+                        .padding(.leading, 4)
+                        .accessibilityLabel("New reply")
+                }
+            }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .background(

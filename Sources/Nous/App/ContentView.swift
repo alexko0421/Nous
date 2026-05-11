@@ -150,6 +150,7 @@ struct ContentView: View {
     private func sidebar(dependencies: AppDependencies) -> some View {
         LeftSidebar(
             nodeStore: dependencies.nodeStore,
+            conversationSessionStore: dependencies.conversationSessionStore,
             selectedTab: $selectedTab,
             selectedProjectId: $selectedProjectId,
             selectedNodeId: currentSidebarNodeId(dependencies: dependencies),

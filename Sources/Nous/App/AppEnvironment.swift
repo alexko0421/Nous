@@ -32,6 +32,7 @@ struct AppDependencies {
     let backgroundAITelemetry: BackgroundAIJobTelemetryStore
     let galaxyRelationTelemetry: GalaxyRelationTelemetry
     let scratchPadStore: ScratchPadStore
+    let conversationSessionStore: ConversationSessionStore
     let voiceController: VoiceCommandController
     let voiceTranscriptCommitter: VoiceTranscriptCommitter
     let settingsVM: SettingsViewModel
@@ -318,6 +319,7 @@ final class AppEnvironment {
             backgroundAITelemetry: backgroundAITelemetry,
             galaxyRelationTelemetry: galaxyRelationTelemetry,
             scratchPadStore: scratchPadStore,
+            conversationSessionStore: conversationSessionStore,
             voiceController: voiceController,
             voiceTranscriptCommitter: voiceTranscriptCommitter,
             settingsVM: settingsVM,
