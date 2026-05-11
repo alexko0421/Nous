@@ -42,9 +42,23 @@ final class ChatViewModel {
     /// cascade behind `FeatureFlags.atomCardsEnabled`.
     var resolvedCorpusEntries: [ResolvedCitableEntry] = []
 
-    /// Attribution chips are hidden — retrieval runs fully in background.
-    /// `cascade()` logic is preserved in `AttributionDisplay` for future use.
-    var primaryAttribution: AttributionDisplay { .none }
+    /// Block 4b Phase 1B — cascade decision for the chip area. When the
+    /// flag is off, the legacy conversation-level citations render as
+    /// before. When the flag is on and the corpus lane has entries, atom
+    /// cards become primary; the legacy citations fall back only when the
+    /// corpus lane is empty. Mirrors the prompt-side suppression in
+    /// `PromptContextAssembler.swift:945-946`.
+    ///
+    /// Phase 1C will add a UI-side confidence floor (0.7) and UI cap (5)
+    /// here; Phase 1B is structurally complete with no quality gates so
+    /// the cascade itself can be verified independently.
+    var primaryAttribution: AttributionDisplay {
+        AttributionDisplay.cascade(
+            flagEnabled: FeatureFlags.resolvedAtomCardsEnabled,
+            resolvedCorpusEntries: resolvedCorpusEntries,
+            citations: citations
+        )
+    }
 
     var activeQuickActionMode: QuickActionMode?
     var activeChatMode: ChatMode? = nil
