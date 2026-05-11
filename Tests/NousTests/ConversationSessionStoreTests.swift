@@ -266,6 +266,27 @@ final class ConversationSessionStoreTests: XCTestCase {
         XCTAssertEqual(storedMessage.decodedAgentTraceRecords.first?.detail, "Matched")
     }
 
+    @MainActor
+    func test_streamingSession_isIdentityStableForSameId() {
+        let store = makeStoreForStreamingTests()
+        let id = UUID()
+        let a = store.streamingSession(for: id)
+        let b = store.streamingSession(for: id)
+        XCTAssertTrue(a === b)
+    }
+
+    @MainActor
+    func test_streamingSession_distinctIdsProduceDistinctInstances() {
+        let store = makeStoreForStreamingTests()
+        let a = store.streamingSession(for: UUID())
+        let b = store.streamingSession(for: UUID())
+        XCTAssertFalse(a === b)
+    }
+
+    private func makeStoreForStreamingTests() -> ConversationSessionStore {
+        sessionStore
+    }
+
     func testRemoveAssistantTurnRecordsBehaviorDeleteSignal() throws {
         let telemetry = RecordingBehaviorEvalTelemetry()
         sessionStore = ConversationSessionStore(

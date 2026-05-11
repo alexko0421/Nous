@@ -84,6 +84,26 @@ final class ConversationSessionStore {
         self.now = now
     }
 
+    @MainActor
+    private var streamingSessions: [UUID: ConversationStreamingSession] = [:]
+
+    @MainActor
+    func streamingSession(for conversationId: UUID) -> ConversationStreamingSession {
+        if let existing = streamingSessions[conversationId] {
+            return existing
+        }
+        let session = ConversationStreamingSession(conversationId: conversationId)
+        streamingSessions[conversationId] = session
+        return session
+    }
+
+    /// Conversation ids that currently have an unseen background completion.
+    /// Used by LeftSidebar to render the unread dot.
+    @MainActor
+    func conversationIdsWithUnseenCompletion() -> Set<UUID> {
+        Set(streamingSessions.compactMap { $0.value.hasUnseenCompletion ? $0.key : nil })
+    }
+
     func startConversation(
         title: String = "New Conversation",
         projectId: UUID? = nil
