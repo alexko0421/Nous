@@ -13,10 +13,11 @@ When the user sends a message in conversation A and the assistant begins thinkin
 Root cause (verified):
 
 - `ChatViewModel` is a single, shared view model — not per-conversation.
-- The in-flight streaming `Task` is owned by `ChatViewModel.inFlightResponseTask` (`Sources/Nous/ViewModels/ChatViewModel.swift:53`).
-- `loadConversation(...)` (`Sources/Nous/ViewModels/ChatViewModel.swift:347`) defaults to `cancelInFlightWork: true` and calls `cancelInFlightResponse(...)` on every conversation switch.
-- `cancelInFlightResponse` (`Sources/Nous/ViewModels/ChatViewModel.swift:824`) calls `inFlightResponseTask?.cancel()`, which propagates `Task.checkCancellation()` in the streaming loop (`Sources/Nous/Services/TurnExecutor.swift:88-94`).
+- The in-flight streaming `Task` is owned by `ChatViewModel.inFlightResponseTask` (`Sources/Nous/ViewModels/ChatViewModel.swift:82`).
+- `loadConversation(...)` (`Sources/Nous/ViewModels/ChatViewModel.swift:496`) defaults to `cancelInFlightWork: true` and calls `cancelInFlightResponse(...)` on every conversation switch.
+- `cancelInFlightResponse` (`Sources/Nous/ViewModels/ChatViewModel.swift:1305`) calls `inFlightResponseTask?.cancel()`, which propagates `Task.checkCancellation()` in the streaming loop in `Sources/Nous/Services/TurnExecutor.swift`.
 - Partial streaming state (`currentResponse`, `currentThinking`, `currentAgentTrace`) lives on `ChatViewModel` as `@Published` — not stored per-conversation, so even without cancellation the view-model rebind would lose it.
+- `inFlightResponseTask` is assigned from **three** turn-spawn sites (`ChatViewModel.swift:531, 704, 867`) and superseded from **two** sites (`:444, :472`). Implementation must route all five through the new per-session API.
 
 ## Goal
 
