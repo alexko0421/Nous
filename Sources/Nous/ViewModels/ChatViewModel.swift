@@ -379,6 +379,7 @@ final class ChatViewModel {
             onConversationNodeUpdated: { [weak self] refreshedNode in
                 guard let self, self.currentNode?.id == refreshedNode.id else { return }
                 self.currentNode = refreshedNode
+                self.bindStreamingSession(for: refreshedNode)
             }
         )
         cachedTurnHousekeepingService = service
@@ -501,7 +502,7 @@ final class ChatViewModel {
             projectId: projectId
         ) else { return }
         currentNode = node
-        currentStreamingSession = conversationSessionStore.streamingSession(for: node.id)
+        bindStreamingSession(for: node)
         scratchPadStore.activate(conversationId: node.id)
         messages = []
         citations = []
@@ -524,7 +525,7 @@ final class ChatViewModel {
             cancelInFlightJudge()  // switching conversations invalidates any pending verdict
         }
         currentNode = node
-        currentStreamingSession = conversationSessionStore.streamingSession(for: node.id)
+        bindStreamingSession(for: node)
         scratchPadStore.activate(conversationId: node.id)
         messages = (try? nodeStore.fetchMessages(nodeId: node.id)) ?? []
         citations = []
@@ -533,6 +534,16 @@ final class ChatViewModel {
         activeChatMode = (try? nodeStore.latestChatMode(forNode: node.id)) ?? nil
         pendingSourceMaterialsByTurnId.removeAll()
         sourceMaterialsByUserMessageId.removeAll()
+    }
+
+    /// Bind the streaming session that backs the forwarded streaming
+    /// properties (`isGenerating`, `currentResponse`, `currentThinking`,
+    /// ...). Must be called immediately after every assignment to
+    /// `currentNode`; without it, the forwarded setters silently no-op
+    /// against a nil session. See Task 4 (cross-window streaming).
+    @MainActor
+    private func bindStreamingSession(for node: NousNode) {
+        currentStreamingSession = conversationSessionStore.streamingSession(for: node.id)
     }
 
     func activateQuickActionMode(_ mode: QuickActionMode) {
@@ -613,6 +624,7 @@ final class ChatViewModel {
             projectId: defaultProjectId
         )
         self.currentNode = node
+        bindStreamingSession(for: node)
         self.messages = []
         return node.id
     }
@@ -899,6 +911,10 @@ final class ChatViewModel {
         let query = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard (!query.isEmpty || !attachments.isEmpty), isActiveResponseTask(responseTaskId) else { return }
 
+        if currentNode == nil {
+            startNewConversation(projectId: defaultProjectId, cancelInFlightWork: false)
+        }
+
         inputText = ""
         isGenerating = true
         currentResponse = ""
@@ -1067,6 +1083,7 @@ final class ChatViewModel {
         }
 
         currentNode = updatedNode
+        bindStreamingSession(for: updatedNode)
         messages = retainedMessages
         citations = []
         resolvedCorpusEntries = []
@@ -1152,6 +1169,7 @@ final class ChatViewModel {
         switch envelope.event {
         case .userMessageAppended(let appended):
             currentNode = appended.node
+            bindStreamingSession(for: appended.node)
             if scratchPadStore.activeConversationId != appended.node.id {
                 scratchPadStore.activate(conversationId: appended.node.id)
             }
@@ -1162,6 +1180,7 @@ final class ChatViewModel {
             }
         case .prepared(let prepared):
             currentNode = prepared.node
+            bindStreamingSession(for: prepared.node)
             messages = prepared.messagesAfterUserAppend
             citations = prepared.citations
             resolvedCorpusEntries = prepared.resolvedCorpusEntries
@@ -1189,6 +1208,7 @@ final class ChatViewModel {
             currentResponse.append(delta)
         case .completed(let completion):
             currentNode = completion.node
+            bindStreamingSession(for: completion.node)
             messages = completion.messagesAfterAssistantAppend
             activeQuickActionMode = completion.nextQuickActionMode
             emitCitationTrace(for: completion)
@@ -1259,6 +1279,7 @@ final class ChatViewModel {
             assistantContent: content
         ) {
             currentNode = committed.node
+            bindStreamingSession(for: committed.node)
             messages = committed.messagesAfterAssistantAppend
         } else {
             messages.append(
