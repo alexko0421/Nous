@@ -19,12 +19,26 @@ final class CitableContextBuilder {
     private let nodeStore: NodeStore
     private let planner: MemoryQueryPlanner
     private let lexicalIndex: LexicalIndex?
+    private let feedbackStore: CitationFeedbackStore?
 
-    init(nodeStore: NodeStore, lexicalIndex: LexicalIndex? = nil) {
+    init(
+        nodeStore: NodeStore,
+        lexicalIndex: LexicalIndex? = nil,
+        feedbackStore: CitationFeedbackStore? = nil
+    ) {
         self.nodeStore = nodeStore
         self.planner = MemoryQueryPlanner(nodeStore: nodeStore)
         self.lexicalIndex = lexicalIndex
+        self.feedbackStore = feedbackStore
     }
+
+    /// Suppression threshold mirrors the judge feedback loop entry-suppression
+    /// gate (`TurnPlanner.buildJudgeFeedbackLoop`, > 0.45). Roughly: one fresh
+    /// thumbs-down on its own does NOT suppress (weight ≈ 2.0 × decay — but a
+    /// single down vote within the past day will already cross this). Tuned
+    /// so a thumbs-down today on an atom is honored, while a single old vote
+    /// from weeks ago naturally fades below the gate.
+    static let feedbackSuppressionThreshold: Double = 0.45
 
     /// Build the citable context for a given turn.
     ///
@@ -98,8 +112,18 @@ final class CitableContextBuilder {
         )) ?? []
         let pickedClaims = Array(claims.prefix(reflectionLimit))
 
+        // Citation feedback loop — fetch aggregated thumbs penalties for all
+        // candidate atom + reflection ids in a single query, before the
+        // confidence/budget gates so suppression telemetry can attribute
+        // drops accurately. Empty when no feedbackStore is wired (tests).
+        let feedbackIds: [UUID] = mergedAtomIds + pickedClaims.map(\.id)
+        let feedbackPenalty: [UUID: Double] = (
+            try? feedbackStore?.fetchAggregatedPenalty(entryIds: feedbackIds, now: now)
+        ) ?? [:]
+
         var totalSeen = 0
         var droppedByFloor = 0
+        var droppedByFeedback = 0
         var ranked: [(entry: CitableEntry, score: Double)] = []
 
         // Atom lane — iterate planner-then-lexical id order so the keyword/
@@ -115,7 +139,13 @@ final class CitableContextBuilder {
                 droppedByFloor += 1
                 continue
             }
-            ranked.append((Self.shapeAtom(atom), Self.scoreAtom(atom, now: now)))
+            let penalty = feedbackPenalty[id] ?? 0
+            if penalty > Self.feedbackSuppressionThreshold {
+                droppedByFeedback += 1
+                continue
+            }
+            let baseScore = Self.scoreAtom(atom, now: now)
+            ranked.append((Self.shapeAtom(atom), baseScore * Self.feedbackMultiplier(penalty: penalty)))
         }
 
         // Reflection lane.
@@ -125,7 +155,13 @@ final class CitableContextBuilder {
                 droppedByFloor += 1
                 continue
             }
-            ranked.append((Self.shapeReflection(claim), Self.scoreReflection(claim, now: now)))
+            let penalty = feedbackPenalty[claim.id] ?? 0
+            if penalty > Self.feedbackSuppressionThreshold {
+                droppedByFeedback += 1
+                continue
+            }
+            let baseScore = Self.scoreReflection(claim, now: now)
+            ranked.append((Self.shapeReflection(claim), baseScore * Self.feedbackMultiplier(penalty: penalty)))
         }
 
         // Stable sort: score desc, ties broken by recordedAt desc.
@@ -145,6 +181,7 @@ final class CitableContextBuilder {
             totalCandidates: totalSeen,
             droppedByConfidenceFloor: droppedByFloor,
             droppedByBudget: droppedByBudget,
+            droppedByFeedback: droppedByFeedback,
             admittedCount: admitted.count,
             timeWindowStart: packet.timeWindowStart,
             timeWindowEnd: packet.timeWindowEnd
@@ -219,6 +256,20 @@ final class CitableContextBuilder {
         case .reason, .rejection: return 0.75
         case .identity, .entity: return 0.7
         }
+    }
+
+    /// Translates an aggregated feedback penalty (down-vote +, up-vote −) into
+    /// a multiplicative score adjustment. Below the suppression threshold,
+    /// positive penalty compresses the score; negative penalty (net up-votes)
+    /// applies a small capped boost so a single accidental thumb does not
+    /// pin an atom to the top. Suppression itself is handled by the caller
+    /// before this is ever consulted.
+    private static func feedbackMultiplier(penalty: Double) -> Double {
+        if penalty > 0 {
+            return 1.0 / (1.0 + penalty)
+        }
+        let boost = min(0.3, -penalty * 0.15)
+        return 1.0 + boost
     }
 
     private static func recencyFactor(_ referenceTime: Date, now: Date) -> Double {

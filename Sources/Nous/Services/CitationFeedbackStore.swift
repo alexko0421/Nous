@@ -69,4 +69,47 @@ final class CitationFeedbackStore {
             verdictAt: Date(timeIntervalSince1970: stmt.double(at: 5))
         )
     }
+
+    /// Aggregate per-entry feedback penalty across all conversations + turns.
+    /// Mirrors the judge feedback loop (`TurnPlanner.buildJudgeFeedbackLoop`):
+    /// down = +2.0, up = −1.0, decayed by `pow(0.82, ageHours/24)` (~3.5-day
+    /// half-life) so a thumbs-down from this morning weighs heavily but a
+    /// month-old one fades. Atom feedback is intentionally global — a bad
+    /// atom is bad everywhere, not just in the chat where it was thumbed.
+    ///
+    /// Returns only entries with non-zero penalty; absent keys mean neutral.
+    func fetchAggregatedPenalty(
+        entryIds: [UUID],
+        now: Date = Date()
+    ) throws -> [UUID: Double] {
+        guard !entryIds.isEmpty else { return [:] }
+        let placeholders = entryIds.map { _ in "?" }.joined(separator: ",")
+        let stmt = try nodeStore.rawDatabase.prepare("""
+            SELECT atom_id, verdict, verdict_at
+            FROM citation_feedback
+            WHERE atom_id IN (\(placeholders));
+        """)
+        for (index, id) in entryIds.enumerated() {
+            try stmt.bind(id.uuidString, at: Int32(index + 1))
+        }
+        var penalty: [UUID: Double] = [:]
+        while try stmt.step() {
+            guard let atomIdString = stmt.text(at: 0),
+                  let atomId = UUID(uuidString: atomIdString),
+                  let verdictRaw = stmt.text(at: 1),
+                  let verdict = ThumbVerdict(rawValue: verdictRaw)
+            else { continue }
+            let verdictAt = Date(timeIntervalSince1970: stmt.double(at: 2))
+            let ageHours = max(0, now.timeIntervalSince(verdictAt) / 3600.0)
+            let decay = pow(0.82, ageHours / 24.0)
+            let weight: Double
+            switch verdict {
+            case .down: weight = 2.0 * decay
+            case .up: weight = -1.0 * decay
+            case .unset: continue
+            }
+            penalty[atomId, default: 0] += weight
+        }
+        return penalty
+    }
 }

@@ -53,7 +53,8 @@ final class TurnMemoryContextBuilder {
         self.contextEvidenceSteward = contextEvidenceSteward
         self.citableContextBuilder = CitableContextBuilder(
             nodeStore: nodeStore,
-            lexicalIndex: nodeStore.lexicalIndex
+            lexicalIndex: nodeStore.lexicalIndex,
+            feedbackStore: CitationFeedbackStore(nodeStore: nodeStore)
         )
     }
 
