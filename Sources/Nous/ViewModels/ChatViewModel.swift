@@ -304,10 +304,15 @@ final class ChatViewModel {
             return cachedContextContinuationService
         }
 
+        let autoTrigger = PerConversationReflectionAutoTrigger(
+            nodeStore: nodeStore,
+            serviceFactory: perConversationReflectionServiceFactory
+        )
         let service = ContextContinuationService(
             scratchPadStore: scratchPadStore,
             userMemoryScheduler: userMemoryScheduler,
-            governanceTelemetry: governanceTelemetry
+            governanceTelemetry: governanceTelemetry,
+            perConversationReflectionAutoTrigger: autoTrigger
         )
         cachedContextContinuationService = service
         return service

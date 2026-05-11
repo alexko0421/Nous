@@ -3126,6 +3126,21 @@ extension NodeStore {
         return try stmt.step()
     }
 
+    /// True iff *any* per-conversation reflection run (success, rejected,
+    /// or failed) already landed for this conversation. Used by the
+    /// auto-fire path to short-circuit — each conversation gets at most
+    /// one Gemini call from the post-turn hook; further reflections are
+    /// manual `/reflect` only.
+    func hasPerConversationReflectionRun(nodeId: UUID) throws -> Bool {
+        let stmt = try db.prepare("""
+            SELECT 1 FROM reflection_runs
+            WHERE node_id = ?
+            LIMIT 1;
+        """)
+        try stmt.bind(nodeId.uuidString, at: 1)
+        return try stmt.step()
+    }
+
     /// Most-recent run regardless of status. The foreground trigger uses this
     /// to decide whether *any* attempt has happened this week (so we don't
     /// retry a `.failed` run five times per app launch).

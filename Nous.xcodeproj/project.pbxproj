@@ -175,6 +175,7 @@
 		604A96BBB87BD5E9B4FA5EBE /* CitableEntryPoolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 475D19B8C6EA339A5D31688A /* CitableEntryPoolTests.swift */; };
 		60FD6D61A194F0D71BCEF236 /* PerConversationReflectionPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 210E7076BBBE730DB1312151 /* PerConversationReflectionPrompt.swift */; };
 		B7E1F5A26C4D3A0987A5C401 /* PerConversationReflectionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7E1F5A26C4D3A0987A5C402 /* PerConversationReflectionService.swift */; };
+		C8F2E3A47B5D6E0192A6C501 /* PerConversationReflectionAutoTrigger.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8F2E3A47B5D6E0192A6C502 /* PerConversationReflectionAutoTrigger.swift */; };
 		6146D9C1D7258FD6FCF32DDB /* VoiceCommandController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02AC12449EDE4D32637B0A15 /* VoiceCommandController.swift */; };
 		61F1354157F1EFF4427FA253 /* GalaxyRelationRefinementQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71F36681132B59215BCA2DB0 /* GalaxyRelationRefinementQueue.swift */; };
 		63AEE97E980861283A2BC3A4 /* GalaxyRelationTelemetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D5DFF872F7F3975B774CC9F /* GalaxyRelationTelemetry.swift */; };
@@ -483,6 +484,7 @@
 		20B68614BD2267D5C46B81C2 /* CitableContextBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CitableContextBuilderTests.swift; sourceTree = "<group>"; };
 		210E7076BBBE730DB1312151 /* PerConversationReflectionPrompt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerConversationReflectionPrompt.swift; sourceTree = "<group>"; };
 		B7E1F5A26C4D3A0987A5C402 /* PerConversationReflectionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerConversationReflectionService.swift; sourceTree = "<group>"; };
+		C8F2E3A47B5D6E0192A6C502 /* PerConversationReflectionAutoTrigger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerConversationReflectionAutoTrigger.swift; sourceTree = "<group>"; };
 		21B69FA4E8FA51EB389B278F /* ShadowPatternLexiconTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShadowPatternLexiconTests.swift; sourceTree = "<group>"; };
 		21D608580A0735186848E5BD /* AgentToolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentToolTests.swift; sourceTree = "<group>"; };
 		2257F8C4D5ED497EDB832E9E /* VoiceActionRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceActionRegistry.swift; sourceTree = "<group>"; };
@@ -1217,6 +1219,7 @@
 				728E7385459EB842724E8BCA /* NodeStore.swift */,
 				210E7076BBBE730DB1312151 /* PerConversationReflectionPrompt.swift */,
 				B7E1F5A26C4D3A0987A5C402 /* PerConversationReflectionService.swift */,
+				C8F2E3A47B5D6E0192A6C502 /* PerConversationReflectionAutoTrigger.swift */,
 				69A16176517033741C601125 /* PromptContextAssembler.swift */,
 				F5E8453730FD807288584740 /* ProvocationJudge.swift */,
 				4D6FBDAFCE3FA7D6D5610175 /* QueryNormalizer.swift */,
@@ -1805,6 +1808,7 @@
 				E945B227EBC4479E9F43EF34 /* NousNode.swift in Sources */,
 				60FD6D61A194F0D71BCEF236 /* PerConversationReflectionPrompt.swift in Sources */,
 				B7E1F5A26C4D3A0987A5C401 /* PerConversationReflectionService.swift in Sources */,
+				C8F2E3A47B5D6E0192A6C501 /* PerConversationReflectionAutoTrigger.swift in Sources */,
 				75CB071A0B8485BBBAD535BC /* PlanAgent.swift in Sources */,
 				A5D96F5B4C4214500D13A9D6 /* ProductCognitiveRoleModels.swift in Sources */,
 				2314061EED27031103F0CE65 /* Project.swift in Sources */,
