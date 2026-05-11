@@ -39,3 +39,52 @@ final class ConversationStreamingSession {
         self.conversationId = conversationId
     }
 }
+
+extension ConversationStreamingSession {
+
+    func beginTurn(turnId: UUID, task: Task<Void, Never>) {
+        inFlightTurnId = turnId
+        inFlightTask = task
+        inFlightAbortReason = nil
+        currentResponse = ""
+        currentThinking = ""
+        currentThinkingStartedAt = Date()
+        currentAgentTrace = []
+        didHitBudgetExhaustion = false
+        isGenerating = true
+    }
+
+    func finishTurn(viewingNow: Bool) {
+        isGenerating = false
+        inFlightTask = nil
+        inFlightTurnId = nil
+        inFlightAbortReason = nil
+        if !viewingNow {
+            hasUnseenCompletion = true
+        }
+    }
+
+    func failTurn(_ error: Error, viewingNow: Bool) {
+        lastError = error
+        finishTurn(viewingNow: viewingNow)
+        if !viewingNow {
+            hasUnseenCompletion = true
+        }
+    }
+
+    func cancel() {
+        inFlightTask?.cancel()
+        inFlightTask = nil
+        inFlightTurnId = nil
+    }
+
+    /// Clears `hasUnseenCompletion` and returns the one-shot `lastError`
+    /// (if any) so the caller can surface it once and then move on.
+    @discardableResult
+    func markViewed() -> Error? {
+        hasUnseenCompletion = false
+        let err = lastError
+        lastError = nil
+        return err
+    }
+}
