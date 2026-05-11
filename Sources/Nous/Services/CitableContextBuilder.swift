@@ -87,7 +87,15 @@ final class CitableContextBuilder {
             nodeStore: nodeStore
         )
 
-        let claims = (try? nodeStore.fetchActiveReflectionClaims(projectId: projectId)) ?? []
+        // `currentNodeId: conversationId` filters out per-conversation
+        // reflection claims that belong to *other* conversations. Cross-
+        // conversation claims (weekly tier, `r.node_id IS NULL`) always
+        // come through; conversation-scoped claims surface only when the
+        // user is back in the source chat.
+        let claims = (try? nodeStore.fetchActiveReflectionClaims(
+            projectId: projectId,
+            currentNodeId: conversationId
+        )) ?? []
         let pickedClaims = Array(claims.prefix(reflectionLimit))
 
         var totalSeen = 0

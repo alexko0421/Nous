@@ -711,10 +711,10 @@ final class ChatViewModel {
     }
 
     /// Runs `PerConversationReflectionService` over the current conversation
-    /// and appends the result as an in-memory assistant message. No
-    /// persistence: the reflection lives only until the conversation is
-    /// reloaded. See `PerConversationReflectionService` for why we don't
-    /// write to `reflection_claim` in v1.
+    /// and appends the result as an in-memory assistant message. The service
+    /// persists the run + claim with `ReflectionRun.nodeId = currentNode.id`
+    /// so retrieval (`fetchActiveReflectionClaims(currentNodeId:)`) surfaces
+    /// the claim only inside this conversation, not in other chats.
     @MainActor
     private func runReflectCommand() async {
         guard let node = currentNode else {
@@ -738,6 +738,7 @@ final class ChatViewModel {
             let output = try await service.run(
                 conversationId: node.id,
                 conversationTitle: node.title,
+                projectId: node.projectId,
                 messages: snapshot
             )
             if let claim = output.claim {

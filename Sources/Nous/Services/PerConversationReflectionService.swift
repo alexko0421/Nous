@@ -2,16 +2,14 @@ import Foundation
 
 /// Manual-trigger per-conversation reflection. Runs `PerConversationReflectionPrompt`
 /// against a single conversation's transcript on Gemini 2.5 Pro, validates the
-/// result via `ReflectionValidator`, and returns claims as values.
+/// result via `ReflectionValidator`, and persists the run + claim + evidence
+/// scoped to the source conversation via `ReflectionRun.nodeId`.
 ///
-/// Block 8 lite v1 (2026-05-10) deliberately does NOT persist to
-/// `reflection_claim`. The weekly tier already populates that table for
-/// CitableContextBuilder retrieval; per-conversation claims are scoped to
-/// "in this conversation, you tend to..." phrasing and would be misleading
-/// if they leaked into other conversations' prompts via the global
-/// `fetchActiveReflectionClaims` lane. Once Alex has run this manually a few
-/// times and the claim quality is graded, persistence can be added with a
-/// proper conversation-scoped storage path.
+/// The conversation-scoping is the load-bearing invariant: claims phrased as
+/// "in this conversation, you ..." MUST NOT leak into retrieval for other
+/// conversations. `NodeStore.fetchActiveReflectionClaims(currentNodeId:)`
+/// enforces this by filtering on `r.node_id IS NULL OR r.node_id = ?`, so
+/// per-conv claims surface only when the user is back in the source chat.
 ///
 /// This service mirrors `WeeklyReflectionService` deliberately so that future
 /// wiring (auto-trigger after N turns, per-project rollup, etc.) can lift the
@@ -48,24 +46,40 @@ final class PerConversationReflectionService {
     /// their judgment but still reject genuinely empty conversations.
     static let manualTriggerMinimumTurns = 4
 
+    private let nodeStore: NodeStore
     private let llm: StructuredLLMClient
     private let now: () -> Date
 
-    init(llm: StructuredLLMClient, now: @escaping () -> Date = Date.init) {
+    init(
+        nodeStore: NodeStore,
+        llm: StructuredLLMClient,
+        now: @escaping () -> Date = Date.init
+    ) {
+        self.nodeStore = nodeStore
         self.llm = llm
         self.now = now
     }
 
-    convenience init(llm: GeminiLLMService, now: @escaping () -> Date = Date.init) {
-        self.init(llm: GeminiStructuredLLMAdapter(service: llm), now: now)
+    convenience init(
+        nodeStore: NodeStore,
+        llm: GeminiLLMService,
+        now: @escaping () -> Date = Date.init
+    ) {
+        self.init(
+            nodeStore: nodeStore,
+            llm: GeminiStructuredLLMAdapter(service: llm),
+            now: now
+        )
     }
 
-    /// Run reflection on one conversation's messages. Caller passes the live
-    /// `messages` array from `ChatViewModel`; this service doesn't touch the
-    /// node store or write anything.
+    /// Run reflection on one conversation's messages and persist the result.
+    /// LLM/validator failures still persist a `.failed` run row so debug
+    /// inspectors can see the attempt happened. The Output `claim` is non-nil
+    /// only when validation produced an active claim.
     func run(
         conversationId: UUID,
         conversationTitle: String,
+        projectId: UUID?,
         messages: [Message]
     ) async throws -> Output {
         guard messages.count >= Self.manualTriggerMinimumTurns else {
@@ -76,6 +90,7 @@ final class PerConversationReflectionService {
         }
 
         let runId = UUID()
+        let startedAt = now()
         let validMessageIds = Set(messages.map { $0.id.uuidString })
         let fixtureJSON = try encodeFixture(
             conversationId: conversationId,
@@ -97,6 +112,14 @@ final class PerConversationReflectionService {
                 temperature: 0.7
             )
         } catch {
+            try? persistFailedRun(
+                runId: runId,
+                conversationId: conversationId,
+                projectId: projectId,
+                startedAt: startedAt,
+                costCents: 0,
+                reason: .apiError
+            )
             throw ServiceError.llmFailure(error)
         }
 
@@ -111,17 +134,133 @@ final class PerConversationReflectionService {
                 now: now()
             )
         } catch let err as ReflectionValidator.ValidationError {
+            try? persistFailedRun(
+                runId: runId,
+                conversationId: conversationId,
+                projectId: projectId,
+                startedAt: startedAt,
+                costCents: cost,
+                reason: .apiError
+            )
             if case let .malformed(detail) = err {
                 throw ServiceError.validatorMalformed(detail)
             }
             throw ServiceError.validatorMalformed("unknown validator error")
         }
 
-        return Output(
-            claim: validation.claims.first,
-            rejectionReason: validation.rejectionReason,
+        // Empty / rejected validator output: persist a `.rejectedAll` row so
+        // the debug inspector can see the attempt and reason. Return Output
+        // with claim=nil so the UI can render a sensible notice.
+        guard let firstClaim = validation.claims.first else {
+            let run = ReflectionRun(
+                id: runId,
+                projectId: projectId,
+                nodeId: conversationId,
+                weekStart: startedAt,
+                weekEnd: startedAt,
+                ranAt: startedAt,
+                status: .rejectedAll,
+                rejectionReason: validation.rejectionReason ?? .generic,
+                costCents: cost
+            )
+            try nodeStore.persistReflectionRun(run, claims: [], evidence: [])
+            return Output(
+                claim: nil,
+                rejectionReason: validation.rejectionReason,
+                costCents: cost
+            )
+        }
+
+        // Happy path: build evidence rows from the raw JSON (re-parsed because
+        // the validator doesn't return grounded IDs), persist run + claim +
+        // evidence in one transaction.
+        let evidence = try buildEvidence(
+            rawJSON: rawText,
+            claims: validation.claims,
+            validMessageIds: validMessageIds
+        )
+        let run = ReflectionRun(
+            id: runId,
+            projectId: projectId,
+            nodeId: conversationId,
+            weekStart: startedAt,
+            weekEnd: startedAt,
+            ranAt: startedAt,
+            status: .success,
+            rejectionReason: nil,
             costCents: cost
         )
+        try nodeStore.persistReflectionRun(run, claims: validation.claims, evidence: evidence)
+        return Output(
+            claim: firstClaim,
+            rejectionReason: nil,
+            costCents: cost
+        )
+    }
+
+    private func persistFailedRun(
+        runId: UUID,
+        conversationId: UUID,
+        projectId: UUID?,
+        startedAt: Date,
+        costCents: Int,
+        reason: ReflectionRejectionReason
+    ) throws {
+        let run = ReflectionRun(
+            id: runId,
+            projectId: projectId,
+            nodeId: conversationId,
+            weekStart: startedAt,
+            weekEnd: startedAt,
+            ranAt: startedAt,
+            status: .failed,
+            rejectionReason: reason,
+            costCents: costCents
+        )
+        try nodeStore.persistReflectionRun(run, claims: [], evidence: [])
+    }
+
+    private func buildEvidence(
+        rawJSON: String,
+        claims: [ReflectionClaim],
+        validMessageIds: Set<String>
+    ) throws -> [ReflectionEvidence] {
+        struct Envelope: Decodable { let claims: [RawClaim] }
+        struct RawClaim: Decodable {
+            let claim: String
+            let confidence: Double
+            let supporting_turn_ids: [String]
+        }
+        let env = try JSONDecoder().decode(Envelope.self, from: Data(rawJSON.utf8))
+
+        var map: [String: [[UUID]]] = [:]
+        for raw in env.claims {
+            let trimmed = raw.claim.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard raw.confidence >= ReflectionValidator.minConfidence else { continue }
+            let grounded = raw.supporting_turn_ids.filter { validMessageIds.contains($0) }
+            var seen = Set<String>()
+            let deduped = grounded.filter { id in
+                if seen.contains(id) { return false }
+                seen.insert(id)
+                return true
+            }
+            guard deduped.count >= ReflectionValidator.minGroundedTurns else { continue }
+            let uuids = deduped.compactMap(UUID.init(uuidString:))
+            map[trimmed, default: []].append(uuids)
+        }
+
+        var evidence: [ReflectionEvidence] = []
+        for claim in claims {
+            guard var queue = map[claim.claim], !queue.isEmpty else { continue }
+            let ids = queue.removeFirst()
+            map[claim.claim] = queue
+            var seenIds = Set<UUID>()
+            for messageId in ids where !seenIds.contains(messageId) {
+                seenIds.insert(messageId)
+                evidence.append(ReflectionEvidence(reflectionId: claim.id, messageId: messageId))
+            }
+        }
+        return evidence
     }
 
     private func encodeFixture(

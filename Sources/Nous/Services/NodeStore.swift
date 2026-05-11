@@ -455,6 +455,7 @@ final class NodeStore {
             CREATE TABLE IF NOT EXISTS reflection_runs (
                 id               TEXT PRIMARY KEY,
                 project_id       TEXT REFERENCES projects(id) ON DELETE CASCADE,
+                node_id          TEXT REFERENCES nodes(id) ON DELETE CASCADE,
                 week_start       REAL NOT NULL,
                 week_end         REAL NOT NULL,
                 ran_at           REAL NOT NULL,
@@ -463,6 +464,20 @@ final class NodeStore {
                 cost_cents       INTEGER
             );
         """)
+
+        // 2026-05-10: per-conversation reflection ships. Pre-existing DBs
+        // built before node_id was in the CREATE TABLE need the column added
+        // via ALTER. SQLite ALTER TABLE cannot add a FOREIGN KEY constraint
+        // to an existing table, so the cascade lives only on fresh installs;
+        // for upgraded DBs the column is best-effort and orphan rows are
+        // tolerated. The retrieval filter (`fetchActiveReflectionClaims`)
+        // does not rely on cascade — it joins on node_id directly and
+        // returns nothing for stale ids.
+        try ensureColumnExists(
+            table: "reflection_runs",
+            column: "node_id",
+            alterSQL: "ALTER TABLE reflection_runs ADD COLUMN node_id TEXT;"
+        )
 
         try db.exec("""
             CREATE TABLE IF NOT EXISTS reflection_claim (
@@ -3118,7 +3133,7 @@ extension NodeStore {
         let sql: String
         if projectId != nil {
             sql = """
-                SELECT id, project_id, week_start, week_end, ran_at, status,
+                SELECT id, project_id, node_id, week_start, week_end, ran_at, status,
                        rejection_reason, cost_cents
                 FROM reflection_runs
                 WHERE project_id = ?
@@ -3127,7 +3142,7 @@ extension NodeStore {
             """
         } else {
             sql = """
-                SELECT id, project_id, week_start, week_end, ran_at, status,
+                SELECT id, project_id, node_id, week_start, week_end, ran_at, status,
                        rejection_reason, cost_cents
                 FROM reflection_runs
                 WHERE project_id IS NULL
@@ -3147,30 +3162,39 @@ extension NodeStore {
     /// `projectId` (including NULL = free-chat scope) and whose `status =
     /// 'active'`. Used by retrieval when building the Self-reflection slice
     /// of the citable-entry pool (Codex R2).
-    func fetchActiveReflectionClaims(projectId: UUID?) throws -> [ReflectionClaim] {
-        let sql: String
-        if projectId != nil {
-            sql = """
-                SELECT c.id, c.run_id, c.claim, c.confidence, c.why_non_obvious,
-                       c.status, c.created_at
-                FROM reflection_claim c
-                JOIN reflection_runs r ON r.id = c.run_id
-                WHERE r.project_id = ? AND c.status = 'active'
-                ORDER BY c.created_at DESC;
-            """
-        } else {
-            sql = """
-                SELECT c.id, c.run_id, c.claim, c.confidence, c.why_non_obvious,
-                       c.status, c.created_at
-                FROM reflection_claim c
-                JOIN reflection_runs r ON r.id = c.run_id
-                WHERE r.project_id IS NULL AND c.status = 'active'
-                ORDER BY c.created_at DESC;
-            """
-        }
+    ///
+    /// `currentNodeId` filters out per-conversation claims (`runs.node_id`
+    /// set) that belong to *other* conversations. Cross-conversation claims
+    /// (`runs.node_id IS NULL`, written by weekly reflection) always come
+    /// through. Pass `nil` to read every active claim regardless of
+    /// conversation scope — used by debug inspectors and tests.
+    func fetchActiveReflectionClaims(
+        projectId: UUID?,
+        currentNodeId: UUID? = nil
+    ) throws -> [ReflectionClaim] {
+        let projectClause = projectId != nil
+            ? "r.project_id = ?"
+            : "r.project_id IS NULL"
+        let nodeClause = currentNodeId != nil
+            ? "(r.node_id IS NULL OR r.node_id = ?)"
+            : "1 = 1"
+        let sql = """
+            SELECT c.id, c.run_id, c.claim, c.confidence, c.why_non_obvious,
+                   c.status, c.created_at
+            FROM reflection_claim c
+            JOIN reflection_runs r ON r.id = c.run_id
+            WHERE \(projectClause) AND \(nodeClause) AND c.status = 'active'
+            ORDER BY c.created_at DESC;
+        """
         let stmt = try db.prepare(sql)
+        var bindIndex: Int32 = 1
         if let projectId {
-            try stmt.bind(projectId.uuidString, at: 1)
+            try stmt.bind(projectId.uuidString, at: bindIndex)
+            bindIndex += 1
+        }
+        if let currentNodeId {
+            try stmt.bind(currentNodeId.uuidString, at: bindIndex)
+            bindIndex += 1
         }
         var results: [ReflectionClaim] = []
         while try stmt.step() {
@@ -3263,21 +3287,22 @@ extension NodeStore {
     private func insertReflectionRun(_ run: ReflectionRun) throws {
         let stmt = try db.prepare("""
             INSERT INTO reflection_runs
-              (id, project_id, week_start, week_end, ran_at, status,
+              (id, project_id, node_id, week_start, week_end, ran_at, status,
                rejection_reason, cost_cents)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
         """)
         try stmt.bind(run.id.uuidString, at: 1)
         try stmt.bind(run.projectId?.uuidString, at: 2)
-        try stmt.bind(run.weekStart.timeIntervalSince1970, at: 3)
-        try stmt.bind(run.weekEnd.timeIntervalSince1970, at: 4)
-        try stmt.bind(run.ranAt.timeIntervalSince1970, at: 5)
-        try stmt.bind(run.status.rawValue, at: 6)
-        try stmt.bind(run.rejectionReason?.rawValue, at: 7)
+        try stmt.bind(run.nodeId?.uuidString, at: 3)
+        try stmt.bind(run.weekStart.timeIntervalSince1970, at: 4)
+        try stmt.bind(run.weekEnd.timeIntervalSince1970, at: 5)
+        try stmt.bind(run.ranAt.timeIntervalSince1970, at: 6)
+        try stmt.bind(run.status.rawValue, at: 7)
+        try stmt.bind(run.rejectionReason?.rawValue, at: 8)
         if let cents = run.costCents {
-            try stmt.bind(cents, at: 8)
+            try stmt.bind(cents, at: 9)
         } else {
-            try stmt.bind(nil as String?, at: 8)
+            try stmt.bind(nil as String?, at: 9)
         }
         try stmt.step()
     }
@@ -3314,15 +3339,17 @@ extension NodeStore {
     private func reflectionRunFrom(_ stmt: Statement) -> ReflectionRun {
         let id = UUID(uuidString: stmt.text(at: 0) ?? "") ?? UUID()
         let projectId = (stmt.text(at: 1)).flatMap { UUID(uuidString: $0) }
-        let weekStart = Date(timeIntervalSince1970: stmt.double(at: 2))
-        let weekEnd = Date(timeIntervalSince1970: stmt.double(at: 3))
-        let ranAt = Date(timeIntervalSince1970: stmt.double(at: 4))
-        let status = ReflectionRunStatus(rawValue: stmt.text(at: 5) ?? "failed") ?? .failed
-        let reason = (stmt.text(at: 6)).flatMap(ReflectionRejectionReason.init(rawValue:))
-        let cost: Int? = stmt.isNull(at: 7) ? nil : stmt.int(at: 7)
+        let nodeId = (stmt.text(at: 2)).flatMap { UUID(uuidString: $0) }
+        let weekStart = Date(timeIntervalSince1970: stmt.double(at: 3))
+        let weekEnd = Date(timeIntervalSince1970: stmt.double(at: 4))
+        let ranAt = Date(timeIntervalSince1970: stmt.double(at: 5))
+        let status = ReflectionRunStatus(rawValue: stmt.text(at: 6) ?? "failed") ?? .failed
+        let reason = (stmt.text(at: 7)).flatMap(ReflectionRejectionReason.init(rawValue:))
+        let cost: Int? = stmt.isNull(at: 8) ? nil : stmt.int(at: 8)
         return ReflectionRun(
             id: id,
             projectId: projectId,
+            nodeId: nodeId,
             weekStart: weekStart,
             weekEnd: weekEnd,
             ranAt: ranAt,
