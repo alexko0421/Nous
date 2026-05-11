@@ -345,6 +345,7 @@ final class MemoryGraphWriter {
         merged.sourceNodeId = existing.sourceNodeId ?? candidate.sourceNodeId
         merged.sourceMessageId = existing.sourceMessageId ?? candidate.sourceMessageId
         merged.embedding = existing.embedding ?? candidate.embedding
+        merged.verbatimQuote = candidate.verbatimQuote ?? existing.verbatimQuote
         return merged
     }
 

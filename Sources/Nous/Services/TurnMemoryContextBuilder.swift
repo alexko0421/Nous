@@ -64,7 +64,6 @@ final class TurnMemoryContextBuilder {
         node: NousNode,
         policy: QuickActionMemoryPolicy,
         citationSourceMaterials: [SourceMaterialContext] = [],
-        includeGraphPromptRecall: Bool = true,
         now: Date
     ) throws -> TurnMemoryContext {
         let excludedCitationIds = Self.citationExclusionIds(
