@@ -75,6 +75,8 @@ final class ConversationStreamingSessionTests: XCTestCase {
 
         XCTAssertTrue(session.hasUnseenCompletion)
         XCTAssertTrue(session.lastError is E)
+        XCTAssertFalse(session.isGenerating)
+        XCTAssertNil(session.inFlightTask)
     }
 
     func test_markViewed_clearsUnseenAndReturnsError() {

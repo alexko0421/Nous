@@ -67,11 +67,9 @@ extension ConversationStreamingSession {
     func failTurn(_ error: Error, viewingNow: Bool) {
         lastError = error
         finishTurn(viewingNow: viewingNow)
-        if !viewingNow {
-            hasUnseenCompletion = true
-        }
     }
 
+    /// Cancels the in-flight task and clears the slots. The cancelled task's completion handler still routes through finishTurn/failTurn for the isGenerating reset.
     func cancel() {
         inFlightTask?.cancel()
         inFlightTask = nil
