@@ -379,19 +379,22 @@ final class MemoryQueryPlannerTests: XCTestCase {
     /// without cue words can never reach memory even when relevant atoms
     /// exist with embeddings.
     func testVectorFallbackRecallsRelevantAtomWhenNoKeywordCue() throws {
+        let sig = EmbeddingService.currentSignature
         let preference = MemoryAtom(
             type: .preference,
             statement: "Alex prefers direct, concise feedback.",
             scope: .global,
             status: .active,
-            embedding: [1.0, 0.0, 0.0]
+            embedding: [1.0, 0.0, 0.0],
+            embeddingSignature: sig
         )
         let belief = MemoryAtom(
             type: .belief,
             statement: "Distractions tax focus heavily.",
             scope: .global,
             status: .active,
-            embedding: [0.0, 1.0, 0.0]
+            embedding: [0.0, 1.0, 0.0],
+            embeddingSignature: sig
         )
         try store.insertMemoryAtom(preference)
         try store.insertMemoryAtom(belief)
@@ -418,6 +421,7 @@ final class MemoryQueryPlannerTests: XCTestCase {
     /// at the vector layer.
     func testVectorFallbackReranksUsingConfidenceAndRecency() throws {
         let now = Date()
+        let sig = EmbeddingService.currentSignature
         let stalePref = MemoryAtom(
             type: .preference,
             statement: "Alex prefers verbose outputs (stale).",
@@ -428,7 +432,8 @@ final class MemoryQueryPlannerTests: XCTestCase {
             createdAt: Calendar.current.date(byAdding: .day, value: -180, to: now)!,
             updatedAt: Calendar.current.date(byAdding: .day, value: -180, to: now)!,
             lastSeenAt: Calendar.current.date(byAdding: .day, value: -180, to: now),
-            embedding: [0.99, 0.14, 0.0]
+            embedding: [0.99, 0.14, 0.0],
+            embeddingSignature: sig
         )
         let freshPref = MemoryAtom(
             type: .preference,
@@ -440,7 +445,8 @@ final class MemoryQueryPlannerTests: XCTestCase {
             createdAt: now,
             updatedAt: now,
             lastSeenAt: now,
-            embedding: [0.85, 0.50, 0.0]
+            embedding: [0.85, 0.50, 0.0],
+            embeddingSignature: sig
         )
         try [stalePref, freshPref].forEach(store.insertMemoryAtom)
 
@@ -511,7 +517,8 @@ final class MemoryQueryPlannerTests: XCTestCase {
             statement: "Alex prefers em-dashes off.",
             scope: .global,
             status: .active,
-            embedding: [1.0, 0.0, 0.0]
+            embedding: [1.0, 0.0, 0.0],
+            embeddingSignature: EmbeddingService.currentSignature
         )
         try store.insertMemoryAtom(preference)
 

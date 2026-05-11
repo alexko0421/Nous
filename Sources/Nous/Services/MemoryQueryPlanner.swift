@@ -170,6 +170,7 @@ final class MemoryQueryPlanner {
         let pool = ((try? nodeStore.fetchMemoryAtomsNearest(
             embedding: queryEmbedding,
             topK: max(limit * 4, limit),
+            activeSignature: EmbeddingService.currentSignature,
             statuses: [.active]
         )) ?? [])
             .filter { atom in

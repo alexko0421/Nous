@@ -2311,12 +2311,13 @@ final class NodeStore {
     func fetchMemoryAtomsNearest(
         embedding query: [Float],
         topK: Int,
+        activeSignature: String,
         statuses: Set<MemoryStatus> = []
     ) throws -> [MemoryAtom] {
         guard !query.isEmpty, topK > 0 else { return [] }
 
-        var whereClauses = ["embedding IS NOT NULL"]
-        var stringBindings: [String?] = []
+        var whereClauses = ["embedding IS NOT NULL", "embedding_signature = ?"]
+        var stringBindings: [String?] = [activeSignature]
         if !statuses.isEmpty {
             let placeholders = Array(repeating: "?", count: statuses.count).joined(separator: ", ")
             whereClauses.append("status IN (\(placeholders))")
