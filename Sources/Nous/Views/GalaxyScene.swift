@@ -40,6 +40,10 @@ final class GalaxyScene: SKScene {
     private var nodeTitleLabels: [UUID: SKLabelNode] = [:]
     private var nodeHitRadii: [UUID: CGFloat] = [:]
     private var fittedNodeIds: [UUID] = []
+    /// Cached 1-hop neighbor set of `selectedNodeId`. Recomputed in
+    /// `refreshNeighborCache()` whenever the selection or the edge list
+    /// changes, so `shouldShowLabel` is a constant-time lookup per node.
+    private var selectedNeighborIds: Set<UUID> = []
 
     // MARK: - Lifecycle
 
@@ -84,6 +88,7 @@ final class GalaxyScene: SKScene {
         nodeTitleLabels.removeAll()
         nodeHitRadii.removeAll()
 
+        refreshNeighborCache()
         drawEdges()
         drawNodes()
 
@@ -263,7 +268,10 @@ final class GalaxyScene: SKScene {
     }
 
     private func shouldShowLabel(for node: NousNode, isSelected: Bool) -> Bool {
-        isSelected || node.isFavorite || cameraNode.xScale <= GalaxyZoomPresentation.titleRevealScale
+        isSelected
+            || selectedNeighborIds.contains(node.id)
+            || node.isFavorite
+            || cameraNode.xScale <= GalaxyZoomPresentation.titleRevealScale
     }
 
     private func titleLabelAlpha(for node: NousNode, isSelected: Bool) -> CGFloat {
@@ -271,12 +279,29 @@ final class GalaxyScene: SKScene {
     }
 
     private func updateTitleLabelVisibility() {
+        refreshNeighborCache()
         for node in graphNodes {
             guard let titleLabel = nodeTitleLabels[node.id] else { continue }
             let isSelected = node.id == selectedNodeId
             titleLabel.alpha = titleLabelAlpha(for: node, isSelected: isSelected)
             titleLabel.fontColor = labelColor(for: node, isSelected: isSelected)
         }
+    }
+
+    private func refreshNeighborCache() {
+        guard let selectedNodeId else {
+            selectedNeighborIds = []
+            return
+        }
+        var neighbors: Set<UUID> = []
+        for edge in graphEdges {
+            if edge.sourceId == selectedNodeId {
+                neighbors.insert(edge.targetId)
+            } else if edge.targetId == selectedNodeId {
+                neighbors.insert(edge.sourceId)
+            }
+        }
+        selectedNeighborIds = neighbors
     }
 
     private func fillColor(for node: NousNode, isSelected: Bool) -> SKColor {
@@ -326,48 +351,9 @@ final class GalaxyScene: SKScene {
         to end: CGPoint,
         kind: GalaxyRelationLineKind?
     ) -> CGPath {
-        guard kind == .candidate else {
-            let path = CGMutablePath()
-            path.move(to: start)
-            path.addLine(to: end)
-            return path
-        }
-
-        return dashedPath(from: start, to: end, dashLength: 6, gapLength: 7)
-    }
-
-    private func dashedPath(
-        from start: CGPoint,
-        to end: CGPoint,
-        dashLength: CGFloat,
-        gapLength: CGFloat
-    ) -> CGPath {
         let path = CGMutablePath()
-        let dx = end.x - start.x
-        let dy = end.y - start.y
-        let distance = sqrt(dx * dx + dy * dy)
-        guard distance > 0 else { return path }
-
-        let ux = dx / distance
-        let uy = dy / distance
-        var travelled: CGFloat = 0
-
-        while travelled < distance {
-            let dashEnd = min(travelled + dashLength, distance)
-            let segmentStart = CGPoint(
-                x: start.x + ux * travelled,
-                y: start.y + uy * travelled
-            )
-            let segmentEnd = CGPoint(
-                x: start.x + ux * dashEnd,
-                y: start.y + uy * dashEnd
-            )
-
-            path.move(to: segmentStart)
-            path.addLine(to: segmentEnd)
-            travelled += dashLength + gapLength
-        }
-
+        path.move(to: start)
+        path.addLine(to: end)
         return path
     }
 
@@ -689,8 +675,13 @@ final class GalaxyScene: SKScene {
 
     private func prepareDragPhysics(for nodeId: UUID) {
         draggedNodeId = nodeId
-        dragPhysicsComponentIds = connectedComponentIds(startingAt: nodeId)
-        dragPhysicsEdges = graphEdges.filter { edge in
+        // Only solid (non-candidate) edges transmit drag spring force.
+        // Candidate edges are unverified — they shouldn't tug far-hop nodes.
+        // Combined with depth-2 BFS, this stops a single drag from rippling
+        // the entire connected component (which felt like dragging a blob).
+        let solidEdges = graphEdges.filter { GalaxyRelationLineKind.kind(for: $0) != .candidate }
+        dragPhysicsComponentIds = neighborhoodIds(startingAt: nodeId, edges: solidEdges, maxDepth: 2)
+        dragPhysicsEdges = solidEdges.filter { edge in
             dragPhysicsComponentIds.contains(edge.sourceId) && dragPhysicsComponentIds.contains(edge.targetId)
         }
         dragPhysicsRestLengths = Dictionary(uniqueKeysWithValues: dragPhysicsEdges.compactMap { edge in
@@ -791,21 +782,26 @@ final class GalaxyScene: SKScene {
     }
 
     private func connectedComponentIds(startingAt startId: UUID) -> Set<UUID> {
+        neighborhoodIds(startingAt: startId, edges: graphEdges, maxDepth: Int.max)
+    }
+
+    private func neighborhoodIds(startingAt startId: UUID, edges: [NodeEdge], maxDepth: Int) -> Set<UUID> {
         var adjacency: [UUID: Set<UUID>] = [:]
-        for edge in graphEdges {
+        for edge in edges {
             adjacency[edge.sourceId, default: []].insert(edge.targetId)
             adjacency[edge.targetId, default: []].insert(edge.sourceId)
         }
 
         var visited: Set<UUID> = [startId]
-        var queue = Array(adjacency[startId, default: []])
-        while let id = queue.first {
+        var queue: [(id: UUID, depth: Int)] = adjacency[startId, default: []].map { ($0, 1) }
+        while let head = queue.first {
             queue.removeFirst()
-            guard !visited.contains(id) else { continue }
-            visited.insert(id)
+            guard !visited.contains(head.id) else { continue }
+            visited.insert(head.id)
 
-            for neighbor in adjacency[id, default: []] where !visited.contains(neighbor) {
-                queue.append(neighbor)
+            guard head.depth < maxDepth else { continue }
+            for neighbor in adjacency[head.id, default: []] where !visited.contains(neighbor) {
+                queue.append((neighbor, head.depth + 1))
             }
         }
 

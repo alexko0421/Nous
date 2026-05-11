@@ -215,7 +215,17 @@ final class GalaxyViewModel {
     private func apply(_ snapshot: Snapshot) {
         nodes = snapshot.nodes
         edges = snapshot.edges
-        positions = snapshot.positions
+        // Preserve any user-dragged positions (already in self.positions) for
+        // nodes that still exist; only fall back to the freshly computed
+        // layout for newly appearing nodes. Without this, every snapshot
+        // reload (e.g. after refineRelationship) would snap dragged nodes
+        // back to the force-simulated positions and look unstable.
+        let visibleIds = Set(snapshot.nodes.map(\.id))
+        var merged: [UUID: GraphPosition] = [:]
+        for id in visibleIds {
+            merged[id] = positions[id] ?? snapshot.positions[id]
+        }
+        positions = merged
     }
 
     private func replaceOrAppendEdge(_ edge: NodeEdge) {
