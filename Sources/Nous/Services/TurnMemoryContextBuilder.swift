@@ -110,21 +110,16 @@ final class TurnMemoryContextBuilder {
             .filterMemoryEvidence(memoryEvidence, promptQuery: promptQuery)
             .kept
         let queryEmbedding: [Float]? = {
-            guard policy.includeContradictionRecall,
-                  includeGraphPromptRecall,
-                  embeddingService.isLoaded
-            else { return nil }
+            guard embeddingService.isLoaded else { return nil }
             return try? embeddingService.embed(promptQuery)
         }()
-        let memoryGraphRecall: [String] = policy.includeContradictionRecall && includeGraphPromptRecall
-            ? memoryProjectionService.currentGraphMemoryRecall(
-                currentMessage: promptQuery,
-                projectId: node.projectId,
-                conversationId: node.id,
-                queryEmbedding: queryEmbedding,
-                now: now
-            )
-            : []
+        let memoryGraphRecall: [String] = memoryProjectionService.currentGraphMemoryRecall(
+            currentMessage: promptQuery,
+            projectId: node.projectId,
+            conversationId: node.id,
+            queryEmbedding: queryEmbedding,
+            now: now
+        )
         let projectMemory = policy.includeProjectMemory
             ? node.projectId.flatMap {
                 memoryProjectionService.currentProject(projectId: $0)
