@@ -1315,7 +1315,8 @@ final class UserMemoryCore {
             updatedAt: now,
             lastSeenAt: now,
             sourceNodeId: sourceNodeId,
-            sourceMessageId: verified.sourceMessage.id
+            sourceMessageId: verified.sourceMessage.id,
+            verbatimQuote: verified.atom.evidenceQuote
         )
     }
 
