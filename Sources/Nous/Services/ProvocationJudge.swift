@@ -246,15 +246,79 @@ final class ProvocationJudge {
 
 private struct TimeoutError: Error {}
 
-private func withTimeout<T>(seconds: TimeInterval, operation: @escaping @Sendable () async throws -> T) async throws -> T {
-    try await withThrowingTaskGroup(of: T.self) { group in
-        defer { group.cancelAll() }
-        group.addTask { try await operation() }
-        group.addTask {
-            try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-            throw TimeoutError()
+private func withTimeout<T: Sendable>(
+    seconds: TimeInterval,
+    operation: @escaping @Sendable () async throws -> T
+) async throws -> T {
+    let state = TimeoutRaceState<T>()
+    let operationTask = Task {
+        do {
+            state.finish(.success(try await operation()))
+        } catch {
+            state.finish(.failure(error))
         }
-        let result = try await group.next()!
-        return result
+    }
+    let timeoutTask = Task {
+        do {
+            try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            operationTask.cancel()
+            state.finish(.failure(TimeoutError()))
+        } catch {
+            state.finish(.failure(error))
+        }
+    }
+
+    return try await withTaskCancellationHandler {
+        try await withCheckedThrowingContinuation { continuation in
+            state.setContinuation(continuation)
+        }
+    } onCancel: {
+        operationTask.cancel()
+        timeoutTask.cancel()
+        state.finish(.failure(CancellationError()))
+    }
+}
+
+private final class TimeoutRaceState<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<T, Error>?
+    private var result: Result<T, Error>?
+    private var didFinish = false
+
+    func setContinuation(_ continuation: CheckedContinuation<T, Error>) {
+        let resultToResume: Result<T, Error>?
+        lock.lock()
+        if let result {
+            didFinish = true
+            resultToResume = result
+        } else {
+            self.continuation = continuation
+            resultToResume = nil
+        }
+        lock.unlock()
+
+        if let resultToResume {
+            continuation.resume(with: resultToResume)
+        }
+    }
+
+    func finish(_ result: Result<T, Error>) {
+        let continuationToResume: CheckedContinuation<T, Error>?
+        lock.lock()
+        guard !didFinish else {
+            lock.unlock()
+            return
+        }
+        didFinish = true
+        if let continuation {
+            continuationToResume = continuation
+            self.continuation = nil
+        } else {
+            self.result = result
+            continuationToResume = nil
+        }
+        lock.unlock()
+
+        continuationToResume?.resume(with: result)
     }
 }
