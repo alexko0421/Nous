@@ -603,6 +603,7 @@ final class SourceIngestionService {
                     kind: .web,
                     originalURL: fetched.url.absoluteString,
                     originalFilename: nil,
+                    evidenceLevel: .unknown,
                     projectId: projectId
                 )
                 materials.append(material)
@@ -634,12 +635,33 @@ final class SourceIngestionService {
                 kind: .document,
                 originalURL: nil,
                 originalFilename: attachment.name,
+                evidenceLevel: .unknown,
                 projectId: projectId
             )
             materials.append(material)
         }
 
         return materials
+    }
+
+    func ingestExtractedSource(
+        title: String,
+        text: String,
+        kind: SourceKind,
+        originalURL: String?,
+        originalFilename: String?,
+        evidenceLevel: SourceEvidenceLevel = .unknown,
+        projectId: UUID?
+    ) throws -> SourceMaterialContext {
+        try persistSource(
+            title: title,
+            text: text,
+            kind: kind,
+            originalURL: originalURL,
+            originalFilename: originalFilename,
+            evidenceLevel: evidenceLevel,
+            projectId: projectId
+        )
     }
 
     func enrichedMaterials(
@@ -656,7 +678,12 @@ final class SourceIngestionService {
             return materials
         }
 
-        let sourceIds = Set(materials.map(\.sourceNodeId))
+        let enrichableMaterials = materials.filter { !Self.preservesSelectedDiscussionPayload($0) }
+        guard !enrichableMaterials.isEmpty else {
+            return materials
+        }
+
+        let sourceIds = Set(enrichableMaterials.map(\.sourceNodeId))
         let hits = (try? vectorStore.searchSourceChunks(
             query: queryEmbedding,
             topK: max(materials.count * maxChunksPerSource * 2, maxChunksPerSource),
@@ -681,6 +708,9 @@ final class SourceIngestionService {
         }
 
         return materials.map { material in
+            guard !Self.preservesSelectedDiscussionPayload(material) else {
+                return material
+            }
             guard let rankedChunks = chunksBySource[material.sourceNodeId],
                   !rankedChunks.isEmpty else {
                 return material
@@ -690,8 +720,17 @@ final class SourceIngestionService {
                 title: material.title,
                 originalURL: material.originalURL,
                 originalFilename: material.originalFilename,
-                chunks: rankedChunks
+                chunks: rankedChunks,
+                evidenceLevel: material.evidenceLevel
             )
+        }
+    }
+
+    private static func preservesSelectedDiscussionPayload(_ material: SourceMaterialContext) -> Bool {
+        material.chunks.contains { chunk in
+            let normalized = chunk.text.lowercased()
+            return normalized.contains("youtube section:") &&
+                normalized.contains("evidence:")
         }
     }
 
@@ -699,6 +738,17 @@ final class SourceIngestionService {
         guard !AttachmentLimitPolicy.isImageAttachment(attachment) else { return false }
         let ext = URL(fileURLWithPath: attachment.name).pathExtension.lowercased()
         return ["pdf", "txt", "md", "markdown", "csv", "json"].contains(ext)
+    }
+
+    private static func emoji(for kind: SourceKind) -> String {
+        switch kind {
+        case .web:
+            return "🔗"
+        case .document:
+            return "📄"
+        case .youtube:
+            return "▶"
+        }
     }
 
     private func existingMaterial(originalURL: String) throws -> SourceMaterialContext? {
@@ -712,6 +762,7 @@ final class SourceIngestionService {
         kind: SourceKind,
         originalURL: String?,
         originalFilename: String?,
+        evidenceLevel: SourceEvidenceLevel,
         projectId: UUID?
     ) throws -> SourceMaterialContext {
         let normalizedText = SourceTextExtractor.normalizeWhitespace(text)
@@ -729,7 +780,7 @@ final class SourceIngestionService {
             type: .source,
             title: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Untitled Source" : title,
             content: normalizedText,
-            emoji: kind == .web ? "🔗" : "📄",
+            emoji: Self.emoji(for: kind),
             embedding: embedding,
             projectId: projectId,
             createdAt: createdAt,
@@ -751,7 +802,8 @@ final class SourceIngestionService {
                 originalFilename: originalFilename,
                 contentHash: hash,
                 ingestedAt: createdAt,
-                extractionStatus: .ready
+                extractionStatus: .ready,
+                evidenceLevel: evidenceLevel
             ),
             chunks: chunks
         )
@@ -761,7 +813,8 @@ final class SourceIngestionService {
             title: node.title,
             originalURL: originalURL,
             originalFilename: originalFilename,
-            chunks: []
+            chunks: [],
+            evidenceLevel: evidenceLevel
         )
     }
 
@@ -785,7 +838,8 @@ final class SourceIngestionService {
             title: node.title,
             originalURL: metadata.originalURL,
             originalFilename: metadata.originalFilename,
-            chunks: Array(chunks)
+            chunks: Array(chunks),
+            evidenceLevel: metadata.evidenceLevel
         )
     }
 

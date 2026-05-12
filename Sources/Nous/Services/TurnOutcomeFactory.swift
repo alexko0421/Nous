@@ -53,12 +53,28 @@ struct TurnOutcomeFactory: Sendable {
         nextQuickActionModeIfCompleted: QuickActionMode?,
         committed: CommittedAssistantTurn,
         assistantContent: String,
-        stableSystem: String
+        stableSystem: String,
+        userMessage: Message? = nil,
+        sourceMaterials: [SourceMaterialContext] = []
     ) -> TurnCompletion {
         let memoryDecision = memoryPersistenceDecision(
             committed.messagesAfterAssistantAppend,
             committed.node.projectId
         )
+        let sourceLearningDigest: SourceLearningDigestRequest?
+        if memoryDecision.shouldPersist,
+           let userMessage,
+           !sourceMaterials.isEmpty {
+            sourceLearningDigest = SourceLearningDigestRequest(
+                conversationId: committed.node.id,
+                projectId: committed.node.projectId,
+                userMessage: userMessage,
+                assistantMessage: committed.assistantMessage,
+                sourceMaterials: sourceMaterials
+            )
+        } else {
+            sourceLearningDigest = nil
+        }
         let continuationPlan = ContextContinuationPlan(
             turnId: turnId,
             conversationId: committed.node.id,
@@ -73,7 +89,8 @@ struct TurnOutcomeFactory: Sendable {
                 projectId: committed.node.projectId,
                 messages: committed.messagesAfterAssistantAppend
             ) : nil,
-            memorySuppressionReason: memoryDecision.suppressionReason
+            memorySuppressionReason: memoryDecision.suppressionReason,
+            sourceLearningDigest: sourceLearningDigest
         )
         let housekeepingPlan = TurnHousekeepingPlan(
             turnId: turnId,

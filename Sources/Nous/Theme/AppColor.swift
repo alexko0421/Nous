@@ -81,7 +81,11 @@ struct AppColor {
         light: NSColor(white: 1, alpha: 0.22),
         dark: NSColor(red: 72/255, green: 72/255, blue: 78/255, alpha: 0.24)
     )
-    
+    static let rightPanelGlassTint = dynamicNSColor(
+        light: NSColor(white: 0, alpha: 0.06),
+        dark: NSColor(red: 34/255, green: 34/255, blue: 37/255, alpha: 0.20)
+    )
+
     // 专门为茶色玻璃效果设计嘅 Tint Color (Tea/Brown Glass)
     static let teaGlassTint = dynamicNSColor(
         light: NSColor(red: 210/255, green: 160/255, blue: 110/255, alpha: 0.15), // 浅色模式：淡茶色/琥珀色透光

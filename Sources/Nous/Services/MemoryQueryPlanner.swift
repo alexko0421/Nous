@@ -359,11 +359,10 @@ final class MemoryQueryPlanner {
     }
 
     private func sourceQuote(for atom: MemoryAtom) -> String? {
-        guard let sourceNodeId = atom.sourceNodeId,
-              let sourceMessageId = atom.sourceMessageId,
-              let messages = try? nodeStore.fetchMessages(nodeId: sourceNodeId),
-              let message = messages.first(where: { $0.id == sourceMessageId })
-        else {
+        guard let sourceMessageId = atom.sourceMessageId else {
+            return nil
+        }
+        guard let message = try? nodeStore.fetchMessage(id: sourceMessageId) else {
             return nil
         }
         return Self.preview(UserMemoryCore.stripQuoteBlocks(message.content), maxChars: 140)

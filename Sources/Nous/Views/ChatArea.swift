@@ -5,7 +5,7 @@ struct ChatArea: View {
     @Bindable var vm: ChatViewModel
     @Bindable var voiceController: VoiceCommandController
     @Binding var isSidebarVisible: Bool
-    @Binding var isScratchPadVisible: Bool
+    @Binding var rightPanelMode: RightPanelMode?
     let voiceUnavailableReason: String?
     let voiceAttachmentResetToken: UUID
     let onToggleVoiceMode: () -> Void
@@ -29,6 +29,7 @@ struct ChatArea: View {
     @Namespace private var composerPrimaryActionNamespace
 
     private let bottomScrollAnchor = "chat-bottom-anchor"
+    private let temporaryBranchFocusBottomAnchor = "temporary-branch-focus-bottom-anchor"
     private let bottomVisibleSpacing: CGFloat = 53
     private let composerMaxWidth: CGFloat = 820
     private let composerActionMotion = ComposerPrimaryActionMotion()
@@ -48,6 +49,10 @@ struct ChatArea: View {
         vm.isGenerating || canSend
     }
 
+    private func isRightPanelModeActive(_ mode: RightPanelMode) -> Bool {
+        rightPanelMode == mode
+    }
+
     private var shouldSeparateComposerPrimaryAction: Bool {
         ComposerSeparationPolicy.shouldSeparate(
             inputText: vm.inputText,
@@ -62,6 +67,10 @@ struct ChatArea: View {
 
     private var canPickPhotoAttachment: Bool {
         remainingImageAttachmentSlots > 0
+    }
+
+    private var hasComposerLinks: Bool {
+        vm.activeSourceDiscussionContext != nil || !attachments.isEmpty
     }
 
     private var activeClarificationCard: ClarificationCard? {
@@ -105,12 +114,19 @@ struct ChatArea: View {
                 WelcomeView(
                     inputText: $vm.inputText,
                     attachments: attachments,
+                    sourceContext: vm.activeSourceDiscussionContext,
                     onPickAttachment: { isFileImporterPresented = true },
                     onPickPhoto: { isPhotosPickerPresented = true },
+                    onYouTubeSummary: {
+                        withAnimation(AppMotion.markdownPanelSpring.animation) {
+                            rightPanelMode = .youtube
+                        }
+                    },
                     onVoice: { onToggleVoiceMode() },
                     canPickPhoto: canPickPhotoAttachment,
                     isVoiceActive: voiceController.isActive,
                     onRemoveAttachment: removeAttachment,
+                    onClearSourceContext: { vm.clearSourceDiscussion() },
                     onSend: sendCurrentInput,
                     onImageDrop: handleImageDrop,
                     onQuickActionSelected: { mode in
@@ -141,6 +157,21 @@ struct ChatArea: View {
                                                 timestamp: msg.timestamp,
                                                 onOpenBranch: { openTemporaryBranch(from: msg) }
                                             )
+                                            if msg.role == .user {
+                                                let sourceMaterials = vm.sourceMaterials(for: msg)
+                                                if !sourceMaterials.isEmpty {
+                                                    HStack {
+                                                        Spacer(minLength: 60)
+                                                        VStack(alignment: .trailing, spacing: 6) {
+                                                            ForEach(Array(sourceMaterials.prefix(2)), id: \.sourceNodeId) { material in
+                                                                SourceMaterialMessageChip(material: material)
+                                                            }
+                                                        }
+                                                        .frame(maxWidth: 520, alignment: .trailing)
+                                                    }
+                                                    .padding(.top, 2)
+                                                }
+                                            }
                                             if shouldShowRelevantChats(after: msg) {
                                                 RAGCitationView(
                                                     citations: vm.citations,
@@ -397,9 +428,15 @@ struct ChatArea: View {
                                 }
                             }
 
-                            if !attachments.isEmpty {
+                            if hasComposerLinks {
                                 ScrollView(.horizontal, showsIndicators: false) {
                                     HStack(spacing: 8) {
+                                        if let sourceContext = vm.activeSourceDiscussionContext {
+                                            SourceDiscussionLinkChip(context: sourceContext) {
+                                                vm.clearSourceDiscussion()
+                                            }
+                                        }
+
                                         ForEach(attachments) { attachment in
                                             AttachmentChip(attachment: attachment) {
                                                 removeAttachment(attachment.id)
@@ -475,6 +512,12 @@ struct ChatArea: View {
                                     isPhotosPickerPresented = true
                                     withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isActionMenuExpanded = false }
                                 },
+                                onYouTube: {
+                                    withAnimation(AppMotion.markdownPanelSpring.animation) {
+                                        rightPanelMode = .youtube
+                                    }
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isActionMenuExpanded = false }
+                                },
                                 onVoice: {
                                     onToggleVoiceMode()
                                     withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isActionMenuExpanded = false }
@@ -542,35 +585,11 @@ struct ChatArea: View {
             }
         }
         .overlay(alignment: .topTrailing) {
-            if !isWelcomeState {
-                Button(action: {
-                    withAnimation(AppMotion.markdownPanelSpring.animation) {
-                        isScratchPadVisible.toggle()
-                    }
-                }) {
-                    ZStack {
-                        NativeGlassPanel(
-                            cornerRadius: 16,
-                            tintColor: isScratchPadVisible
-                                ? NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: 0.22)
-                                : AppColor.controlGlassTint
-                        ) { EmptyView() }
-                        .frame(width: 32, height: 32)
-                        .overlay(
-                            Circle()
-                                .stroke(
-                                    isScratchPadVisible ? AppColor.colaOrange.opacity(0.4) : AppColor.panelStroke,
-                                    lineWidth: 1
-                                )
-                        )
-                        Image(systemName: "note.text")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(isScratchPadVisible ? AppColor.colaOrange : AppColor.secondaryText)
-                    }
-                }
-                .buttonStyle(.plain)
-                .padding(.top, 16)
-                .padding(.trailing, 24)
+            if !isWelcomeState && !temporaryBranch.isPresented {
+                rightPanelToggleCapsule
+                    .padding(.top, 16)
+                    .padding(.trailing, 24)
+                    .transition(.opacity)
                 .blur(radius: branchBackgroundBlurRadius)
                 .opacity(branchBackgroundOpacity)
                 .allowsHitTesting(!temporaryBranch.isPresented)
@@ -636,6 +655,57 @@ struct ChatArea: View {
         Task { await vm.send(attachments: pendingAttachments) }
     }
 
+    private var rightPanelToggleCapsule: some View {
+        HStack(spacing: 4) {
+            rightPanelToggleButton(
+                mode: .youtube,
+                systemImage: "play.rectangle",
+                helpText: "YouTube"
+            )
+            rightPanelToggleButton(
+                mode: .markdown,
+                systemImage: "note.text",
+                helpText: "Markdown"
+            )
+        }
+        .padding(4)
+        .background(NativeGlassPanel(cornerRadius: 18, tintColor: AppColor.controlGlassTint) { EmptyView() })
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(AppColor.panelStroke, lineWidth: 1)
+        )
+    }
+
+    private func rightPanelToggleButton(
+        mode: RightPanelMode,
+        systemImage: String,
+        helpText: String
+    ) -> some View {
+        let isActive = isRightPanelModeActive(mode)
+
+        return Button {
+            withAnimation(AppMotion.markdownPanelSpring.animation) {
+                rightPanelMode = isActive ? nil : mode
+            }
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(isActive ? AppColor.colaOrange.opacity(0.14) : Color.clear)
+                    .overlay(
+                        Circle()
+                            .stroke(isActive ? AppColor.colaOrange.opacity(0.34) : Color.clear, lineWidth: 1)
+                    )
+
+                Image(systemName: systemImage)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(isActive ? AppColor.colaOrange : AppColor.secondaryText)
+            }
+            .frame(width: 28, height: 28)
+        }
+        .buttonStyle(.plain)
+        .help(helpText)
+    }
+
     private var temporaryBranchBottomRail: some View {
         TemporaryBranchInlineComposer(
             branch: temporaryBranch,
@@ -644,38 +714,74 @@ struct ChatArea: View {
         .frame(maxWidth: composerMaxWidth)
     }
 
+    private var temporaryBranchFocusBottomSpacerHeight: CGFloat {
+        TemporaryBranchMembraneStyle.focusedSourceBottomClearance
+    }
+
+    private var temporaryBranchFocusViewportBottomInset: CGFloat {
+        floatingComposerHeight + TemporaryBranchMembraneStyle.focusedSourceBottomClearance
+    }
+
+    private func temporaryBranchFocusViewportHeight(in geometry: GeometryProxy) -> CGFloat {
+        max(1, geometry.size.height - temporaryBranchFocusViewportBottomInset)
+    }
+
     @ViewBuilder
     private var temporaryBranchFocusedSourceLane: some View {
         if let sourceMessage = temporaryBranch.sourceMessage {
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 14) {
-                    MessageBubble(
-                        text: sourceMessage.content,
-                        thinkingContent: sourceMessage.thinkingContent,
-                        thinkingStartedAt: nil,
-                        agentTraceRecords: sourceMessage.decodedAgentTraceRecords,
-                        isThinkingStreaming: false,
-                        isAgentTraceStreaming: false,
-                        isUser: sourceMessage.role == .user,
-                        source: sourceMessage.source,
-                        timestamp: sourceMessage.timestamp,
-                        onOpenBranch: nil
-                    )
+            GeometryReader { geometry in
+                ScrollViewReader { proxy in
+                    ScrollView(.vertical, showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: 14) {
+                            MessageBubble(
+                                text: sourceMessage.content,
+                                thinkingContent: sourceMessage.thinkingContent,
+                                thinkingStartedAt: nil,
+                                agentTraceRecords: sourceMessage.decodedAgentTraceRecords,
+                                isThinkingStreaming: false,
+                                isAgentTraceStreaming: false,
+                                isUser: sourceMessage.role == .user,
+                                source: sourceMessage.source,
+                                timestamp: sourceMessage.timestamp,
+                                onOpenBranch: nil
+                            )
 
-                    TemporaryBranchTranscript(
-                        branch: temporaryBranch,
-                        onRegenerate: regenerateTemporaryBranchAssistant
+                            TemporaryBranchTranscript(
+                                branch: temporaryBranch,
+                                onRegenerate: regenerateTemporaryBranchAssistant
+                            )
+
+                            Color.clear
+                                .frame(height: temporaryBranchFocusBottomSpacerHeight)
+                                .id(temporaryBranchFocusBottomAnchor)
+                        }
+                        .frame(maxWidth: composerMaxWidth, alignment: .leading)
+                        .padding(.horizontal, 36)
+                        .padding(.top, TemporaryBranchMembraneStyle.focusedSourceTopPadding)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .opacity(TemporaryBranchMembraneStyle.focusedContentOpacity)
+                    }
+                    .frame(
+                        width: geometry.size.width,
+                        height: temporaryBranchFocusViewportHeight(in: geometry),
+                        alignment: .top
                     )
+                    .onAppear {
+                        scrollTemporaryBranchFocusToBottom(with: proxy, animated: false)
+                    }
+                    .onChange(of: temporaryBranch.messages.count) { _, _ in
+                        scrollTemporaryBranchFocusToBottom(with: proxy)
+                    }
+                    .onChange(of: temporaryBranch.currentResponse) { _, _ in
+                        scrollTemporaryBranchFocusToBottom(with: proxy, animated: false)
+                    }
+                    .onChange(of: temporaryBranch.isGenerating) { _, _ in
+                        scrollTemporaryBranchFocusToBottom(with: proxy)
+                    }
+                    .onChange(of: floatingComposerHeight) { _, _ in
+                        scrollTemporaryBranchFocusToBottom(with: proxy)
+                    }
                 }
-                .frame(maxWidth: composerMaxWidth, alignment: .leading)
-                .padding(.horizontal, 36)
-                .padding(.top, TemporaryBranchMembraneStyle.focusedSourceTopPadding)
-                .padding(
-                    .bottom,
-                    floatingComposerHeight + TemporaryBranchMembraneStyle.focusedSourceBottomClearance
-                )
-                .frame(maxWidth: .infinity, alignment: .center)
-                .opacity(TemporaryBranchMembraneStyle.focusedContentOpacity)
             }
             .transition(.opacity.combined(with: .move(edge: .top)))
             .zIndex(2)
@@ -892,6 +998,22 @@ struct ChatArea: View {
         guard !temporaryBranch.isPresented else { return }
         DispatchQueue.main.async {
             proxy.scrollTo(bottomScrollAnchor, anchor: .bottom)
+        }
+    }
+
+    private func scrollTemporaryBranchFocusToBottom(
+        with proxy: ScrollViewProxy,
+        animated: Bool = true
+    ) {
+        guard temporaryBranch.isPresented else { return }
+        DispatchQueue.main.async {
+            if animated {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.86)) {
+                    proxy.scrollTo(temporaryBranchFocusBottomAnchor, anchor: .bottom)
+                }
+            } else {
+                proxy.scrollTo(temporaryBranchFocusBottomAnchor, anchor: .bottom)
+            }
         }
     }
 
@@ -1398,6 +1520,7 @@ struct ActionMenuCapsule: View {
     let isExpanded: Bool
     let onFile: () -> Void
     let onPhoto: () -> Void
+    let onYouTube: () -> Void
     let onVoice: () -> Void
     let canPickPhoto: Bool
 
@@ -1431,10 +1554,20 @@ struct ActionMenuCapsule: View {
             ActionMenuDivider(isExpanded: isExpanded)
 
             ActionMenuButton(
+                icon: "play.rectangle",
+                title: "YouTube",
+                isExpanded: isExpanded,
+                separationIndex: 2,
+                action: onYouTube
+            )
+
+            ActionMenuDivider(isExpanded: isExpanded)
+
+            ActionMenuButton(
                 icon: "mic",
                 title: "Voice",
                 isExpanded: isExpanded,
-                separationIndex: 2,
+                separationIndex: 3,
                 action: onVoice
             )
         }

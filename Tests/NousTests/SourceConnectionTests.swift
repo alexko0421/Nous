@@ -572,6 +572,73 @@ final class SourceFetchServiceTests: XCTestCase {
             XCTFail("Expected tooLarge, got \(error).")
         }
     }
+
+    func testEnrichedMaterialsPreservesSelectedYouTubeDiscussionSnapshot() throws {
+        let store = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: store)
+        let sourceNode = NousNode(
+            type: .source,
+            title: "How to Start a Cult",
+            content: "00:00 Unselected opening transcript.",
+            emoji: "▶",
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+        try store.insertSource(
+            node: sourceNode,
+            metadata: SourceMetadata(
+                nodeId: sourceNode.id,
+                kind: .youtube,
+                originalURL: "https://www.youtube.com/watch?v=OQ0OOzOwsJY",
+                originalFilename: nil,
+                contentHash: "preserve-selected-youtube-section",
+                ingestedAt: Date(timeIntervalSince1970: 1),
+                extractionStatus: .ready,
+                evidenceLevel: .transcriptBacked
+            ),
+            chunks: [
+                SourceChunk(
+                    sourceNodeId: sourceNode.id,
+                    ordinal: 0,
+                    text: "00:00 Unselected opening transcript.",
+                    embedding: [1, 0],
+                    createdAt: Date(timeIntervalSince1970: 1)
+                )
+            ]
+        )
+        let service = SourceIngestionService(
+            nodeStore: store,
+            vectorStore: vectorStore,
+            embeddingProvider: StubSourceEmbeddingProvider()
+        )
+        let selectedMaterial = SourceMaterialContext(
+            sourceNodeId: sourceNode.id,
+            title: "How to Start a Cult",
+            originalURL: "https://www.youtube.com/watch?v=OQ0OOzOwsJY",
+            originalFilename: nil,
+            chunks: [
+                SourceChunkContext(
+                    sourceNodeId: sourceNode.id,
+                    ordinal: 0,
+                    text: """
+                    YouTube section: Leader role (00:18-00:48)
+                    Evidence: Transcript-backed
+                    Summary: Explains why the leader creates the initial shared worldview.
+
+                    Transcript excerpt:
+                    00:18 Selected leader-role section.
+                    """,
+                    similarity: nil
+                )
+            ],
+            evidenceLevel: .transcriptBacked
+        )
+
+        let enriched = service.enrichedMaterials([selectedMaterial], matching: "connect this")
+
+        XCTAssertEqual(enriched.first?.chunks.first?.text, selectedMaterial.chunks.first?.text)
+        XCTAssertFalse(enriched.first?.chunks.first?.text.contains("Unselected opening transcript") == true)
+    }
 }
 
 private func countRows(in store: NodeStore, table: String) throws -> Int {

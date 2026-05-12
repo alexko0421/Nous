@@ -40,7 +40,75 @@ final class SourcePromptContextTests: XCTestCase {
         XCTAssertTrue(context.combinedString.contains("SOURCE CONNECTION BRIEF"))
         XCTAssertTrue(context.combinedString.contains("What the source says"))
         XCTAssertTrue(context.combinedString.contains("How it connects to Alex"))
+        XCTAssertTrue(context.combinedString.contains("Your own probe"))
+        XCTAssertTrue(context.combinedString.contains("do not stop at summary alone"))
         XCTAssertTrue(context.combinedString.contains("If there is no strong existing Nous connection"))
+
+        // Plain-writing policy must be present so Sonnet doesn't reach for the
+        // anchor's 倾观点 4-paragraph essay scaffolding by default. Language-
+        // agnostic so the same shape rule covers Cantonese/Mandarin/English.
+        XCTAssertTrue(context.combinedString.contains("PLAIN WRITING POLICY"))
+        XCTAssertTrue(context.combinedString.contains("Don't stack 3+ jargon nouns"))
+        XCTAssertTrue(context.combinedString.contains("4-paragraph essay shape"))
+        XCTAssertTrue(context.combinedString.contains("Cantonese, Mandarin, or English"))
+    }
+
+    func testAttachedYouTubeSourceScopesVaguePromptAndRendersEvidenceContract() {
+        let transcriptNodeId = UUID()
+        let geminiNodeId = UUID()
+        let context = PromptContextAssembler.assembleContext(
+            currentUserInput: "呢段讲咩",
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil,
+            sourceMaterials: [
+                SourceMaterialContext(
+                    sourceNodeId: transcriptNodeId,
+                    title: "How to Start a Cult",
+                    originalURL: "https://www.youtube.com/watch?v=OQ0OOzOwsJY",
+                    originalFilename: nil,
+                    chunks: [
+                        SourceChunkContext(
+                            sourceNodeId: transcriptNodeId,
+                            ordinal: 0,
+                            text: "YouTube section: Leader role\nEvidence: Transcript-backed\nTranscript excerpt:\n00:18 Leaders create the initial shared worldview.",
+                            similarity: nil
+                        )
+                    ],
+                    evidenceLevel: .transcriptBacked
+                ),
+                SourceMaterialContext(
+                    sourceNodeId: geminiNodeId,
+                    title: "Video with no captions",
+                    originalURL: "https://youtu.be/example0000",
+                    originalFilename: nil,
+                    chunks: [
+                        SourceChunkContext(
+                            sourceNodeId: geminiNodeId,
+                            ordinal: 0,
+                            text: "YouTube section: Recruiting momentum\nEvidence: Gemini video analysis\nAnalysis excerpt:\nGemini summarizes that commitment escalates over time.",
+                            similarity: nil
+                        )
+                    ],
+                    evidenceLevel: .geminiVideoAnalysis
+                )
+            ]
+        )
+
+        XCTAssertTrue(context.combinedString.contains("Alex is currently discussing the attached source."))
+        XCTAssertTrue(context.combinedString.contains("Never reply with \"which topic / which section / which one\""))
+        XCTAssertTrue(context.combinedString.contains("For Transcript-backed sources, anchor your reply in 1–2 specific timestamped quotes"))
+        XCTAssertTrue(context.combinedString.contains("Quote-then-take, not theme-first."))
+        XCTAssertTrue(context.combinedString.contains("For Gemini video analysis sources, use section analysis and do not claim exact wording."))
+        XCTAssertTrue(context.combinedString.contains("Evidence level: Transcript-backed"))
+        XCTAssertTrue(context.combinedString.contains("Evidence level: Gemini video analysis"))
+        // The first chunk text starts with "YouTube section: Leader role" — the
+        // assembler must lift that into a one-liner the model cannot miss.
+        XCTAssertTrue(context.combinedString.contains("Alex pinned this specific section"))
+        XCTAssertTrue(context.combinedString.contains("Leader role"))
     }
 
     func testSourceMaterialKeepsMultilineUntrustedTextInsideSourceMarkers() {
