@@ -1885,6 +1885,18 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D6F662B68CBCBA3AF34D2169 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				140A8A6D9778F7E7ED52D8E7 /* BehaviorDatasetCLI.swift in Sources */,
+				CF2F76DAF7E507235E62EEC0 /* BehaviorExperimentCLI.swift in Sources */,
+				EEACF6BB4BA4AB21DA7F66A2 /* BehaviorLocalSpecializationCLI.swift in Sources */,
+				413D6C0EC578D723C8BEC37B /* SkillDogfoodSummaryCLI.swift in Sources */,
+				1BD1904F4A9484EEA149959B /* main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		FD75C696E15748D5D237D4E2 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;

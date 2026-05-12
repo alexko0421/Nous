@@ -113,6 +113,36 @@ final class TurnStewardTests: XCTestCase {
         XCTAssertEqual(decision.trace.supervisorLanes, decision.supervisorLanes)
     }
 
+
+    func testSourceMaterialsKeepJudgeEngaged() {
+        let sourceNodeId = UUID()
+        let decision = steward.steer(
+            prepared: preparedTurn(userText: "what connects here?"),
+            request: request(
+                input: "what connects here?",
+                sourceMaterials: [
+                    SourceMaterialContext(
+                        sourceNodeId: sourceNodeId,
+                        title: "External essay",
+                        originalURL: "https://example.com/essay",
+                        originalFilename: nil,
+                        chunks: [
+                            SourceChunkContext(
+                                sourceNodeId: sourceNodeId,
+                                ordinal: 0,
+                                text: "External essay chunk about connecting ideas.",
+                                similarity: nil
+                            )
+                        ]
+                    )
+                ]
+            )
+        )
+
+        XCTAssertEqual(decision.challengeStance, .surfaceTension)
+        XCTAssertEqual(decision.judgePolicy, .visibleTension)
+    }
+
     func testActiveSupportFirstRouterDoesNotEraseSourceAnalysisLane() async {
         let sourceNodeId = UUID()
         let decision = await TurnSteward(
