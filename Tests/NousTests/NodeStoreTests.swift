@@ -533,6 +533,72 @@ final class NodeStoreTests: XCTestCase {
         XCTAssertTrue(try store.fetchMessageSourceMaterials(messageId: message.id).isEmpty)
     }
 
+    func testMessageSourceMaterialsPreserveSelectedPayloadSnapshot() throws {
+        let conversation = makeNode(type: .conversation)
+        let source = makeNode(
+            title: "How to Start a Cult",
+            type: .source,
+            content: "Full transcript with many sections"
+        )
+        let now = Date(timeIntervalSince1970: 1_000)
+        try store.insertNode(conversation)
+        try store.insertNode(source)
+        try store.upsertSourceMetadata(
+            SourceMetadata(
+                nodeId: source.id,
+                kind: .youtube,
+                originalURL: "https://www.youtube.com/watch?v=OQ0OOzOwsJY",
+                originalFilename: nil,
+                contentHash: "youtube-selected-section",
+                ingestedAt: now,
+                extractionStatus: .ready,
+                evidenceLevel: .transcriptBacked
+            )
+        )
+        try store.replaceSourceChunks([
+            SourceChunk(
+                sourceNodeId: source.id,
+                ordinal: 0,
+                text: "00:00 Unselected opening transcript.",
+                createdAt: now
+            ),
+            SourceChunk(
+                sourceNodeId: source.id,
+                ordinal: 1,
+                text: "04:10 Unselected later transcript.",
+                createdAt: now
+            )
+        ], for: source.id)
+
+        let message = Message(nodeId: conversation.id, role: .user, content: "呢段讲咩")
+        try store.insertMessage(message)
+        let selectedMaterial = SourceMaterialContext(
+            sourceNodeId: source.id,
+            title: source.title,
+            originalURL: "https://www.youtube.com/watch?v=OQ0OOzOwsJY",
+            originalFilename: nil,
+            chunks: [
+                SourceChunkContext(
+                    sourceNodeId: source.id,
+                    ordinal: 0,
+                    text: "YouTube section: Leader role\nEvidence: Transcript-backed\nTranscript excerpt:\n00:18 Selected leader-role section.",
+                    similarity: nil
+                )
+            ],
+            evidenceLevel: .transcriptBacked
+        )
+
+        try store.replaceMessageSourceMaterials([selectedMaterial], for: message.id)
+
+        let fetched = try store.fetchMessageSourceMaterials(messageId: message.id)
+        XCTAssertEqual(fetched.count, 1)
+        XCTAssertEqual(fetched.first?.sourceNodeId, source.id)
+        XCTAssertEqual(fetched.first?.evidenceLevel, .transcriptBacked)
+        XCTAssertEqual(fetched.first?.chunks.count, 1)
+        XCTAssertTrue(fetched.first?.chunks.first?.text.contains("Selected leader-role section") == true)
+        XCTAssertFalse(fetched.first?.chunks.first?.text.contains("Unselected opening transcript") == true)
+    }
+
     func testClearAllMessageThinkingContentRemovesStoredTraces() throws {
         let node = makeNode(type: .conversation)
         try store.insertNode(node)

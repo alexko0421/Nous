@@ -207,6 +207,42 @@ struct VoiceAppSnapshot: Equatable {
     var sidebarVisible: Bool
     var scratchpadVisible: Bool
     var activeConversationTitle: String?
+    var rightPanelMode: String?
+    var youtubeURLText: String?
+    var activeSourceTitle: String?
+    var activeSourceTimeRange: String?
+    var activeSourceSummaryTitle: String?
+    var activeSourceEvidenceLevel: String?
+
+    init(
+        currentTab: VoiceNavigationTarget,
+        settingsSection: VoiceSettingsSection?,
+        composerText: String,
+        selectedProjectName: String?,
+        sidebarVisible: Bool,
+        scratchpadVisible: Bool,
+        activeConversationTitle: String?,
+        rightPanelMode: String? = nil,
+        youtubeURLText: String? = nil,
+        activeSourceTitle: String? = nil,
+        activeSourceTimeRange: String? = nil,
+        activeSourceSummaryTitle: String? = nil,
+        activeSourceEvidenceLevel: String? = nil
+    ) {
+        self.currentTab = currentTab
+        self.settingsSection = settingsSection
+        self.composerText = composerText
+        self.selectedProjectName = selectedProjectName
+        self.sidebarVisible = sidebarVisible
+        self.scratchpadVisible = scratchpadVisible
+        self.activeConversationTitle = activeConversationTitle
+        self.rightPanelMode = rightPanelMode
+        self.youtubeURLText = youtubeURLText
+        self.activeSourceTitle = activeSourceTitle
+        self.activeSourceTimeRange = activeSourceTimeRange
+        self.activeSourceSummaryTitle = activeSourceSummaryTitle
+        self.activeSourceEvidenceLevel = activeSourceEvidenceLevel
+    }
 
     func jsonString() throws -> String {
         let data = try JSONSerialization.data(
@@ -217,7 +253,13 @@ struct VoiceAppSnapshot: Equatable {
                 "selected_project_name": Self.stringOrNull(selectedProjectName),
                 "sidebar_visible": sidebarVisible,
                 "scratchpad_visible": scratchpadVisible,
-                "active_conversation_title": Self.stringOrNull(activeConversationTitle)
+                "active_conversation_title": Self.stringOrNull(activeConversationTitle),
+                "right_panel_mode": Self.stringOrNull(rightPanelMode),
+                "youtube_url_text": Self.stringOrNull(youtubeURLText),
+                "active_source_title": Self.stringOrNull(activeSourceTitle),
+                "active_source_time_range": Self.stringOrNull(activeSourceTimeRange),
+                "active_source_summary_title": Self.stringOrNull(activeSourceSummaryTitle),
+                "active_source_evidence_level": Self.stringOrNull(activeSourceEvidenceLevel)
             ],
             options: [.sortedKeys]
         )
@@ -249,6 +291,60 @@ struct VoiceSummaryPreview: Equatable {
     var markdown: String
 }
 
+struct VoiceYouTubeSummaryResult: Equatable {
+    var succeeded: Bool
+    var status: String
+    var output: String
+
+    static let missingURL = VoiceYouTubeSummaryResult(
+        succeeded: false,
+        status: "Paste or enter a YouTube URL first.",
+        output: "Paste or enter a YouTube URL first."
+    )
+}
+
+struct VoiceSourceContextResult: Equatable {
+    var hasContext: Bool
+    var status: String
+    var output: String
+
+    init(context: SourceDiscussionContext) {
+        hasContext = true
+        status = "Source context ready"
+        output = Self.output(for: context)
+    }
+
+    static let noActiveSourceContext = VoiceSourceContextResult(
+        hasContext: false,
+        status: "Click a source section first",
+        output: "No source section is selected. Ask Alex to click a YouTube summary section first."
+    )
+
+    private init(hasContext: Bool, status: String, output: String) {
+        self.hasContext = hasContext
+        self.status = status
+        self.output = output
+    }
+
+    private static func output(for context: SourceDiscussionContext) -> String {
+        let excerptLabel = context.isQuoteLevelReliable ? "Transcript excerpt" : "Analysis excerpt"
+        let sourceURLLine = context.sourceURL.map { "\nSource URL: \($0)" } ?? ""
+
+        return """
+        SOURCE MATERIAL
+        Title: \(context.title)
+        Section: \(context.summaryTitle) (\(context.timeRangeLabel))
+        Evidence: \(context.evidenceLabel)\(sourceURLLine)
+
+        Summary:
+        \(context.summary)
+
+        \(excerptLabel):
+        \(context.transcriptExcerpt)
+        """
+    }
+}
+
 enum VoicePendingAction: Equatable {
     case createNote(title: String, body: String)
 }
@@ -270,6 +366,8 @@ struct VoiceActionHandlers {
     var clearComposer: () -> Void
     var startNewChat: () -> Void
     var createNote: (String, String) -> Void
+    var summarizeYouTubeVideo: (String?) async -> VoiceYouTubeSummaryResult
+    var getActiveSourceContext: () -> VoiceSourceContextResult
     var setAppearanceMode: (VoiceAppearanceMode) -> Void
     var openSettingsSection: (VoiceSettingsSection) -> Void
     var appSnapshot: () -> VoiceAppSnapshot
@@ -283,6 +381,8 @@ struct VoiceActionHandlers {
         clearComposer: @escaping () -> Void,
         startNewChat: @escaping () -> Void,
         createNote: @escaping (String, String) -> Void,
+        summarizeYouTubeVideo: @escaping (String?) async -> VoiceYouTubeSummaryResult = { _ in .missingURL },
+        getActiveSourceContext: @escaping () -> VoiceSourceContextResult = { .noActiveSourceContext },
         setAppearanceMode: @escaping (VoiceAppearanceMode) -> Void = { _ in },
         openSettingsSection: @escaping (VoiceSettingsSection) -> Void = { _ in },
         appSnapshot: @escaping () -> VoiceAppSnapshot = { .empty }
@@ -295,6 +395,8 @@ struct VoiceActionHandlers {
         self.clearComposer = clearComposer
         self.startNewChat = startNewChat
         self.createNote = createNote
+        self.summarizeYouTubeVideo = summarizeYouTubeVideo
+        self.getActiveSourceContext = getActiveSourceContext
         self.setAppearanceMode = setAppearanceMode
         self.openSettingsSection = openSettingsSection
         self.appSnapshot = appSnapshot
@@ -309,6 +411,8 @@ struct VoiceActionHandlers {
         clearComposer: {},
         startNewChat: {},
         createNote: { _, _ in },
+        summarizeYouTubeVideo: { _ in .missingURL },
+        getActiveSourceContext: { .noActiveSourceContext },
         setAppearanceMode: { _ in },
         openSettingsSection: { _ in },
         appSnapshot: { .empty }

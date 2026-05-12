@@ -20,6 +20,7 @@ targets:
         CFBundleIconName: AppIcon
         LSMinimumSystemVersion: "26.0"
         NSMicrophoneUsageDescription: Nous uses the microphone only while Voice Mode is active so you can speak commands and draft messages.
+        NSAppleEventsUsageDescription: Nous uses Apple Events only when you ask Voice Mode to summarize a YouTube video, so it can read the URL from your active browser tab.
         NSPrincipalClass: NSApplication
         ATSApplicationFontsPath: Fonts
     settings:
@@ -37,6 +38,7 @@ targets:
       - sdk: AVFoundation.framework
       - sdk: Security.framework
       - sdk: SpriteKit.framework
+      - sdk: WebKit.framework
   ProvocationFixtureRunner:
     type: tool
     platform: macOS

@@ -3,8 +3,14 @@ import SwiftUI
 
 @MainActor
 final class NousMainWindowController {
-    static let defaultSize = NSSize(width: 900, height: 690)
-    static let minimumSize = NSSize(width: 760, height: 600)
+    static let defaultSize = NSSize(
+        width: RightPanelLayout.defaultWindowWidth,
+        height: RightPanelLayout.defaultWindowHeight
+    )
+    static let minimumSize = NSSize(
+        width: RightPanelLayout.minimumWindowWidth,
+        height: RightPanelLayout.minimumWindowHeight
+    )
 
     private let window: NSWindow
 

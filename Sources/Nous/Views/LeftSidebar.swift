@@ -447,6 +447,7 @@ struct LeftSidebar: View {
             }
         }
         .frame(width: GalaxySidebarLayout.width)
+        .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 32, style: .continuous)
                 .stroke(AppColor.panelStroke.opacity(0.78), lineWidth: 1)

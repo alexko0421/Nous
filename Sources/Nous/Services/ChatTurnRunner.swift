@@ -312,7 +312,9 @@ final class ChatTurnRunner {
             nextQuickActionModeIfCompleted: plan.nextQuickActionModeIfCompleted,
             committed: committed,
             assistantContent: executionResult.assistantContent,
-            stableSystem: plan.turnSlice.stable
+            stableSystem: plan.turnSlice.stable,
+            userMessage: plan.prepared.userMessage,
+            sourceMaterials: plan.sourceMaterials
         )
         await sink.emit(.completed(completion))
         Self.debugLog("completed emitted turn=\(request.turnId)")

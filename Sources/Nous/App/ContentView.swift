@@ -20,7 +20,7 @@ struct ContentView: View {
     private static let isRunningUnitTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
     @State private var isSidebarVisible = true
-    @State private var isScratchPadVisible = false
+    @State private var rightPanelMode: RightPanelMode?
     @State private var selectedTab: MainTab = .chat
     @State private var selectedSettingsSection: SettingsSection = .profile
     @State private var selectedProjectId: UUID?
@@ -66,10 +66,10 @@ struct ContentView: View {
     private func mainContent(dependencies: AppDependencies) -> some View {
         mainLayout(dependencies: dependencies)
             .frame(
-                minWidth: NousMainWindowController.minimumSize.width,
-                minHeight: NousMainWindowController.minimumSize.height
+                minWidth: RightPanelLayout.minimumContentWidth,
+                minHeight: RightPanelLayout.minimumContentHeight
             )
-            .padding(12)
+            .padding(RightPanelLayout.windowPadding)
             .background(
                 RoundedRectangle(cornerRadius: 36, style: .continuous)
                     .fill(AppColor.colaBeige.opacity(0.72))
@@ -80,7 +80,7 @@ struct ContentView: View {
                 globalVoicePill(dependencies: dependencies)
             }
             .animation(AppMotion.sidebarPanelSpring.animation, value: isSidebarVisible)
-            .animation(AppMotion.markdownPanelSpring.animation, value: isScratchPadVisible)
+            .animation(AppMotion.markdownPanelSpring.animation, value: rightPanelMode)
             .onAppear {
                 if voiceNotchPanelController == nil {
                     voiceNotchPanelController = VoiceNotchPanelController(
@@ -140,9 +140,12 @@ struct ContentView: View {
             }
 
             selectedContent(dependencies: dependencies)
+                .frame(minWidth: RightPanelLayout.preferredWidth)
+                .layoutPriority(1)
 
-            if isScratchPadVisible && selectedTab == .chat {
-                scratchPad(dependencies: dependencies)
+            if selectedTab == .chat {
+                rightPanel(dependencies: dependencies)
+                    .layoutPriority(0)
             }
         }
     }
@@ -172,7 +175,7 @@ struct ContentView: View {
                     vm: dependencies.chatVM,
                     voiceController: dependencies.voiceController,
                     isSidebarVisible: $isSidebarVisible,
-                    isScratchPadVisible: $isScratchPadVisible,
+                    rightPanelMode: $rightPanelMode,
                     voiceUnavailableReason: dependencies.settingsVM.voiceModeUnavailableReason,
                     voiceAttachmentResetToken: voiceAttachmentResetToken,
                     onToggleVoiceMode: {
@@ -218,12 +221,48 @@ struct ContentView: View {
         .shadow(color: .black.opacity(0.10), radius: 18, x: 0, y: 8)
     }
 
-    private func scratchPad(dependencies: AppDependencies) -> some View {
-        ScratchPadPanel(
-            isVisible: $isScratchPadVisible,
-            store: dependencies.scratchPadStore
+    @ViewBuilder
+    private func rightPanel(dependencies: AppDependencies) -> some View {
+        switch rightPanelMode {
+        case .markdown:
+            ScratchPadPanel(
+                isVisible: scratchPadVisibilityBinding,
+                store: dependencies.scratchPadStore
+            )
+            .transition(.move(edge: .trailing).combined(with: .opacity))
+
+        case .youtube:
+            YouTubeLearningPanel(
+                viewModel: dependencies.youtubeLearningVM,
+                currentProjectId: dependencies.chatVM.currentNode?.projectId ?? dependencies.chatVM.defaultProjectId,
+                onSelectContext: { context in
+                    dependencies.chatVM.activateSourceDiscussion(context)
+                    selectedTab = .chat
+                },
+                onClose: {
+                    withAnimation(AppMotion.markdownPanelSpring.animation) {
+                        rightPanelMode = nil
+                    }
+                }
+            )
+            .transition(.move(edge: .trailing).combined(with: .opacity))
+
+        case .none:
+            EmptyView()
+        }
+    }
+
+    private var scratchPadVisibilityBinding: Binding<Bool> {
+        Binding(
+            get: { rightPanelMode == .markdown },
+            set: { visible in
+                if visible {
+                    rightPanelMode = .markdown
+                } else if rightPanelMode == .markdown {
+                    rightPanelMode = nil
+                }
+            }
         )
-        .transition(.move(edge: .trailing).combined(with: .opacity))
     }
 
     private func currentSidebarNodeId(dependencies: AppDependencies) -> UUID? {
@@ -285,9 +324,11 @@ struct ContentView: View {
                 },
                 setScratchPadVisible: { visible in
                     withAnimation(AppMotion.markdownPanelSpring.animation) {
-                        isScratchPadVisible = visible
                         if visible {
+                            rightPanelMode = .markdown
                             selectedTab = .chat
+                        } else if rightPanelMode == .markdown {
+                            rightPanelMode = nil
                         }
                     }
                 },
@@ -309,13 +350,22 @@ struct ContentView: View {
                 startNewChat: {
                     dependencies.chatVM.startBlankConversation()
                     withAnimation(AppMotion.markdownPanelSpring.animation) {
-                        isScratchPadVisible = false
+                        rightPanelMode = nil
                     }
                     selectedTab = .chat
                     voiceAttachmentResetToken = UUID()
                 },
                 createNote: { title, body in
                     createVoiceNote(title: title, body: body, dependencies: dependencies)
+                },
+                summarizeYouTubeVideo: { explicitURL in
+                    await summarizeYouTubeVideoWithVoice(explicitURL: explicitURL, dependencies: dependencies)
+                },
+                getActiveSourceContext: {
+                    guard let context = dependencies.chatVM.activeSourceDiscussionContext else {
+                        return .noActiveSourceContext
+                    }
+                    return VoiceSourceContextResult(context: context)
                 },
                 setAppearanceMode: { mode in
                     appearanceMode = mode.rawValue
@@ -391,6 +441,7 @@ struct ContentView: View {
         let projectName = projectId.flatMap { id in
             (try? dependencies.nodeStore.fetchProject(id: id))?.title
         }
+        let sourceContext = dependencies.chatVM.activeSourceDiscussionContext
 
         return VoiceAppSnapshot(
             currentTab: voiceNavigationTarget(for: selectedTab),
@@ -398,8 +449,71 @@ struct ContentView: View {
             composerText: dependencies.chatVM.inputText,
             selectedProjectName: projectName,
             sidebarVisible: isSidebarVisible,
-            scratchpadVisible: isScratchPadVisible,
-            activeConversationTitle: dependencies.chatVM.currentNode?.title
+            scratchpadVisible: rightPanelMode == .markdown,
+            activeConversationTitle: dependencies.chatVM.currentNode?.title,
+            rightPanelMode: voiceSnapshotRightPanelMode,
+            youtubeURLText: dependencies.youtubeLearningVM.urlText,
+            activeSourceTitle: sourceContext?.title,
+            activeSourceTimeRange: sourceContext?.timeRangeLabel,
+            activeSourceSummaryTitle: sourceContext?.summaryTitle,
+            activeSourceEvidenceLevel: sourceContext?.evidenceLabel
+        )
+    }
+
+    private var voiceSnapshotRightPanelMode: String? {
+        switch rightPanelMode {
+        case .markdown:
+            return "markdown"
+        case .youtube:
+            return "youtube"
+        case .none:
+            return nil
+        }
+    }
+
+    private func summarizeYouTubeVideoWithVoice(
+        explicitURL: String?,
+        dependencies: AppDependencies
+    ) async -> VoiceYouTubeSummaryResult {
+        let currentPanelURL = rightPanelMode == .youtube ? dependencies.youtubeLearningVM.urlText : nil
+
+        guard let resolvedURL = VoiceYouTubeURLRequestResolver.resolve(
+            explicitURL: explicitURL,
+            activeBrowserURL: { dependencies.activeBrowserTabURLReader.currentActiveBrowserURL() },
+            currentPanelURL: currentPanelURL,
+            clipboardText: { NSPasteboard.general.string(forType: .string) }
+        ) else {
+            selectedTab = .chat
+            withAnimation(AppMotion.markdownPanelSpring.animation) {
+                rightPanelMode = .youtube
+            }
+            return .missingURL
+        }
+
+        selectedTab = .chat
+        withAnimation(AppMotion.markdownPanelSpring.animation) {
+            rightPanelMode = .youtube
+        }
+        dependencies.youtubeLearningVM.urlText = resolvedURL
+        await dependencies.youtubeLearningVM.load(
+            projectId: dependencies.chatVM.currentNode?.projectId ?? dependencies.chatVM.defaultProjectId
+        )
+
+        if !dependencies.youtubeLearningVM.summarySections.isEmpty {
+            return VoiceYouTubeSummaryResult(
+                succeeded: true,
+                status: "YouTube summary ready",
+                output: "Summary ready. Click a section to discuss it."
+            )
+        }
+
+        let message = dependencies.youtubeLearningVM.errorMessage
+            ?? dependencies.youtubeLearningVM.summaryUnavailableMessage
+            ?? "YouTube summary unavailable."
+        return VoiceYouTubeSummaryResult(
+            succeeded: false,
+            status: message,
+            output: message
         )
     }
 

@@ -24,6 +24,8 @@
 	<string>1</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>26.0</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Nous uses Apple Events only when you ask Voice Mode to summarize a YouTube video, so it can read the URL from your active browser tab.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Nous uses the microphone only while Voice Mode is active so you can speak commands and draft messages.</string>
 	<key>NSPrincipalClass</key>

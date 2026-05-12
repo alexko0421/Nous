@@ -51,10 +51,12 @@ final class ChatViewModel {
 
     var activeQuickActionMode: QuickActionMode?
     var activeChatMode: ChatMode? = nil
+    var activeSourceDiscussionContext: SourceDiscussionContext?
     var defaultProjectId: UUID?
     var lastPromptGovernanceTrace: PromptGovernanceTrace?
     private var judgeFeedbackVersion: Int = 0
     @ObservationIgnored private var pendingSourceMaterialsByTurnId: [UUID: [SourceMaterialContext]] = [:]
+    @ObservationIgnored private var pendingSourceDiscussionContextByTurnId: [UUID: SourceDiscussionContext] = [:]
     @ObservationIgnored private var sourceMaterialsByUserMessageId: [UUID: [SourceMaterialContext]] = [:]
 
     // MARK: - Dependencies
@@ -66,6 +68,7 @@ final class ChatViewModel {
     private let relationRefinementQueue: GalaxyRelationRefinementQueue?
     private let userMemoryService: UserMemoryService
     private let userMemoryScheduler: UserMemoryScheduler
+    private let sourceLearningMemoryScheduler: SourceLearningMemoryScheduler?
     private let conversationSessionStore: ConversationSessionStore
     @ObservationIgnored private let explicitTurnRunner: ChatTurnRunner?
     @ObservationIgnored private let explicitTurnPlanner: TurnPlanner?
@@ -331,7 +334,8 @@ final class ChatViewModel {
             scratchPadStore: scratchPadStore,
             userMemoryScheduler: userMemoryScheduler,
             governanceTelemetry: governanceTelemetry,
-            perConversationReflectionAutoTrigger: autoTrigger
+            perConversationReflectionAutoTrigger: autoTrigger,
+            sourceLearningScheduler: sourceLearningMemoryScheduler
         )
         cachedContextContinuationService = service
         return service
@@ -396,6 +400,7 @@ final class ChatViewModel {
         relationRefinementQueue: GalaxyRelationRefinementQueue? = nil,
         userMemoryService: UserMemoryService,
         userMemoryScheduler: UserMemoryScheduler,
+        sourceLearningMemoryScheduler: SourceLearningMemoryScheduler? = nil,
         conversationSessionStore: ConversationSessionStore? = nil,
         turnRunner: ChatTurnRunner? = nil,
         turnPlanner: TurnPlanner? = nil,
@@ -430,6 +435,7 @@ final class ChatViewModel {
         self.relationRefinementQueue = relationRefinementQueue
         self.userMemoryService = userMemoryService
         self.userMemoryScheduler = userMemoryScheduler
+        self.sourceLearningMemoryScheduler = sourceLearningMemoryScheduler
         self.conversationSessionStore = conversationSessionStore ?? ConversationSessionStore(
             nodeStore: nodeStore,
             telemetry: governanceTelemetry
@@ -470,6 +476,7 @@ final class ChatViewModel {
             cancelInFlightJudge()
         }
         currentNode = nil
+        activeSourceDiscussionContext = nil
         scratchPadStore.activate(conversationId: nil)
         messages = []
         citations = []
@@ -484,6 +491,7 @@ final class ChatViewModel {
         activeChatMode = nil
         lastPromptGovernanceTrace = nil
         pendingSourceMaterialsByTurnId.removeAll()
+        pendingSourceDiscussionContextByTurnId.removeAll()
         sourceMaterialsByUserMessageId.removeAll()
     }
 
@@ -514,7 +522,9 @@ final class ChatViewModel {
         didHitBudgetExhaustion = false
         activeQuickActionMode = nil
         activeChatMode = nil  // brand-new chat has no prior judgment
+        activeSourceDiscussionContext = nil
         pendingSourceMaterialsByTurnId.removeAll()
+        pendingSourceDiscussionContextByTurnId.removeAll()
         sourceMaterialsByUserMessageId.removeAll()
     }
 
@@ -536,8 +546,29 @@ final class ChatViewModel {
         resolvedCorpusEntries = []
         activeQuickActionMode = nil
         activeChatMode = (try? nodeStore.latestChatMode(forNode: node.id)) ?? nil
+        activeSourceDiscussionContext = nil
         pendingSourceMaterialsByTurnId.removeAll()
+        pendingSourceDiscussionContextByTurnId.removeAll()
         sourceMaterialsByUserMessageId.removeAll()
+        cacheSourceMaterialsForLoadedMessages()
+    }
+
+    func activateSourceDiscussion(_ context: SourceDiscussionContext) {
+        activeSourceDiscussionContext = context
+    }
+
+    func clearSourceDiscussion() {
+        activeSourceDiscussionContext = nil
+    }
+
+    func sourceMaterials(for message: Message) -> [SourceMaterialContext] {
+        guard message.role == .user else { return [] }
+        if let materials = sourceMaterialsByUserMessageId[message.id] {
+            return materials
+        }
+        let materials = (try? nodeStore.fetchMessageSourceMaterials(messageId: message.id)) ?? []
+        sourceMaterialsByUserMessageId[message.id] = materials
+        return materials
     }
 
     /// Bind the streaming session that backs the forwarded streaming
@@ -1020,14 +1051,20 @@ final class ChatViewModel {
             }
         }
 
+        let sourceDiscussionContext = activeSourceDiscussionContext
         let sourcePreparation = await prepareSourceMaterials(
             inputText: query,
-            attachments: attachments
+            attachments: attachments,
+            sourceDiscussionContext: sourceDiscussionContext
         )
         guard isActiveResponseTask(responseTaskId) else { return }
+        if let sourceDiscussionContext {
+            pendingSourceDiscussionContextByTurnId[responseTaskId] = sourceDiscussionContext
+        }
         rememberPendingSourceMaterials(sourcePreparation.materials, for: responseTaskId)
         defer {
             pendingSourceMaterialsByTurnId.removeValue(forKey: responseTaskId)
+            pendingSourceDiscussionContextByTurnId.removeValue(forKey: responseTaskId)
         }
 
         let turnRequest = TurnRequest(
@@ -1064,10 +1101,14 @@ final class ChatViewModel {
 
     private func prepareSourceMaterials(
         inputText: String,
-        attachments: [AttachedFileContext]
+        attachments: [AttachedFileContext],
+        sourceDiscussionContext: SourceDiscussionContext? = nil
     ) async -> (materials: [SourceMaterialContext], remainingAttachments: [AttachedFileContext]) {
         var materials: [SourceMaterialContext] = []
         var ingestedDocumentAttachmentIds = Set<UUID>()
+        if let sourceDiscussionContext {
+            materials.append(sourceDiscussionContext.sourceMaterialContext())
+        }
         let urls = SourceURLDetector.urls(in: inputText)
         if !urls.isEmpty {
             let urlMaterials = (try? await sourceIngestionService.ingestURLs(
@@ -1113,16 +1154,27 @@ final class ChatViewModel {
         }
     }
 
+    @discardableResult
     private func rememberSourceMaterials(
         _ materials: [SourceMaterialContext],
         for userMessageId: UUID
-    ) {
-        guard !materials.isEmpty else { return }
-        sourceMaterialsByUserMessageId[userMessageId] = materials
+    ) -> Bool {
+        guard !materials.isEmpty else { return true }
         do {
             try nodeStore.replaceMessageSourceMaterials(materials, for: userMessageId)
+            sourceMaterialsByUserMessageId[userMessageId] = materials
+            return true
         } catch {
             NSLog("[SourceIngestion] failed to persist source material links for message %@: %@", userMessageId.uuidString, error.localizedDescription)
+            return false
+        }
+    }
+
+    private func cacheSourceMaterialsForLoadedMessages() {
+        sourceMaterialsByUserMessageId.removeAll()
+        for message in messages where message.role == .user {
+            let materials = (try? nodeStore.fetchMessageSourceMaterials(messageId: message.id)) ?? []
+            sourceMaterialsByUserMessageId[message.id] = materials
         }
     }
 
@@ -1270,6 +1322,7 @@ final class ChatViewModel {
             if let materials = pendingSourceMaterialsByTurnId.removeValue(forKey: envelope.turnId),
                !materials.isEmpty {
                 rememberSourceMaterials(materials, for: appended.userMessage.id)
+                pendingSourceDiscussionContextByTurnId.removeValue(forKey: envelope.turnId)
             }
         case .prepared(let prepared):
             currentNode = prepared.node

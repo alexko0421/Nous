@@ -23,7 +23,7 @@ struct ScratchPadPanel: View {
             RoundedRectangle(cornerRadius: 32, style: .continuous)
                 .stroke(AppColor.panelStroke, lineWidth: 1)
         )
-        .frame(width: 420)
+        .frame(width: RightPanelLayout.preferredWidth)
         .frame(maxHeight: .infinity)
         .onAppear { store.onPanelOpened() }
         .onChange(of: store.latestSummary) { _, _ in
