@@ -1071,11 +1071,12 @@ CHAT FORMAT POLICY:
             For Summary-only sources, use only the provided summary and be explicit that quote-level transcript support is unavailable.
 
             SOURCE CONNECTION BRIEF:
-            When answering from source material, use a compact connection brief when it helps:
+            When answering from source material, always close with all five content parts in order — do not stop at summary alone:
             - What the source says: cite the source title, URL, filename, or chunk marker.
             - How it connects to Alex: connect only to provided notes, conversations, projects, decisions, or citations.
             - Why it matters: state the practical implication for Alex's current thinking or project.
-            - Grounding: name the source and any existing Nous citation used for the connection.
+            - Your own probe: pick at least ONE specific claim in the source and either push back, surface a missed angle, or name a fragile assumption. Paraphrasing the author or generic agreement does not count.
+            - Grounding (meta footer): name the source and any existing Nous citation used for the connection.
             If there is no strong existing Nous connection, say that plainly instead of inventing one.
             """)
             for (sourceIndex, material) in sourceMaterials.enumerated() {

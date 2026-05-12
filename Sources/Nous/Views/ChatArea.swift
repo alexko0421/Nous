@@ -590,6 +590,9 @@ struct ChatArea: View {
                     .padding(.top, 16)
                     .padding(.trailing, 24)
                     .transition(.opacity)
+                .blur(radius: branchBackgroundBlurRadius)
+                .opacity(branchBackgroundOpacity)
+                .allowsHitTesting(!temporaryBranch.isPresented)
             }
         }
         .confirmationDialog("Add Attachment", isPresented: $isAttachmentMenuPresented, titleVisibility: .visible) {

@@ -40,6 +40,8 @@ final class SourcePromptContextTests: XCTestCase {
         XCTAssertTrue(context.combinedString.contains("SOURCE CONNECTION BRIEF"))
         XCTAssertTrue(context.combinedString.contains("What the source says"))
         XCTAssertTrue(context.combinedString.contains("How it connects to Alex"))
+        XCTAssertTrue(context.combinedString.contains("Your own probe"))
+        XCTAssertTrue(context.combinedString.contains("do not stop at summary alone"))
         XCTAssertTrue(context.combinedString.contains("If there is no strong existing Nous connection"))
 
         // Plain-writing policy must be present so Sonnet doesn't reach for the

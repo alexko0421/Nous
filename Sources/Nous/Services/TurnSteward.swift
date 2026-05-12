@@ -131,7 +131,7 @@ final class TurnSteward {
             return TurnStewardDecision(
                 route: .sourceAnalysis,
                 memoryPolicy: .full,
-                challengeStance: .useSilently,
+                challengeStance: .surfaceTension,
                 responseShape: .answerNow,
                 source: .deterministic,
                 reason: "source material attached"
@@ -196,7 +196,7 @@ final class TurnSteward {
             return TurnStewardDecision(
                 route: .sourceAnalysis,
                 memoryPolicy: .full,
-                challengeStance: .useSilently,
+                challengeStance: .surfaceTension,
                 responseShape: .answerNow,
                 source: .deterministic,
                 reason: "source material attached"
