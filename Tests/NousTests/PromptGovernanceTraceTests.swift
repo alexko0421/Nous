@@ -169,6 +169,19 @@ final class PromptGovernanceTraceTests: XCTestCase {
         XCTAssertEqual(decoded.agentCoordination, coordination)
     }
 
+    func testGovernanceTraceIncludesEpistemicGroundingPolicyLayer() {
+        let trace = PromptContextAssembler.governanceTrace(
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        )
+
+        XCTAssertTrue(trace.promptLayers.contains("epistemic_grounding_policy"))
+    }
+
     func testGovernanceTraceAddsTurnStewardLayer() {
         let stewardTrace = TurnStewardTrace(
             route: .direction,

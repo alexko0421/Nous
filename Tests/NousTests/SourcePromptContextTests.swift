@@ -41,6 +41,8 @@ final class SourcePromptContextTests: XCTestCase {
         XCTAssertTrue(context.combinedString.contains("What the source says"))
         XCTAssertTrue(context.combinedString.contains("How it connects to Alex"))
         XCTAssertTrue(context.combinedString.contains("Your own probe"))
+        XCTAssertTrue(context.combinedString.contains("what must be true for that claim to hold"))
+        XCTAssertTrue(context.combinedString.contains("proves it or merely assumes it"))
         XCTAssertTrue(context.combinedString.contains("do not stop at summary alone"))
         XCTAssertTrue(context.combinedString.contains("If there is no strong existing Nous connection"))
 

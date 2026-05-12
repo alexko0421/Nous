@@ -204,6 +204,22 @@ final class RAGPipelineTests: XCTestCase {
         XCTAssertTrue(context.contains("Do not infer that something is unavailable"))
     }
 
+    func testAssembleContextIncludesEpistemicGroundingPolicy() {
+        let context = PromptContextAssembler.assembleContext(
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        ).combined
+
+        XCTAssertTrue(context.contains("EPISTEMIC GROUNDING POLICY"))
+        XCTAssertTrue(context.contains("reason from ground truth before analogy"))
+        XCTAssertTrue(context.contains("Separate what is known, what is assumed"))
+        XCTAssertTrue(context.contains("Do not announce \"first principles\""))
+    }
+
     func testMemoryPromptPacketOwnsStableMemoryBlockOrdering() {
         let evidence = MemoryEvidenceSnippet(
             label: "Project context",
@@ -686,6 +702,8 @@ final class RAGPipelineTests: XCTestCase {
         XCTAssertTrue(context.contains("ACTIVE CHAT MODE: Strategist"))
         XCTAssertTrue(context.contains("Alex explicitly wants deeper reasoning"))
         XCTAssertTrue(context.contains("Make assumptions explicit"))
+        XCTAssertTrue(context.contains("goal -> facts -> assumptions -> constraints -> tradeoff/rebuild -> next move"))
+        XCTAssertTrue(context.contains("Keep visible structure optional"))
         XCTAssertTrue(context.contains("BROADER SITUATION RIGHT NOW"))
         XCTAssertTrue(context.contains("RECENT CONVERSATIONS WITH ALEX"))
     }

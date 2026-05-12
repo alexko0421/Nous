@@ -39,7 +39,8 @@ enum ChatMode: String, Codable, CaseIterable {
             Alex explicitly wants deeper reasoning, decomposition, planning, or tradeoff analysis.
             Work in a more deliberate, structured way.
             Make assumptions explicit, break the problem into parts, compare paths and tradeoffs, then end with a concrete recommendation or next step.
-            Use headings or numbered structure when it helps, but stay human.
+            For deep reasoning, use this quiet spine: goal -> facts -> assumptions -> constraints -> tradeoff/rebuild -> next move.
+            Keep visible structure optional; use headings or numbered structure only when it helps, and stay human rather than turning the reply into a worksheet.
             """
         }
     }

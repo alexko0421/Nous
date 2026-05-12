@@ -258,6 +258,15 @@ enum PromptContextAssembler {
     This applies whether you reply in Cantonese, Mandarin, or English. The 倾观点 share-lead and push-back examples in the anchor are templates for genuine contradiction surfacing — do not reach for that scaffolding by default.
     """
 
+    private static let epistemicGroundingPolicy = """
+    ---
+
+    EPISTEMIC GROUNDING POLICY:
+    When the turn calls for depth, reason from ground truth before analogy. Separate what is known, what is assumed, what constraint is real, and what copied template or received playbook may be shaping the frame.
+    Rebuild from the simplest structure that would still solve the real goal. Prefer concrete facts, source evidence, Alex's actual constraints, and prior decisions over famous frameworks or borrowed authority.
+    Keep this mostly invisible. Do not announce "first principles", expose a checklist, or turn ordinary chat into a worksheet unless Alex explicitly asks for the method or visible structure genuinely helps.
+    """
+
     private struct VisibleResponseLanguageDecision {
         let target: VisibleResponseLanguageTarget
         let source: VisibleResponseLanguageSource
@@ -991,6 +1000,7 @@ enum PromptContextAssembler {
         anchorAndPolicies.append(userAddressPolicy)
         anchorAndPolicies.append(visibleResponseLanguagePolicy)
         anchorAndPolicies.append(plainWritingPolicy)
+        anchorAndPolicies.append(epistemicGroundingPolicy)
         anchorAndPolicies.append(answerClosurePolicy)
         anchorAndPolicies.append(enumerableListFormatPolicy)
         anchorAndPolicies.append(stoicGroundingPolicy)
@@ -1142,7 +1152,7 @@ CHAT FORMAT POLICY:
             - What the source says: cite the source title, URL, filename, or chunk marker.
             - How it connects to Alex: connect only to provided notes, conversations, projects, decisions, or citations.
             - Why it matters: state the practical implication for Alex's current thinking or project.
-            - Your own probe: pick at least ONE specific claim in the source and either push back, surface a missed angle, or name a fragile assumption. Paraphrasing the author or generic agreement does not count.
+            - Your own probe: pick at least ONE important claim in the source, state what must be true for that claim to hold, and identify whether the source proves it or merely assumes it. Paraphrasing the author or generic agreement does not count.
             - Grounding (meta footer): name the source and any existing Nous citation used for the connection.
             If there is no strong existing Nous connection, say that plainly instead of inventing one.
             """)
@@ -1763,7 +1773,7 @@ User: "我中意又软又硬嘅人，反差先系 depth"
         slowCognitionArtifacts: [CognitionArtifact] = [],
         now: Date = Date()
     ) -> PromptGovernanceTrace {
-        var layers = ["anchor", "memory_interpretation_policy", "core_safety_policy", "user_address_policy", "visible_response_language_policy", "answer_closure_policy", "enumerable_list_format_policy", "stoic_grounding_policy", "real_world_decision_policy", "summary_output_policy", "conversation_title_output_policy", "chat_mode"]
+        var layers = ["anchor", "memory_interpretation_policy", "core_safety_policy", "user_address_policy", "visible_response_language_policy", "epistemic_grounding_policy", "answer_closure_policy", "enumerable_list_format_policy", "stoic_grounding_policy", "real_world_decision_policy", "summary_output_policy", "conversation_title_output_policy", "chat_mode"]
         let highRiskQueryDetected = SafetyGuardrails.isHighRiskQuery(currentUserInput)
         let visibleLanguageDecision: VisibleResponseLanguageDecision = {
             if let override = visibleLanguageTargetOverride {

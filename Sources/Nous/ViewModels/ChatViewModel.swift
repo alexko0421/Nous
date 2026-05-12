@@ -810,8 +810,12 @@ final class ChatViewModel {
         // active-task guard in `runSend` rejects the turn. The duplicate
         // bootstrap inside `runSend` is intentionally removed so we don't
         // create the conversation twice.
+        let sourceDiscussionContextBeforeBootstrap = activeSourceDiscussionContext
         if currentNode == nil {
             startNewConversation(projectId: defaultProjectId, cancelInFlightWork: false)
+            if let sourceDiscussionContextBeforeBootstrap {
+                activeSourceDiscussionContext = sourceDiscussionContextBeforeBootstrap
+            }
         } else if currentStreamingSession == nil, let node = currentNode {
             // currentNode was set without going through
             // startNewConversation/loadConversation (e.g. test scaffolding
