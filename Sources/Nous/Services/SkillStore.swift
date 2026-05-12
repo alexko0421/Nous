@@ -134,16 +134,17 @@ final class SkillStore: SkillStoring {
         let payloadJSON = try encodedPayload(skill.payload)
 
         try nodeStore.inTransaction {
-            let stmt = try database.prepare("""
-                INSERT INTO skills (
-                    id, user_id, payload, state, fired_count,
-                    created_at, last_modified_at, last_fired_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-            """)
-            try bind(skill, payloadJSON: payloadJSON, to: stmt)
-            try stmt.step()
+            try insertSkillWithoutTransaction(skill, payloadJSON: payloadJSON)
         }
+    }
+
+    func insertSkillInExistingTransaction(_ skill: Skill, nodeStore expectedNodeStore: NodeStore) throws {
+        guard nodeStore === expectedNodeStore else {
+            throw SkillStoreError.nodeStoreMismatch
+        }
+        try validate(skill.payload)
+        let payloadJSON = try encodedPayload(skill.payload)
+        try insertSkillWithoutTransaction(skill, payloadJSON: payloadJSON)
     }
 
     func updateSkill(_ skill: Skill) throws {
@@ -200,30 +201,7 @@ final class SkillStore: SkillStoring {
     }
 
     private func validate(_ payload: SkillPayload) throws {
-        guard (1...2).contains(payload.payloadVersion) else {
-            throw SkillStoreError.invalidPayloadVersion(payload.payloadVersion)
-        }
-
-        switch payload.trigger.kind {
-        case .analysisGate:
-            let nonEmptyCues = payload.trigger.cues.filter {
-                !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            }
-            guard !nonEmptyCues.isEmpty else {
-                throw SkillStoreError.emptyCues
-            }
-        case .always, .mode:
-            guard !payload.trigger.modes.isEmpty else {
-                throw SkillStoreError.emptyModes
-            }
-        }
-
-        guard 0...100 ~= payload.trigger.priority else {
-            throw SkillStoreError.priorityOutOfRange(payload.trigger.priority)
-        }
-        guard !payload.action.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw SkillStoreError.emptyActionContent
-        }
+        try SkillPayloadValidator.validate(payload)
     }
 
     private func encodedPayload(_ payload: SkillPayload) throws -> String {
@@ -243,6 +221,18 @@ final class SkillStore: SkillStoring {
         try stmt.bind(skill.createdAt.timeIntervalSince1970, at: 6)
         try stmt.bind(skill.lastModifiedAt.timeIntervalSince1970, at: 7)
         try stmt.bind(skill.lastFiredAt?.timeIntervalSince1970, at: 8)
+    }
+
+    private func insertSkillWithoutTransaction(_ skill: Skill, payloadJSON: String) throws {
+        let stmt = try database.prepare("""
+            INSERT INTO skills (
+                id, user_id, payload, state, fired_count,
+                created_at, last_modified_at, last_fired_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+        """)
+        try bind(skill, payloadJSON: payloadJSON, to: stmt)
+        try stmt.step()
     }
 
     private func skill(from stmt: Statement) -> Skill? {

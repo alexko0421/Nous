@@ -12,6 +12,7 @@ final class TurnPlanner {
     private let memoryContextBuilder: TurnMemoryContextBuilder
     private let currentProviderProvider: () -> LLMProvider
     private let judgeLLMServiceFactory: () -> (any LLMService)?
+    private let sourceBriefingService: SourceBriefingService?
     private let provocationJudgeFactory: (any LLMService) -> any Judging
     private let governanceTelemetry: GovernanceTelemetryStore
     private let quickActionAddendumResolver: QuickActionAddendumResolver
@@ -28,6 +29,7 @@ final class TurnPlanner {
         contradictionMemoryService: ContradictionMemoryService,
         currentProviderProvider: @escaping () -> LLMProvider,
         judgeLLMServiceFactory: @escaping () -> (any LLMService)?,
+        sourceBriefingService: SourceBriefingService? = nil,
         provocationJudgeFactory: @escaping (any LLMService) -> any Judging = { ProvocationJudge(llmService: $0) },
         governanceTelemetry: GovernanceTelemetryStore = GovernanceTelemetryStore(),
         skillStore: (any SkillStoring)? = nil,
@@ -52,6 +54,7 @@ final class TurnPlanner {
         )
         self.currentProviderProvider = currentProviderProvider
         self.judgeLLMServiceFactory = judgeLLMServiceFactory
+        self.sourceBriefingService = sourceBriefingService
         self.provocationJudgeFactory = provocationJudgeFactory
         self.governanceTelemetry = governanceTelemetry
         self.quickActionAddendumResolver = QuickActionAddendumResolver(
@@ -263,6 +266,15 @@ final class TurnPlanner {
                 now: request.now
             )) ?? []
             : []
+        let sourceBriefing = await generateSourceBriefingIfNeeded(
+            promptQuery: promptQuery,
+            projectGoal: projectGoal,
+            projectMemory: projectMemory,
+            conversationMemory: conversationMemory,
+            globalMemory: globalMemory,
+            citations: citations,
+            sourceMaterials: request.sourceMaterials
+        )
 
         let turnSlice = PromptContextAssembler.assembleContext(
             chatMode: effectiveMode,
@@ -280,6 +292,7 @@ final class TurnPlanner {
             projectGoal: projectGoal,
             attachments: request.attachments,
             sourceMaterials: request.sourceMaterials,
+            sourceBriefing: sourceBriefing,
             turnSteward: stewardship.trace,
             activeQuickActionMode: planningQuickActionMode,
             loadedSkills: quickActionResolution.loadedSkills,
@@ -324,6 +337,7 @@ final class TurnPlanner {
             projectGoal: projectGoal,
             attachments: request.attachments,
             sourceMaterials: request.sourceMaterials,
+            sourceBriefing: sourceBriefing,
             activeQuickActionMode: planningQuickActionMode,
             quickActionAddendum: quickActionContext,
             allowInteractiveClarification: shouldAllowInteractiveClarification,
@@ -360,6 +374,7 @@ final class TurnPlanner {
                 prepared: prepared,
                 citations: citations,
                 sourceMaterials: request.sourceMaterials,
+                sourceBriefing: sourceBriefing,
                 promptTrace: promptTrace,
                 effectiveMode: effectiveMode,
                 nextQuickActionModeIfCompleted: explicitQuickActionMode,
@@ -382,7 +397,8 @@ final class TurnPlanner {
                 loadedCitationIds: promptResourceIds.citationIds,
                 memoryUsageHints: promptResourceIds.memoryUsageHints,
                 memoryProvenance: promptResourceIds.memoryProvenance,
-                corpusContext: memoryContext.corpusContext
+                corpusContext: memoryContext.corpusContext,
+                resolvedCorpusEntries: memoryContext.resolvedCorpusEntries
             )
         }
 
@@ -391,6 +407,7 @@ final class TurnPlanner {
             prepared: prepared,
             citations: citations,
             sourceMaterials: request.sourceMaterials,
+            sourceBriefing: sourceBriefing,
             promptTrace: promptTrace,
             effectiveMode: effectiveMode,
             nextQuickActionModeIfCompleted: explicitQuickActionMode,
@@ -413,8 +430,90 @@ final class TurnPlanner {
             loadedCitationIds: promptResourceIds.citationIds,
             memoryUsageHints: promptResourceIds.memoryUsageHints,
             memoryProvenance: promptResourceIds.memoryProvenance,
-            corpusContext: memoryContext.corpusContext
+            corpusContext: memoryContext.corpusContext,
+            resolvedCorpusEntries: memoryContext.resolvedCorpusEntries
         )
+    }
+
+    private func generateSourceBriefingIfNeeded(
+        promptQuery: String,
+        projectGoal: String?,
+        projectMemory: String?,
+        conversationMemory: String?,
+        globalMemory: String?,
+        citations: [SearchResult],
+        sourceMaterials: [SourceMaterialContext]
+    ) async -> SourceBriefing {
+        guard !sourceMaterials.isEmpty,
+              let sourceBriefingService else {
+            return .empty
+        }
+
+        let request = SourceBriefingRequest(
+            currentFocus: promptQuery,
+            projectContext: Self.briefingProjectContext(
+                projectGoal: projectGoal,
+                projectMemory: projectMemory
+            ),
+            rememberedTheses: Self.briefingRememberedTheses(
+                conversationMemory: conversationMemory,
+                globalMemory: globalMemory,
+                citations: citations
+            ),
+            sourceMaterials: sourceMaterials,
+            maxItems: 4
+        )
+        do {
+            return try await sourceBriefingService.generateBriefing(request)
+        } catch {
+            return .empty
+        }
+    }
+
+    private static func briefingProjectContext(
+        projectGoal: String?,
+        projectMemory: String?
+    ) -> String? {
+        let pieces = [
+            projectGoal.map { "Project goal: \(briefingSnippet($0, limit: 280))" },
+            projectMemory.map { "Project memory: \(briefingSnippet($0, limit: 520))" }
+        ].compactMap { value -> String? in
+            guard let value,
+                  !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return nil
+            }
+            return value
+        }
+        guard !pieces.isEmpty else { return nil }
+        return pieces.joined(separator: "\n")
+    }
+
+    private static func briefingRememberedTheses(
+        conversationMemory: String?,
+        globalMemory: String?,
+        citations: [SearchResult]
+    ) -> [String] {
+        var theses: [String] = []
+        if let conversationMemory,
+           !conversationMemory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            theses.append("Conversation memory: \(briefingSnippet(conversationMemory, limit: 520))")
+        }
+        if let globalMemory,
+           !globalMemory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            theses.append("Global memory: \(briefingSnippet(globalMemory, limit: 520))")
+        }
+        theses.append(contentsOf: citations.prefix(3).map { citation in
+            let snippet = briefingSnippet(citation.surfacedSnippet, limit: 360)
+            return "Citation \(citation.node.title): \(snippet)"
+        })
+        return theses
+    }
+
+    private static func briefingSnippet(_ text: String, limit: Int) -> String {
+        let normalized = SourceTextExtractor.normalizeWhitespace(text)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalized.count > limit else { return normalized }
+        return "\(normalized.prefix(limit))..."
     }
 
     private static func agentLoopMode(
@@ -636,9 +735,42 @@ final class TurnPlanner {
 
     private func transcriptMessages(from messages: [Message]) -> [LLMMessage] {
         messages.map { message in
-            LLMMessage(
+            let images = message.role == .user
+                ? Self.imageAttachments(from: message.attachments)
+                : []
+            let documents = message.role == .user
+                ? Self.documentAttachments(from: message.attachments)
+                : []
+            return LLMMessage(
                 role: message.role == .user ? "user" : "assistant",
-                content: message.content
+                content: message.content,
+                imageAttachments: images,
+                documentAttachments: documents
+            )
+        }
+    }
+
+    static func imageAttachments(from attachments: [AttachedFileContext]) -> [LLMImageAttachment] {
+        attachments.compactMap { attachment in
+            guard attachment.kind == .image,
+                  let data = attachment.imageData,
+                  !data.isEmpty else { return nil }
+            return LLMImageAttachment(
+                data: data,
+                mimeType: attachment.imageMimeType ?? "image/png"
+            )
+        }
+    }
+
+    static func documentAttachments(from attachments: [AttachedFileContext]) -> [LLMDocumentAttachment] {
+        attachments.compactMap { attachment in
+            guard attachment.kind == .pdf,
+                  let data = attachment.pdfData,
+                  !data.isEmpty else { return nil }
+            return LLMDocumentAttachment(
+                data: data,
+                mimeType: "application/pdf",
+                filename: attachment.name
             )
         }
     }

@@ -16,6 +16,19 @@ final class SkillMatcherTests: XCTestCase {
         XCTAssertEqual(matches, [])
     }
 
+    func testGlobalAlwaysSkillFiresWithoutQuickActionMode() {
+        let matcher = SkillMatcher()
+        let skill = makeSkill(name: "global", kind: .always, modes: [])
+
+        let matches = matcher.matchingSkills(
+            from: [skill],
+            context: SkillMatchContext(mode: nil, turnIndex: 1),
+            cap: 5
+        )
+
+        XCTAssertEqual(matches, [skill])
+    }
+
     func testModeMatchFires() {
         let matcher = SkillMatcher()
         let skill = makeSkill(name: "direction", modes: [.direction])

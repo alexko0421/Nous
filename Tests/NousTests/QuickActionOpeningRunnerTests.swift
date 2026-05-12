@@ -271,7 +271,7 @@ final class QuickActionOpeningRunnerTests: XCTestCase {
         XCTAssertEqual(reviewer.reason, "silent_review_failed")
     }
 
-    func testOpeningRunnerDoesNotRecordReviewOrSnapshotWhenCommitFails() async throws {
+    func testOpeningRunnerRecordsReviewAndSnapshotWhenCommitRecoversDeletedNode() async throws {
         let nodeStore = try NodeStore(path: ":memory:")
         let conversationStore = ConversationSessionStore(nodeStore: nodeStore)
         let node = try conversationStore.startConversation()
@@ -299,18 +299,25 @@ final class QuickActionOpeningRunnerTests: XCTestCase {
         let turnId = UUID()
         let sink = TurnSequencedEventSink(turnId: turnId, sink: OpeningTurnEventCapture())
 
-        let completion = await runner.run(
+        let maybeCompletion = await runner.run(
             mode: .direction,
             node: node,
             turnId: turnId,
             sink: sink,
             abortReason: { .unexpectedCancellation }
         )
+        let completion = try XCTUnwrap(maybeCompletion)
 
-        XCTAssertNil(completion)
-        XCTAssertTrue(reviewer.reviewedTurnIds.isEmpty)
-        XCTAssertTrue(reviewCapture.values().isEmpty)
-        XCTAssertTrue(snapshotCapture.values().isEmpty)
+        XCTAssertNotEqual(completion.node.id, node.id)
+        XCTAssertEqual(completion.node.title, "Recovered Conversation")
+        XCTAssertEqual(reviewer.reviewedTurnIds, [turnId])
+        XCTAssertEqual(reviewCapture.values().count, 1)
+
+        let snapshot = try XCTUnwrap(snapshotCapture.values().first)
+        XCTAssertEqual(snapshotCapture.values().count, 1)
+        XCTAssertEqual(snapshot.conversationId, completion.node.id)
+        XCTAssertEqual(snapshot.assistantMessageId, completion.assistantMessage.id)
+        XCTAssertNotNil(snapshot.reviewArtifactId)
     }
 
     private func makeMemoryContextBuilder(nodeStore: NodeStore) -> TurnMemoryContextBuilder {

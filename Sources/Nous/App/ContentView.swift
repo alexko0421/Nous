@@ -15,6 +15,42 @@ enum GlobalVoicePillPolicy {
     }
 }
 
+private struct MainWindowGlassBackground: View {
+    private let cornerRadius: CGFloat = 36
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(Color.clear)
+            .background(
+                NativeGlassPanel(cornerRadius: cornerRadius, tintColor: AppColor.windowGlassTint) {
+                    EmptyView()
+                }
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(AppColor.inkBackground.opacity(0.34))
+            )
+            .overlay(alignment: .top) {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.28),
+                                Color.white.opacity(0.08),
+                                Color.clear
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1
+                    )
+                    .blendMode(.screen)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .shadow(color: .black.opacity(0.12), radius: 24, x: 0, y: 8)
+    }
+}
+
 struct ContentView: View {
     let env: AppEnvironment
     private static let isRunningUnitTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
@@ -71,9 +107,7 @@ struct ContentView: View {
             )
             .padding(RightPanelLayout.windowPadding)
             .background(
-                RoundedRectangle(cornerRadius: 36, style: .continuous)
-                    .fill(AppColor.colaBeige.opacity(0.72))
-                    .shadow(color: .black.opacity(0.12), radius: 24, x: 0, y: 8)
+                MainWindowGlassBackground()
             )
             .background(.clear)
             .overlay(alignment: .bottom) {
@@ -153,6 +187,7 @@ struct ContentView: View {
     private func sidebar(dependencies: AppDependencies) -> some View {
         LeftSidebar(
             nodeStore: dependencies.nodeStore,
+            conversationSessionStore: dependencies.conversationSessionStore,
             selectedTab: $selectedTab,
             selectedProjectId: $selectedProjectId,
             selectedNodeId: currentSidebarNodeId(dependencies: dependencies),
@@ -201,6 +236,7 @@ struct ContentView: View {
                     vm: dependencies.settingsVM,
                     selectedTab: $selectedSettingsSection,
                     skillStore: dependencies.skillStore,
+                    failureSkillCandidateStore: dependencies.failureSkillCandidateStore,
                     userMemoryService: dependencies.userMemoryService,
                     telemetry: dependencies.governanceTelemetry,
                     galaxyRelationTelemetry: dependencies.galaxyRelationTelemetry,
@@ -215,9 +251,8 @@ struct ContentView: View {
         }
         .overlay(
             RoundedRectangle(cornerRadius: 36, style: .continuous)
-                .stroke(AppColor.panelStroke.opacity(0.52), lineWidth: 1)
+                .stroke(AppColor.sidebarGlassStroke.opacity(0.26), lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.10), radius: 18, x: 0, y: 8)
     }
 
     @ViewBuilder

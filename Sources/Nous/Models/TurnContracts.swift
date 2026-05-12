@@ -119,6 +119,7 @@ struct TurnRequest {
     let snapshot: TurnSessionSnapshot
     let inputText: String
     let attachments: [AttachedFileContext]
+    let displayAttachments: [AttachedFileContext]
     let sourceMaterials: [SourceMaterialContext]
     let now: Date
 
@@ -127,6 +128,7 @@ struct TurnRequest {
         snapshot: TurnSessionSnapshot,
         inputText: String,
         attachments: [AttachedFileContext],
+        displayAttachments: [AttachedFileContext]? = nil,
         sourceMaterials: [SourceMaterialContext] = [],
         now: Date
     ) {
@@ -134,6 +136,7 @@ struct TurnRequest {
         self.snapshot = snapshot
         self.inputText = inputText
         self.attachments = attachments
+        self.displayAttachments = displayAttachments ?? attachments
         self.sourceMaterials = sourceMaterials
         self.now = now
     }
@@ -232,6 +235,35 @@ struct TurnPrepared {
     let citations: [SearchResult]
     let promptTrace: PromptGovernanceTrace
     let effectiveMode: ChatMode
+    let sourceBriefing: SourceBriefing
+    /// Block 4b Phase 1A — atom + reflection cards paired with their resolved
+    /// source nodes. Carried alongside legacy `citations` so the UI can
+    /// cascade-render atom cards primary and fall back to citations when the
+    /// corpus lane is empty. Defaults to `[]` so existing call sites compile
+    /// unchanged.
+    let resolvedCorpusEntries: [ResolvedCitableEntry]
+
+    init(
+        turnId: UUID,
+        node: NousNode,
+        userMessage: Message,
+        messagesAfterUserAppend: [Message],
+        citations: [SearchResult],
+        promptTrace: PromptGovernanceTrace,
+        effectiveMode: ChatMode,
+        sourceBriefing: SourceBriefing = .empty,
+        resolvedCorpusEntries: [ResolvedCitableEntry] = []
+    ) {
+        self.turnId = turnId
+        self.node = node
+        self.userMessage = userMessage
+        self.messagesAfterUserAppend = messagesAfterUserAppend
+        self.citations = citations
+        self.promptTrace = promptTrace
+        self.effectiveMode = effectiveMode
+        self.sourceBriefing = sourceBriefing
+        self.resolvedCorpusEntries = resolvedCorpusEntries
+    }
 }
 
 struct TurnUserMessageAppended {
@@ -358,6 +390,7 @@ struct TurnPlan {
     let prepared: PreparedTurnSession
     let citations: [SearchResult]
     let sourceMaterials: [SourceMaterialContext]
+    let sourceBriefing: SourceBriefing
     let promptTrace: PromptGovernanceTrace
     let effectiveMode: ChatMode
     let nextQuickActionModeIfCompleted: QuickActionMode?
@@ -379,12 +412,17 @@ struct TurnPlan {
     /// Defaults to `.empty` so existing TurnPlan construction sites compile
     /// without modification.
     let corpusContext: CitableContext
+    /// Block 4b Phase 1A — `corpusContext.entries` paired with their resolved
+    /// source nodes. UI consumes this for atom-card chips; defaults to `[]`
+    /// so existing TurnPlan construction sites compile unchanged.
+    let resolvedCorpusEntries: [ResolvedCitableEntry]
 
     init(
         turnId: UUID,
         prepared: PreparedTurnSession,
         citations: [SearchResult],
         sourceMaterials: [SourceMaterialContext],
+        sourceBriefing: SourceBriefing = .empty,
         promptTrace: PromptGovernanceTrace,
         effectiveMode: ChatMode,
         nextQuickActionModeIfCompleted: QuickActionMode?,
@@ -400,12 +438,14 @@ struct TurnPlan {
         loadedCitationIds: Set<UUID> = [],
         memoryUsageHints: [ContextManifestUsageHint] = [],
         memoryProvenance: [String: ContextManifestMemoryProvenance] = [:],
-        corpusContext: CitableContext = .empty
+        corpusContext: CitableContext = .empty,
+        resolvedCorpusEntries: [ResolvedCitableEntry] = []
     ) {
         self.turnId = turnId
         self.prepared = prepared
         self.citations = citations
         self.sourceMaterials = sourceMaterials
+        self.sourceBriefing = sourceBriefing
         self.promptTrace = promptTrace
         self.effectiveMode = effectiveMode
         self.nextQuickActionModeIfCompleted = nextQuickActionModeIfCompleted
@@ -422,6 +462,7 @@ struct TurnPlan {
         self.memoryUsageHints = memoryUsageHints
         self.memoryProvenance = memoryProvenance
         self.corpusContext = corpusContext
+        self.resolvedCorpusEntries = resolvedCorpusEntries
     }
 
     init(
@@ -443,13 +484,15 @@ struct TurnPlan {
         loadedCitationIds: Set<UUID> = [],
         memoryUsageHints: [ContextManifestUsageHint] = [],
         memoryProvenance: [String: ContextManifestMemoryProvenance] = [:],
-        corpusContext: CitableContext = .empty
+        corpusContext: CitableContext = .empty,
+        resolvedCorpusEntries: [ResolvedCitableEntry] = []
     ) {
         self.init(
             turnId: turnId,
             prepared: prepared,
             citations: citations,
             sourceMaterials: [],
+            sourceBriefing: .empty,
             promptTrace: promptTrace,
             effectiveMode: effectiveMode,
             nextQuickActionModeIfCompleted: nextQuickActionModeIfCompleted,
@@ -465,7 +508,8 @@ struct TurnPlan {
             loadedCitationIds: loadedCitationIds,
             memoryUsageHints: memoryUsageHints,
             memoryProvenance: memoryProvenance,
-            corpusContext: corpusContext
+            corpusContext: corpusContext,
+            resolvedCorpusEntries: resolvedCorpusEntries
         )
     }
 }

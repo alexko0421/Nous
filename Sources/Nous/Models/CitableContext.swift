@@ -17,6 +17,10 @@ struct CitableContextManifest: Equatable {
     let totalCandidates: Int
     let droppedByConfidenceFloor: Int
     let droppedByBudget: Int
+    /// Entries suppressed because their aggregated thumbs-down penalty from
+    /// `CitationFeedbackStore` crossed the suppression threshold. Separate
+    /// from `droppedByBudget` so a sudden spike is visible in telemetry.
+    let droppedByFeedback: Int
     let admittedCount: Int
     let timeWindowStart: Date?
     let timeWindowEnd: Date?
@@ -27,6 +31,7 @@ struct CitableContextManifest: Equatable {
         totalCandidates: 0,
         droppedByConfidenceFloor: 0,
         droppedByBudget: 0,
+        droppedByFeedback: 0,
         admittedCount: 0,
         timeWindowStart: nil,
         timeWindowEnd: nil

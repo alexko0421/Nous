@@ -10,13 +10,45 @@ final class ChatViewModel {
     var currentNode: NousNode?
     var messages: [Message] = []
     var inputText: String = ""
-    var isGenerating: Bool = false
-    var currentResponse: String = ""
-    var currentThinking: String = ""
-    var currentThinkingStartedAt: Date?
-    var currentAgentTrace: [AgentTraceRecord] = []
-    var didHitBudgetExhaustion: Bool = false
+    @ObservationIgnored private(set) var currentStreamingSession: ConversationStreamingSession?
+    var isGenerating: Bool {
+        get { currentStreamingSession?.isGenerating ?? false }
+        set { currentStreamingSession?.isGenerating = newValue }
+    }
+    var currentResponse: String {
+        get { currentStreamingSession?.currentResponse ?? "" }
+        set { currentStreamingSession?.currentResponse = newValue }
+    }
+    var currentThinking: String {
+        get { currentStreamingSession?.currentThinking ?? "" }
+        set { currentStreamingSession?.currentThinking = newValue }
+    }
+    var currentThinkingStartedAt: Date? {
+        get { currentStreamingSession?.currentThinkingStartedAt }
+        set { currentStreamingSession?.currentThinkingStartedAt = newValue }
+    }
+    var currentAgentTrace: [AgentTraceRecord] {
+        get { currentStreamingSession?.currentAgentTrace ?? [] }
+        set { currentStreamingSession?.currentAgentTrace = newValue }
+    }
+    var didHitBudgetExhaustion: Bool {
+        get { currentStreamingSession?.didHitBudgetExhaustion ?? false }
+        set { currentStreamingSession?.didHitBudgetExhaustion = newValue }
+    }
     var citations: [SearchResult] = []
+    /// Block 4b Phase 1A — atom + reflection cards paired with their resolved
+    /// source nodes. Populated alongside `citations` from `TurnPrepared`.
+    /// Phase 1B reads this through `primaryAttribution` to drive the chip
+    /// cascade behind `FeatureFlags.atomCardsEnabled`.
+    var resolvedCorpusEntries: [ResolvedCitableEntry] = []
+
+    /// Attribution chips are hidden by product decision — retrieval still
+    /// runs in background and feeds the model, but the chip area never
+    /// surfaces in the UI. Cascade logic is preserved in `AttributionDisplay`
+    /// for future reintroduction (e.g. once the trust contract from Phase 2
+    /// guarantees chip = "model used" rather than "retrieved").
+    var primaryAttribution: AttributionDisplay { .none }
+
     var activeQuickActionMode: QuickActionMode?
     var activeChatMode: ChatMode? = nil
     var activeSourceDiscussionContext: SourceDiscussionContext?
@@ -26,6 +58,7 @@ final class ChatViewModel {
     @ObservationIgnored private var pendingSourceMaterialsByTurnId: [UUID: [SourceMaterialContext]] = [:]
     @ObservationIgnored private var pendingSourceDiscussionContextByTurnId: [UUID: SourceDiscussionContext] = [:]
     @ObservationIgnored private var sourceMaterialsByUserMessageId: [UUID: [SourceMaterialContext]] = [:]
+    @ObservationIgnored private var sourceBriefingsByUserMessageId: [UUID: SourceBriefing] = [:]
 
     // MARK: - Dependencies
 
@@ -44,6 +77,7 @@ final class ChatViewModel {
     @ObservationIgnored private let explicitContextContinuationService: ContextContinuationService?
     @ObservationIgnored private let explicitTurnHousekeepingService: TurnHousekeepingService?
     @ObservationIgnored private let explicitSourceIngestionService: SourceIngestionService?
+    @ObservationIgnored private let sourceBriefingService: SourceBriefingService?
     private let llmServiceProvider: () -> (any LLMService)?
     private let currentProviderProvider: () -> LLMProvider
     private let judgeLLMServiceFactory: () -> (any LLMService)?
@@ -52,15 +86,27 @@ final class ChatViewModel {
     private let skillMatcher: SkillMatcher?
     private let skillTracker: SkillTracker?
     private let skillDogfoodLogger: (any SkillDogfoodLogging)?
+    private let failureSkillCandidateStore: FailureSkillCandidateStore?
     /// Stored as a typed `Task<JudgeVerdict, Error>` — not `Task<Void, …>` — so tests can
     /// `await task.value` and inspect the verdict directly. The slot is guarded on clear:
     /// a later `send()` may have already overwritten it with a new task ID, so only the task
     /// that still owns the slot clears it (see `inFlightJudgeTaskId` guard in `send()`).
     @ObservationIgnored nonisolated(unsafe) private var inFlightJudgeTask: Task<JudgeVerdict, Error>?
     @ObservationIgnored nonisolated(unsafe) private var inFlightJudgeTaskId: UUID?
-    @ObservationIgnored nonisolated(unsafe) private var inFlightResponseTask: Task<Void, Never>?
-    @ObservationIgnored nonisolated(unsafe) private var inFlightResponseTaskId: UUID?
-    @ObservationIgnored nonisolated(unsafe) private var inFlightResponseAbortReason: TurnAbortReason?
+    private var inFlightResponseTask: Task<Void, Never>? {
+        get { currentStreamingSession?.inFlightTask }
+        set { currentStreamingSession?.inFlightTask = newValue }
+    }
+
+    private var inFlightResponseTaskId: UUID? {
+        get { currentStreamingSession?.inFlightTurnId }
+        set { currentStreamingSession?.inFlightTurnId = newValue }
+    }
+
+    private var inFlightResponseAbortReason: TurnAbortReason? {
+        get { currentStreamingSession?.inFlightAbortReason }
+        set { currentStreamingSession?.inFlightAbortReason = newValue }
+    }
     private let governanceTelemetry: GovernanceTelemetryStore
     private let geminiPromptCache: GeminiPromptCacheService
     private let scratchPadStore: ScratchPadStore
@@ -70,12 +116,26 @@ final class ChatViewModel {
     private let heartbeatCoordinator: HeartbeatCoordinator?
     private let shouldUseGeminiHistoryCache: () -> Bool
     private let shouldPersistAssistantThinking: () -> Bool
+    /// Factory for the manual `/reflect` command. Returns `nil` when the
+    /// Gemini API key is unset; the command then surfaces a configuration
+    /// hint instead of attempting an LLM call.
+    private let perConversationReflectionServiceFactory: () -> PerConversationReflectionService?
     @ObservationIgnored private var cachedTurnPlanner: TurnPlanner?
     @ObservationIgnored private var cachedTurnExecutor: TurnExecutor?
     @ObservationIgnored private var cachedQuickActionOpeningRunner: QuickActionOpeningRunner?
     @ObservationIgnored private var cachedContextContinuationService: ContextContinuationService?
     @ObservationIgnored private var cachedTurnHousekeepingService: TurnHousekeepingService?
     @ObservationIgnored private var cachedSourceIngestionService: SourceIngestionService?
+
+    /// Phase A chat citation trace + feedback stores. Built lazily off
+    /// the shared NodeStore. The emitter writes one telemetry row per
+    /// candidate atom on each `.completed` turn event; the feedback
+    /// store is exposed so `CorpusAtomCardListView` can mount per-row
+    /// thumb feedback.
+    @ObservationIgnored private lazy var citationTraceEmitter = CitationTraceEmitter(
+        traceStore: CitationJudgeTraceStore(nodeStore: nodeStore)
+    )
+    @ObservationIgnored lazy var citationFeedbackStore = CitationFeedbackStore(nodeStore: nodeStore)
     private var memoryProjectionService: MemoryProjectionService {
         userMemoryService.projectionReader
     }
@@ -138,6 +198,7 @@ final class ChatViewModel {
             outcomeFactory: turnOutcomeFactory,
             shadowLearningSignalRecorder: shadowLearningSignalRecorder,
             cognitionReviewer: CognitionReviewer(),
+            failureSkillCandidateStore: failureSkillCandidateStore,
             shouldSurfaceThinkingTraces: shouldPersistAssistantThinking,
             onPlanReady: { [governanceTelemetry] plan in
                 governanceTelemetry.recordPromptTrace(plan.promptTrace)
@@ -175,6 +236,7 @@ final class ChatViewModel {
             contradictionMemoryService: userMemoryService.contradictionReader,
             currentProviderProvider: currentProviderProvider,
             judgeLLMServiceFactory: judgeLLMServiceFactory,
+            sourceBriefingService: sourceBriefingService,
             provocationJudgeFactory: provocationJudgeFactory,
             governanceTelemetry: governanceTelemetry,
             skillStore: skillStore,
@@ -269,10 +331,15 @@ final class ChatViewModel {
             return cachedContextContinuationService
         }
 
+        let autoTrigger = PerConversationReflectionAutoTrigger(
+            nodeStore: nodeStore,
+            serviceFactory: perConversationReflectionServiceFactory
+        )
         let service = ContextContinuationService(
             scratchPadStore: scratchPadStore,
             userMemoryScheduler: userMemoryScheduler,
             governanceTelemetry: governanceTelemetry,
+            perConversationReflectionAutoTrigger: autoTrigger,
             sourceLearningScheduler: sourceLearningMemoryScheduler
         )
         cachedContextContinuationService = service
@@ -321,6 +388,7 @@ final class ChatViewModel {
             onConversationNodeUpdated: { [weak self] refreshedNode in
                 guard let self, self.currentNode?.id == refreshedNode.id else { return }
                 self.currentNode = refreshedNode
+                self.bindStreamingSession(for: refreshedNode)
             }
         )
         cachedTurnHousekeepingService = service
@@ -345,6 +413,7 @@ final class ChatViewModel {
         contextContinuationService: ContextContinuationService? = nil,
         turnHousekeepingService: TurnHousekeepingService? = nil,
         sourceIngestionService: SourceIngestionService? = nil,
+        sourceBriefingService: SourceBriefingService? = nil,
         llmServiceProvider: @escaping () -> (any LLMService)?,
         currentProviderProvider: @escaping () -> LLMProvider,
         judgeLLMServiceFactory: @escaping () -> (any LLMService)?,
@@ -353,6 +422,7 @@ final class ChatViewModel {
         skillMatcher: SkillMatcher? = nil,
         skillTracker: SkillTracker? = nil,
         skillDogfoodLogger: (any SkillDogfoodLogging)? = nil,
+        failureSkillCandidateStore: FailureSkillCandidateStore? = nil,
         governanceTelemetry: GovernanceTelemetryStore = GovernanceTelemetryStore(),
         geminiPromptCache: GeminiPromptCacheService = GeminiPromptCacheService(),
         scratchPadStore: ScratchPadStore,
@@ -362,6 +432,7 @@ final class ChatViewModel {
         heartbeatCoordinator: HeartbeatCoordinator? = nil,
         shouldUseGeminiHistoryCache: @escaping () -> Bool = { true },
         shouldPersistAssistantThinking: @escaping () -> Bool = { true },
+        perConversationReflectionServiceFactory: @escaping () -> PerConversationReflectionService? = { nil },
         defaultProjectId: UUID? = nil
     ) {
         self.nodeStore = nodeStore
@@ -384,6 +455,7 @@ final class ChatViewModel {
         self.skillMatcher = skillMatcher
         self.skillTracker = skillTracker
         self.skillDogfoodLogger = skillDogfoodLogger
+        self.failureSkillCandidateStore = failureSkillCandidateStore
         self.governanceTelemetry = governanceTelemetry
         self.geminiPromptCache = geminiPromptCache
         self.scratchPadStore = scratchPadStore
@@ -393,6 +465,7 @@ final class ChatViewModel {
         self.heartbeatCoordinator = heartbeatCoordinator
         self.shouldUseGeminiHistoryCache = shouldUseGeminiHistoryCache
         self.shouldPersistAssistantThinking = shouldPersistAssistantThinking
+        self.perConversationReflectionServiceFactory = perConversationReflectionServiceFactory
         self.defaultProjectId = defaultProjectId
         self.explicitTurnRunner = turnRunner
         self.explicitTurnPlanner = turnPlanner
@@ -400,6 +473,7 @@ final class ChatViewModel {
         self.explicitContextContinuationService = contextContinuationService
         self.explicitTurnHousekeepingService = turnHousekeepingService
         self.explicitSourceIngestionService = sourceIngestionService
+        self.sourceBriefingService = sourceBriefingService
     }
 
     // MARK: - Conversation Management
@@ -415,6 +489,7 @@ final class ChatViewModel {
         scratchPadStore.activate(conversationId: nil)
         messages = []
         citations = []
+        resolvedCorpusEntries = []
         currentResponse = ""
         currentThinking = ""
         currentThinkingStartedAt = nil
@@ -427,6 +502,7 @@ final class ChatViewModel {
         pendingSourceMaterialsByTurnId.removeAll()
         pendingSourceDiscussionContextByTurnId.removeAll()
         sourceMaterialsByUserMessageId.removeAll()
+        sourceBriefingsByUserMessageId.removeAll()
     }
 
     @MainActor
@@ -444,9 +520,11 @@ final class ChatViewModel {
             projectId: projectId
         ) else { return }
         currentNode = node
+        bindStreamingSession(for: node)
         scratchPadStore.activate(conversationId: node.id)
         messages = []
         citations = []
+        resolvedCorpusEntries = []
         currentResponse = ""
         currentThinking = ""
         currentThinkingStartedAt = nil
@@ -458,30 +536,34 @@ final class ChatViewModel {
         pendingSourceMaterialsByTurnId.removeAll()
         pendingSourceDiscussionContextByTurnId.removeAll()
         sourceMaterialsByUserMessageId.removeAll()
+        sourceBriefingsByUserMessageId.removeAll()
     }
 
     @MainActor
-    func loadConversation(_ node: NousNode, cancelInFlightWork: Bool = true) {
+    func loadConversation(_ node: NousNode, cancelInFlightWork: Bool = false) {
         if cancelInFlightWork {
             cancelInFlightResponse(clearDraft: true, reason: .conversationSwitched)
-            cancelInFlightJudge()  // switching conversations invalidates any pending verdict
         }
+        cancelInFlightJudge()  // judges are conversation-scoped; always invalidate on switch
         currentNode = node
+        bindStreamingSession(for: node)
+        if let surfacedError = currentStreamingSession?.markViewed() {
+            NSLog("[NousTurn] background turn error surfaced on conversation enter: %@",
+                  String(describing: surfacedError))
+        }
         scratchPadStore.activate(conversationId: node.id)
         messages = (try? nodeStore.fetchMessages(nodeId: node.id)) ?? []
         citations = []
-        currentResponse = ""
-        currentThinking = ""
-        currentThinkingStartedAt = nil
-        currentAgentTrace = []
-        didHitBudgetExhaustion = false
+        resolvedCorpusEntries = []
         activeQuickActionMode = nil
         activeChatMode = (try? nodeStore.latestChatMode(forNode: node.id)) ?? nil
         activeSourceDiscussionContext = nil
         pendingSourceMaterialsByTurnId.removeAll()
         pendingSourceDiscussionContextByTurnId.removeAll()
         sourceMaterialsByUserMessageId.removeAll()
+        sourceBriefingsByUserMessageId.removeAll()
         cacheSourceMaterialsForLoadedMessages()
+        cacheSourceBriefingsForLoadedMessages()
     }
 
     func activateSourceDiscussion(_ context: SourceDiscussionContext) {
@@ -502,6 +584,43 @@ final class ChatViewModel {
         return materials
     }
 
+    func sourceBriefing(for message: Message) -> SourceBriefing? {
+        guard message.role == .user else { return nil }
+        if let briefing = sourceBriefingsByUserMessageId[message.id] {
+            return briefing.items.isEmpty ? nil : briefing
+        }
+        let briefing = (try? nodeStore.fetchSourceBriefing(messageId: message.id)) ?? .empty
+        sourceBriefingsByUserMessageId[message.id] = briefing
+        return briefing.items.isEmpty ? nil : briefing
+    }
+
+    /// Bind the streaming session that backs the forwarded streaming
+    /// properties (`isGenerating`, `currentResponse`, `currentThinking`,
+    /// ...). Must be called immediately after every assignment to
+    /// `currentNode`; without it, the forwarded setters silently no-op
+    /// against a nil session. See Task 4 (cross-window streaming).
+    ///
+    /// When this rebinds the session mid-turn (e.g. the recovery path
+    /// in `runSend` swaps the missing/restored node for a freshly-created
+    /// one inside `.userMessageAppended`), the in-flight task slots are
+    /// migrated to the new session so `isActiveResponseTask` continues
+    /// to recognize the running turn after the rebind.
+    @MainActor
+    private func bindStreamingSession(for node: NousNode) {
+        let newSession = conversationSessionStore.streamingSession(for: node.id)
+        if let previous = currentStreamingSession,
+           previous !== newSession,
+           let turnId = previous.inFlightTurnId {
+            newSession.inFlightTurnId = turnId
+            newSession.inFlightTask = previous.inFlightTask
+            newSession.inFlightAbortReason = previous.inFlightAbortReason
+            previous.inFlightTurnId = nil
+            previous.inFlightTask = nil
+            previous.inFlightAbortReason = nil
+        }
+        currentStreamingSession = newSession
+    }
+
     func activateQuickActionMode(_ mode: QuickActionMode) {
         activeQuickActionMode = mode
     }
@@ -510,8 +629,24 @@ final class ChatViewModel {
     func beginQuickActionConversation(_ mode: QuickActionMode) async {
         guard !isGenerating else { return }
 
+        // Pre-create the conversation at the spawn site so the in-flight
+        // task slot writes below land on a bound streaming session. Quick
+        // actions always start a fresh conversation, so this is
+        // unconditional. The duplicate bootstrap inside
+        // `runQuickActionConversation` is intentionally removed.
+        startNewConversation(projectId: defaultProjectId, cancelInFlightWork: false)
+        activeQuickActionMode = mode
+        inputText = ""
+
         let responseTaskId = UUID()
         inFlightResponseAbortReason = nil
+        // Capture the originating session at spawn time so a background
+        // completion (user navigated away mid-turn) still flips
+        // `hasUnseenCompletion` on the conversation where the turn started.
+        let originatingConversationId = currentNode?.id
+        let originatingSession = originatingConversationId.map {
+            conversationSessionStore.streamingSession(for: $0)
+        }
         let responseTask = Task { @MainActor [weak self] in
             guard let self else { return }
             await self.runQuickActionConversation(mode, responseTaskId: responseTaskId)
@@ -519,6 +654,15 @@ final class ChatViewModel {
         inFlightResponseTask = responseTask
         inFlightResponseTaskId = responseTaskId
         await responseTask.value
+        let viewingNow = (currentNode?.id == originatingConversationId)
+        let surfacedError = originatingSession?.captureFinish(
+            turnId: responseTaskId,
+            viewingNow: viewingNow,
+            error: nil
+        )
+        if let surfacedError {
+            NSLog("[NousTurn] background turn surfaced error: %@", String(describing: surfacedError))
+        }
         clearInFlightResponseTaskIfOwned(responseTaskId)
         if inFlightResponseTaskId == nil {
             inFlightResponseAbortReason = nil
@@ -529,10 +673,9 @@ final class ChatViewModel {
     private func runQuickActionConversation(_ mode: QuickActionMode, responseTaskId: UUID) async {
         guard isActiveResponseTask(responseTaskId) else { return }
 
-        // Quick actions are a launch path, not the lasting chat label.
-        startNewConversation(projectId: defaultProjectId, cancelInFlightWork: false)
-        activeQuickActionMode = mode
-        inputText = ""
+        // Conversation bootstrap moved to `beginQuickActionConversation`
+        // so the in-flight task slots have a bound streaming session
+        // before they're written.
 
         guard let node = currentNode else { return }
 
@@ -580,6 +723,7 @@ final class ChatViewModel {
             projectId: defaultProjectId
         )
         self.currentNode = node
+        bindStreamingSession(for: node)
         self.messages = []
         return node.id
     }
@@ -671,8 +815,47 @@ final class ChatViewModel {
         let limitedAttachments = AttachmentLimitPolicy.limitingImageAttachments(attachments)
         guard (!inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !limitedAttachments.isEmpty), !isGenerating else { return }
 
+        // Manual `/reflect` slash command (Block 8 lite, dogfood-only). Runs
+        // PerConversationReflectionPrompt against the current conversation
+        // on Gemini and surfaces the claim as a transient assistant message.
+        // Result is NOT persisted to the reflection_claim table — see
+        // PerConversationReflectionService for rationale.
+        let trimmedInput = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedInput == "/reflect" && limitedAttachments.isEmpty {
+            inputText = ""
+            await runReflectCommand()
+            return
+        }
+
+        // Pre-bind a streaming session at the spawn site so the in-flight
+        // task slot writes below land on a real session. Without this, the
+        // forwarded setters silently no-op against a nil session and the
+        // active-task guard in `runSend` rejects the turn. The duplicate
+        // bootstrap inside `runSend` is intentionally removed so we don't
+        // create the conversation twice.
+        let sourceDiscussionContextBeforeBootstrap = activeSourceDiscussionContext
+        if currentNode == nil {
+            startNewConversation(projectId: defaultProjectId, cancelInFlightWork: false)
+            if let sourceDiscussionContextBeforeBootstrap {
+                activeSourceDiscussionContext = sourceDiscussionContextBeforeBootstrap
+            }
+        } else if currentStreamingSession == nil, let node = currentNode {
+            // currentNode was set without going through
+            // startNewConversation/loadConversation (e.g. test scaffolding
+            // or a restored-conversation scenario). Bind here so the
+            // forwarded slots have somewhere to live.
+            bindStreamingSession(for: node)
+        }
+
         let responseTaskId = UUID()
         inFlightResponseAbortReason = nil
+        // Capture the originating session at spawn time so a background
+        // completion (user navigated away mid-turn) still flips
+        // `hasUnseenCompletion` on the conversation where the turn started.
+        let originatingConversationId = currentNode?.id
+        let originatingSession = originatingConversationId.map {
+            conversationSessionStore.streamingSession(for: $0)
+        }
         let responseTask = Task { @MainActor [weak self] in
             guard let self else { return }
             await self.runSend(attachments: limitedAttachments, responseTaskId: responseTaskId)
@@ -680,10 +863,83 @@ final class ChatViewModel {
         inFlightResponseTask = responseTask
         inFlightResponseTaskId = responseTaskId
         await responseTask.value
+        let viewingNow = (currentNode?.id == originatingConversationId)
+        let surfacedError = originatingSession?.captureFinish(
+            turnId: responseTaskId,
+            viewingNow: viewingNow,
+            error: nil
+        )
+        if let surfacedError {
+            NSLog("[NousTurn] background turn surfaced error: %@", String(describing: surfacedError))
+        }
         clearInFlightResponseTaskIfOwned(responseTaskId)
         if inFlightResponseTaskId == nil {
             inFlightResponseAbortReason = nil
         }
+    }
+
+    /// Runs `PerConversationReflectionService` over the current conversation
+    /// and appends the result as an in-memory assistant message. The service
+    /// persists the run + claim with `ReflectionRun.nodeId = currentNode.id`
+    /// so retrieval (`fetchActiveReflectionClaims(currentNodeId:)`) surfaces
+    /// the claim only inside this conversation, not in other chats.
+    @MainActor
+    private func runReflectCommand() async {
+        guard let node = currentNode else {
+            appendReflectionNotice("Reflection · 需要先选定一个对话先得。")
+            return
+        }
+        guard let service = perConversationReflectionServiceFactory() else {
+            appendReflectionNotice("Reflection · 未设定 Gemini API key，去 Settings 加咗先再试。")
+            return
+        }
+        let snapshot = messages
+        guard snapshot.count >= PerConversationReflectionService.manualTriggerMinimumTurns else {
+            appendReflectionNotice("Reflection · 呢段对话仲短（\(snapshot.count) turns），最少要 \(PerConversationReflectionService.manualTriggerMinimumTurns) 才好捞 pattern。")
+            return
+        }
+
+        isGenerating = true
+        defer { isGenerating = false }
+
+        do {
+            let output = try await service.run(
+                conversationId: node.id,
+                conversationTitle: node.title,
+                projectId: node.projectId,
+                messages: snapshot
+            )
+            if let claim = output.claim {
+                let body = "Reflection · 「\(claim.claim)」\n\n— \(claim.whyNonObvious)"
+                appendReflectionNotice(body)
+            } else {
+                let reasonHint: String
+                switch output.rejectionReason {
+                case .lowConfidence: reasonHint = "（信心唔够）"
+                case .unsupported: reasonHint = "（引用唔够实）"
+                case .apiError: reasonHint = "（API 出错）"
+                case .generic, .none: reasonHint = ""
+                }
+                appendReflectionNotice("Reflection · 暂时未见到非显然嘅 pattern\(reasonHint)。")
+            }
+        } catch let err as PerConversationReflectionService.ServiceError {
+            appendReflectionNotice("Reflection · \(err.localizedDescription)")
+        } catch {
+            appendReflectionNotice("Reflection · 失败：\(error.localizedDescription)")
+        }
+    }
+
+    @MainActor
+    private func appendReflectionNotice(_ body: String) {
+        let nodeId = currentNode?.id ?? UUID()
+        let message = Message(
+            nodeId: nodeId,
+            role: .assistant,
+            content: body,
+            timestamp: Date(),
+            source: .typed
+        )
+        messages.append(message)
     }
 
     @MainActor
@@ -772,6 +1028,13 @@ final class ChatViewModel {
 
         let responseTaskId = UUID()
         inFlightResponseAbortReason = nil
+        // Capture the originating session at spawn time so a background
+        // completion (user navigated away mid-turn) still flips
+        // `hasUnseenCompletion` on the conversation where the turn started.
+        let originatingConversationId = currentNode?.id
+        let originatingSession = originatingConversationId.map {
+            conversationSessionStore.streamingSession(for: $0)
+        }
         let responseTask = Task { @MainActor [weak self] in
             guard let self else { return }
             await self.runRegenerateLatestAssistant(responseTaskId: responseTaskId)
@@ -779,6 +1042,15 @@ final class ChatViewModel {
         inFlightResponseTask = responseTask
         inFlightResponseTaskId = responseTaskId
         await responseTask.value
+        let viewingNow = (currentNode?.id == originatingConversationId)
+        let surfacedError = originatingSession?.captureFinish(
+            turnId: responseTaskId,
+            viewingNow: viewingNow,
+            error: nil
+        )
+        if let surfacedError {
+            NSLog("[NousTurn] background turn surfaced error: %@", String(describing: surfacedError))
+        }
         clearInFlightResponseTaskIfOwned(responseTaskId)
         if inFlightResponseTaskId == nil {
             inFlightResponseAbortReason = nil
@@ -789,6 +1061,9 @@ final class ChatViewModel {
     private func runSend(attachments: [AttachedFileContext], responseTaskId: UUID) async {
         let query = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard (!query.isEmpty || !attachments.isEmpty), isActiveResponseTask(responseTaskId) else { return }
+
+        // Conversation bootstrap moved to `send()` so the in-flight task
+        // slots have a bound streaming session before they're written.
 
         inputText = ""
         isGenerating = true
@@ -830,6 +1105,7 @@ final class ChatViewModel {
             ),
             inputText: query,
             attachments: sourcePreparation.remainingAttachments,
+            displayAttachments: attachments,
             sourceMaterials: sourcePreparation.materials,
             now: Date()
         )
@@ -929,6 +1205,33 @@ final class ChatViewModel {
         }
     }
 
+    @discardableResult
+    private func rememberSourceBriefing(
+        _ briefing: SourceBriefing,
+        for userMessageId: UUID
+    ) -> Bool {
+        do {
+            try nodeStore.replaceSourceBriefing(briefing, for: userMessageId)
+            if briefing.items.isEmpty {
+                sourceBriefingsByUserMessageId[userMessageId] = .empty
+            } else {
+                sourceBriefingsByUserMessageId[userMessageId] = briefing
+            }
+            return true
+        } catch {
+            NSLog("[SourceBriefing] failed to persist briefing for message %@: %@", userMessageId.uuidString, error.localizedDescription)
+            return false
+        }
+    }
+
+    private func cacheSourceBriefingsForLoadedMessages() {
+        sourceBriefingsByUserMessageId.removeAll()
+        for message in messages where message.role == .user {
+            let briefing = (try? nodeStore.fetchSourceBriefing(messageId: message.id)) ?? .empty
+            sourceBriefingsByUserMessageId[message.id] = briefing
+        }
+    }
+
     private func sourceMaterialsForRetry(userMessage: Message) async -> [SourceMaterialContext] {
         if let materials = sourceMaterialsByUserMessageId[userMessage.id],
            !materials.isEmpty {
@@ -979,8 +1282,10 @@ final class ChatViewModel {
         }
 
         currentNode = updatedNode
+        bindStreamingSession(for: updatedNode)
         messages = retainedMessages
         citations = []
+        resolvedCorpusEntries = []
         currentResponse = ""
         currentThinking = ""
         currentThinkingStartedAt = nil
@@ -1063,6 +1368,7 @@ final class ChatViewModel {
         switch envelope.event {
         case .userMessageAppended(let appended):
             currentNode = appended.node
+            bindStreamingSession(for: appended.node)
             if scratchPadStore.activeConversationId != appended.node.id {
                 scratchPadStore.activate(conversationId: appended.node.id)
             }
@@ -1074,8 +1380,11 @@ final class ChatViewModel {
             }
         case .prepared(let prepared):
             currentNode = prepared.node
+            bindStreamingSession(for: prepared.node)
             messages = prepared.messagesAfterUserAppend
             citations = prepared.citations
+            resolvedCorpusEntries = prepared.resolvedCorpusEntries
+            rememberSourceBriefing(prepared.sourceBriefing, for: prepared.userMessage.id)
             lastPromptGovernanceTrace = prepared.promptTrace
             if !prepared.messagesAfterUserAppend.isEmpty {
                 activeChatMode = prepared.effectiveMode
@@ -1100,8 +1409,10 @@ final class ChatViewModel {
             currentResponse.append(delta)
         case .completed(let completion):
             currentNode = completion.node
+            bindStreamingSession(for: completion.node)
             messages = completion.messagesAfterAssistantAppend
             activeQuickActionMode = completion.nextQuickActionMode
+            emitCitationTrace(for: completion)
             currentResponse = ""
             currentThinking = ""
             currentThinkingStartedAt = nil
@@ -1126,6 +1437,37 @@ final class ChatViewModel {
         }
     }
 
+    /// Phase A chat citation telemetry. Snapshots the cascade decision
+    /// for this assistant turn and writes one trace row per candidate
+    /// atom — including atoms filtered out by the UI confidence floor.
+    /// Non-UUID-shaped citable entry ids (sidecar facts) are skipped
+    /// since the trace table keys on UUIDs.
+    @MainActor
+    private func emitCitationTrace(for completion: TurnCompletion) {
+        guard !resolvedCorpusEntries.isEmpty else { return }
+
+        let displayedAtomIds: Set<UUID> = {
+            switch primaryAttribution {
+            case .atomCards(let entries):
+                return Set(entries.compactMap { UUID(uuidString: $0.entry.id) })
+            case .legacyCitations, .none:
+                return []
+            }
+        }()
+
+        let candidates: [(atomId: UUID, confidence: Double)] = resolvedCorpusEntries.compactMap { resolved in
+            guard let atomId = UUID(uuidString: resolved.entry.id) else { return nil }
+            return (atomId: atomId, confidence: resolved.entry.confidence ?? 0.0)
+        }
+
+        try? citationTraceEmitter.emit(
+            conversationId: completion.node.id,
+            turnId: completion.assistantMessage.id,
+            candidates: candidates,
+            displayedIds: displayedAtomIds
+        )
+    }
+
     @MainActor
     private func presentAssistantFailure(_ content: String) {
         guard let nodeId = currentNode?.id else {
@@ -1138,6 +1480,7 @@ final class ChatViewModel {
             assistantContent: content
         ) {
             currentNode = committed.node
+            bindStreamingSession(for: committed.node)
             messages = committed.messagesAfterAssistantAppend
         } else {
             messages.append(
@@ -1320,6 +1663,12 @@ extension ChatViewModel {
             newFeedback: feedback,
             newReason: nil
         )
+        dismissFailureSkillCandidateIfNeeded(
+            previousEvent: event,
+            newFeedback: feedback,
+            newReason: nil,
+            newNote: nil
+        )
         let eventId = event.id
         governanceTelemetry.recordFeedback(eventId: eventId, feedback: feedback)
         if feedback == .up {
@@ -1346,8 +1695,22 @@ extension ChatViewModel {
             newFeedback: feedback,
             newReason: reason
         )
+        dismissFailureSkillCandidateIfNeeded(
+            previousEvent: event,
+            newFeedback: feedback,
+            newReason: reason,
+            newNote: note
+        )
         let eventId = event.id
         governanceTelemetry.recordFeedback(eventId: eventId, feedback: feedback, reason: reason, note: note)
+        if feedback == .down {
+            var feedbackEvent = event
+            feedbackEvent.userFeedback = feedback
+            feedbackEvent.feedbackTs = Date()
+            feedbackEvent.feedbackReason = reason
+            feedbackEvent.feedbackNote = note
+            recordFailureSkillCandidate(from: feedbackEvent)
+        }
         recordShadowFeedbackSignal(
             forMessageId: messageId,
             feedback: feedback,
@@ -1355,6 +1718,53 @@ extension ChatViewModel {
             note: note
         )
         bumpJudgeFeedbackVersion()
+    }
+
+    private func recordFailureSkillCandidate(from event: JudgeEvent) {
+        guard let failureSkillCandidateStore else { return }
+        guard let candidate = FailureToSkillDetector().candidate(from: event) else { return }
+        do {
+            try failureSkillCandidateStore.upsertCandidate(candidate)
+        } catch {
+            print("[FailureToSkill] failed to record feedback candidate: \(error)")
+        }
+    }
+
+    private func dismissFailureSkillCandidateIfNeeded(
+        previousEvent: JudgeEvent,
+        newFeedback: JudgeFeedback,
+        newReason: JudgeFeedbackReason?,
+        newNote: String?
+    ) {
+        guard previousEvent.userFeedback == .down else { return }
+        guard let previousCandidate = FailureToSkillDetector().candidate(from: previousEvent) else { return }
+
+        if newFeedback != .down {
+            dismissFailureSkillCandidates(for: previousEvent)
+            return
+        }
+
+        var updatedEvent = previousEvent
+        updatedEvent.userFeedback = newFeedback
+        updatedEvent.feedbackReason = newReason
+        updatedEvent.feedbackNote = newNote
+        guard let updatedCandidate = FailureToSkillDetector().candidate(from: updatedEvent),
+              updatedCandidate.signature == previousCandidate.signature else {
+            dismissFailureSkillCandidates(for: previousEvent)
+            return
+        }
+    }
+
+    private func dismissFailureSkillCandidates(for event: JudgeEvent) {
+        guard let failureSkillCandidateStore else { return }
+        do {
+            try failureSkillCandidateStore.dismissCandidates(
+                sourceKind: .judgeFeedback,
+                sourceId: event.id.uuidString
+            )
+        } catch {
+            print("[FailureToSkill] failed to dismiss feedback candidate: \(error)")
+        }
     }
 
     @MainActor
@@ -1367,6 +1777,12 @@ extension ChatViewModel {
                 reason: event.feedbackReason
             )
         }
+        dismissFailureSkillCandidateIfNeeded(
+            previousEvent: event,
+            newFeedback: .up,
+            newReason: nil,
+            newNote: nil
+        )
         let eventId = event.id
         governanceTelemetry.clearFeedback(eventId: eventId)
         bumpJudgeFeedbackVersion()

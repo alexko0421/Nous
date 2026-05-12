@@ -25,6 +25,7 @@ struct ChatArea: View {
     @State private var downvoteFeedbackReason: JudgeFeedbackReason?
     @State private var downvoteFeedbackNote: String = ""
     @State private var temporaryBranch = TemporaryBranchViewModel()
+    @State private var isFocusedSourceExpanded = false
     @FocusState private var isComposerFocused: Bool
     @Namespace private var composerPrimaryActionNamespace
 
@@ -159,12 +160,16 @@ struct ChatArea: View {
                                             )
                                             if msg.role == .user {
                                                 let sourceMaterials = vm.sourceMaterials(for: msg)
-                                                if !sourceMaterials.isEmpty {
+                                                let sourceBriefing = vm.sourceBriefing(for: msg)
+                                                if !sourceMaterials.isEmpty || sourceBriefing != nil {
                                                     HStack {
                                                         Spacer(minLength: 60)
                                                         VStack(alignment: .trailing, spacing: 6) {
                                                             ForEach(Array(sourceMaterials.prefix(2)), id: \.sourceNodeId) { material in
                                                                 SourceMaterialMessageChip(material: material)
+                                                            }
+                                                            if let sourceBriefing {
+                                                                SourceBriefingCard(briefing: sourceBriefing)
                                                             }
                                                         }
                                                         .frame(maxWidth: 520, alignment: .trailing)
@@ -173,12 +178,8 @@ struct ChatArea: View {
                                                 }
                                             }
                                             if shouldShowRelevantChats(after: msg) {
-                                                RAGCitationView(
-                                                    citations: vm.citations,
-                                                    isExpanded: $isRelevantChatsExpanded,
-                                                    onOpenSource: onNavigateToNode
-                                                )
-                                                .padding(.top, 8)
+                                                attributionView(for: vm.primaryAttribution, turnId: msg.id)
+                                                    .padding(.top, 8)
                                             }
                                             if msg.role == .assistant {
                                                 HStack(spacing: 4) {
@@ -294,13 +295,9 @@ struct ChatArea: View {
                                             timestamp: Date(),
                                             onOpenBranch: nil
                                         )
-                                        if !vm.citations.isEmpty {
-                                            RAGCitationView(
-                                                citations: vm.citations,
-                                                isExpanded: $isRelevantChatsExpanded,
-                                                onOpenSource: onNavigateToNode
-                                            )
-                                            .padding(.top, 4)
+                                        if vm.primaryAttribution != .none {
+                                            attributionView(for: vm.primaryAttribution)
+                                                .padding(.top, 4)
                                         }
                                     }
                                     .blur(radius: branchBackgroundBlurRadius)
@@ -480,17 +477,21 @@ struct ChatArea: View {
                                         .onSubmit(sendCurrentInput)
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
+                                .onDrop(
+                                    of: AttachmentDropSupport.allFileTypeIdentifiers,
+                                    isTargeted: $isImageDropTargeted,
+                                    perform: handleImageDrop
+                                )
                                 .background(
-                                    NativeGlassPanel(
+                                    MatteGlassPanel(
                                         cornerRadius: 18,
-                                        tintColor: AppColor.controlGlassTint
+                                        overlayColor: AppColor.composerMatteOverlay
                                     ) { EmptyView() }
                                 )
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                        .stroke(AppColor.panelStroke, lineWidth: 1)
+                                        .stroke(AppColor.composerMatteStroke, lineWidth: 1)
                                 )
-                                .shadow(color: .black.opacity(0.04), radius: 6, x: 0, y: 2)
 
                                 if shouldSeparateComposerPrimaryAction {
                                     primaryActionButton(isSeparated: true)
@@ -535,7 +536,7 @@ struct ChatArea: View {
                     .padding(.bottom, 16)
                     .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                     .onDrop(
-                        of: AttachmentDropSupport.acceptedTypeIdentifiers,
+                        of: AttachmentDropSupport.allFileTypeIdentifiers,
                         isTargeted: $isImageDropTargeted,
                         perform: handleImageDrop
                     )
@@ -551,7 +552,12 @@ struct ChatArea: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(AppColor.colaBeige)
+        .background(
+            NativeGlassPanel(
+                cornerRadius: 36,
+                tintColor: AppColor.sidebarGlassTint
+            ) { EmptyView() }
+        )
         .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
         .onChange(of: citationNodeIDs) { _, _ in
             isRelevantChatsExpanded = false
@@ -635,6 +641,7 @@ struct ChatArea: View {
         }
         .onAppear {
             reloadTemporaryBranchRecords()
+            focusComposerOnNextRunLoop()
         }
         .onChange(of: voiceAttachmentResetToken) { _, _ in
             attachments = []
@@ -645,6 +652,12 @@ struct ChatArea: View {
                     isActionMenuExpanded = false
                 }
             }
+        }
+    }
+
+    private func focusComposerOnNextRunLoop() {
+        DispatchQueue.main.async {
+            isComposerFocused = true
         }
     }
 
@@ -788,7 +801,92 @@ struct ChatArea: View {
         }
     }
 
+    private func shouldOfferFocusedSourceToggle(_ message: Message) -> Bool {
+        message.content.count > TemporaryBranchMembraneStyle.focusedSourceToggleThresholdChars
+    }
+
+    @ViewBuilder
+    private func focusedSourceBubble(for sourceMessage: Message) -> some View {
+        let bubble = MessageBubble(
+            text: sourceMessage.content,
+            thinkingContent: sourceMessage.thinkingContent,
+            thinkingStartedAt: nil,
+            agentTraceRecords: sourceMessage.decodedAgentTraceRecords,
+            isThinkingStreaming: false,
+            isAgentTraceStreaming: false,
+            isUser: sourceMessage.role == .user,
+            source: sourceMessage.source,
+            timestamp: sourceMessage.timestamp,
+            onOpenBranch: nil
+        )
+
+        if shouldOfferFocusedSourceToggle(sourceMessage) {
+            if isFocusedSourceExpanded {
+                ScrollView(.vertical, showsIndicators: true) {
+                    bubble
+                }
+                .frame(maxHeight: TemporaryBranchMembraneStyle.focusedSourceExpandedMaxHeight)
+            } else {
+                bubble
+                    .frame(
+                        maxHeight: TemporaryBranchMembraneStyle.focusedSourceCollapsedMaxHeight,
+                        alignment: .top
+                    )
+                    .clipped()
+                    .mask(
+                        VStack(spacing: 0) {
+                            Rectangle().fill(Color.black)
+                            LinearGradient(
+                                colors: [.black, .clear],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                            .frame(height: 28)
+                        }
+                    )
+            }
+        } else {
+            bubble
+        }
+    }
+
+    @ViewBuilder
+    private func focusedSourceToggleButton(for sourceMessage: Message) -> some View {
+        if shouldOfferFocusedSourceToggle(sourceMessage) {
+            Button(action: {
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.84)) {
+                    isFocusedSourceExpanded.toggle()
+                }
+            }) {
+                HStack(spacing: 12) {
+                    focusedSourceFoldRule
+                    HStack(spacing: 6) {
+                        Text(isFocusedSourceExpanded ? "收起" : "展开")
+                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .tracking(0.5)
+                        Image(systemName: isFocusedSourceExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                    .foregroundStyle(AppColor.colaDarkText.opacity(0.55))
+                    focusedSourceFoldRule
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(isFocusedSourceExpanded ? "Collapse source preview" : "Expand full source")
+        }
+    }
+
+    private var focusedSourceFoldRule: some View {
+        Rectangle()
+            .fill(AppColor.panelStroke.opacity(0.75))
+            .frame(height: 1.75)
+    }
+
     private func openTemporaryBranch(from message: Message) {
+        isFocusedSourceExpanded = false
         withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
             temporaryBranch.open(from: message, in: vm.messages)
         }
@@ -797,6 +895,7 @@ struct ChatArea: View {
     private func closeTemporaryBranch() {
         let recordToEvaluate = temporaryBranch.presentedRecordSnapshot()
         persistPresentedTemporaryBranch()
+        isFocusedSourceExpanded = false
         withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
             temporaryBranch.close()
         }
@@ -961,9 +1060,8 @@ struct ChatArea: View {
     }
 
     private func handleImageDrop(_ providers: [NSItemProvider]) -> Bool {
-        guard canPickPhotoAttachment else { return false }
         Task {
-            let droppedAttachments = await AttachmentExtractor.droppedImageContexts(from: providers)
+            let droppedAttachments = await AttachmentExtractor.droppedAttachmentContexts(from: providers)
             await MainActor.run {
                 appendAttachments(droppedAttachments)
             }
@@ -990,8 +1088,34 @@ struct ChatArea: View {
     private func shouldShowRelevantChats(after message: Message) -> Bool {
         message.role == .assistant &&
         message.id == vm.messages.last(where: { $0.role == .assistant })?.id &&
-        !vm.citations.isEmpty &&
+        vm.primaryAttribution != .none &&
         !vm.isGenerating
+    }
+
+    @ViewBuilder
+    private func attributionView(
+        for attribution: AttributionDisplay,
+        turnId: UUID? = nil
+    ) -> some View {
+        switch attribution {
+        case .atomCards(let entries):
+            CorpusAtomCardListView(
+                entries: entries,
+                isExpanded: $isRelevantChatsExpanded,
+                onOpenSource: onNavigateToNode,
+                conversationId: vm.currentNode?.id,
+                turnId: turnId,
+                feedbackStore: vm.citationFeedbackStore
+            )
+        case .legacyCitations(let citations):
+            RAGCitationView(
+                citations: citations,
+                isExpanded: $isRelevantChatsExpanded,
+                onOpenSource: onNavigateToNode
+            )
+        case .none:
+            EmptyView()
+        }
     }
 
     private func scrollToBottom(with proxy: ScrollViewProxy) {
@@ -1452,7 +1576,7 @@ struct ComposerLeadingActionButton: View {
 
     private var tintColor: NSColor {
         guard isSeparated else {
-            return AppColor.controlGlassTint
+            return AppColor.composerMatteOverlay
         }
 
         return NSColor(
@@ -1499,18 +1623,25 @@ struct ComposerLeadingActionButton: View {
             Circle()
                 .fill(AppColor.colaOrange.opacity(motion.fillOpacity(isSeparated: isSeparated)))
 
-            NativeGlassPanel(
-                cornerRadius: cornerRadius,
-                tintColor: tintColor
-            ) { EmptyView() }
-            .opacity(isSeparated ? 0.72 : 1)
+            if isSeparated {
+                NativeGlassPanel(
+                    cornerRadius: cornerRadius,
+                    tintColor: tintColor
+                ) { EmptyView() }
+                .opacity(0.72)
+            } else {
+                MatteGlassPanel(
+                    cornerRadius: cornerRadius,
+                    overlayColor: tintColor
+                ) { EmptyView() }
+            }
         }
     }
 
     private var buttonStroke: some View {
         Circle()
             .stroke(
-                isSeparated ? AppColor.colaOrange.opacity(0.22) : AppColor.panelStroke,
+                isSeparated ? AppColor.colaOrange.opacity(0.22) : AppColor.composerMatteStroke,
                 lineWidth: 1
             )
     }

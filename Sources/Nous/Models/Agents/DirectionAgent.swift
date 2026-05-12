@@ -5,15 +5,13 @@ struct DirectionAgent: QuickActionAgent {
 
     func openingPrompt() -> String {
         """
-        Alex just tapped the Direction chip from the welcome screen. Start the
-        conversation in a mentor voice, not as an intake form. Do not ask
-        "what would you like direction on?" and do not offer bullet topic options.
-
-        Lead with one of:
-        - A warm sentence reading what shape you can sense from memory + recent
-          context, then a casual invitation to elaborate.
-        - One short specific question in mentor tone ("讲下而家最拉锯系咩"
-          rather than "你想倾边方面").
+        Alex just tapped the Direction chip from the welcome screen. Read his
+        recent conversations and what's been on his mind from memory, then lead
+        in mentor voice with a warm sentence naming the shape you sense and a
+        casual invitation to elaborate. Only fall back to a short specific
+        question in mentor tone ("讲下而家最拉锯系咩" rather than "你想倾边方面")
+        if nothing in context feels concrete enough to name. Never ask "what
+        would you like direction on?" or offer bullet topic options.
 
         This is the opening turn — do not use the structured clarification card yet.
         Start your reply with this hidden marker so the mode stays in understanding phase:

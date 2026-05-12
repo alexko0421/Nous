@@ -70,6 +70,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
 
     var store: NodeStore!
     var skillStore: SkillStore!
+    var failureSkillCandidateStore: FailureSkillCandidateStore!
     var telemetry: GovernanceTelemetryStore!
     var llm: CannedLLMService!
     var judge: StubJudge!
@@ -87,6 +88,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
         super.setUp()
         store = try! NodeStore(path: ":memory:")
         skillStore = SkillStore(nodeStore: store)
+        failureSkillCandidateStore = FailureSkillCandidateStore(nodeStore: store)
         try! importSeedSkills(into: skillStore)
         telemetry = GovernanceTelemetryStore(
             defaults: UserDefaults(suiteName: "test-\(UUID().uuidString)")!,
@@ -111,6 +113,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
             skillStore: skillStore,
             skillMatcher: SkillMatcher(),
             skillTracker: nil,
+            failureSkillCandidateStore: failureSkillCandidateStore,
             governanceTelemetry: telemetry,
             scratchPadStore: makeScratchPadStore(),
             shadowLearningSignalRecorder: ShadowLearningSignalRecorder(store: shadowStore),
@@ -119,7 +122,7 @@ final class ProvocationOrchestrationTests: XCTestCase {
     }
 
     override func tearDown() {
-        viewModel = nil; shadowStore = nil; judge = nil; llm = nil; telemetry = nil; skillStore = nil; store = nil
+        viewModel = nil; shadowStore = nil; judge = nil; llm = nil; telemetry = nil; failureSkillCandidateStore = nil; skillStore = nil; store = nil
         super.tearDown()
     }
 
@@ -1110,6 +1113,175 @@ final class ProvocationOrchestrationTests: XCTestCase {
         XCTAssertEqual(pattern.status, .soft)
         XCTAssertTrue(pattern.evidenceMessageIds.contains(assistantMessage.id))
         XCTAssertTrue(pattern.promptFragment.contains("Keep pushback proportionate"))
+    }
+
+    @MainActor
+    func testDownvoteFeedbackDetailCreatesFailureSkillCandidate() async throws {
+        let entryId = UUID()
+        try store.insertMemoryEntry(MemoryEntry(
+            id: entryId, scope: .global, kind: .preference, stability: .stable,
+            content: "don't compete on price", sourceNodeIds: []
+        ))
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: true,
+            userState: .deciding,
+            shouldProvoke: true,
+            entryId: entryId.uuidString,
+            reason: "conflict",
+            inferredMode: .companion
+        )
+        viewModel.inputText = "what is my next step if I am going cheap?"
+        await viewModel.send()
+
+        let assistantMessage = try XCTUnwrap(viewModel.messages.last(where: { $0.role == .assistant }))
+        let eventId = try XCTUnwrap(viewModel.judgeEventId(forMessageId: assistantMessage.id))
+        viewModel.recordFeedbackDetail(
+            forMessageId: assistantMessage.id,
+            feedback: .down,
+            reason: .tooForceful,
+            note: "too sharp"
+        )
+
+        let candidates = try failureSkillCandidateStore.fetchRecentCandidates(userId: "alex", limit: 10)
+        XCTAssertEqual(candidates.count, 1)
+        let candidate = try XCTUnwrap(candidates.first)
+        XCTAssertEqual(candidate.sourceKind, .judgeFeedback)
+        XCTAssertEqual(candidate.sourceId, eventId.uuidString)
+        XCTAssertEqual(candidate.conversationId, viewModel.currentNode?.id)
+        XCTAssertEqual(candidate.assistantMessageId, assistantMessage.id)
+        XCTAssertEqual(candidate.signature, .judgeFeedbackTooForceful)
+        XCTAssertEqual(candidate.repairKind, .promptSkill)
+        XCTAssertEqual(candidate.status, .proposed)
+        XCTAssertNotNil(candidate.proposedSkillPayload)
+        XCTAssertTrue(candidate.evidence.contains { $0.source == .userFeedback && $0.snippet == "too sharp" })
+    }
+
+    @MainActor
+    func testClearingDownvoteDismissesFailureSkillCandidate() async throws {
+        let entryId = UUID()
+        try store.insertMemoryEntry(MemoryEntry(
+            id: entryId, scope: .global, kind: .preference, stability: .stable,
+            content: "don't compete on price", sourceNodeIds: []
+        ))
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: true,
+            userState: .deciding,
+            shouldProvoke: true,
+            entryId: entryId.uuidString,
+            reason: "conflict",
+            inferredMode: .companion
+        )
+        viewModel.inputText = "what is my next step if I am going cheap?"
+        await viewModel.send()
+
+        let assistantMessage = try XCTUnwrap(viewModel.messages.last(where: { $0.role == .assistant }))
+        viewModel.recordFeedbackDetail(
+            forMessageId: assistantMessage.id,
+            feedback: .down,
+            reason: .tooForceful,
+            note: "too sharp"
+        )
+
+        var candidates = try failureSkillCandidateStore.fetchRecentCandidates(userId: "alex", limit: 10)
+        let candidate = try XCTUnwrap(candidates.first)
+        XCTAssertEqual(candidate.status, .proposed)
+
+        viewModel.clearFeedback(forMessageId: assistantMessage.id)
+
+        candidates = try failureSkillCandidateStore.fetchRecentCandidates(userId: "alex", limit: 10)
+        XCTAssertEqual(candidates.count, 1)
+        XCTAssertEqual(candidates[0].id, candidate.id)
+        XCTAssertEqual(candidates[0].status, .dismissed)
+    }
+
+    @MainActor
+    func testChangingDownvoteReasonDismissesPreviousFailureSkillCandidate() async throws {
+        let entryId = UUID()
+        try store.insertMemoryEntry(MemoryEntry(
+            id: entryId, scope: .global, kind: .preference, stability: .stable,
+            content: "don't compete on price", sourceNodeIds: []
+        ))
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: true,
+            userState: .deciding,
+            shouldProvoke: true,
+            entryId: entryId.uuidString,
+            reason: "conflict",
+            inferredMode: .companion
+        )
+        viewModel.inputText = "what is my next step if I am going cheap?"
+        await viewModel.send()
+
+        let assistantMessage = try XCTUnwrap(viewModel.messages.last(where: { $0.role == .assistant }))
+        viewModel.recordFeedbackDetail(
+            forMessageId: assistantMessage.id,
+            feedback: .down,
+            reason: .tooForceful,
+            note: "too sharp"
+        )
+
+        viewModel.recordFeedbackDetail(
+            forMessageId: assistantMessage.id,
+            feedback: .down,
+            reason: .wrongMemory,
+            note: "memory did not apply"
+        )
+
+        let candidates = try failureSkillCandidateStore.fetchRecentCandidates(userId: "alex", limit: 10)
+        let oldCandidate = try XCTUnwrap(candidates.first(where: { $0.signature == .judgeFeedbackTooForceful }))
+        let newCandidate = try XCTUnwrap(candidates.first(where: { $0.signature == .judgeFeedbackWrongMemory }))
+
+        XCTAssertEqual(oldCandidate.status, .dismissed)
+        XCTAssertEqual(newCandidate.status, .proposed)
+        XCTAssertEqual(newCandidate.repairKind, .deterministicFix)
+    }
+
+    @MainActor
+    func testChangingDownvoteNoteToRegressionOnlyReplacesApprovedPromptSkillCandidate() async throws {
+        let entryId = UUID()
+        try store.insertMemoryEntry(MemoryEntry(
+            id: entryId, scope: .global, kind: .preference, stability: .stable,
+            content: "don't compete on price", sourceNodeIds: []
+        ))
+        judge.nextVerdict = JudgeVerdict(
+            tensionExists: true,
+            userState: .deciding,
+            shouldProvoke: true,
+            entryId: entryId.uuidString,
+            reason: "conflict",
+            inferredMode: .companion
+        )
+        viewModel.inputText = "what is my next step if I am going cheap?"
+        await viewModel.send()
+
+        let assistantMessage = try XCTUnwrap(viewModel.messages.last(where: { $0.role == .assistant }))
+        viewModel.recordFeedbackDetail(
+            forMessageId: assistantMessage.id,
+            feedback: .down,
+            reason: .tooForceful,
+            note: "too sharp"
+        )
+
+        var candidates = try failureSkillCandidateStore.fetchRecentCandidates(userId: "alex", limit: 10)
+        let promptCandidate = try XCTUnwrap(candidates.first(where: { $0.signature == .judgeFeedbackTooForceful }))
+        XCTAssertEqual(promptCandidate.repairKind, .promptSkill)
+        XCTAssertTrue(SkillifyChecklistEvaluator().evaluate(promptCandidate).canActivate)
+        try failureSkillCandidateStore.setStatus(id: promptCandidate.id, status: .approved)
+
+        viewModel.recordFeedbackDetail(
+            forMessageId: assistantMessage.id,
+            feedback: .down,
+            reason: .tooForceful,
+            note: "regression only; do not create a prompt skill"
+        )
+
+        candidates = try failureSkillCandidateStore.fetchRecentCandidates(userId: "alex", limit: 10)
+        let replacedCandidate = try XCTUnwrap(candidates.first(where: { $0.id == promptCandidate.id }))
+        XCTAssertEqual(candidates.filter { $0.signature == .judgeFeedbackTooForceful }.count, 1)
+        XCTAssertEqual(replacedCandidate.status, .proposed)
+        XCTAssertEqual(replacedCandidate.repairKind, .regressionOnly)
+        XCTAssertNil(replacedCandidate.proposedSkillPayload)
+        XCTAssertFalse(SkillifyChecklistEvaluator().evaluate(replacedCandidate).canActivate)
     }
 
     @MainActor

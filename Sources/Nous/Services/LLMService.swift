@@ -55,6 +55,31 @@ protocol ThinkingDeltaConfigurableLLMService: LLMService {
 struct LLMMessage {
     let role: String // "user" or "assistant"
     let content: String
+    let imageAttachments: [LLMImageAttachment]
+    let documentAttachments: [LLMDocumentAttachment]
+
+    init(
+        role: String,
+        content: String,
+        imageAttachments: [LLMImageAttachment] = [],
+        documentAttachments: [LLMDocumentAttachment] = []
+    ) {
+        self.role = role
+        self.content = content
+        self.imageAttachments = imageAttachments
+        self.documentAttachments = documentAttachments
+    }
+}
+
+struct LLMImageAttachment: Equatable, Sendable {
+    let data: Data
+    let mimeType: String
+}
+
+struct LLMDocumentAttachment: Equatable, Sendable {
+    let data: Data
+    let mimeType: String
+    let filename: String
 }
 
 struct GeminiUsageMetadata: Equatable, Codable {
@@ -609,11 +634,19 @@ extension OpenRouterLLMService: ToolCallingLLMService {
         includeWebSearch: Bool,
         reasoningBudgetTokens: Int? = nil
     ) throws -> [String: Any] {
-        var allMessages: [[String: String]] = []
+        var allMessages: [[String: Any]] = []
         if let system {
             allMessages.append(["role": "system", "content": system])
         }
-        allMessages.append(contentsOf: messages.map { ["role": $0.role, "content": $0.content] })
+        let visionCapable = OpenRouterLLMService.isVisionCapable(model: model)
+        let documentCapable = OpenRouterLLMService.isDocumentCapable(model: model)
+        for message in messages {
+            allMessages.append(serializeStreamingMessage(
+                message,
+                allowImages: visionCapable,
+                allowDocuments: documentCapable
+            ))
+        }
 
         var requestBody: [String: Any] = [
             "model": model,
@@ -627,6 +660,74 @@ extension OpenRouterLLMService: ToolCallingLLMService {
             requestBody["reasoning"] = Self.reasoningRequestBody(maxTokens: reasoningBudgetTokens)
         }
         return requestBody
+    }
+
+    static func serializeStreamingMessage(
+        _ message: LLMMessage,
+        allowImages: Bool,
+        allowDocuments: Bool
+    ) -> [String: Any] {
+        Self.serializeMessageContent(
+            role: message.role,
+            content: message.content,
+            images: allowImages ? message.imageAttachments : [],
+            documents: allowDocuments ? message.documentAttachments : []
+        )
+    }
+
+    static func serializeMessageContent(
+        role: String,
+        content: String,
+        images: [LLMImageAttachment],
+        documents: [LLMDocumentAttachment]
+    ) -> [String: Any] {
+        guard !images.isEmpty || !documents.isEmpty else {
+            return ["role": role, "content": content]
+        }
+        var blocks: [[String: Any]] = []
+        if !content.isEmpty {
+            blocks.append(["type": "text", "text": content])
+        }
+        for image in images {
+            let dataURL = "data:\(image.mimeType);base64,\(image.data.base64EncodedString())"
+            blocks.append([
+                "type": "image_url",
+                "image_url": ["url": dataURL]
+            ])
+        }
+        for document in documents {
+            let dataURL = "data:\(document.mimeType);base64,\(document.data.base64EncodedString())"
+            blocks.append([
+                "type": "file",
+                "file": [
+                    "filename": document.filename,
+                    "file_data": dataURL
+                ]
+            ])
+        }
+        return ["role": role, "content": blocks]
+    }
+
+    static func isVisionCapable(model: String) -> Bool {
+        let lowered = model.lowercased()
+        if lowered.contains("claude") { return true }
+        if lowered.contains("gemini") && (lowered.contains("pro") || lowered.contains("flash")) {
+            return true
+        }
+        if lowered.contains("gpt-4") || lowered.contains("gpt-5") { return true }
+        if lowered.contains("vision") { return true }
+        return false
+    }
+
+    static func isDocumentCapable(model: String?) -> Bool {
+        guard let model else { return false }
+        let lowered = model.lowercased()
+        // Claude (3.5+, 4.x) and Gemini Pro support PDF input via OpenRouter file blocks.
+        if lowered.contains("claude") { return true }
+        if lowered.contains("gemini") && (lowered.contains("pro") || lowered.contains("flash")) {
+            return true
+        }
+        return false
     }
 
     private static func reasoningRequestBody(maxTokens: Int) -> [String: Any] {
@@ -692,6 +793,13 @@ extension OpenRouterLLMService: ToolCallingLLMService {
         switch message {
         case .text(let role, let content):
             return ["role": role, "content": content]
+        case .textWithMedia(let role, let content, let images, let documents):
+            return serializeMessageContent(
+                role: role,
+                content: content,
+                images: images,
+                documents: documents
+            )
         case .assistantToolCalls(let content, let toolCalls, let reasoningContent, let reasoningDetailsJSON):
             var payload: [String: Any] = [
                 "role": "assistant",

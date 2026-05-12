@@ -41,6 +41,8 @@ final class SourcePromptContextTests: XCTestCase {
         XCTAssertTrue(context.combinedString.contains("What the source says"))
         XCTAssertTrue(context.combinedString.contains("How it connects to Alex"))
         XCTAssertTrue(context.combinedString.contains("Your own probe"))
+        XCTAssertTrue(context.combinedString.contains("what must be true for that claim to hold"))
+        XCTAssertTrue(context.combinedString.contains("proves it or merely assumes it"))
         XCTAssertTrue(context.combinedString.contains("do not stop at summary alone"))
         XCTAssertTrue(context.combinedString.contains("If there is no strong existing Nous connection"))
 
@@ -51,6 +53,59 @@ final class SourcePromptContextTests: XCTestCase {
         XCTAssertTrue(context.combinedString.contains("Don't stack 3+ jargon nouns"))
         XCTAssertTrue(context.combinedString.contains("4-paragraph essay shape"))
         XCTAssertTrue(context.combinedString.contains("Cantonese, Mandarin, or English"))
+    }
+
+    func testSourceAnalystBriefRendersAsPreAnalysisWithSourceRefs() {
+        let sourceNodeId = UUID()
+        let briefing = SourceBriefing(
+            title: "Filing brief",
+            items: [
+                SourceBriefingItem(
+                    sourceNodeId: sourceNodeId,
+                    headline: "Margin pressure eased",
+                    whatChanged: "The filing says supplier renegotiation improved gross margin.",
+                    whyItMatters: "It changes whether the business is still margin-constrained.",
+                    alexRelevance: "Relevant to Alex's quality filter.",
+                    tensionOrRisk: "This could be a one-quarter timing effect.",
+                    suggestedNextAction: "Check whether the next quarter keeps the same margin level.",
+                    evidence: "supplier renegotiation improved gross margin",
+                    confidence: 0.78
+                )
+            ]
+        )
+
+        let context = PromptContextAssembler.assembleContext(
+            currentUserInput: "what changed in this filing",
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil,
+            sourceMaterials: [
+                SourceMaterialContext(
+                    sourceNodeId: sourceNodeId,
+                    title: "Company filing",
+                    originalURL: "https://example.com/filing",
+                    originalFilename: nil,
+                    chunks: [
+                        SourceChunkContext(
+                            sourceNodeId: sourceNodeId,
+                            ordinal: 0,
+                            text: "The filing says supplier renegotiation improved gross margin.",
+                            similarity: nil
+                        )
+                    ]
+                )
+            ],
+            sourceBriefing: briefing
+        )
+
+        XCTAssertTrue(context.combinedString.contains("SOURCE ANALYST BRIEF"))
+        XCTAssertTrue(context.combinedString.contains("pre-analysis, not source text or Alex memory"))
+        XCTAssertTrue(context.combinedString.contains("ground final claims in SOURCE MATERIAL chunks"))
+        XCTAssertTrue(context.combinedString.contains("[S1] Margin pressure eased"))
+        XCTAssertTrue(context.combinedString.contains("Evidence: supplier renegotiation improved gross margin"))
     }
 
     func testAttachedYouTubeSourceScopesVaguePromptAndRendersEvidenceContract() {

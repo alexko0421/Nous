@@ -459,6 +459,49 @@ final class MemoryQueryPlannerTests: XCTestCase {
         )
     }
 
+    /// Vector fallback must apply a cosine floor — nearest-neighbor
+    /// always returns top-K regardless of how unrelated they are. Without
+    /// a floor, an off-topic query (no keyword cue + embedding far from
+    /// every atom) still surfaces N atoms because *something* is K-th
+    /// closest. That's how "How to Start a Cult" ended up cited under a
+    /// chat about studying English. Match the keyword path's posture:
+    /// collapse to empty rather than admit noise.
+    func testVectorFallbackDropsAtomsBelowCosineFloor() throws {
+        let unrelatedA = MemoryAtom(
+            type: .insight,
+            statement: "How to Start a Cult — note from podcast.",
+            scope: .global,
+            status: .active,
+            confidence: 0.9,
+            embedding: [1.0, 0.0, 0.0]
+        )
+        let unrelatedB = MemoryAtom(
+            type: .insight,
+            statement: "Notes on sneezing reflex (打喷嚏).",
+            scope: .global,
+            status: .active,
+            confidence: 0.9,
+            embedding: [0.0, 1.0, 0.0]
+        )
+        try [unrelatedA, unrelatedB].forEach(store.insertMemoryAtom)
+
+        // Query embedding orthogonal to every atom (cosine 0 vs both).
+        // Both are well below the 0.5 floor.
+        let packet = MemoryQueryPlanner(nodeStore: store).recallPacket(
+            currentMessage: "Plan to study English for tomorrow's event",
+            projectId: nil,
+            conversationId: UUID(),
+            queryEmbedding: [0.0, 0.0, 1.0],
+            now: Date()
+        )
+
+        XCTAssertTrue(
+            packet.retrievedAtomIds.isEmpty,
+            "Vector fallback must drop atoms below the cosine floor — high-confidence but topically-unrelated atoms should NOT surface."
+        )
+        XCTAssertTrue(packet.items.isEmpty)
+    }
+
     /// When keyword intent IS detected, vector fallback must NOT fire —
     /// the keyword path is more precise and we don't want vector noise
     /// shadowing well-targeted retrieval.

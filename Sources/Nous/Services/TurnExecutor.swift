@@ -147,7 +147,12 @@ final class TurnExecutor {
             volatile: slice.volatile,
             userContent: latestMessage.content
         )
-        return [LLMMessage(role: "user", content: prefixedContent)]
+        return [LLMMessage(
+            role: "user",
+            content: prefixedContent,
+            imageAttachments: latestMessage.imageAttachments,
+            documentAttachments: latestMessage.documentAttachments
+        )]
     }
 
     private func requestSystem(

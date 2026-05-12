@@ -204,6 +204,39 @@ final class RAGPipelineTests: XCTestCase {
         XCTAssertTrue(context.contains("Do not infer that something is unavailable"))
     }
 
+    func testAssembleContextIncludesEpistemicGroundingPolicy() {
+        let context = PromptContextAssembler.assembleContext(
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        ).combined
+
+        XCTAssertTrue(context.contains("EPISTEMIC GROUNDING POLICY"))
+        XCTAssertTrue(context.contains("reason from ground truth before analogy"))
+        XCTAssertTrue(context.contains("Separate what is known, what is assumed"))
+        XCTAssertTrue(context.contains("Do not announce \"first principles\""))
+    }
+
+    func testAssembleContextIncludesExplanationClarityPolicy() {
+        let context = PromptContextAssembler.assembleContext(
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        ).combined
+
+        XCTAssertTrue(context.contains("EXPLANATION CLARITY POLICY"))
+        XCTAssertTrue(context.contains("optimize for Alex actually understanding it"))
+        XCTAssertTrue(context.contains("plain-language meaning"))
+        XCTAssertTrue(context.contains("one concrete example"))
+        XCTAssertTrue(context.contains("Do not over-explain casual chat"))
+    }
+
     func testMemoryPromptPacketOwnsStableMemoryBlockOrdering() {
         let evidence = MemoryEvidenceSnippet(
             label: "Project context",
@@ -686,6 +719,8 @@ final class RAGPipelineTests: XCTestCase {
         XCTAssertTrue(context.contains("ACTIVE CHAT MODE: Strategist"))
         XCTAssertTrue(context.contains("Alex explicitly wants deeper reasoning"))
         XCTAssertTrue(context.contains("Make assumptions explicit"))
+        XCTAssertTrue(context.contains("goal -> facts -> assumptions -> constraints -> tradeoff/rebuild -> next move"))
+        XCTAssertTrue(context.contains("Keep visible structure optional"))
         XCTAssertTrue(context.contains("BROADER SITUATION RIGHT NOW"))
         XCTAssertTrue(context.contains("RECENT CONVERSATIONS WITH ALEX"))
     }
@@ -906,10 +941,11 @@ final class RAGPipelineTests: XCTestCase {
         ).combined
 
         XCTAssertTrue(context.contains("VISIBLE RESPONSE LANGUAGE POLICY"))
-        XCTAssertTrue(context.contains("If the current user message is mostly English, answer in English"))
-        XCTAssertTrue(context.contains("Do not force Cantonese or Mandarin"))
+        XCTAssertTrue(context.contains("MUST use the same language as the current user message"))
+        XCTAssertTrue(context.contains("English message → reply in English"))
+        XCTAssertTrue(context.contains("overrides anchor examples"))
         XCTAssertFalse(context.contains("or Chinese just because"))
-        XCTAssertTrue(context.contains("Keep technical terms in English when they are already English"))
+        XCTAssertTrue(context.contains("Keep technical terms in English when that is clearer"))
     }
 
     func testGovernanceTraceIncludesVisibleResponseLanguagePolicyLayer() {
@@ -943,8 +979,11 @@ final class RAGPipelineTests: XCTestCase {
     }
 
     func testGovernanceTraceRecordsMixedVisibleResponseLanguageTarget() {
+        // Genuinely balanced input: no Cantonese marker, neither script reaches the 2:1
+        // dominance ratio. Earlier inputs like "咁开始 V9 language telemetry 啦" now
+        // correctly classify as Cantonese (咁/啦 are Cantonese markers).
         let trace = PromptContextAssembler.governanceTrace(
-            currentUserInput: "咁开始 V9 language telemetry 啦",
+            currentUserInput: "Hi 你好",
             globalMemory: nil,
             projectMemory: nil,
             conversationMemory: nil,
@@ -1446,9 +1485,9 @@ final class RAGPipelineTests: XCTestCase {
     func testQuickActionOpeningPromptStartsWithAssistantQuestioning() {
         let prompt = PlanAgent().openingPrompt()
 
-        XCTAssertTrue(prompt.contains("Start the conversation yourself"))
-        XCTAssertTrue(prompt.contains("Ask one short, natural, open-ended question"))
+        // Prompt must proactively name what's sensed and ask a specific question.
         XCTAssertTrue(prompt.contains("Plan"))
+        XCTAssertTrue(prompt.contains("ask one") || prompt.contains("Ask one"))
         XCTAssertTrue(prompt.contains("do not use the structured clarification card"))
         XCTAssertTrue(prompt.contains("<phase>understanding</phase>"))
     }

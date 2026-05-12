@@ -175,7 +175,7 @@ final class QuickActionOpeningRunner {
             retrievalQuery: openingText,
             promptQuery: openingText,
             node: node,
-            policy: Self.openingPolicy(from: agent.memoryPolicy()),
+            policy: agent.memoryPolicy(),
             now: Date()
         )
         #if DEBUG
@@ -200,7 +200,8 @@ final class QuickActionOpeningRunner {
 
         let turnSlice = PromptContextAssembler.assembleContext(
             chatMode: .companion,
-            currentUserInput: openingText,
+            currentUserInput: nil,
+            visibleLanguageTargetOverride: .cantonese,
             operatingContext: memoryContext.operatingContext,
             globalMemory: memoryContext.globalMemory,
             essentialStory: memoryContext.essentialStory,
@@ -236,7 +237,8 @@ final class QuickActionOpeningRunner {
         )
         let promptTrace = PromptContextAssembler.governanceTrace(
             chatMode: .companion,
-            currentUserInput: openingText,
+            currentUserInput: nil,
+            visibleLanguageTargetOverride: .cantonese,
             operatingContext: memoryContext.operatingContext,
             globalMemory: memoryContext.globalMemory,
             essentialStory: memoryContext.essentialStory,
@@ -279,15 +281,6 @@ final class QuickActionOpeningRunner {
             memoryUsageHints: promptResourceIds.memoryUsageHints,
             memoryProvenance: promptResourceIds.memoryProvenance,
             corpusContext: memoryContext.corpusContext
-        )
-    }
-
-    private static func openingPolicy(from policy: QuickActionMemoryPolicy) -> QuickActionMemoryPolicy {
-        policy.with(
-            includeRecentConversations: false,
-            includeCitations: false,
-            includeContradictionRecall: false,
-            includeJudgeFocus: false
         )
     }
 

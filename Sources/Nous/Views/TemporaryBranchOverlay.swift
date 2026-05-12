@@ -20,6 +20,9 @@ enum TemporaryBranchMembraneStyle {
     static let recordMarkerHeight: CGFloat = 64
     static let focusedSourceTopPadding: CGFloat = 118
     static let focusedSourceBottomClearance: CGFloat = 44
+    static let focusedSourceCollapsedMaxHeight: CGFloat = 280
+    static let focusedSourceExpandedMaxHeight: CGFloat = 460
+    static let focusedSourceToggleThresholdChars: Int = 320
 }
 
 enum TemporaryBranchTriggerHitTarget {

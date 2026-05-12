@@ -182,11 +182,18 @@ final class MemoryQueryPlanner {
         // load-bearing — a stale low-confidence atom can outrank a fresh
         // high-confidence one. The keyword path already applies these
         // signals; vector fallback should match.
+        //
+        // Cosine floor: nearest-neighbor returns top-K regardless of how
+        // unrelated they are. Without a floor, an off-topic query (e.g.
+        // "study English for tomorrow's event") still surfaces 6 atoms
+        // because *something* is always K-th closest. Match the keyword
+        // path's posture: collapse to empty rather than admit noise.
         let scored = pool.compactMap { atom -> (atom: MemoryAtom, score: Double)? in
             guard let candidate = atom.embedding,
                   candidate.count == queryEmbedding.count
             else { return nil }
             let cosine = Double(Self.cosineSimilarity(queryEmbedding, candidate))
+            guard cosine >= Self.vectorMinimumCosine else { return nil }
             let decay = Self.decayWeight(
                 atom: atom,
                 intent: .generalRecall,
@@ -662,6 +669,12 @@ final class MemoryQueryPlanner {
             return 0.22
         }
     }
+
+    /// Floor on raw cosine similarity for the vector-fallback path.
+    /// MiniLM-L6-v2 (the embedding model in use) puts unrelated text pairs
+    /// in 0.0–0.3, weakly related in 0.3–0.5, topically relevant 0.5+.
+    /// A lower bar would re-admit the noise this floor exists to block.
+    private static let vectorMinimumCosine: Double = 0.5
 
     private static func containsAny(_ text: String, _ needles: [String]) -> Bool {
         needles.contains { text.contains($0) }

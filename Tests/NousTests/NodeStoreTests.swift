@@ -27,6 +27,25 @@ final class NodeStoreTests: XCTestCase {
         NousNode(type: type, title: title, content: content, projectId: projectId, isFavorite: isFavorite)
     }
 
+    private func makeSourceBriefing(sourceId: UUID) -> SourceBriefing {
+        SourceBriefing(
+            title: "Morning source brief",
+            items: [
+                SourceBriefingItem(
+                    sourceNodeId: sourceId,
+                    headline: "Margins improved",
+                    whatChanged: "The filing says gross margin improved after supplier terms changed.",
+                    whyItMatters: "It changes whether the business is still margin-constrained.",
+                    alexRelevance: "Relevant to Alex's quality filter for compounding businesses.",
+                    tensionOrRisk: "Could be temporary if supplier pricing normalizes.",
+                    suggestedNextAction: "Compare this margin move against the next quarter.",
+                    evidence: "gross margin improved after supplier terms changed",
+                    confidence: 0.77
+                )
+            ]
+        )
+    }
+
     private func temporaryDatabasePath() -> String {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("NousNodeStoreTests-\(UUID().uuidString)")
@@ -597,6 +616,49 @@ final class NodeStoreTests: XCTestCase {
         XCTAssertEqual(fetched.first?.chunks.count, 1)
         XCTAssertTrue(fetched.first?.chunks.first?.text.contains("Selected leader-role section") == true)
         XCTAssertFalse(fetched.first?.chunks.first?.text.contains("Unselected opening transcript") == true)
+    }
+
+    func testSourceBriefingPersistsAndFetchesByMessage() throws {
+        let conversation = makeNode(type: .conversation)
+        let source = makeNode(title: "10-K", type: .source, content: "gross margin improved after supplier terms changed")
+        try store.insertNode(conversation)
+        try store.insertNode(source)
+        let message = Message(nodeId: conversation.id, role: .user, content: "Read this filing")
+        try store.insertMessage(message)
+
+        let briefing = makeSourceBriefing(sourceId: source.id)
+        try store.replaceSourceBriefing(briefing, for: message.id)
+
+        let fetched = try store.fetchSourceBriefing(messageId: message.id)
+        XCTAssertEqual(fetched, briefing)
+    }
+
+    func testReplacingSourceBriefingWithEmptyDeletesRow() throws {
+        let conversation = makeNode(type: .conversation)
+        let source = makeNode(title: "Filing", type: .source)
+        try store.insertNode(conversation)
+        try store.insertNode(source)
+        let message = Message(nodeId: conversation.id, role: .user, content: "Read this")
+        try store.insertMessage(message)
+
+        try store.replaceSourceBriefing(makeSourceBriefing(sourceId: source.id), for: message.id)
+        try store.replaceSourceBriefing(.empty, for: message.id)
+
+        XCTAssertNil(try store.fetchSourceBriefing(messageId: message.id))
+    }
+
+    func testDeletingMessageCascadesSourceBriefing() throws {
+        let conversation = makeNode(type: .conversation)
+        let source = makeNode(title: "Filing", type: .source)
+        try store.insertNode(conversation)
+        try store.insertNode(source)
+        let message = Message(nodeId: conversation.id, role: .user, content: "Read this")
+        try store.insertMessage(message)
+
+        try store.replaceSourceBriefing(makeSourceBriefing(sourceId: source.id), for: message.id)
+        try store.deleteMessage(id: message.id)
+
+        XCTAssertNil(try store.fetchSourceBriefing(messageId: message.id))
     }
 
     func testClearAllMessageThinkingContentRemovesStoredTraces() throws {

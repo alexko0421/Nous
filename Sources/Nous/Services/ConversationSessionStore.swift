@@ -38,6 +38,7 @@ enum ConversationSessionStoreError: Error {
 
 enum ConversationRecoveryReason: String, Codable, Equatable {
     case missingCurrentNode = "missing_current_node"
+    case missingNodeBeforeAssistantCommit = "missing_node_before_assistant_commit"
 }
 
 struct ConversationRecoveryTelemetryEvent: Codable, Equatable {
@@ -84,6 +85,26 @@ final class ConversationSessionStore {
         self.now = now
     }
 
+    @MainActor
+    private var streamingSessions: [UUID: ConversationStreamingSession] = [:]
+
+    @MainActor
+    func streamingSession(for conversationId: UUID) -> ConversationStreamingSession {
+        if let existing = streamingSessions[conversationId] {
+            return existing
+        }
+        let session = ConversationStreamingSession(conversationId: conversationId)
+        streamingSessions[conversationId] = session
+        return session
+    }
+
+    /// Conversation ids that currently have an unseen background completion.
+    /// Used by LeftSidebar to render the unread dot.
+    @MainActor
+    func conversationIdsWithUnseenCompletion() -> Set<UUID> {
+        Set(streamingSessions.compactMap { $0.value.hasUnseenCompletion ? $0.key : nil })
+    }
+
     func startConversation(
         title: String = "New Conversation",
         projectId: UUID? = nil
@@ -102,6 +123,7 @@ final class ConversationSessionStore {
         currentMessages: [Message],
         defaultProjectId: UUID?,
         userMessageContent: String,
+        attachments: [AttachedFileContext] = [],
         newConversationTitle: String = "New Conversation"
     ) throws -> PreparedConversationTurn {
         let recovered = try recoverCurrentConversationIfNeeded(
@@ -117,7 +139,8 @@ final class ConversationSessionStore {
             nodeId: node.id,
             role: .user,
             content: userMessageContent,
-            timestamp: now()
+            timestamp: now(),
+            attachments: attachments
         )
         try nodeStore.insertMessage(userMessage)
 
@@ -145,8 +168,16 @@ final class ConversationSessionStore {
         judgeEventId: UUID? = nil,
         agentTraceJson: String? = nil
     ) throws -> CommittedAssistantTurn {
-        let assistantMessage = Message(
+        let recovered = try recoverAssistantCommitConversationIfNeeded(
             nodeId: nodeId,
+            currentMessages: currentMessages,
+            conversationTitle: conversationTitle
+        )
+        let node = recovered.node
+        let rebasedCurrentMessages = recovered.currentMessages
+
+        let assistantMessage = Message(
+            nodeId: node.id,
             role: .assistant,
             content: assistantContent,
             thinkingContent: thinkingContent,
@@ -154,7 +185,7 @@ final class ConversationSessionStore {
         )
         try nodeStore.insertMessage(assistantMessage)
 
-        let messagesAfterAssistantAppend = currentMessages + [assistantMessage]
+        let messagesAfterAssistantAppend = rebasedCurrentMessages + [assistantMessage]
         if let judgeEventId {
             try nodeStore.updateJudgeEventMessageId(
                 eventId: judgeEventId,
@@ -163,7 +194,7 @@ final class ConversationSessionStore {
         }
 
         let updatedNode = try applyTitleAndPersistTranscript(
-            nodeId: nodeId,
+            nodeId: node.id,
             messages: messagesAfterAssistantAppend,
             proposedTitle: conversationTitle
         )
@@ -330,17 +361,8 @@ final class ConversationSessionStore {
             title: recoveredTitle,
             projectId: try recoverableProjectId(currentNode.projectId ?? defaultProjectId)
         )
-        let recoveredMessages = currentMessages.map { message in
-            Message(
-                id: message.id,
-                nodeId: recoveredNode.id,
-                role: message.role,
-                content: message.content,
-                timestamp: message.timestamp,
-                thinkingContent: message.thinkingContent,
-                agentTraceJson: message.agentTraceJson,
-                source: message.source
-            )
+        let recoveredMessages = currentMessages.map {
+            Self.rebasedMessage($0, nodeId: recoveredNode.id)
         }
 
         for message in recoveredMessages {
@@ -356,6 +378,53 @@ final class ConversationSessionStore {
         telemetry?.recordConversationRecovery(recoveryEvent)
 
         return (recoveredNode, recoveredMessages, recoveryEvent)
+    }
+
+    private func recoverAssistantCommitConversationIfNeeded(
+        nodeId: UUID,
+        currentMessages: [Message],
+        conversationTitle: String?
+    ) throws -> (node: NousNode, currentMessages: [Message]) {
+        if let storedNode = try nodeStore.fetchNode(id: nodeId) {
+            return (storedNode, currentMessages)
+        }
+
+        let recoveredTitle = conversationTitle?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let recoveredNode = try startConversation(
+            title: recoveredTitle.flatMap { $0.isEmpty ? nil : $0 } ?? "Recovered Conversation"
+        )
+        let recoveredMessages = currentMessages.map { message in
+            Self.rebasedMessage(message, nodeId: recoveredNode.id)
+        }
+
+        for message in recoveredMessages {
+            try nodeStore.insertMessage(message)
+        }
+
+        let recoveryEvent = ConversationRecoveryTelemetryEvent(
+            reason: .missingNodeBeforeAssistantCommit,
+            originalNodeId: nodeId,
+            recoveredNodeId: recoveredNode.id,
+            rebasedMessageCount: recoveredMessages.count
+        )
+        telemetry?.recordConversationRecovery(recoveryEvent)
+
+        return (recoveredNode, recoveredMessages)
+    }
+
+    private static func rebasedMessage(_ message: Message, nodeId: UUID) -> Message {
+        Message(
+            id: message.id,
+            nodeId: nodeId,
+            role: message.role,
+            content: message.content,
+            timestamp: message.timestamp,
+            thinkingContent: message.thinkingContent,
+            agentTraceJson: message.agentTraceJson,
+            source: message.source,
+            attachments: message.attachments
+        )
     }
 
     private func recoverableProjectId(_ projectId: UUID?) throws -> UUID? {

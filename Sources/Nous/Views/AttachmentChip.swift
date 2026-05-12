@@ -23,23 +23,27 @@ struct AttachmentChip: View {
 
             Text(attachment.name)
                 .font(.system(size: 12, weight: .medium, design: .rounded))
-                .foregroundColor(AppColor.secondaryText)
+                .foregroundColor(AppColor.colaDarkText.opacity(0.72))
                 .lineLimit(1)
 
             Button(action: onRemove) {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .bold))
-                    .foregroundColor(AppColor.secondaryText.opacity(0.72))
+                    .foregroundColor(AppColor.colaDarkText.opacity(0.48))
             }
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(AppColor.surfaceSecondary)
+        .background(
+            NativeGlassPanel(cornerRadius: 17, tintColor: AppColor.controlGlassTint) {
+                EmptyView()
+            }
+        )
         .clipShape(Capsule())
         .overlay(
             Capsule()
-                .stroke(AppColor.panelStroke, lineWidth: 1)
+                .stroke(Color.white.opacity(0.12), lineWidth: 1)
         )
     }
 }

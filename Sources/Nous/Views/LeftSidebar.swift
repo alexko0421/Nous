@@ -58,6 +58,80 @@ struct NativeGlassPanel<Content: View>: NSViewRepresentable {
     }
 }
 
+struct MatteGlassPanel<Content: View>: NSViewRepresentable {
+    let cornerRadius: CGFloat
+    let overlayColor: NSColor?
+    let content: Content
+
+    init(
+        cornerRadius: CGFloat,
+        overlayColor: NSColor? = nil,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.cornerRadius = cornerRadius
+        self.overlayColor = overlayColor
+        self.content = content()
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let rootView = NSView()
+        let effectView = NSVisualEffectView()
+        let tintView = NSView()
+        let hostingView = NSHostingView(rootView: content)
+
+        rootView.translatesAutoresizingMaskIntoConstraints = false
+        rootView.wantsLayer = true
+        rootView.layer?.cornerRadius = cornerRadius
+        rootView.layer?.cornerCurve = .continuous
+        rootView.layer?.masksToBounds = true
+
+        [effectView, tintView, hostingView].forEach {
+            $0.translatesAutoresizingMaskIntoConstraints = false
+            rootView.addSubview($0)
+        }
+
+        tintView.wantsLayer = true
+        hostingView.wantsLayer = true
+        hostingView.layer?.backgroundColor = NSColor.clear.cgColor
+        hostingView.layer?.isOpaque = false
+        configure(effectView, tintView: tintView)
+
+        NSLayoutConstraint.activate(
+            [effectView, tintView, hostingView].flatMap { child in
+                [
+                    child.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
+                    child.trailingAnchor.constraint(equalTo: rootView.trailingAnchor),
+                    child.topAnchor.constraint(equalTo: rootView.topAnchor),
+                    child.bottomAnchor.constraint(equalTo: rootView.bottomAnchor)
+                ]
+            }
+        )
+
+        return rootView
+    }
+
+    func updateNSView(_ rootView: NSView, context: Context) {
+        rootView.layer?.cornerRadius = cornerRadius
+
+        guard rootView.subviews.count == 3,
+              let effectView = rootView.subviews[0] as? NSVisualEffectView,
+              let hostingView = rootView.subviews[2] as? NSHostingView<Content> else {
+            return
+        }
+
+        configure(effectView, tintView: rootView.subviews[1])
+        hostingView.rootView = content
+    }
+
+    private func configure(_ effectView: NSVisualEffectView, tintView: NSView) {
+        effectView.material = .hudWindow
+        effectView.blendingMode = .withinWindow
+        effectView.state = .active
+        effectView.isEmphasized = false
+        tintView.layer?.backgroundColor = overlayColor?.cgColor
+    }
+}
+
 enum AppWindowLookup {
     static func mainWindow(in windows: [NSWindow], keyWindow: NSWindow?) -> NSWindow? {
         windows.first(where: { $0 is NousMainWindow })
@@ -149,13 +223,13 @@ struct NavIconButton<Icon: View>: View {
                 .frame(width: 36, height: 36)
                 .overlay(
                     Circle()
-                        .stroke(AppColor.panelStroke, lineWidth: 1)
+                        .stroke(AppColor.sidebarGlassStroke.opacity(0.55), lineWidth: 1)
                 )
                 .overlay(icon)
                 
                 Text(label)
                     .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .foregroundColor(AppColor.secondaryText)
+                    .foregroundColor(AppColor.sidebarMutedText)
             }
         }
         .buttonStyle(.plain)
@@ -175,7 +249,7 @@ struct SidebarDivider: View {
             )
         }
         .stroke(
-            AppColor.panelStroke.opacity(0.95),
+            AppColor.sidebarGlassStroke.opacity(0.62),
             style: StrokeStyle(lineWidth: 1, lineCap: .round)
         )
         .frame(width: 108, height: 6)
@@ -238,6 +312,7 @@ struct MacOSTrafficLights: View {
 
 struct LeftSidebar: View {
     let nodeStore: NodeStore
+    let conversationSessionStore: ConversationSessionStore
     @Binding var selectedTab: MainTab
     @Binding var selectedProjectId: UUID?
     let selectedNodeId: UUID?
@@ -249,6 +324,9 @@ struct LeftSidebar: View {
     @State private var favorites: [NousNode] = []
     @State private var recents: [NousNode] = []
     @State private var showProjectList = false
+    @State private var renameTarget: NousNode?
+    @State private var searchQuery: String = ""
+    @State private var searchResults: [NousNode] = []
 
     var body: some View {
         NativeGlassPanel(
@@ -259,21 +337,28 @@ struct LeftSidebar: View {
                 MacOSTrafficLights()
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.top, 26)
-                    .padding(.bottom, 24)
+                    .padding(.bottom, 28)
 
-                HStack(spacing: 12) {
-                    NavIconButton(
-                        icon: GalaxyIcon(color: AppColor.colaDarkText.opacity(0.8)),
-                        label: "Galaxy",
-                        action: { selectedTab = .galaxy }
-                    )
-                    NavIconButton(
-                        icon: ProjectIcon(color: AppColor.colaDarkText.opacity(0.8)),
-                        label: "Project",
-                        action: { showProjectList.toggle() }
-                    )
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(AppColor.sidebarMutedText)
+                    TextField("Search", text: $searchQuery)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 13, design: .rounded))
+                        .foregroundColor(AppColor.sidebarText)
                 }
-                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(Color.white.opacity(0.055))
+                )
+                .overlay(
+                    Capsule(style: .continuous)
+                        .stroke(AppColor.sidebarGlassStroke.opacity(0.48), lineWidth: 1)
+                )
+                .padding(.horizontal, 16)
                 .padding(.bottom, 14)
 
                 SidebarDivider()
@@ -290,7 +375,7 @@ struct LeftSidebar: View {
                         Text("New Chat")
                             .font(.system(size: 12, weight: .medium, design: .rounded))
                     }
-                    .foregroundColor(AppColor.secondaryText)
+                    .foregroundColor(AppColor.sidebarMutedText)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.leading, 6)
                     .padding(.vertical, 4)
@@ -303,7 +388,38 @@ struct LeftSidebar: View {
                 SidebarDivider()
                     .padding(.bottom, 14)
 
-                if showProjectList {
+                if !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    ScrollView(.vertical, showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Results")
+                                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                .foregroundColor(AppColor.sidebarMutedText)
+
+                            if searchResults.isEmpty {
+                                Text("No matches")
+                                    .font(.system(size: 12, design: .rounded))
+                                    .foregroundColor(AppColor.sidebarMutedText.opacity(0.72))
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                            } else {
+                                ForEach(searchResults) { node in
+                                    let session: ConversationStreamingSession? = {
+                                        guard node.type == .conversation else { return nil }
+                                        return conversationSessionStore.streamingSession(for: node.id)
+                                    }()
+                                    SidebarNodeItem(
+                                        node: node,
+                                        isSelected: selectedNodeId == node.id,
+                                        streamingSession: session,
+                                        action: { onNodeSelected?(node) }
+                                    )
+                                }
+                            }
+                        }
+                        .padding(.leading, 20)
+                        .padding(.trailing, 8)
+                    }
+                } else if showProjectList {
                     ProjectListView(nodeStore: nodeStore, selectedProjectId: $selectedProjectId)
                 } else {
                     ScrollView(.vertical, showsIndicators: false) {
@@ -317,12 +433,15 @@ struct LeftSidebar: View {
                                             .font(.system(size: 7, weight: .bold))
                                             .opacity(0.5)
                                     }
-                                    .foregroundColor(AppColor.colaDarkText.opacity(0.6))
+                                    .foregroundColor(AppColor.sidebarMutedText)
 
                                     ForEach(favorites) { node in
                                         SidebarNodeItem(
                                             node: node,
                                             isSelected: selectedNodeId == node.id,
+                                            streamingSession: node.type == .conversation
+                                                ? conversationSessionStore.streamingSession(for: node.id)
+                                                : nil,
                                             action: { onNodeSelected?(node) }
                                         )
                                     }
@@ -332,15 +451,23 @@ struct LeftSidebar: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("Recents")
                                     .font(.system(size: 11, weight: .semibold, design: .rounded))
-                                    .foregroundColor(AppColor.colaDarkText.opacity(0.6))
+                                    .foregroundColor(AppColor.sidebarMutedText)
 
                                 ForEach(recents) { node in
                                     SidebarNodeItem(
                                         node: node,
                                         isSelected: selectedNodeId == node.id,
+                                        streamingSession: node.type == .conversation
+                                            ? conversationSessionStore.streamingSession(for: node.id)
+                                            : nil,
                                         action: { onNodeSelected?(node) }
                                     )
                                     .contextMenu {
+                                        Button {
+                                            renameTarget = node
+                                        } label: {
+                                            Label("Rename", systemImage: "pencil")
+                                        }
                                         Button(role: .destructive) {
                                             try? nodeStore.deleteNode(id: node.id)
                                             loadData()
@@ -377,7 +504,7 @@ struct LeftSidebar: View {
 
                     Text(username.uppercased())
                         .font(.system(size: 12, weight: .bold, design: .rounded))
-                        .foregroundColor(AppColor.colaDarkText)
+                        .foregroundColor(AppColor.sidebarText)
 
                     Spacer(minLength: 0)
                 }
@@ -397,7 +524,7 @@ struct LeftSidebar: View {
         .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 32, style: .continuous)
-                .stroke(AppColor.panelStroke.opacity(0.78), lineWidth: 1)
+                .stroke(AppColor.sidebarGlassStroke.opacity(0.22), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.12), radius: 18, x: 0, y: 8)
         .onAppear { loadData() }
@@ -408,12 +535,49 @@ struct LeftSidebar: View {
             )
         ) { _ in
             loadData()
+            if !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                runSearch()
+            }
+        }
+        .onChange(of: searchQuery) { _, _ in
+            runSearch()
+        }
+        .sheet(item: $renameTarget) { node in
+            RenameConversationSheet(node: node) { newTitle in
+                var updated = node
+                updated.title = newTitle
+                updated.updatedAt = Date()
+                try? nodeStore.updateNode(updated)
+                loadData()
+            }
         }
     }
 
     private func loadData() {
         favorites = (try? nodeStore.fetchFavorites()) ?? []
         recents = (try? nodeStore.fetchRecents(limit: 20)) ?? []
+    }
+
+    private func runSearch() {
+        let trimmed = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            searchResults = []
+            return
+        }
+
+        let titleHits = (try? nodeStore.lexicalIndex.searchTitles(query: trimmed, limit: 30)) ?? []
+        let messageHits = (try? nodeStore.lexicalIndex.searchMessages(query: trimmed, limit: 30)) ?? []
+
+        var seen = Set<UUID>()
+        var hits: [NousNode] = []
+        for hit in titleHits + messageHits {
+            guard !seen.contains(hit.nodeId) else { continue }
+            seen.insert(hit.nodeId)
+            if let node = try? nodeStore.fetchNode(id: hit.nodeId), node.type == .conversation {
+                hits.append(node)
+            }
+        }
+        searchResults = hits
     }
 }
 
@@ -422,15 +586,26 @@ struct LeftSidebar: View {
 struct SidebarNodeItem: View {
     let node: NousNode
     let isSelected: Bool
+    let streamingSession: ConversationStreamingSession?
     let action: () -> Void
     @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
-            Text(node.title)
-                .font(.system(size: 12, weight: .medium, design: .rounded))
-                .foregroundColor(isSelected ? AppColor.colaOrange : AppColor.secondaryText)
-                .lineLimit(1)
+            HStack(spacing: 0) {
+                Text(node.title)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundColor(isSelected ? AppColor.colaOrange : AppColor.sidebarMutedText)
+                    .lineLimit(1)
+
+                if let streamingSession, streamingSession.hasUnseenCompletion {
+                    Circle()
+                        .fill(AppColor.colaOrange)
+                        .frame(width: 5, height: 5)
+                        .padding(.leading, 4)
+                        .accessibilityLabel("New reply")
+                }
+            }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .background(
@@ -446,7 +621,7 @@ struct SidebarNodeItem: View {
                             )
                         } else if isHovered {
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(AppColor.colaDarkText.opacity(0.04))
+                                .fill(Color.white.opacity(0.045))
                         }
                     }
                 )
@@ -455,6 +630,60 @@ struct SidebarNodeItem: View {
         .scaleEffect(isHovered ? 1.03 : 1.0)
         .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isHovered)
         .onHover { isHovered = $0 }
+    }
+}
+
+// MARK: - RenameConversationSheet
+
+struct RenameConversationSheet: View {
+    let node: NousNode
+    let onSave: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var text: String
+
+    init(node: NousNode, onSave: @escaping (String) -> Void) {
+        self.node = node
+        self.onSave = onSave
+        _text = State(initialValue: node.title)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Rename conversation")
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundColor(AppColor.colaDarkText)
+
+            TextField("Title", text: $text)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 13, design: .rounded))
+                .onSubmit { commit() }
+
+            HStack(spacing: 8) {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Save") { commit() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(trimmed.isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 360)
+    }
+
+    private var trimmed: String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func commit() {
+        let value = trimmed
+        guard !value.isEmpty, value != node.title else {
+            dismiss()
+            return
+        }
+        onSave(value)
+        dismiss()
     }
 }
 

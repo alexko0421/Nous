@@ -19,14 +19,23 @@ enum ReflectionClaimStatus: String, Codable {
     case superseded
 }
 
-/// One row per weekly reflection job. Unique per (projectId, weekStart, weekEnd)
+/// One row per reflection job — weekly (cross-conversation) or
+/// per-conversation. Weekly runs are unique per (projectId, weekStart, weekEnd)
 /// so foreground-trigger and retry paths can safely no-op on duplicates.
+/// Per-conversation runs are NOT deduped — each manual `/reflect` invocation
+/// produces a fresh row.
 struct ReflectionRun: Identifiable, Codable, Equatable {
     let id: UUID
     /// `nil` = free-chat scope (no project). Matches the nullable `project_id`
     /// column on `reflection_runs`, which reflects that most nodes in the real
     /// DB have `projectId IS NULL` (Alex's primary usage as of 2026-04-22).
     var projectId: UUID?
+    /// `nil` = cross-conversation scope (weekly tier). Non-nil = single
+    /// conversation scope: the produced claim says "in this conversation,
+    /// you tend to ..." and must NOT leak into retrieval for any other
+    /// conversation. `fetchActiveReflectionClaims(currentNodeId:)` enforces
+    /// this by filtering on `node_id IS NULL OR node_id = ?`.
+    var nodeId: UUID?
     var weekStart: Date
     var weekEnd: Date
     var ranAt: Date
@@ -37,6 +46,7 @@ struct ReflectionRun: Identifiable, Codable, Equatable {
     init(
         id: UUID = UUID(),
         projectId: UUID? = nil,
+        nodeId: UUID? = nil,
         weekStart: Date,
         weekEnd: Date,
         ranAt: Date = Date(),
@@ -46,6 +56,7 @@ struct ReflectionRun: Identifiable, Codable, Equatable {
     ) {
         self.id = id
         self.projectId = projectId
+        self.nodeId = nodeId
         self.weekStart = weekStart
         self.weekEnd = weekEnd
         self.ranAt = ranAt

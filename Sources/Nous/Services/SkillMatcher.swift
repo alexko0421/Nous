@@ -19,11 +19,9 @@ final class SkillMatcher: SkillMatching {
         context: SkillMatchContext,
         cap: Int = 5
     ) -> [Skill] {
-        guard let mode = context.mode else { return [] }
-
         return skills
             .filter { $0.state == .active }
-            .filter { $0.payload.trigger.modes.contains(mode) }
+            .filter { Self.matches($0, context: context) }
             .filter { skill in
                 if context.turnIndex == 0 && skill.payload.trigger.kind == .mode {
                     return false
@@ -33,6 +31,22 @@ final class SkillMatcher: SkillMatching {
             .sorted(by: Self.skillOrdering)
             .prefix(cap)
             .map { $0 }
+    }
+
+    private static func matches(_ skill: Skill, context: SkillMatchContext) -> Bool {
+        switch skill.payload.trigger.kind {
+        case .analysisGate:
+            return false
+        case .always:
+            guard let mode = context.mode else {
+                return skill.payload.trigger.modes.isEmpty
+            }
+            return skill.payload.trigger.modes.isEmpty
+                || skill.payload.trigger.modes.contains(mode)
+        case .mode:
+            guard let mode = context.mode else { return false }
+            return skill.payload.trigger.modes.contains(mode)
+        }
     }
 
     private static func skillOrdering(_ lhs: Skill, _ rhs: Skill) -> Bool {

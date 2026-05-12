@@ -471,7 +471,7 @@ final class ChatTurnRunnerShadowLearningTests: XCTestCase {
         XCTAssertEqual(reviewer.reason, "silent_review_failed")
     }
 
-    func testRunnerDoesNotRecordSilentReviewArtifactWhenCommitFails() async throws {
+    func testRunnerRecordsSilentReviewArtifactWhenCommitRecoversDeletedNode() async throws {
         let nodeStore = try NodeStore(path: ":memory:")
         let reviewer = RecordingCognitionReviewer()
         let capture = ReviewArtifactCapture()
@@ -507,18 +507,31 @@ final class ChatTurnRunnerShadowLearningTests: XCTestCase {
             attachments: [],
             now: Date(timeIntervalSince1970: 5_000)
         )
-        let sink = TurnSequencedEventSink(turnId: request.turnId, sink: NoOpTurnEventSink())
+        let eventCapture = RecordingTurnEventSink()
+        let sink = TurnSequencedEventSink(turnId: request.turnId, sink: eventCapture)
 
-        let completion = await runner.run(
+        let maybeCompletion = await runner.run(
             request: request,
             sink: sink,
             abortReason: { .unexpectedCancellation }
         )
+        let completion = try XCTUnwrap(maybeCompletion)
 
-        XCTAssertNil(completion)
-        XCTAssertTrue(reviewer.reviewedTurnIds.isEmpty)
-        XCTAssertTrue(capture.values().isEmpty)
-        XCTAssertTrue(snapshotCapture.values().isEmpty)
+        let events = await eventCapture.events()
+        let preparedNode = try XCTUnwrap(events.compactMap { envelope -> NousNode? in
+            guard case .prepared(let prepared) = envelope.event else { return nil }
+            return prepared.node
+        }.first)
+        XCTAssertNotEqual(completion.node.id, preparedNode.id)
+        XCTAssertEqual(completion.node.title, "Commit failure")
+        XCTAssertEqual(reviewer.reviewedTurnIds, [request.turnId])
+        XCTAssertEqual(capture.values().count, 1)
+
+        let snapshot = try XCTUnwrap(snapshotCapture.values().first)
+        XCTAssertEqual(snapshotCapture.values().count, 1)
+        XCTAssertEqual(snapshot.conversationId, completion.node.id)
+        XCTAssertEqual(snapshot.assistantMessageId, completion.assistantMessage.id)
+        XCTAssertNotNil(snapshot.reviewArtifactId)
     }
 
     private func makePlanner(

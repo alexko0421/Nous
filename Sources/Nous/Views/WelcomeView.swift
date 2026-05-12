@@ -100,27 +100,13 @@ struct WelcomeView: View {
                     
                     VStack(spacing: 16) {
                         if hasComposerLinks {
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 8) {
-                                    if let sourceContext {
-                                        SourceDiscussionLinkChip(context: sourceContext) {
-                                            onClearSourceContext()
-                                        }
-                                    }
-
-                                    ForEach(attachments) { attachment in
-                                        AttachmentChip(attachment: attachment) {
-                                            onRemoveAttachment(attachment.id)
-                                        }
-                                    }
-                                }
-                            }
+                            centeredComposerLinks
                         }
 
                         welcomeComposerControls
                         .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
                         .onDrop(
-                            of: AttachmentDropSupport.acceptedTypeIdentifiers,
+                            of: AttachmentDropSupport.allFileTypeIdentifiers,
                             isTargeted: $isImageDropTargeted,
                             perform: onImageDrop
                         )
@@ -147,12 +133,46 @@ struct WelcomeView: View {
                 Spacer(minLength: 0)
             }
         }
+        .onAppear {
+            focusComposerOnNextRunLoop()
+        }
+    }
+
+    private func focusComposerOnNextRunLoop() {
+        DispatchQueue.main.async {
+            isComposerFocused = true
+        }
+    }
+
+    private var centeredComposerLinks: some View {
+        GeometryReader { geometry in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    if let sourceContext {
+                        SourceDiscussionLinkChip(context: sourceContext) {
+                            onClearSourceContext()
+                        }
+                    }
+
+                    ForEach(attachments) { attachment in
+                        AttachmentChip(attachment: attachment) {
+                            onRemoveAttachment(attachment.id)
+                        }
+                    }
+                }
+                .frame(minWidth: geometry.size.width, alignment: .center)
+            }
+        }
+        .frame(height: 36)
     }
     
     private var backgroundLayer: some View {
         ZStack {
             LinearGradient(
-                colors: [AppColor.welcomeGradientStart, AppColor.welcomeGradientEnd],
+                colors: [
+                    AppColor.welcomeGradientStart.opacity(0.72),
+                    AppColor.welcomeGradientEnd.opacity(0.74)
+                ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
@@ -201,21 +221,25 @@ struct WelcomeView: View {
                         }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .onDrop(
+                    of: AttachmentDropSupport.allFileTypeIdentifiers,
+                    isTargeted: $isImageDropTargeted,
+                    perform: onImageDrop
+                )
             }
             .padding(.leading, 16)
             .padding(.trailing, 16)
             .padding(.vertical, ComposerTextInputMetrics.verticalPadding)
             .background(
-                NativeGlassPanel(
+                MatteGlassPanel(
                     cornerRadius: 18,
-                    tintColor: AppColor.controlGlassTint
+                    overlayColor: AppColor.composerMatteOverlay
                 ) { EmptyView() }
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(AppColor.panelStroke, lineWidth: 1)
+                    .stroke(AppColor.composerMatteStroke, lineWidth: 1)
             )
-            .shadow(color: .black.opacity(0.04), radius: 10, x: 0, y: 3)
 
             if shouldSeparateComposerPrimaryAction {
                 primaryActionButton(isSeparated: true)

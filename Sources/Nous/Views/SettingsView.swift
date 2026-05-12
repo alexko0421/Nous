@@ -23,6 +23,7 @@ struct SettingsView: View {
     @Bindable var vm: SettingsViewModel
     @Binding var selectedTab: SettingsSection
     let skillStore: SkillStore
+    let failureSkillCandidateStore: FailureSkillCandidateStore
     let userMemoryService: UserMemoryService
     let telemetry: GovernanceTelemetryStore
     let galaxyRelationTelemetry: GalaxyRelationTelemetry
@@ -86,6 +87,7 @@ struct SettingsView: View {
                     MemoryDebugInspector(
                         nodeStore: vm.nodeStore,
                         skillStore: skillStore,
+                        failureSkillCandidateStore: failureSkillCandidateStore,
                         userMemoryService: userMemoryService,
                         telemetry: telemetry,
                         galaxyRelationTelemetry: galaxyRelationTelemetry,

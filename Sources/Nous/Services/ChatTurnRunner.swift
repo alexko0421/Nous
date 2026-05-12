@@ -15,6 +15,8 @@ final class ChatTurnRunner {
     private let outcomeFactory: TurnOutcomeFactory
     private let shadowLearningSignalRecorder: ShadowLearningSignalRecorder?
     private let cognitionReviewer: (any CognitionReviewing)?
+    private let failureSkillCandidateStore: FailureSkillCandidateStore?
+    private let failureToSkillDetector: FailureToSkillDetector
     private let shouldSurfaceThinkingTraces: () -> Bool
     private let onPlanReady: (TurnPlan) -> Void
     private let onReviewArtifact: (CognitionArtifact) -> Void
@@ -31,6 +33,8 @@ final class ChatTurnRunner {
         outcomeFactory: TurnOutcomeFactory,
         shadowLearningSignalRecorder: ShadowLearningSignalRecorder? = nil,
         cognitionReviewer: (any CognitionReviewing)? = nil,
+        failureSkillCandidateStore: FailureSkillCandidateStore? = nil,
+        failureToSkillDetector: FailureToSkillDetector = FailureToSkillDetector(),
         shouldSurfaceThinkingTraces: @escaping () -> Bool = { true },
         onPlanReady: @escaping (TurnPlan) -> Void = { _ in },
         onReviewArtifact: @escaping (CognitionArtifact) -> Void = { _ in },
@@ -46,6 +50,8 @@ final class ChatTurnRunner {
         self.outcomeFactory = outcomeFactory
         self.shadowLearningSignalRecorder = shadowLearningSignalRecorder
         self.cognitionReviewer = cognitionReviewer
+        self.failureSkillCandidateStore = failureSkillCandidateStore
+        self.failureToSkillDetector = failureToSkillDetector
         self.shouldSurfaceThinkingTraces = shouldSurfaceThinkingTraces
         self.onPlanReady = onPlanReady
         self.onReviewArtifact = onReviewArtifact
@@ -71,7 +77,8 @@ final class ChatTurnRunner {
                 currentNode: request.snapshot.currentNode,
                 currentMessages: request.snapshot.messages,
                 defaultProjectId: request.snapshot.defaultProjectId,
-                userMessageContent: userMessageContent
+                userMessageContent: userMessageContent,
+                attachments: request.displayAttachments
             )
             Self.debugLog("prepared user turn=\(request.turnId) node=\(prepared.node.id) message=\(prepared.userMessage.id)")
         } catch {
@@ -305,6 +312,10 @@ final class ChatTurnRunner {
             signal: fidelitySignal
         )
         onCorpusFidelity(fidelityRecord)
+        recordFailureSkillCandidates(
+            corpusFidelity: fidelityRecord,
+            contextManifest: contextManifest
+        )
 
         let completion = outcomeFactory.makeCompletion(
             turnId: request.turnId,
@@ -318,6 +329,24 @@ final class ChatTurnRunner {
         await sink.emit(.completed(completion))
         Self.debugLog("completed emitted turn=\(request.turnId)")
         return completion
+    }
+
+    private func recordFailureSkillCandidates(
+        corpusFidelity: CorpusFidelityRecord,
+        contextManifest: ContextManifestRecord
+    ) {
+        guard let failureSkillCandidateStore else { return }
+        let candidates = failureToSkillDetector.candidates(
+            corpusFidelity: corpusFidelity,
+            contextManifest: contextManifest
+        )
+        for candidate in candidates {
+            do {
+                try failureSkillCandidateStore.upsertCandidate(candidate)
+            } catch {
+                Self.debugLog("failure-to-skill candidate write failed turn=\(corpusFidelity.turnId) error=\(error.localizedDescription)")
+            }
+        }
     }
 
     private static func debugLog(_ message: String) {
@@ -477,6 +506,7 @@ private extension TurnPlan {
             prepared: prepared,
             citations: citations,
             sourceMaterials: sourceMaterials,
+            sourceBriefing: sourceBriefing,
             promptTrace: trace,
             effectiveMode: effectiveMode,
             nextQuickActionModeIfCompleted: nextQuickActionModeIfCompleted,

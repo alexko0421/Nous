@@ -96,6 +96,21 @@ final class ProvocationJudgeTests: XCTestCase {
         }
     }
 
+    struct BlockingGenerateLLMService: LLMService {
+        let delay: TimeInterval
+
+        func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
+            _ = DispatchSemaphore(value: 0).wait(timeout: .now() + delay)
+            return AsyncThrowingStream { continuation in
+                continuation.yield("""
+                {"tension_exists":false,"user_state":"exploring","should_provoke":false,
+                 "entry_id":null,"reason":"late"}
+                """)
+                continuation.finish()
+            }
+        }
+    }
+
     actor ThinkingCapture {
         private var values: [String] = []
 
@@ -215,6 +230,26 @@ final class ProvocationJudgeTests: XCTestCase {
         } catch {
             XCTFail("Expected JudgeError.timeout, got \(error)")
         }
+    }
+
+    func testTimeoutDoesNotWaitForNonCooperativeGenerate() async {
+        let fake = BlockingGenerateLLMService(delay: 0.5)
+        let judge = ProvocationJudge(llmService: fake, timeout: 0.05)
+        let startedAt = Date()
+
+        do {
+            _ = try await judge.judge(
+                userMessage: "hi", citablePool: pool(),
+                previousMode: .companion, provider: .claude, feedbackLoop: nil
+            )
+            XCTFail("Expected timeout throw")
+        } catch let error as JudgeError {
+            XCTAssertEqual(error, .timeout)
+        } catch {
+            XCTFail("Expected JudgeError.timeout, got \(error)")
+        }
+
+        XCTAssertLessThan(Date().timeIntervalSince(startedAt), 0.25)
     }
 
     func testDefaultTimeoutAllowsNormalCloudJudgeLatency() async throws {

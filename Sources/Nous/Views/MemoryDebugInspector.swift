@@ -211,6 +211,7 @@ enum MemoryCuratorReviewDebugFormatting {
 struct MemoryDebugInspector: View {
     let nodeStore: NodeStore
     let skillStore: SkillStore
+    let failureSkillCandidateStore: FailureSkillCandidateStore
     let userMemoryService: UserMemoryService
     let telemetry: GovernanceTelemetryStore
     let galaxyRelationTelemetry: GalaxyRelationTelemetry
@@ -263,6 +264,8 @@ struct MemoryDebugInspector: View {
     @State private var factEntries: [MemoryFactEntry] = []
     @State private var reviewPlan = MemoryCuratorReviewPlan(generatedAt: .distantPast, items: [])
     @State private var skills: [Skill] = []
+    @State private var failureSkillCandidates: [FailureSkillCandidate] = []
+    @State private var failureSkillPatterns: [FailureSkillTriagePattern] = []
     @State private var shadowPatterns: [ShadowLearningPattern] = []
     @State private var learningEvents: [LearningEvent] = []
     @State private var projectTitles: [UUID: String] = [:]
@@ -289,6 +292,7 @@ struct MemoryDebugInspector: View {
                 factMemoryCard
                 #if DEBUG
                 skillsCard
+                failureSkillCard
                 shadowLearningCard
                 #endif
                 MemoryGraphInspector(nodeStore: nodeStore)
@@ -520,6 +524,173 @@ struct MemoryDebugInspector: View {
                 }
             }
         }
+    }
+
+    private var failureSkillCard: some View {
+        card {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        sectionLabel("Failure -> Skill")
+                        Text("Reviewable candidates captured from fidelity, source-use, and judge feedback signals.")
+                            .font(.system(size: 12, design: .rounded))
+                            .foregroundColor(AppColor.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Spacer()
+
+                    statPill(title: "Recent", value: "\(failureSkillCandidates.count)")
+                    statPill(title: "Recurring", value: "\(failureSkillPatterns.filter(\.isRecurring).count)")
+                    statPill(
+                        title: "Ready",
+                        value: "\(failureSkillCandidates.filter { SkillifyChecklistEvaluator().evaluate($0).canActivate }.count)"
+                    )
+                }
+
+                if failureSkillCandidates.isEmpty {
+                    Text("No failure candidates have been captured yet.")
+                        .font(.system(size: 13, design: .rounded))
+                        .foregroundColor(AppColor.secondaryText)
+                        .padding(.vertical, 8)
+                } else {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(failureSkillCandidates) { candidate in
+                            failureSkillCandidateRow(candidate)
+                        }
+                    }
+                }
+
+                let recurringPatterns = failureSkillPatterns.filter(\.isRecurring)
+                if !recurringPatterns.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        sectionLabel("Recurring Patterns")
+                        LazyVStack(alignment: .leading, spacing: 8) {
+                            ForEach(recurringPatterns) { pattern in
+                                failureSkillPatternRow(pattern)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func failureSkillCandidateRow(_ candidate: FailureSkillCandidate) -> some View {
+        let evaluation = SkillifyChecklistEvaluator().evaluate(candidate)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(candidate.signature.displayName)
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundColor(AppColor.colaDarkText)
+                        .lineLimit(1)
+
+                    Text(failureEvidenceSummary(for: candidate))
+                        .font(.system(size: 12, design: .rounded))
+                        .foregroundColor(AppColor.secondaryText)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 12)
+
+                badge(
+                    text: failureStatusDisplay(candidate.status),
+                    tint: failureStatusTint(candidate.status),
+                    textColor: failureStatusTextColor(candidate.status)
+                )
+            }
+
+            HStack(spacing: 8) {
+                badge(
+                    text: candidate.repairKind.displayName,
+                    tint: AppColor.surfacePrimary,
+                    textColor: AppColor.colaDarkText.opacity(0.78)
+                )
+                badge(
+                    text: evaluation.scoreText,
+                    tint: evaluation.canActivate ? AppColor.colaOrange.opacity(0.14) : AppColor.surfacePrimary,
+                    textColor: evaluation.canActivate ? AppColor.colaDarkText : AppColor.secondaryText
+                )
+                Text("Updated \(Self.relative(candidate.updatedAt))")
+                    .font(.system(size: 11, design: .rounded))
+                    .foregroundColor(AppColor.secondaryText)
+                Spacer(minLength: 0)
+            }
+
+            if !evaluation.missingItems.isEmpty {
+                Text("Missing: \(evaluation.missingItems.map(\.rawValue).joined(separator: ", "))")
+                    .font(.system(size: 11, design: .rounded))
+                    .foregroundColor(AppColor.secondaryText)
+                    .lineLimit(2)
+            }
+
+            HStack(spacing: 8) {
+                if candidate.status == .proposed {
+                    smallActionButton(
+                        title: "Approve",
+                        tint: AppColor.colaOrange.opacity(0.14),
+                        textColor: AppColor.colaDarkText
+                    ) {
+                        updateFailureCandidate(candidate, status: .approved)
+                    }
+                }
+
+                if candidate.status != .dismissed && candidate.status != .activated {
+                    smallActionButton(
+                        title: "Dismiss",
+                        tint: AppColor.surfacePrimary,
+                        textColor: AppColor.secondaryText
+                    ) {
+                        updateFailureCandidate(candidate, status: .dismissed)
+                    }
+                }
+
+                if candidate.status == .approved && candidate.repairKind == .promptSkill {
+                    smallActionButton(
+                        title: "Activate",
+                        tint: evaluation.canActivate ? AppColor.colaOrange : AppColor.surfacePrimary,
+                        textColor: evaluation.canActivate ? .white : AppColor.secondaryText
+                    ) {
+                        activateFailureCandidate(candidate)
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppColor.surfacePrimary)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(AppColor.panelStroke, lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private func failureSkillPatternRow(_ pattern: FailureSkillTriagePattern) -> some View {
+        HStack(alignment: .center, spacing: 8) {
+            badge(
+                text: pattern.signature.displayName,
+                tint: AppColor.colaOrange.opacity(0.14),
+                textColor: AppColor.colaDarkText
+            )
+            badge(
+                text: pattern.repairKind.displayName,
+                tint: AppColor.surfacePrimary,
+                textColor: AppColor.secondaryText
+            )
+            Text("\(pattern.candidateCount) signals | \(pattern.readyCount) ready")
+                .font(.system(size: 12, design: .rounded))
+                .foregroundColor(AppColor.secondaryText)
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppColor.surfacePrimary.opacity(0.72))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     private var shadowLearningCard: some View {
@@ -1464,6 +1635,7 @@ struct MemoryDebugInspector: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
                         skillsCard
+                        failureSkillCard
                     }
                     .padding(24)
                 }
@@ -1528,6 +1700,8 @@ struct MemoryDebugInspector: View {
             reviewPlan = try MemoryCuratorReviewService(nodeStore: nodeStore).makePlan()
             #if DEBUG
             skills = try skillStore.fetchAllSkills(userId: "alex")
+            failureSkillCandidates = try failureSkillCandidateStore.fetchRecentCandidates(userId: "alex", limit: 20)
+            failureSkillPatterns = FailureSkillTriageService().patterns(from: failureSkillCandidates)
             if let shadowLearningStore {
                 shadowPatterns = try shadowLearningStore.fetchPatterns(userId: "alex")
                 learningEvents = try shadowLearningStore.fetchRecentEvents(userId: "alex", limit: 12)
@@ -1617,6 +1791,28 @@ struct MemoryDebugInspector: View {
             loadError = failureMessage
         }
     }
+
+    #if DEBUG
+    private func updateFailureCandidate(_ candidate: FailureSkillCandidate, status: FailureSkillStatus) {
+        do {
+            try failureSkillCandidateStore.setStatus(id: candidate.id, status: status)
+            loadError = nil
+            reload()
+        } catch {
+            loadError = "Failed to update failure candidate: \(error.localizedDescription)"
+        }
+    }
+
+    private func activateFailureCandidate(_ candidate: FailureSkillCandidate) {
+        do {
+            _ = try failureSkillCandidateStore.activateCandidate(id: candidate.id, skillStore: skillStore)
+            loadError = nil
+            reload()
+        } catch {
+            loadError = "Failed to activate failure candidate: \(error.localizedDescription)"
+        }
+    }
+    #endif
 
     private func scopeDisplay(for entry: MemoryEntry) -> String {
         switch entry.scope {
@@ -1870,6 +2066,47 @@ struct MemoryDebugInspector: View {
     private func skillModesDisplay(_ skill: Skill) -> String {
         let modes = skill.payload.trigger.modes.map(\.label).joined(separator: ", ")
         return modes.isEmpty ? "No modes" : modes
+    }
+
+    private func failureEvidenceSummary(for candidate: FailureSkillCandidate) -> String {
+        let ids = candidate.evidence
+            .prefix(3)
+            .map { evidence -> String in
+                let label = evidence.label ?? evidence.source.rawValue
+                return "\(label): \(evidence.id)"
+            }
+            .joined(separator: " | ")
+        return ids.isEmpty ? "No evidence ids" : ids
+    }
+
+    private func failureStatusDisplay(_ status: FailureSkillStatus) -> String {
+        status.rawValue.capitalized
+    }
+
+    private func failureStatusTint(_ status: FailureSkillStatus) -> Color {
+        switch status {
+        case .proposed:
+            return AppColor.surfacePrimary
+        case .approved:
+            return AppColor.colaOrange.opacity(0.14)
+        case .activated:
+            return Color.blue.opacity(0.12)
+        case .dismissed:
+            return Color.gray.opacity(0.16)
+        }
+    }
+
+    private func failureStatusTextColor(_ status: FailureSkillStatus) -> Color {
+        switch status {
+        case .proposed:
+            return AppColor.secondaryText
+        case .approved:
+            return AppColor.colaDarkText
+        case .activated:
+            return Color.blue.opacity(0.75)
+        case .dismissed:
+            return AppColor.colaDarkText.opacity(0.62)
+        }
     }
 
     private func shadowKindDisplay(_ kind: String) -> String {

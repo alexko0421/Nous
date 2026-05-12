@@ -184,6 +184,74 @@ final class RecordingReplyLLMService: LLMService {
     }
 }
 
+private final class SequencedSourceBriefingLLMService: LLMService {
+    private let lock = NSLock()
+    private var outputs: [String]
+
+    init(outputs: [String]) {
+        self.outputs = outputs
+    }
+
+    func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
+        let output = lock.withLock {
+            if outputs.isEmpty { return "{}" }
+            return outputs.removeFirst()
+        }
+        return AsyncThrowingStream { continuation in
+            continuation.yield(output)
+            continuation.finish()
+        }
+    }
+}
+
+private final class DynamicSourceBriefingLLMService: LLMService {
+    private let lock = NSLock()
+    private var headlines: [String]
+
+    init(headlines: [String]) {
+        self.headlines = headlines
+    }
+
+    func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
+        let prompt = messages.map(\.content).joined(separator: "\n\n")
+        let sourceId = Self.firstUUID(in: prompt) ?? UUID()
+        let headline = lock.withLock {
+            if headlines.isEmpty { return "Source brief" }
+            return headlines.removeFirst()
+        }
+        let output = """
+        {
+          "title": "Document source brief",
+          "items": [
+            {
+              "source_node_id": "\(sourceId.uuidString)",
+              "headline": "\(headline)",
+              "what_changed": "Supplier renegotiation improved gross margin after pricing changed.",
+              "why_it_matters": "It changes whether the business is still margin-constrained.",
+              "alex_relevance": "Relevant to Alex's quality filter.",
+              "tension_or_risk": "This could be a temporary one-quarter effect.",
+              "suggested_next_action": "Check whether the next quarter keeps the same margin level.",
+              "evidence": "supplier renegotiation improved gross margin",
+              "confidence": 0.78
+            }
+          ]
+        }
+        """
+        return AsyncThrowingStream { continuation in
+            continuation.yield(output)
+            continuation.finish()
+        }
+    }
+
+    private static func firstUUID(in text: String) -> UUID? {
+        let pattern = #"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"#
+        guard let range = text.range(of: pattern, options: .regularExpression) else {
+            return nil
+        }
+        return UUID(uuidString: String(text[range]))
+    }
+}
+
 final class CancellationFailingLLMService: LLMService {
     func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
         throw CancellationError()
@@ -517,6 +585,145 @@ final class ChatViewModelTests: XCTestCase {
         let sourcePromptCountAfterRetry = llm.promptTexts.filter(Self.isDocumentSourcePrompt).count
         XCTAssertEqual(sourcePromptCountAfterFirstSend, 1)
         XCTAssertEqual(sourcePromptCountAfterRetry, 2)
+    }
+
+    func testSendingDocumentSourcePersistsAndReloadsSourceBriefing() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let briefingLLM = DynamicSourceBriefingLLMService(headlines: ["Supplier margin changed"])
+        let sourceBriefingService = SourceBriefingService(llmServiceProvider: { briefingLLM })
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            sourceBriefingService: sourceBriefingService,
+            llmServiceProvider: { SingleReplyLLMService(output: "I connected the source.") },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: makeScratchPadStore(nodeStore: nodeStore)
+        )
+
+        vm.inputText = "Analyze this report"
+        await vm.send(attachments: [
+            AttachedFileContext(
+                name: "report.txt",
+                extractedText: "Report preview",
+                sourceText: "Full report says supplier renegotiation improved gross margin after pricing changed."
+            )
+        ])
+
+        let nodeId = try XCTUnwrap(vm.currentNode?.id)
+        let userMessage = try XCTUnwrap(try nodeStore.fetchMessages(nodeId: nodeId).first { $0.role == .user })
+
+        XCTAssertEqual(vm.sourceBriefing(for: userMessage)?.items.first?.headline, "Supplier margin changed")
+
+        let reloadedVM = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { SingleReplyLLMService(output: "I connected the source.") },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: makeScratchPadStore(nodeStore: nodeStore)
+        )
+        let reloadedNode = try XCTUnwrap(nodeStore.fetchNode(id: nodeId))
+        reloadedVM.loadConversation(reloadedNode)
+
+        XCTAssertEqual(reloadedVM.sourceBriefing(for: userMessage)?.items.first?.headline, "Supplier margin changed")
+    }
+
+    func testSourceBriefingGenerationFailureDoesNotBlockAssistantResponse() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let sourceBriefingService = SourceBriefingService(llmServiceProvider: {
+            SequencedSourceBriefingLLMService(outputs: ["not json"])
+        })
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            sourceBriefingService: sourceBriefingService,
+            llmServiceProvider: { SingleReplyLLMService(output: "Assistant still answered.") },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: makeScratchPadStore(nodeStore: nodeStore)
+        )
+
+        vm.inputText = "Analyze this report"
+        await vm.send(attachments: [
+            AttachedFileContext(
+                name: "report.txt",
+                extractedText: "Report preview",
+                sourceText: "Full report says supplier renegotiation improved gross margin after pricing changed."
+            )
+        ])
+
+        let nodeId = try XCTUnwrap(vm.currentNode?.id)
+        let messages = try nodeStore.fetchMessages(nodeId: nodeId)
+        let userMessage = try XCTUnwrap(messages.first { $0.role == .user })
+        XCTAssertEqual(messages.last?.content, "Assistant still answered.")
+        XCTAssertNil(vm.sourceBriefing(for: userMessage))
+    }
+
+    func testRegenerateLatestAssistantReplacesSourceBriefingForUserMessage() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let briefingLLM = DynamicSourceBriefingLLMService(headlines: [
+            "Supplier margin first",
+            "Supplier margin second"
+        ])
+        let sourceBriefingService = SourceBriefingService(llmServiceProvider: { briefingLLM })
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            sourceBriefingService: sourceBriefingService,
+            llmServiceProvider: { SingleReplyLLMService(output: "answer") },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: makeScratchPadStore(nodeStore: nodeStore)
+        )
+
+        vm.inputText = "Connect this report"
+        await vm.send(attachments: [
+            AttachedFileContext(
+                name: "report.txt",
+                extractedText: "Report preview",
+                sourceText: "Full report says supplier renegotiation improved gross margin after pricing changed."
+            )
+        ])
+
+        let nodeId = try XCTUnwrap(vm.currentNode?.id)
+        let userMessage = try XCTUnwrap(try nodeStore.fetchMessages(nodeId: nodeId).first { $0.role == .user })
+
+        XCTAssertEqual(vm.sourceBriefing(for: userMessage)?.items.first?.headline, "Supplier margin first")
+
+        await vm.regenerateLatestAssistant()
+        XCTAssertEqual(vm.sourceBriefing(for: userMessage)?.items.first?.headline, "Supplier margin second")
     }
 
     func testActiveSourceDiscussionContextScopesNextTurnWithoutAutoSending() async throws {
@@ -906,6 +1113,60 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertEqual(vm.sourceMaterials(for: userMessage).count, 1)
     }
 
+    func testSourceBriefingForUserMessageCachesEmptyLookupsUntilReload() throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let conversation = NousNode(type: .conversation, title: "Plain chat")
+        let userMessage = Message(nodeId: conversation.id, role: .user, content: "Plain message")
+        try nodeStore.insertNode(conversation)
+        try nodeStore.insertMessage(userMessage)
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { SingleReplyLLMService(output: "answer") },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: makeScratchPadStore(nodeStore: nodeStore)
+        )
+        vm.loadConversation(conversation)
+
+        XCTAssertNil(vm.sourceBriefing(for: userMessage))
+
+        let sourceId = UUID()
+        try nodeStore.replaceSourceBriefing(
+            SourceBriefing(
+                title: "Late brief",
+                items: [
+                    SourceBriefingItem(
+                        sourceNodeId: sourceId,
+                        headline: "Late source brief",
+                        whatChanged: "The source now has a briefing.",
+                        whyItMatters: "This proves empty cache behavior.",
+                        alexRelevance: "It keeps render-time lookups quiet.",
+                        tensionOrRisk: "None.",
+                        suggestedNextAction: "Reload the conversation.",
+                        evidence: "The source now has a briefing.",
+                        confidence: 0.8
+                    )
+                ]
+            ),
+            for: userMessage.id
+        )
+
+        XCTAssertNil(vm.sourceBriefing(for: userMessage))
+
+        vm.loadConversation(conversation)
+        XCTAssertEqual(vm.sourceBriefing(for: userMessage)?.items.first?.headline, "Late source brief")
+    }
+
     func testRegenerateLatestAssistantKeepsDocumentSourceMaterialAfterConversationReload() async throws {
         let nodeStore = try NodeStore(path: ":memory:")
         let vectorStore = VectorStore(nodeStore: nodeStore)
@@ -1269,7 +1530,7 @@ final class ChatViewModelTests: XCTestCase {
         let otherNode = NousNode(type: .conversation, title: "Other conversation")
         try nodeStore.insertNode(otherNode)
 
-        vm.loadConversation(otherNode)
+        vm.loadConversation(otherNode, cancelInFlightWork: true)
         await sendTask.value
 
         let originalMessages = try nodeStore.fetchMessages(nodeId: originalNodeId)
@@ -1677,6 +1938,98 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertNotNil(store.latestSummary)
         XCTAssertTrue(store.latestSummary!.markdown.hasPrefix("# 今次倾咗乜"))
         XCTAssertEqual(store.latestSummary!.sourceMessageId, msg.id)
+    }
+
+    @MainActor
+    func test_backgroundTurnCompletion_setsHasUnseenCompletion() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { nil },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: makeScratchPadStore(nodeStore: nodeStore)
+        )
+
+        let nodeA = NousNode(type: .conversation, title: "A")
+        try nodeStore.insertNode(nodeA)
+        let nodeB = NousNode(type: .conversation, title: "B")
+        try nodeStore.insertNode(nodeB)
+
+        vm.loadConversation(nodeA)
+        let sessionA = try XCTUnwrap(vm.currentStreamingSession)
+
+        let turnId = UUID()
+        let task = Task<Void, Never> { }
+        sessionA.beginTurn(turnId: turnId, task: task)
+
+        // Switch to B BEFORE the simulated finish.
+        vm.loadConversation(nodeB)
+
+        // Simulate the originating turn finishing in the background.
+        _ = sessionA.captureFinish(turnId: turnId, viewingNow: false, error: nil)
+
+        XCTAssertTrue(sessionA.hasUnseenCompletion)
+    }
+
+    @MainActor
+    func test_loadConversation_doesNotCancelInFlightTaskOnOtherConversation() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            llmServiceProvider: { nil },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: makeScratchPadStore(nodeStore: nodeStore)
+        )
+
+        let nodeA = NousNode(type: .conversation, title: "A")
+        try nodeStore.insertNode(nodeA)
+        let nodeB = NousNode(type: .conversation, title: "B")
+        try nodeStore.insertNode(nodeB)
+
+        vm.loadConversation(nodeA)
+        let sessionA = try XCTUnwrap(vm.currentStreamingSession)
+        let started = expectation(description: "A task started")
+        let task = Task<Void, Never> {
+            started.fulfill()
+            while !Task.isCancelled { try? await Task.sleep(nanoseconds: 1_000_000) }
+        }
+        sessionA.beginTurn(turnId: UUID(), task: task)
+        await fulfillment(of: [started], timeout: 1.0)
+
+        vm.loadConversation(nodeB)
+
+        XCTAssertFalse(task.isCancelled)
+        // Task 5 migrates the in-flight slots to the newly-bound session so
+        // `isActiveResponseTask` keeps recognizing the running turn. After
+        // the switch, the live task lives on the current streaming session
+        // (sessionB) rather than the stale sessionA reference.
+        XCTAssertNotNil(vm.currentStreamingSession?.inFlightTask)
+
+        task.cancel()
     }
 }
 

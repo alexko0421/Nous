@@ -123,6 +123,7 @@ enum VisibleResponseLanguageSource: String, Equatable, Codable, Sendable {
     case currentTurnMandarin
     case currentTurnMixed
     case legacyTrace
+    case quickActionOpeningDefault
 
     var promptReason: String? {
         switch self {
@@ -140,6 +141,8 @@ enum VisibleResponseLanguageSource: String, Equatable, Codable, Sendable {
             return "current message uses a natural mix"
         case .legacyTrace:
             return "legacy trace"
+        case .quickActionOpeningDefault:
+            return "quick action opening — default to anchor voice"
         }
     }
 

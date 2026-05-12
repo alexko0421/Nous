@@ -12,6 +12,7 @@ struct AppDependencies {
     let skillStore: SkillStore
     let skillMatcher: SkillMatcher
     let skillTracker: SkillTracker
+    let failureSkillCandidateStore: FailureSkillCandidateStore
     let seedSkillImporter: SeedSkillImporter
     let shadowLearningStore: ShadowLearningStore
     let shadowLearningSignalRecorder: ShadowLearningSignalRecorder
@@ -32,6 +33,7 @@ struct AppDependencies {
     let backgroundAITelemetry: BackgroundAIJobTelemetryStore
     let galaxyRelationTelemetry: GalaxyRelationTelemetry
     let scratchPadStore: ScratchPadStore
+    let conversationSessionStore: ConversationSessionStore
     let activeBrowserTabURLReader: ActiveBrowserTabURLReader
     let voiceController: VoiceCommandController
     let voiceTranscriptCommitter: VoiceTranscriptCommitter
@@ -119,6 +121,7 @@ final class AppEnvironment {
         let skillStore = SkillStore(nodeStore: nodeStore)
         let skillMatcher = SkillMatcher()
         let skillTracker = SkillTracker(store: skillStore)
+        let failureSkillCandidateStore = FailureSkillCandidateStore(nodeStore: nodeStore)
         let skillDogfoodLogger = try? SkillDogfoodLogStore.defaultStore()
         let seedSkillImporter = SeedSkillImporter(store: skillStore)
         let shadowLearningStore = ShadowLearningStore(nodeStore: nodeStore)
@@ -211,6 +214,9 @@ final class AppEnvironment {
             llmServiceProvider: { settingsVM.makeLLMService(openRouterWebSearchEnabled: false) }
         )
         let sourceLearningMemoryScheduler = SourceLearningMemoryScheduler(service: sourceLearningMemoryService)
+        let sourceBriefingService = SourceBriefingService(
+            llmServiceProvider: { settingsVM.makeLLMService(openRouterWebSearchEnabled: false) }
+        )
         let conversationSessionStore = ConversationSessionStore(
             nodeStore: nodeStore,
             telemetry: governanceTelemetry
@@ -237,6 +243,7 @@ final class AppEnvironment {
             sourceLearningMemoryScheduler: sourceLearningMemoryScheduler,
             conversationSessionStore: conversationSessionStore,
             sourceIngestionService: sourceIngestionService,
+            sourceBriefingService: sourceBriefingService,
             llmServiceProvider: { settingsVM.makeLLMService(openRouterWebSearchEnabled: settingsVM.openRouterWebSearchEnabled) },
             currentProviderProvider: { settingsVM.selectedProvider },
             judgeLLMServiceFactory: { settingsVM.makeJudgeLLMService() },
@@ -244,6 +251,7 @@ final class AppEnvironment {
             skillMatcher: skillMatcher,
             skillTracker: skillTracker,
             skillDogfoodLogger: skillDogfoodLogger,
+            failureSkillCandidateStore: failureSkillCandidateStore,
             governanceTelemetry: governanceTelemetry,
             scratchPadStore: scratchPadStore,
             shadowLearningSignalRecorder: shadowLearningSignalRecorder,
@@ -251,7 +259,15 @@ final class AppEnvironment {
             slowCognitionArtifactProvider: slowCognitionArtifactProvider,
             heartbeatCoordinator: heartbeatCoordinator,
             shouldUseGeminiHistoryCache: { settingsVM.geminiHistoryCacheEnabled },
-            shouldPersistAssistantThinking: { settingsVM.assistantThinkingEnabled }
+            shouldPersistAssistantThinking: { settingsVM.assistantThinkingEnabled },
+            perConversationReflectionServiceFactory: {
+                let key = settingsVM.geminiApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !key.isEmpty else { return nil }
+                return PerConversationReflectionService(
+                    nodeStore: nodeStore,
+                    llm: GeminiLLMService(apiKey: key)
+                )
+            }
         )
         let youtubeLearningVM = YouTubeLearningViewModel(
             transcriptService: YouTubeTranscriptService(),
@@ -322,6 +338,7 @@ final class AppEnvironment {
             skillStore: skillStore,
             skillMatcher: skillMatcher,
             skillTracker: skillTracker,
+            failureSkillCandidateStore: failureSkillCandidateStore,
             seedSkillImporter: seedSkillImporter,
             shadowLearningStore: shadowLearningStore,
             shadowLearningSignalRecorder: shadowLearningSignalRecorder,
@@ -342,6 +359,7 @@ final class AppEnvironment {
             backgroundAITelemetry: backgroundAITelemetry,
             galaxyRelationTelemetry: galaxyRelationTelemetry,
             scratchPadStore: scratchPadStore,
+            conversationSessionStore: conversationSessionStore,
             activeBrowserTabURLReader: ActiveBrowserTabURLReader(),
             voiceController: voiceController,
             voiceTranscriptCommitter: voiceTranscriptCommitter,

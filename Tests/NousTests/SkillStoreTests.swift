@@ -284,8 +284,28 @@ final class SkillStoreTests: XCTestCase {
         }
     }
 
-    func testInsertRejectsEmptyModes() {
+    func testInsertAcceptsGlobalAlwaysSkillWithoutModes() throws {
         let skill = makeSkill(payload: Self.makePayload(modes: []))
+
+        try store.insertSkill(skill)
+
+        let fetched = try XCTUnwrap(store.fetchSkill(id: skill.id))
+        XCTAssertEqual(fetched.payload.trigger.kind, .always)
+        XCTAssertEqual(fetched.payload.trigger.modes, [])
+    }
+
+    func testInsertRejectsModeTriggerWithEmptyModes() {
+        let payload = SkillPayload(
+            payloadVersion: 1,
+            name: "empty-mode",
+            description: nil,
+            source: .alex,
+            trigger: SkillTrigger(kind: .mode, modes: [], priority: 70),
+            action: SkillAction(kind: .promptFragment, content: "Use concrete language."),
+            rationale: nil,
+            antiPatternExamples: []
+        )
+        let skill = makeSkill(payload: payload)
 
         XCTAssertThrowsError(try store.insertSkill(skill)) { error in
             XCTAssertEqual(error as? SkillStoreError, .emptyModes)
@@ -331,7 +351,17 @@ final class SkillStoreTests: XCTestCase {
         let skill = makeSkill()
         try store.insertSkill(skill)
 
-        let invalid = makeSkill(id: skill.id, payload: Self.makePayload(modes: []))
+        let invalidPayload = SkillPayload(
+            payloadVersion: 1,
+            name: "empty-mode",
+            description: nil,
+            source: .alex,
+            trigger: SkillTrigger(kind: .mode, modes: [], priority: 70),
+            action: SkillAction(kind: .promptFragment, content: "Use concrete language."),
+            rationale: nil,
+            antiPatternExamples: []
+        )
+        let invalid = makeSkill(id: skill.id, payload: invalidPayload)
 
         XCTAssertThrowsError(try store.updateSkill(invalid)) { error in
             XCTAssertEqual(error as? SkillStoreError, .emptyModes)

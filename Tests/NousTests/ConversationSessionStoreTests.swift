@@ -266,6 +266,65 @@ final class ConversationSessionStoreTests: XCTestCase {
         XCTAssertEqual(storedMessage.decodedAgentTraceRecords.first?.detail, "Matched")
     }
 
+    func testCommitAssistantTurnRecoversWhenNodeDisappearsAfterUserAppend() throws {
+        let telemetry = RecordingConversationRecoveryTelemetry()
+        sessionStore = ConversationSessionStore(nodeStore: store, telemetry: telemetry)
+        let node = try sessionStore.startConversation(title: "Live Turn")
+        let userMessage = Message(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000801")!,
+            nodeId: node.id,
+            role: .user,
+            content: "Continue even if this chat was stale."
+        )
+        try store.insertMessage(userMessage)
+        try store.deleteNode(id: node.id)
+
+        let committed = try sessionStore.commitAssistantTurn(
+            nodeId: node.id,
+            currentMessages: [userMessage],
+            assistantContent: "I can continue from the recovered turn.",
+            conversationTitle: "Recovered live turn"
+        )
+
+        XCTAssertNotEqual(committed.node.id, node.id)
+        XCTAssertEqual(committed.node.title, "Recovered live turn")
+        XCTAssertEqual(committed.messagesAfterAssistantAppend.map(\.nodeId), [committed.node.id, committed.node.id])
+        XCTAssertEqual(
+            committed.messagesAfterAssistantAppend.map(\.content),
+            ["Continue even if this chat was stale.", "I can continue from the recovered turn."]
+        )
+
+        let storedMessages = try store.fetchMessages(nodeId: committed.node.id)
+        XCTAssertEqual(storedMessages.map(\.content), committed.messagesAfterAssistantAppend.map(\.content))
+
+        let event = try XCTUnwrap(telemetry.events.first)
+        XCTAssertEqual(event.reason, .missingNodeBeforeAssistantCommit)
+        XCTAssertEqual(event.originalNodeId, node.id)
+        XCTAssertEqual(event.recoveredNodeId, committed.node.id)
+        XCTAssertEqual(event.rebasedMessageCount, 1)
+    }
+
+    @MainActor
+    func test_streamingSession_isIdentityStableForSameId() {
+        let store = makeStoreForStreamingTests()
+        let id = UUID()
+        let a = store.streamingSession(for: id)
+        let b = store.streamingSession(for: id)
+        XCTAssertTrue(a === b)
+    }
+
+    @MainActor
+    func test_streamingSession_distinctIdsProduceDistinctInstances() {
+        let store = makeStoreForStreamingTests()
+        let a = store.streamingSession(for: UUID())
+        let b = store.streamingSession(for: UUID())
+        XCTAssertFalse(a === b)
+    }
+
+    private func makeStoreForStreamingTests() -> ConversationSessionStore {
+        sessionStore
+    }
+
     func testRemoveAssistantTurnRecordsBehaviorDeleteSignal() throws {
         let telemetry = RecordingBehaviorEvalTelemetry()
         sessionStore = ConversationSessionStore(

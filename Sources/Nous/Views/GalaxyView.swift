@@ -161,6 +161,32 @@ struct GalaxyView: View {
                             .lineSpacing(2)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+
+                    if let edge = selectedEdge {
+                        Divider().background(GalaxyPalette.stroke)
+
+                        ThumbFeedbackView(
+                            verdict: Binding(
+                                get: { vm.feedback(for: edge)?.verdict ?? .unset },
+                                set: { newVerdict in
+                                    let currentNote = vm.feedback(for: edge)?.note ?? ""
+                                    vm.upsertEdgeFeedback(edge: edge, verdict: newVerdict, note: currentNote)
+                                }
+                            ),
+                            note: Binding(
+                                get: { vm.feedback(for: edge)?.note ?? "" },
+                                set: { newNote in
+                                    let currentVerdict = vm.feedback(for: edge)?.verdict ?? .unset
+                                    vm.upsertEdgeFeedback(edge: edge, verdict: currentVerdict, note: newNote)
+                                }
+                            ),
+                            style: .galaxy,
+                            telemetry: vm.telemetry(for: edge),
+                            onChange: { verdict, note in
+                                vm.upsertEdgeFeedback(edge: edge, verdict: verdict, note: note)
+                            }
+                        )
+                    }
                 }
             }
             .scrollIndicators(.hidden)
@@ -224,52 +250,8 @@ struct GalaxyView: View {
         }
     }
 
-    private var lensPicker: some View {
-        HStack(spacing: 2) {
-            ForEach(GalaxyLensFilter.allCases) { lens in
-                let isSelected = lens == selectedLens
-
-                Button {
-                    withAnimation(smoothAnimation) {
-                        selectedLens = lens
-                        if let selectedEdge, !lens.matches(selectedEdge) {
-                            selectedEdgeId = nil
-                        }
-                    }
-                } label: {
-                    Text(lens.shortTitle)
-                        .font(.system(size: 13, weight: isSelected ? .bold : .semibold, design: .rounded))
-                        .foregroundStyle(isSelected ? GalaxyPalette.darkInk : GalaxyPalette.secondaryText)
-                        .frame(width: 52, height: 34)
-                        .background(
-                            Capsule()
-                                .fill(isSelected ? GalaxyPalette.accent : Color.clear)
-                        )
-                }
-                .buttonStyle(.plain)
-                .help(lens.title)
-            }
-        }
-        .padding(5)
-        .background(
-            Capsule()
-                .fill(GalaxyPalette.panel.opacity(0.66))
-        )
-        .background(
-            NativeGlassPanel(cornerRadius: 22, tintColor: AppColor.controlGlassTint) { EmptyView() }
-        )
-        .overlay(
-            Capsule()
-                .stroke(GalaxyPalette.stroke, lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.18), radius: 18, x: 0, y: 12)
-    }
-
     private var galaxyControls: some View {
-        VStack(spacing: 9) {
-            relationLegend
-            lensPicker
-        }
+        relationLegend
     }
 
     private var relationLegend: some View {
@@ -397,10 +379,10 @@ struct GalaxyView: View {
             selectedEdgeId = nil
             vm.selectedNodeId = shouldSelect ? id : nil
         }
-
-        if shouldSelect {
-            vm.refineRelationship(edge: journalEdge)
-        }
+        // Refinement is intentionally not triggered here. Tapping a dashed
+        // candidate edge (handleEdgeTap → vm.refineRelationship) is the only
+        // entry point — node selection alone must not delete edges via the
+        // LLM-reject path in GalaxyEdgeEngine.refineSemanticEdge.
     }
 
     private func handleEdgeTap(_ id: UUID) {
