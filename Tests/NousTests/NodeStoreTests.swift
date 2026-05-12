@@ -1188,26 +1188,30 @@ final class NodeStoreTests: XCTestCase {
     /// foundation for the plan's "vector finds the entry → graph
     /// traverses" retrieval pattern.
     func testFetchMemoryAtomsNearestRanksByCosineSimilarity() throws {
+        let sig = EmbeddingService.currentSignature
         let atomA = MemoryAtom(
             type: .preference,
             statement: "A",
             scope: .global,
             status: .active,
-            embedding: [1.0, 0.0, 0.0]
+            embedding: [1.0, 0.0, 0.0],
+            embeddingSignature: sig
         )
         let atomB = MemoryAtom(
             type: .preference,
             statement: "B",
             scope: .global,
             status: .active,
-            embedding: [0.0, 1.0, 0.0]
+            embedding: [0.0, 1.0, 0.0],
+            embeddingSignature: sig
         )
         let atomC = MemoryAtom(
             type: .preference,
             statement: "C",
             scope: .global,
             status: .active,
-            embedding: [0.0, 0.0, 1.0]
+            embedding: [0.0, 0.0, 1.0],
+            embeddingSignature: sig
         )
         let atomD = MemoryAtom(
             type: .preference,
@@ -1220,6 +1224,7 @@ final class NodeStoreTests: XCTestCase {
         let results = try store.fetchMemoryAtomsNearest(
             embedding: [0.9, 0.1, 0.0],
             topK: 2,
+            activeSignature: sig,
             statuses: [.active]
         )
 
@@ -1234,25 +1239,29 @@ final class NodeStoreTests: XCTestCase {
     /// Status filter on vector search must drop superseded/archived rows so
     /// stale memory doesn't surface in vector recall.
     func testFetchMemoryAtomsNearestFiltersByStatus() throws {
+        let sig = EmbeddingService.currentSignature
         let active = MemoryAtom(
             type: .preference,
             statement: "active",
             scope: .global,
             status: .active,
-            embedding: [1.0, 0.0]
+            embedding: [1.0, 0.0],
+            embeddingSignature: sig
         )
         let superseded = MemoryAtom(
             type: .preference,
             statement: "superseded",
             scope: .global,
             status: .superseded,
-            embedding: [1.0, 0.0]
+            embedding: [1.0, 0.0],
+            embeddingSignature: sig
         )
         try [active, superseded].forEach(store.insertMemoryAtom)
 
         let results = try store.fetchMemoryAtomsNearest(
             embedding: [1.0, 0.0],
             topK: 5,
+            activeSignature: sig,
             statuses: [.active]
         )
 

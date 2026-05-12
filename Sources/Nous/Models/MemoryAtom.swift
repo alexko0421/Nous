@@ -40,6 +40,8 @@ struct MemoryAtom: Identifiable, Codable, Equatable {
     var sourceNodeId: UUID?
     var sourceMessageId: UUID?
     var embedding: [Float]?
+    var embeddingSignature: String?
+    var verbatimQuote: String?
 
     init(
         id: UUID = UUID(),
@@ -58,7 +60,9 @@ struct MemoryAtom: Identifiable, Codable, Equatable {
         lastSeenAt: Date? = nil,
         sourceNodeId: UUID? = nil,
         sourceMessageId: UUID? = nil,
-        embedding: [Float]? = nil
+        embedding: [Float]? = nil,
+        embeddingSignature: String? = nil,
+        verbatimQuote: String? = nil
     ) {
         self.id = id
         self.type = type
@@ -77,5 +81,7 @@ struct MemoryAtom: Identifiable, Codable, Equatable {
         self.sourceNodeId = sourceNodeId
         self.sourceMessageId = sourceMessageId
         self.embedding = embedding
+        self.embeddingSignature = embeddingSignature
+        self.verbatimQuote = verbatimQuote
     }
 }

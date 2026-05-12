@@ -111,7 +111,6 @@ final class TurnPlanner {
             node: prepared.node,
             policy: policy,
             citationSourceMaterials: request.sourceMaterials,
-            includeGraphPromptRecall: planningQuickActionMode != nil,
             now: request.now
         )
         let citations = memoryContext.citations

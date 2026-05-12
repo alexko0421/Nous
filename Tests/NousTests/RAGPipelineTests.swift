@@ -670,7 +670,7 @@ final class RAGPipelineTests: XCTestCase {
         XCTAssertTrue(trace.promptLayers.contains("memory_graph_recall"))
     }
 
-    func testAssembleContextOmitsGraphMemoryRecallInNormalChat() {
+    func testAssembleContextIncludesGraphMemoryRecallInNormalChat() {
         let recall = "- Rejected proposal: Build Nous around solving emotions."
         let context = PromptContextAssembler.assembleContext(
             currentUserInput: "我哋之前否決過邊個方案，點解？",
@@ -683,8 +683,8 @@ final class RAGPipelineTests: XCTestCase {
             projectGoal: nil
         ).combined
 
-        XCTAssertFalse(context.contains("GRAPH MEMORY RECALL"),
-                       "normal chat (no activeQuickActionMode) must not surface graph memory recall")
+        XCTAssertTrue(context.contains("GRAPH MEMORY RECALL"),
+                      "normal chat now surfaces graph memory recall (Block 4b flip)")
     }
 
     func testAssembleContextStrategistModeChangesPromptBehaviorWithoutDroppingContinuity() {

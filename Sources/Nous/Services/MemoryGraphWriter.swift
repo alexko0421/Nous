@@ -47,6 +47,7 @@ final class MemoryGraphWriter {
             if existing.statement != candidate.statement,
                let fresh = embed(candidate.statement) {
                 enriched.embedding = fresh
+                enriched.embeddingSignature = EmbeddingService.currentSignature
             }
             let merged = Self.merged(existing: existing, candidate: enriched)
             if Self.hasMeaningfulChange(existing, merged) {
@@ -62,6 +63,7 @@ final class MemoryGraphWriter {
         var enriched = candidate
         if enriched.embedding == nil, let fresh = embed(candidate.statement) {
             enriched.embedding = fresh
+            enriched.embeddingSignature = EmbeddingService.currentSignature
         }
         try nodeStore.insertMemoryAtom(enriched)
         atoms.append(enriched)
@@ -343,6 +345,7 @@ final class MemoryGraphWriter {
         merged.sourceNodeId = existing.sourceNodeId ?? candidate.sourceNodeId
         merged.sourceMessageId = existing.sourceMessageId ?? candidate.sourceMessageId
         merged.embedding = existing.embedding ?? candidate.embedding
+        merged.verbatimQuote = candidate.verbatimQuote ?? existing.verbatimQuote
         return merged
     }
 

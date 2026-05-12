@@ -1057,7 +1057,7 @@ final class UserMemoryCore {
           "semantic_atoms": [
             {
               "type":"preference|belief|correction|goal|plan|rule|pattern",
-              "statement":"the durable claim in Alex's voice",
+              "statement":"the durable claim in Alex's voice, in the SAME LANGUAGE Alex spoke (Cantonese / Mandarin / English / code-switch). Do not translate. If Alex used 「我唔系一个读书好叻嘅人」 keep it as Cantonese; do not rewrite to 'I am not academically strong'. Loose paraphrase within the original language is allowed; translation across languages is not.",
               "corrects":"(only when type=correction) short paraphrase of the prior belief/preference/goal/plan/rule Alex is retracting, in the form Alex would have stated it before",
               "evidence_message_id":"the message_id containing the evidence quote",
               "evidence_quote":"short exact quote from Alex's message proving this atom",
@@ -1067,6 +1067,7 @@ final class UserMemoryCore {
         }
 
         Rules:
+        - SOURCE LANGUAGE PRESERVATION: every `statement` must remain in the language Alex used in the cited evidence_quote. Cross-language translation in `statement` is a bug. If unsure, copy the evidence_quote substring as the statement.
         - decision = an explicit choice Alex made
         - boundary = a red line, do-not-cross rule, or operating principle
         - constraint = a real limitation or non-negotiable condition
@@ -1315,7 +1316,8 @@ final class UserMemoryCore {
             updatedAt: now,
             lastSeenAt: now,
             sourceNodeId: sourceNodeId,
-            sourceMessageId: verified.sourceMessage.id
+            sourceMessageId: verified.sourceMessage.id,
+            verbatimQuote: verified.atom.evidenceQuote
         )
     }
 

@@ -55,6 +55,7 @@ final class MemoryAtomEmbeddingBackfillService {
             }
 
             atom.embedding = vector
+            atom.embeddingSignature = EmbeddingService.currentSignature
             atom.updatedAt = Date()
             try nodeStore.updateMemoryAtom(atom)
             report.embedded += 1

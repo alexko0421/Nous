@@ -17,15 +17,18 @@ final class MemoryGraphMessageBackfillService {
     private let nodeStore: NodeStore
     private let llmServiceProvider: () -> LLMService?
     private let backgroundTelemetry: (any BackgroundAIJobTelemetryRecording)?
+    private let embed: (String) -> [Float]?
 
     init(
         nodeStore: NodeStore,
         llmServiceProvider: @escaping () -> LLMService?,
-        backgroundTelemetry: (any BackgroundAIJobTelemetryRecording)? = nil
+        backgroundTelemetry: (any BackgroundAIJobTelemetryRecording)? = nil,
+        embed: @escaping (String) -> [Float]? = { _ in nil }
     ) {
         self.nodeStore = nodeStore
         self.llmServiceProvider = llmServiceProvider
         self.backgroundTelemetry = backgroundTelemetry
+        self.embed = embed
     }
 
     @discardableResult
@@ -216,7 +219,7 @@ final class MemoryGraphMessageBackfillService {
         let now = Date()
 
         try nodeStore.inTransaction {
-            let writer = MemoryGraphWriter(nodeStore: nodeStore)
+            let writer = MemoryGraphWriter(nodeStore: nodeStore, embed: embed)
             var atoms = try nodeStore.fetchMemoryAtoms()
             var edges = try nodeStore.fetchMemoryEdges()
 

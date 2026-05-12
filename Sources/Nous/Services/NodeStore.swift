@@ -630,6 +630,16 @@ final class NodeStore {
             column: "last_scanned_message_id",
             alterSQL: "ALTER TABLE shadow_learning_state ADD COLUMN last_scanned_message_id TEXT;"
         )
+        try ensureColumnExists(
+            table: "memory_atoms",
+            column: "embedding_signature",
+            alterSQL: "ALTER TABLE memory_atoms ADD COLUMN embedding_signature TEXT;"
+        )
+        try ensureColumnExists(
+            table: "memory_atoms",
+            column: "verbatim_quote",
+            alterSQL: "ALTER TABLE memory_atoms ADD COLUMN verbatim_quote TEXT;"
+        )
 
         // Indexes
         try db.exec("CREATE INDEX IF NOT EXISTS idx_nodes_projectId  ON nodes(projectId);")
@@ -654,6 +664,11 @@ final class NodeStore {
         try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_atoms_scope_key ON memory_atoms(scope, scope_ref_id, normalized_key);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_atoms_source_node ON memory_atoms(source_node_id);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_atoms_source_message ON memory_atoms(source_message_id);")
+        try db.exec("""
+            CREATE INDEX IF NOT EXISTS idx_memory_atoms_signature
+            ON memory_atoms(embedding_signature)
+            WHERE embedding_signature IS NOT NULL;
+        """)
         try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_edges_from_type ON memory_edges(from_atom_id, type);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_edges_to_type ON memory_edges(to_atom_id, type);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_observations_source_message ON memory_observations(source_message_id);")
@@ -2171,8 +2186,9 @@ final class NodeStore {
             INSERT INTO memory_atoms
               (id, type, statement, normalized_key, scope, scope_ref_id, status,
                confidence, event_time, valid_from, valid_until, created_at,
-               updated_at, last_seen_at, source_node_id, source_message_id, embedding)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+               updated_at, last_seen_at, source_node_id, source_message_id, embedding,
+               embedding_signature, verbatim_quote)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """)
         try stmt.bind(atom.id.uuidString, at: 1)
         try stmt.bind(atom.type.rawValue, at: 2)
@@ -2192,6 +2208,8 @@ final class NodeStore {
         try stmt.bind(atom.sourceMessageId?.uuidString, at: 16)
         let embeddingData = atom.embedding.map { encodeFloats($0) }
         try stmt.bind(embeddingData, at: 17)
+        try stmt.bind(atom.embeddingSignature, at: 18)
+        try stmt.bind(atom.verbatimQuote, at: 19)
         try stmt.step()
     }
 
@@ -2206,7 +2224,8 @@ final class NodeStore {
             SET type = ?, statement = ?, normalized_key = ?, scope = ?, scope_ref_id = ?,
                 status = ?, confidence = ?, event_time = ?, valid_from = ?,
                 valid_until = ?, updated_at = ?, last_seen_at = ?, source_node_id = ?,
-                source_message_id = ?, embedding = ?
+                source_message_id = ?, embedding = ?, embedding_signature = ?,
+                verbatim_quote = ?
             WHERE id = ?;
         """)
         try stmt.bind(atom.type.rawValue, at: 1)
@@ -2225,7 +2244,9 @@ final class NodeStore {
         try stmt.bind(atom.sourceMessageId?.uuidString, at: 14)
         let embeddingData = atom.embedding.map { encodeFloats($0) }
         try stmt.bind(embeddingData, at: 15)
-        try stmt.bind(atom.id.uuidString, at: 16)
+        try stmt.bind(atom.embeddingSignature, at: 16)
+        try stmt.bind(atom.verbatimQuote, at: 17)
+        try stmt.bind(atom.id.uuidString, at: 18)
         try stmt.step()
     }
 
@@ -2233,7 +2254,8 @@ final class NodeStore {
         let stmt = try db.prepare("""
             SELECT id, type, statement, normalized_key, scope, scope_ref_id, status,
                    confidence, event_time, valid_from, valid_until, created_at,
-                   updated_at, last_seen_at, source_node_id, source_message_id, embedding
+                   updated_at, last_seen_at, source_node_id, source_message_id, embedding,
+                   embedding_signature, verbatim_quote
             FROM memory_atoms
             WHERE id = ?
             LIMIT 1;
@@ -2247,7 +2269,8 @@ final class NodeStore {
         let stmt = try db.prepare("""
             SELECT id, type, statement, normalized_key, scope, scope_ref_id, status,
                    confidence, event_time, valid_from, valid_until, created_at,
-                   updated_at, last_seen_at, source_node_id, source_message_id, embedding
+                   updated_at, last_seen_at, source_node_id, source_message_id, embedding,
+                   embedding_signature, verbatim_quote
             FROM memory_atoms
             ORDER BY COALESCE(event_time, created_at) DESC, created_at DESC;
         """)
@@ -2314,7 +2337,8 @@ final class NodeStore {
         let sql = """
             SELECT id, type, statement, normalized_key, scope, scope_ref_id, status,
                    confidence, event_time, valid_from, valid_until, created_at,
-                   updated_at, last_seen_at, source_node_id, source_message_id, embedding
+                   updated_at, last_seen_at, source_node_id, source_message_id, embedding,
+                   embedding_signature, verbatim_quote
             FROM memory_atoms
             \(whereSQL)ORDER BY COALESCE(event_time, created_at) DESC, created_at DESC
             \(limitSQL);
@@ -2353,12 +2377,13 @@ final class NodeStore {
     func fetchMemoryAtomsNearest(
         embedding query: [Float],
         topK: Int,
+        activeSignature: String,
         statuses: Set<MemoryStatus> = []
     ) throws -> [MemoryAtom] {
         guard !query.isEmpty, topK > 0 else { return [] }
 
-        var whereClauses = ["embedding IS NOT NULL"]
-        var stringBindings: [String?] = []
+        var whereClauses = ["embedding IS NOT NULL", "embedding_signature = ?"]
+        var stringBindings: [String?] = [activeSignature]
         if !statuses.isEmpty {
             let placeholders = Array(repeating: "?", count: statuses.count).joined(separator: ", ")
             whereClauses.append("status IN (\(placeholders))")
@@ -2368,7 +2393,8 @@ final class NodeStore {
         let stmt = try db.prepare("""
             SELECT id, type, statement, normalized_key, scope, scope_ref_id, status,
                    confidence, event_time, valid_from, valid_until, created_at,
-                   updated_at, last_seen_at, source_node_id, source_message_id, embedding
+                   updated_at, last_seen_at, source_node_id, source_message_id, embedding,
+                   embedding_signature, verbatim_quote
             FROM memory_atoms
             WHERE \(whereClauses.joined(separator: " AND "));
         """)
@@ -2418,7 +2444,8 @@ final class NodeStore {
         let stmt = try db.prepare("""
             SELECT id, type, statement, normalized_key, scope, scope_ref_id, status,
                    confidence, event_time, valid_from, valid_until, created_at,
-                   updated_at, last_seen_at, source_node_id, source_message_id, embedding
+                   updated_at, last_seen_at, source_node_id, source_message_id, embedding,
+                   embedding_signature, verbatim_quote
             FROM memory_atoms
             WHERE source_node_id IN (\(placeholders))
             ORDER BY COALESCE(event_time, created_at) DESC, created_at DESC;
@@ -2595,6 +2622,8 @@ final class NodeStore {
         let sourceNodeId = stmt.text(at: 14).flatMap { UUID(uuidString: $0) }
         let sourceMessageId = stmt.text(at: 15).flatMap { UUID(uuidString: $0) }
         let embedding = stmt.blob(at: 16).map { decodeFloats($0) }
+        let embeddingSignature = stmt.text(at: 17)
+        let verbatimQuote = stmt.text(at: 18)
         return MemoryAtom(
             id: id,
             type: type,
@@ -2612,7 +2641,9 @@ final class NodeStore {
             lastSeenAt: lastSeenAt,
             sourceNodeId: sourceNodeId,
             sourceMessageId: sourceMessageId,
-            embedding: embedding
+            embedding: embedding,
+            embeddingSignature: embeddingSignature,
+            verbatimQuote: verbatimQuote
         )
     }
 

@@ -27,6 +27,7 @@ struct AppDependencies {
     let conversationTitleBackfill: ConversationTitleBackfillService
     let memoryGraphMessageBackfill: MemoryGraphMessageBackfillService
     let memoryAtomEmbeddingBackfill: MemoryAtomEmbeddingBackfillService
+    let embeddingMigrationRunner: EmbeddingMigrationRunner
     let userMemoryService: UserMemoryService
     let governanceTelemetry: GovernanceTelemetryStore
     let backgroundAITelemetry: BackgroundAIJobTelemetryStore
@@ -184,9 +185,20 @@ final class AppEnvironment {
         let memoryGraphMessageBackfill = MemoryGraphMessageBackfillService(
             nodeStore: nodeStore,
             llmServiceProvider: { settingsVM.makeLLMService(openRouterWebSearchEnabled: false) },
-            backgroundTelemetry: backgroundAITelemetry
+            backgroundTelemetry: backgroundAITelemetry,
+            embed: { [embeddingService] text in
+                guard embeddingService.isLoaded else { return nil }
+                return try? embeddingService.embed(text)
+            }
         )
         let memoryAtomEmbeddingBackfill = MemoryAtomEmbeddingBackfillService(
+            nodeStore: nodeStore,
+            embed: { [embeddingService] text in
+                guard embeddingService.isLoaded else { return nil }
+                return try? embeddingService.embed(text)
+            }
+        )
+        let embeddingMigrationRunner = EmbeddingMigrationRunner(
             nodeStore: nodeStore,
             embed: { [embeddingService] text in
                 guard embeddingService.isLoaded else { return nil }
@@ -346,6 +358,7 @@ final class AppEnvironment {
             conversationTitleBackfill: conversationTitleBackfill,
             memoryGraphMessageBackfill: memoryGraphMessageBackfill,
             memoryAtomEmbeddingBackfill: memoryAtomEmbeddingBackfill,
+            embeddingMigrationRunner: embeddingMigrationRunner,
             userMemoryService: userMemoryService,
             governanceTelemetry: governanceTelemetry,
             backgroundAITelemetry: backgroundAITelemetry,
