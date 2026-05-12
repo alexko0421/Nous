@@ -478,6 +478,7 @@ private extension TurnPlan {
             prepared: prepared,
             citations: citations,
             sourceMaterials: sourceMaterials,
+            sourceBriefing: sourceBriefing,
             promptTrace: trace,
             effectiveMode: effectiveMode,
             nextQuickActionModeIfCompleted: nextQuickActionModeIfCompleted,

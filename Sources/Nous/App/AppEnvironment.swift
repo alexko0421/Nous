@@ -212,6 +212,9 @@ final class AppEnvironment {
             llmServiceProvider: { settingsVM.makeLLMService(openRouterWebSearchEnabled: false) }
         )
         let sourceLearningMemoryScheduler = SourceLearningMemoryScheduler(service: sourceLearningMemoryService)
+        let sourceBriefingService = SourceBriefingService(
+            llmServiceProvider: { settingsVM.makeLLMService(openRouterWebSearchEnabled: false) }
+        )
         let conversationSessionStore = ConversationSessionStore(
             nodeStore: nodeStore,
             telemetry: governanceTelemetry
@@ -238,6 +241,7 @@ final class AppEnvironment {
             sourceLearningMemoryScheduler: sourceLearningMemoryScheduler,
             conversationSessionStore: conversationSessionStore,
             sourceIngestionService: sourceIngestionService,
+            sourceBriefingService: sourceBriefingService,
             llmServiceProvider: { settingsVM.makeLLMService(openRouterWebSearchEnabled: settingsVM.openRouterWebSearchEnabled) },
             currentProviderProvider: { settingsVM.selectedProvider },
             judgeLLMServiceFactory: { settingsVM.makeJudgeLLMService() },

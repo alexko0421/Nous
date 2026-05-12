@@ -160,12 +160,16 @@ struct ChatArea: View {
                                             )
                                             if msg.role == .user {
                                                 let sourceMaterials = vm.sourceMaterials(for: msg)
-                                                if !sourceMaterials.isEmpty {
+                                                let sourceBriefing = vm.sourceBriefing(for: msg)
+                                                if !sourceMaterials.isEmpty || sourceBriefing != nil {
                                                     HStack {
                                                         Spacer(minLength: 60)
                                                         VStack(alignment: .trailing, spacing: 6) {
                                                             ForEach(Array(sourceMaterials.prefix(2)), id: \.sourceNodeId) { material in
                                                                 SourceMaterialMessageChip(material: material)
+                                                            }
+                                                            if let sourceBriefing {
+                                                                SourceBriefingCard(briefing: sourceBriefing)
                                                             }
                                                         }
                                                         .frame(maxWidth: 520, alignment: .trailing)
@@ -473,17 +477,21 @@ struct ChatArea: View {
                                         .onSubmit(sendCurrentInput)
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
+                                .onDrop(
+                                    of: AttachmentDropSupport.allFileTypeIdentifiers,
+                                    isTargeted: $isImageDropTargeted,
+                                    perform: handleImageDrop
+                                )
                                 .background(
-                                    NativeGlassPanel(
+                                    MatteGlassPanel(
                                         cornerRadius: 18,
-                                        tintColor: AppColor.controlGlassTint
+                                        overlayColor: AppColor.composerMatteOverlay
                                     ) { EmptyView() }
                                 )
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                        .stroke(AppColor.panelStroke, lineWidth: 1)
+                                        .stroke(AppColor.composerMatteStroke, lineWidth: 1)
                                 )
-                                .shadow(color: .black.opacity(0.04), radius: 6, x: 0, y: 2)
 
                                 if shouldSeparateComposerPrimaryAction {
                                     primaryActionButton(isSeparated: true)
@@ -528,7 +536,7 @@ struct ChatArea: View {
                     .padding(.bottom, 16)
                     .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                     .onDrop(
-                        of: AttachmentDropSupport.acceptedTypeIdentifiers,
+                        of: AttachmentDropSupport.allFileTypeIdentifiers,
                         isTargeted: $isImageDropTargeted,
                         perform: handleImageDrop
                     )
@@ -544,7 +552,12 @@ struct ChatArea: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(AppColor.colaBeige)
+        .background(
+            NativeGlassPanel(
+                cornerRadius: 36,
+                tintColor: AppColor.sidebarGlassTint
+            ) { EmptyView() }
+        )
         .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
         .onChange(of: citationNodeIDs) { _, _ in
             isRelevantChatsExpanded = false
@@ -628,6 +641,7 @@ struct ChatArea: View {
         }
         .onAppear {
             reloadTemporaryBranchRecords()
+            focusComposerOnNextRunLoop()
         }
         .onChange(of: voiceAttachmentResetToken) { _, _ in
             attachments = []
@@ -638,6 +652,12 @@ struct ChatArea: View {
                     isActionMenuExpanded = false
                 }
             }
+        }
+    }
+
+    private func focusComposerOnNextRunLoop() {
+        DispatchQueue.main.async {
+            isComposerFocused = true
         }
     }
 
@@ -1040,9 +1060,8 @@ struct ChatArea: View {
     }
 
     private func handleImageDrop(_ providers: [NSItemProvider]) -> Bool {
-        guard canPickPhotoAttachment else { return false }
         Task {
-            let droppedAttachments = await AttachmentExtractor.droppedImageContexts(from: providers)
+            let droppedAttachments = await AttachmentExtractor.droppedAttachmentContexts(from: providers)
             await MainActor.run {
                 appendAttachments(droppedAttachments)
             }
@@ -1557,7 +1576,7 @@ struct ComposerLeadingActionButton: View {
 
     private var tintColor: NSColor {
         guard isSeparated else {
-            return AppColor.controlGlassTint
+            return AppColor.composerMatteOverlay
         }
 
         return NSColor(
@@ -1604,18 +1623,25 @@ struct ComposerLeadingActionButton: View {
             Circle()
                 .fill(AppColor.colaOrange.opacity(motion.fillOpacity(isSeparated: isSeparated)))
 
-            NativeGlassPanel(
-                cornerRadius: cornerRadius,
-                tintColor: tintColor
-            ) { EmptyView() }
-            .opacity(isSeparated ? 0.72 : 1)
+            if isSeparated {
+                NativeGlassPanel(
+                    cornerRadius: cornerRadius,
+                    tintColor: tintColor
+                ) { EmptyView() }
+                .opacity(0.72)
+            } else {
+                MatteGlassPanel(
+                    cornerRadius: cornerRadius,
+                    overlayColor: tintColor
+                ) { EmptyView() }
+            }
         }
     }
 
     private var buttonStroke: some View {
         Circle()
             .stroke(
-                isSeparated ? AppColor.colaOrange.opacity(0.22) : AppColor.panelStroke,
+                isSeparated ? AppColor.colaOrange.opacity(0.22) : AppColor.composerMatteStroke,
                 lineWidth: 1
             )
     }

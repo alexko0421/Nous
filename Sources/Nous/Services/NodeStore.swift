@@ -206,6 +206,15 @@ final class NodeStore {
             );
         """)
 
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS source_briefings (
+                messageId     TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+                briefingJSON  TEXT NOT NULL,
+                createdAt     REAL NOT NULL,
+                updatedAt     REAL NOT NULL
+            );
+        """)
+
         try ensureColumnExists(
             table: "message_source_materials",
             column: "materialJSON",
@@ -638,6 +647,7 @@ final class NodeStore {
         try db.exec("CREATE INDEX IF NOT EXISTS idx_source_chunks_sourceNodeId ON source_chunks(sourceNodeId);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_message_source_materials_messageId ON message_source_materials(messageId);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_message_source_materials_sourceNodeId ON message_source_materials(sourceNodeId);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_source_briefings_messageId ON source_briefings(messageId);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_messages_nodeId  ON messages(nodeId);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_temporary_branch_records_nodeId ON temporary_branch_records(nodeId);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_edges_sourceId   ON edges(sourceId);")
@@ -1430,6 +1440,44 @@ final class NodeStore {
         return materials
     }
 
+    func replaceSourceBriefing(_ briefing: SourceBriefing, for messageId: UUID) throws {
+        try inTransaction {
+            if briefing.items.isEmpty {
+                let delete = try db.prepare("DELETE FROM source_briefings WHERE messageId = ?;")
+                try delete.bind(messageId.uuidString, at: 1)
+                try delete.step()
+                return
+            }
+
+            let now = Date().timeIntervalSince1970
+            let briefingJSON = Self.encodeSourceBriefing(briefing)
+            let stmt = try db.prepare("""
+                INSERT INTO source_briefings (messageId, briefingJSON, createdAt, updatedAt)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(messageId) DO UPDATE SET
+                    briefingJSON = excluded.briefingJSON,
+                    updatedAt = excluded.updatedAt;
+            """)
+            try stmt.bind(messageId.uuidString, at: 1)
+            try stmt.bind(briefingJSON, at: 2)
+            try stmt.bind(now, at: 3)
+            try stmt.bind(now, at: 4)
+            try stmt.step()
+        }
+    }
+
+    func fetchSourceBriefing(messageId: UUID) throws -> SourceBriefing? {
+        let stmt = try db.prepare("""
+            SELECT briefingJSON
+            FROM source_briefings
+            WHERE messageId = ?
+            LIMIT 1;
+        """)
+        try stmt.bind(messageId.uuidString, at: 1)
+        guard try stmt.step() else { return nil }
+        return Self.decodeSourceBriefing(stmt.text(at: 0))
+    }
+
     private static func encodeSourceMaterial(_ material: SourceMaterialContext) -> String? {
         guard !material.chunks.isEmpty else { return nil }
         guard let data = try? JSONEncoder().encode(material) else { return nil }
@@ -1442,6 +1490,19 @@ final class NodeStore {
             return nil
         }
         return try? JSONDecoder().decode(SourceMaterialContext.self, from: data)
+    }
+
+    private static func encodeSourceBriefing(_ briefing: SourceBriefing) -> String {
+        let data = (try? JSONEncoder().encode(briefing)) ?? Data("{}".utf8)
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private static func decodeSourceBriefing(_ rawValue: String?) -> SourceBriefing? {
+        guard let rawValue,
+              let data = rawValue.data(using: .utf8) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(SourceBriefing.self, from: data)
     }
 
     func upsertTemporaryBranchRecord(_ record: TemporaryBranchRecord) throws {

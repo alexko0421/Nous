@@ -45,6 +45,7 @@ struct TurnOutcomeFactory: Sendable {
             citations: plan.citations,
             promptTrace: plan.promptTrace,
             effectiveMode: plan.effectiveMode,
+            sourceBriefing: plan.sourceBriefing,
             resolvedCorpusEntries: plan.resolvedCorpusEntries
         )
     }

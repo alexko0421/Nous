@@ -235,6 +235,7 @@ struct TurnPrepared {
     let citations: [SearchResult]
     let promptTrace: PromptGovernanceTrace
     let effectiveMode: ChatMode
+    let sourceBriefing: SourceBriefing
     /// Block 4b Phase 1A — atom + reflection cards paired with their resolved
     /// source nodes. Carried alongside legacy `citations` so the UI can
     /// cascade-render atom cards primary and fall back to citations when the
@@ -250,6 +251,7 @@ struct TurnPrepared {
         citations: [SearchResult],
         promptTrace: PromptGovernanceTrace,
         effectiveMode: ChatMode,
+        sourceBriefing: SourceBriefing = .empty,
         resolvedCorpusEntries: [ResolvedCitableEntry] = []
     ) {
         self.turnId = turnId
@@ -259,6 +261,7 @@ struct TurnPrepared {
         self.citations = citations
         self.promptTrace = promptTrace
         self.effectiveMode = effectiveMode
+        self.sourceBriefing = sourceBriefing
         self.resolvedCorpusEntries = resolvedCorpusEntries
     }
 }
@@ -387,6 +390,7 @@ struct TurnPlan {
     let prepared: PreparedTurnSession
     let citations: [SearchResult]
     let sourceMaterials: [SourceMaterialContext]
+    let sourceBriefing: SourceBriefing
     let promptTrace: PromptGovernanceTrace
     let effectiveMode: ChatMode
     let nextQuickActionModeIfCompleted: QuickActionMode?
@@ -418,6 +422,7 @@ struct TurnPlan {
         prepared: PreparedTurnSession,
         citations: [SearchResult],
         sourceMaterials: [SourceMaterialContext],
+        sourceBriefing: SourceBriefing = .empty,
         promptTrace: PromptGovernanceTrace,
         effectiveMode: ChatMode,
         nextQuickActionModeIfCompleted: QuickActionMode?,
@@ -440,6 +445,7 @@ struct TurnPlan {
         self.prepared = prepared
         self.citations = citations
         self.sourceMaterials = sourceMaterials
+        self.sourceBriefing = sourceBriefing
         self.promptTrace = promptTrace
         self.effectiveMode = effectiveMode
         self.nextQuickActionModeIfCompleted = nextQuickActionModeIfCompleted
@@ -486,6 +492,7 @@ struct TurnPlan {
             prepared: prepared,
             citations: citations,
             sourceMaterials: [],
+            sourceBriefing: .empty,
             promptTrace: promptTrace,
             effectiveMode: effectiveMode,
             nextQuickActionModeIfCompleted: nextQuickActionModeIfCompleted,

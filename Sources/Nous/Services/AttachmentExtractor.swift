@@ -128,6 +128,11 @@ enum AttachmentExtractor {
                 continue
             }
 
+            if let representedFileContexts = await droppedRepresentedFileContexts(from: provider) {
+                contexts.append(contentsOf: representedFileContexts)
+                continue
+            }
+
             guard let data = await droppedImageData(from: provider) else { continue }
             let fileExtension = preferredImageFileExtension(from: provider)
             let mime = preferredImageMimeType(from: provider) ?? "image/png"
@@ -241,6 +246,71 @@ enum AttachmentExtractor {
         return nil
     }
 
+    private static func droppedRepresentedFileContexts(from provider: NSItemProvider) async -> [AttachedFileContext]? {
+        for identifier in representedFileTypeIdentifiers(from: provider) {
+            if let contexts = await droppedInPlaceFileContexts(from: provider, typeIdentifier: identifier) {
+                return contexts
+            }
+
+            if let contexts = await droppedTemporaryFileContexts(from: provider, typeIdentifier: identifier) {
+                return contexts
+            }
+        }
+
+        return nil
+    }
+
+    private static func representedFileTypeIdentifiers(from provider: NSItemProvider) -> [String] {
+        var identifiers = provider.registeredTypeIdentifiers.filter { identifier in
+            guard let type = UTType(identifier) else { return false }
+            return type.conforms(to: .item)
+        }
+
+        for fallback in [UTType.item.identifier, UTType.data.identifier] where !identifiers.contains(fallback) {
+            identifiers.append(fallback)
+        }
+
+        return identifiers
+    }
+
+    private static func droppedInPlaceFileContexts(
+        from provider: NSItemProvider,
+        typeIdentifier: String
+    ) async -> [AttachedFileContext]? {
+        guard provider.hasItemConformingToTypeIdentifier(typeIdentifier) else {
+            return nil
+        }
+
+        return await withCheckedContinuation { continuation in
+            provider.loadInPlaceFileRepresentation(forTypeIdentifier: typeIdentifier) { url, _, _ in
+                guard let url else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                continuation.resume(returning: fileContexts(from: [url]))
+            }
+        }
+    }
+
+    private static func droppedTemporaryFileContexts(
+        from provider: NSItemProvider,
+        typeIdentifier: String
+    ) async -> [AttachedFileContext]? {
+        guard provider.hasItemConformingToTypeIdentifier(typeIdentifier) else {
+            return nil
+        }
+
+        return await withCheckedContinuation { continuation in
+            provider.loadFileRepresentation(forTypeIdentifier: typeIdentifier) { url, _ in
+                guard let url else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                continuation.resume(returning: fileContexts(from: [url]))
+            }
+        }
+    }
+
     private static func droppedImageData(from provider: NSItemProvider) async -> Data? {
         guard provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) else {
             return nil
@@ -277,6 +347,7 @@ enum AttachmentDropSupport {
 
     /// Whole-chat-surface drop targets — any file (image, PDF, text) + inline image data.
     static let allFileTypeIdentifiers = [
+        UTType.item.identifier,
         UTType.fileURL.identifier,
         UTType.image.identifier,
         UTType.pdf.identifier,

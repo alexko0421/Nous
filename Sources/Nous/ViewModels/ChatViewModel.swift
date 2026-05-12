@@ -58,6 +58,7 @@ final class ChatViewModel {
     @ObservationIgnored private var pendingSourceMaterialsByTurnId: [UUID: [SourceMaterialContext]] = [:]
     @ObservationIgnored private var pendingSourceDiscussionContextByTurnId: [UUID: SourceDiscussionContext] = [:]
     @ObservationIgnored private var sourceMaterialsByUserMessageId: [UUID: [SourceMaterialContext]] = [:]
+    @ObservationIgnored private var sourceBriefingsByUserMessageId: [UUID: SourceBriefing] = [:]
 
     // MARK: - Dependencies
 
@@ -76,6 +77,7 @@ final class ChatViewModel {
     @ObservationIgnored private let explicitContextContinuationService: ContextContinuationService?
     @ObservationIgnored private let explicitTurnHousekeepingService: TurnHousekeepingService?
     @ObservationIgnored private let explicitSourceIngestionService: SourceIngestionService?
+    @ObservationIgnored private let sourceBriefingService: SourceBriefingService?
     private let llmServiceProvider: () -> (any LLMService)?
     private let currentProviderProvider: () -> LLMProvider
     private let judgeLLMServiceFactory: () -> (any LLMService)?
@@ -232,6 +234,7 @@ final class ChatViewModel {
             contradictionMemoryService: userMemoryService.contradictionReader,
             currentProviderProvider: currentProviderProvider,
             judgeLLMServiceFactory: judgeLLMServiceFactory,
+            sourceBriefingService: sourceBriefingService,
             provocationJudgeFactory: provocationJudgeFactory,
             governanceTelemetry: governanceTelemetry,
             skillStore: skillStore,
@@ -408,6 +411,7 @@ final class ChatViewModel {
         contextContinuationService: ContextContinuationService? = nil,
         turnHousekeepingService: TurnHousekeepingService? = nil,
         sourceIngestionService: SourceIngestionService? = nil,
+        sourceBriefingService: SourceBriefingService? = nil,
         llmServiceProvider: @escaping () -> (any LLMService)?,
         currentProviderProvider: @escaping () -> LLMProvider,
         judgeLLMServiceFactory: @escaping () -> (any LLMService)?,
@@ -465,6 +469,7 @@ final class ChatViewModel {
         self.explicitContextContinuationService = contextContinuationService
         self.explicitTurnHousekeepingService = turnHousekeepingService
         self.explicitSourceIngestionService = sourceIngestionService
+        self.sourceBriefingService = sourceBriefingService
     }
 
     // MARK: - Conversation Management
@@ -493,6 +498,7 @@ final class ChatViewModel {
         pendingSourceMaterialsByTurnId.removeAll()
         pendingSourceDiscussionContextByTurnId.removeAll()
         sourceMaterialsByUserMessageId.removeAll()
+        sourceBriefingsByUserMessageId.removeAll()
     }
 
     @MainActor
@@ -526,6 +532,7 @@ final class ChatViewModel {
         pendingSourceMaterialsByTurnId.removeAll()
         pendingSourceDiscussionContextByTurnId.removeAll()
         sourceMaterialsByUserMessageId.removeAll()
+        sourceBriefingsByUserMessageId.removeAll()
     }
 
     @MainActor
@@ -550,7 +557,9 @@ final class ChatViewModel {
         pendingSourceMaterialsByTurnId.removeAll()
         pendingSourceDiscussionContextByTurnId.removeAll()
         sourceMaterialsByUserMessageId.removeAll()
+        sourceBriefingsByUserMessageId.removeAll()
         cacheSourceMaterialsForLoadedMessages()
+        cacheSourceBriefingsForLoadedMessages()
     }
 
     func activateSourceDiscussion(_ context: SourceDiscussionContext) {
@@ -569,6 +578,16 @@ final class ChatViewModel {
         let materials = (try? nodeStore.fetchMessageSourceMaterials(messageId: message.id)) ?? []
         sourceMaterialsByUserMessageId[message.id] = materials
         return materials
+    }
+
+    func sourceBriefing(for message: Message) -> SourceBriefing? {
+        guard message.role == .user else { return nil }
+        if let briefing = sourceBriefingsByUserMessageId[message.id] {
+            return briefing.items.isEmpty ? nil : briefing
+        }
+        let briefing = (try? nodeStore.fetchSourceBriefing(messageId: message.id)) ?? .empty
+        sourceBriefingsByUserMessageId[message.id] = briefing
+        return briefing.items.isEmpty ? nil : briefing
     }
 
     /// Bind the streaming session that backs the forwarded streaming
@@ -1182,6 +1201,33 @@ final class ChatViewModel {
         }
     }
 
+    @discardableResult
+    private func rememberSourceBriefing(
+        _ briefing: SourceBriefing,
+        for userMessageId: UUID
+    ) -> Bool {
+        do {
+            try nodeStore.replaceSourceBriefing(briefing, for: userMessageId)
+            if briefing.items.isEmpty {
+                sourceBriefingsByUserMessageId[userMessageId] = .empty
+            } else {
+                sourceBriefingsByUserMessageId[userMessageId] = briefing
+            }
+            return true
+        } catch {
+            NSLog("[SourceBriefing] failed to persist briefing for message %@: %@", userMessageId.uuidString, error.localizedDescription)
+            return false
+        }
+    }
+
+    private func cacheSourceBriefingsForLoadedMessages() {
+        sourceBriefingsByUserMessageId.removeAll()
+        for message in messages where message.role == .user {
+            let briefing = (try? nodeStore.fetchSourceBriefing(messageId: message.id)) ?? .empty
+            sourceBriefingsByUserMessageId[message.id] = briefing
+        }
+    }
+
     private func sourceMaterialsForRetry(userMessage: Message) async -> [SourceMaterialContext] {
         if let materials = sourceMaterialsByUserMessageId[userMessage.id],
            !materials.isEmpty {
@@ -1334,6 +1380,7 @@ final class ChatViewModel {
             messages = prepared.messagesAfterUserAppend
             citations = prepared.citations
             resolvedCorpusEntries = prepared.resolvedCorpusEntries
+            rememberSourceBriefing(prepared.sourceBriefing, for: prepared.userMessage.id)
             lastPromptGovernanceTrace = prepared.promptTrace
             if !prepared.messagesAfterUserAppend.isEmpty {
                 activeChatMode = prepared.effectiveMode

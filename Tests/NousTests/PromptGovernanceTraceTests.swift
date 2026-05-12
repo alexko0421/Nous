@@ -182,6 +182,19 @@ final class PromptGovernanceTraceTests: XCTestCase {
         XCTAssertTrue(trace.promptLayers.contains("epistemic_grounding_policy"))
     }
 
+    func testGovernanceTraceIncludesExplanationClarityPolicyLayer() {
+        let trace = PromptContextAssembler.governanceTrace(
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        )
+
+        XCTAssertTrue(trace.promptLayers.contains("explanation_clarity_policy"))
+    }
+
     func testGovernanceTraceAddsTurnStewardLayer() {
         let stewardTrace = TurnStewardTrace(
             route: .direction,

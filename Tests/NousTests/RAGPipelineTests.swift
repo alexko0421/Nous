@@ -220,6 +220,23 @@ final class RAGPipelineTests: XCTestCase {
         XCTAssertTrue(context.contains("Do not announce \"first principles\""))
     }
 
+    func testAssembleContextIncludesExplanationClarityPolicy() {
+        let context = PromptContextAssembler.assembleContext(
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil
+        ).combined
+
+        XCTAssertTrue(context.contains("EXPLANATION CLARITY POLICY"))
+        XCTAssertTrue(context.contains("optimize for Alex actually understanding it"))
+        XCTAssertTrue(context.contains("plain-language meaning"))
+        XCTAssertTrue(context.contains("one concrete example"))
+        XCTAssertTrue(context.contains("Do not over-explain casual chat"))
+    }
+
     func testMemoryPromptPacketOwnsStableMemoryBlockOrdering() {
         let evidence = MemoryEvidenceSnippet(
             label: "Project context",

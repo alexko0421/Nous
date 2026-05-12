@@ -58,6 +58,80 @@ struct NativeGlassPanel<Content: View>: NSViewRepresentable {
     }
 }
 
+struct MatteGlassPanel<Content: View>: NSViewRepresentable {
+    let cornerRadius: CGFloat
+    let overlayColor: NSColor?
+    let content: Content
+
+    init(
+        cornerRadius: CGFloat,
+        overlayColor: NSColor? = nil,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.cornerRadius = cornerRadius
+        self.overlayColor = overlayColor
+        self.content = content()
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let rootView = NSView()
+        let effectView = NSVisualEffectView()
+        let tintView = NSView()
+        let hostingView = NSHostingView(rootView: content)
+
+        rootView.translatesAutoresizingMaskIntoConstraints = false
+        rootView.wantsLayer = true
+        rootView.layer?.cornerRadius = cornerRadius
+        rootView.layer?.cornerCurve = .continuous
+        rootView.layer?.masksToBounds = true
+
+        [effectView, tintView, hostingView].forEach {
+            $0.translatesAutoresizingMaskIntoConstraints = false
+            rootView.addSubview($0)
+        }
+
+        tintView.wantsLayer = true
+        hostingView.wantsLayer = true
+        hostingView.layer?.backgroundColor = NSColor.clear.cgColor
+        hostingView.layer?.isOpaque = false
+        configure(effectView, tintView: tintView)
+
+        NSLayoutConstraint.activate(
+            [effectView, tintView, hostingView].flatMap { child in
+                [
+                    child.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
+                    child.trailingAnchor.constraint(equalTo: rootView.trailingAnchor),
+                    child.topAnchor.constraint(equalTo: rootView.topAnchor),
+                    child.bottomAnchor.constraint(equalTo: rootView.bottomAnchor)
+                ]
+            }
+        )
+
+        return rootView
+    }
+
+    func updateNSView(_ rootView: NSView, context: Context) {
+        rootView.layer?.cornerRadius = cornerRadius
+
+        guard rootView.subviews.count == 3,
+              let effectView = rootView.subviews[0] as? NSVisualEffectView,
+              let hostingView = rootView.subviews[2] as? NSHostingView<Content> else {
+            return
+        }
+
+        configure(effectView, tintView: rootView.subviews[1])
+        hostingView.rootView = content
+    }
+
+    private func configure(_ effectView: NSVisualEffectView, tintView: NSView) {
+        effectView.material = .hudWindow
+        effectView.blendingMode = .withinWindow
+        effectView.state = .active
+        effectView.isEmphasized = false
+        tintView.layer?.backgroundColor = overlayColor?.cgColor
+    }
+}
+
 enum AppWindowLookup {
     static func mainWindow(in windows: [NSWindow], keyWindow: NSWindow?) -> NSWindow? {
         windows.first(where: { $0 is NousMainWindow })
@@ -149,13 +223,13 @@ struct NavIconButton<Icon: View>: View {
                 .frame(width: 36, height: 36)
                 .overlay(
                     Circle()
-                        .stroke(AppColor.panelStroke, lineWidth: 1)
+                        .stroke(AppColor.sidebarGlassStroke.opacity(0.55), lineWidth: 1)
                 )
                 .overlay(icon)
                 
                 Text(label)
                     .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .foregroundColor(AppColor.secondaryText)
+                    .foregroundColor(AppColor.sidebarMutedText)
             }
         }
         .buttonStyle(.plain)
@@ -175,7 +249,7 @@ struct SidebarDivider: View {
             )
         }
         .stroke(
-            AppColor.panelStroke.opacity(0.95),
+            AppColor.sidebarGlassStroke.opacity(0.62),
             style: StrokeStyle(lineWidth: 1, lineCap: .round)
         )
         .frame(width: 108, height: 6)
@@ -257,7 +331,7 @@ struct LeftSidebar: View {
     var body: some View {
         NativeGlassPanel(
             cornerRadius: 32,
-            tintColor: AppColor.surfaceGlassTint
+            tintColor: AppColor.sidebarGlassTint
         ) {
             VStack(alignment: .leading, spacing: 0) {
                 MacOSTrafficLights()
@@ -268,21 +342,21 @@ struct LeftSidebar: View {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(AppColor.colaDarkText.opacity(0.5))
+                        .foregroundColor(AppColor.sidebarMutedText)
                     TextField("Search", text: $searchQuery)
                         .textFieldStyle(.plain)
                         .font(.system(size: 13, design: .rounded))
-                        .foregroundColor(AppColor.colaDarkText)
+                        .foregroundColor(AppColor.sidebarText)
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 7)
                 .background(
                     Capsule(style: .continuous)
-                        .fill(AppColor.colaDarkText.opacity(0.06))
+                        .fill(Color.white.opacity(0.055))
                 )
                 .overlay(
                     Capsule(style: .continuous)
-                        .stroke(AppColor.panelStroke.opacity(0.6), lineWidth: 1)
+                        .stroke(AppColor.sidebarGlassStroke.opacity(0.48), lineWidth: 1)
                 )
                 .padding(.horizontal, 16)
                 .padding(.bottom, 14)
@@ -301,7 +375,7 @@ struct LeftSidebar: View {
                         Text("New Chat")
                             .font(.system(size: 12, weight: .medium, design: .rounded))
                     }
-                    .foregroundColor(AppColor.secondaryText)
+                    .foregroundColor(AppColor.sidebarMutedText)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.leading, 6)
                     .padding(.vertical, 4)
@@ -319,12 +393,12 @@ struct LeftSidebar: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Results")
                                 .font(.system(size: 11, weight: .semibold, design: .rounded))
-                                .foregroundColor(AppColor.colaDarkText.opacity(0.6))
+                                .foregroundColor(AppColor.sidebarMutedText)
 
                             if searchResults.isEmpty {
                                 Text("No matches")
                                     .font(.system(size: 12, design: .rounded))
-                                    .foregroundColor(AppColor.colaDarkText.opacity(0.4))
+                                    .foregroundColor(AppColor.sidebarMutedText.opacity(0.72))
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 6)
                             } else {
@@ -359,7 +433,7 @@ struct LeftSidebar: View {
                                             .font(.system(size: 7, weight: .bold))
                                             .opacity(0.5)
                                     }
-                                    .foregroundColor(AppColor.colaDarkText.opacity(0.6))
+                                    .foregroundColor(AppColor.sidebarMutedText)
 
                                     ForEach(favorites) { node in
                                         SidebarNodeItem(
@@ -377,7 +451,7 @@ struct LeftSidebar: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("Recents")
                                     .font(.system(size: 11, weight: .semibold, design: .rounded))
-                                    .foregroundColor(AppColor.colaDarkText.opacity(0.6))
+                                    .foregroundColor(AppColor.sidebarMutedText)
 
                                 ForEach(recents) { node in
                                     SidebarNodeItem(
@@ -430,7 +504,7 @@ struct LeftSidebar: View {
 
                     Text(username.uppercased())
                         .font(.system(size: 12, weight: .bold, design: .rounded))
-                        .foregroundColor(AppColor.colaDarkText)
+                        .foregroundColor(AppColor.sidebarText)
 
                     Spacer(minLength: 0)
                 }
@@ -450,9 +524,8 @@ struct LeftSidebar: View {
         .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 32, style: .continuous)
-                .stroke(AppColor.panelStroke.opacity(0.78), lineWidth: 1)
+                .stroke(AppColor.sidebarGlassStroke.opacity(0.22), lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.12), radius: 18, x: 0, y: 8)
         .onAppear { loadData() }
         .onReceive(
             NotificationCenter.default.publisher(
@@ -521,7 +594,7 @@ struct SidebarNodeItem: View {
             HStack(spacing: 0) {
                 Text(node.title)
                     .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundColor(isSelected ? AppColor.colaOrange : AppColor.secondaryText)
+                    .foregroundColor(isSelected ? AppColor.colaOrange : AppColor.sidebarMutedText)
                     .lineLimit(1)
 
                 if let streamingSession, streamingSession.hasUnseenCompletion {
@@ -547,7 +620,7 @@ struct SidebarNodeItem: View {
                             )
                         } else if isHovered {
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(AppColor.colaDarkText.opacity(0.04))
+                                .fill(Color.white.opacity(0.045))
                         }
                     }
                 )
