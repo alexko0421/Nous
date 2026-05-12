@@ -179,7 +179,7 @@ struct YouTubePlayerEmbed: Equatable {
             queryItems.append(URLQueryItem(name: "autoplay", value: "1"))
         }
         components.queryItems = queryItems
-        return components.url!
+        return components.url ?? URL(string: "about:blank")!
     }
 
     var cacheKey: String {

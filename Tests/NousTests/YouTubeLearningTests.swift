@@ -558,7 +558,7 @@ final class YouTubeLearningTests: XCTestCase {
         // positive budget keeps reasoning from cannibalising the JSON output
         // budget — Pro needs both rooms to finish a complete sections array.
         let thinkingConfig = try XCTUnwrap(config["thinkingConfig"] as? [String: Any])
-        XCTAssertEqual(thinkingConfig["thinkingBudget"] as? Int, 4096)
+        XCTAssertEqual(thinkingConfig["thinkingBudget"] as? Int, 1024)
         XCTAssertEqual(config["maxOutputTokens"] as? Int, 16384)
     }
 

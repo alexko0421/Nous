@@ -23,6 +23,7 @@ actor SourceLearningMemoryScheduler {
 
     func waitUntilIdle() async {
         let tasks = scheduledTasks
+        scheduledTasks = []
         for task in tasks {
             await task.value
         }

@@ -20,6 +20,7 @@ final class YouTubeLearningViewModel {
     private var videoDuration: TimeInterval?
     private var playbackStartSeconds: Int?
     private var playbackRequestID = 0
+    private var loadTask: Task<Void, Never>?
 
     init(
         transcriptService: YouTubeTranscriptService = YouTubeTranscriptService(),
@@ -98,7 +99,15 @@ final class YouTubeLearningViewModel {
     }
 
     func load(projectId: UUID?) async {
-        let requestedURL = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
+        loadTask?.cancel()
+        let task = Task {
+            await performLoad(requestedURL: urlText.trimmingCharacters(in: .whitespacesAndNewlines), projectId: projectId)
+        }
+        loadTask = task
+        await task.value
+    }
+
+    private func performLoad(requestedURL: String, projectId: UUID?) async {
         guard !requestedURL.isEmpty else {
             resetForFailure("Paste a YouTube URL first.")
             return
@@ -119,6 +128,7 @@ final class YouTubeLearningViewModel {
 
         do {
             let loadedTranscript = try await transcriptService.fetchTranscript(from: requestedURL)
+            guard !Task.isCancelled else { return }
             let material = try sourceIngestionService.ingestExtractedSource(
                 title: loadedTranscript.title,
                 text: loadedTranscript.timestampedText,
@@ -129,6 +139,7 @@ final class YouTubeLearningViewModel {
                 projectId: projectId
             )
             let sections = try await summaryService.generateSections(for: loadedTranscript)
+            guard !Task.isCancelled else { return }
 
             transcript = loadedTranscript
             sourceMaterial = material
@@ -137,6 +148,7 @@ final class YouTubeLearningViewModel {
             videoDuration = loadedTranscript.duration
             summarySections = sections
         } catch {
+            guard !Task.isCancelled else { return }
             await loadWithGeminiVideoAnalysis(
                 requestedURL: requestedURL,
                 projectId: projectId,

@@ -334,7 +334,9 @@ struct GeminiYouTubeVideoAnalysisService: YouTubeVideoAnalysisGenerating {
     }
 
     func makeURLRequest(for video: YouTubeVideoReference) throws -> URLRequest {
-        let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent")!
+        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent") else {
+            throw YouTubeLearningSummaryError.geminiVideoAnalysisEmpty
+        }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = timeoutInterval
@@ -360,14 +362,13 @@ struct GeminiYouTubeVideoAnalysisService: YouTubeVideoAnalysisGenerating {
                 ]
             ],
             "generationConfig": [
-                "temperature": 0.2,
+                "temperature": 0,
+                "seed": 42,
                 "maxOutputTokens": 16384,
                 "responseMimeType": "application/json",
                 "mediaResolution": "MEDIA_RESOLUTION_LOW",
-                // Gemini 2.5 Pro is thinking-only (Budget 0 is rejected). 4096
-                // leaves headroom for the model to reason about precise section
-                // boundaries without competing with the JSON output budget.
-                "thinkingConfig": ["thinkingBudget": 4096]
+                // Gemini 2.5 Pro is thinking-only (Budget 0 is rejected).
+                "thinkingConfig": ["thinkingBudget": 1024]
             ]
         ]
     }
