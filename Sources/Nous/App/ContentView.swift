@@ -236,6 +236,7 @@ struct ContentView: View {
                     vm: dependencies.settingsVM,
                     selectedTab: $selectedSettingsSection,
                     skillStore: dependencies.skillStore,
+                    failureSkillCandidateStore: dependencies.failureSkillCandidateStore,
                     userMemoryService: dependencies.userMemoryService,
                     telemetry: dependencies.governanceTelemetry,
                     galaxyRelationTelemetry: dependencies.galaxyRelationTelemetry,

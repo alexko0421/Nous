@@ -591,6 +591,33 @@ final class NodeStore {
         """)
 
         try db.exec("""
+            CREATE TABLE IF NOT EXISTS failure_skill_candidates (
+                id                          TEXT PRIMARY KEY,
+                user_id                     TEXT NOT NULL DEFAULT 'alex',
+                source_kind                 TEXT NOT NULL,
+                source_id                   TEXT NOT NULL,
+                turn_id                     TEXT,
+                conversation_id             TEXT,
+                assistant_message_id        TEXT,
+                signature                   TEXT NOT NULL,
+                repair_kind                 TEXT NOT NULL,
+                status                      TEXT NOT NULL,
+                evidence_json               TEXT NOT NULL CHECK (json_valid(evidence_json)),
+                proposed_skill_payload_json TEXT CHECK (proposed_skill_payload_json IS NULL OR json_valid(proposed_skill_payload_json)),
+                checklist_json              TEXT NOT NULL CHECK (json_valid(checklist_json)),
+                created_at                  REAL NOT NULL,
+                updated_at                  REAL NOT NULL,
+                activated_skill_id          TEXT,
+                UNIQUE(source_kind, source_id, signature)
+            );
+        """)
+
+        try db.exec("""
+            CREATE INDEX IF NOT EXISTS idx_failure_skill_candidates_user_updated
+            ON failure_skill_candidates(user_id, updated_at DESC);
+        """)
+
+        try db.exec("""
             CREATE TABLE IF NOT EXISTS shadow_patterns (
                 id                   TEXT PRIMARY KEY,
                 user_id              TEXT NOT NULL DEFAULT 'alex',

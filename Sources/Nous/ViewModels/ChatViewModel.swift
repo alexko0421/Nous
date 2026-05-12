@@ -86,6 +86,7 @@ final class ChatViewModel {
     private let skillMatcher: SkillMatcher?
     private let skillTracker: SkillTracker?
     private let skillDogfoodLogger: (any SkillDogfoodLogging)?
+    private let failureSkillCandidateStore: FailureSkillCandidateStore?
     /// Stored as a typed `Task<JudgeVerdict, Error>` — not `Task<Void, …>` — so tests can
     /// `await task.value` and inspect the verdict directly. The slot is guarded on clear:
     /// a later `send()` may have already overwritten it with a new task ID, so only the task
@@ -197,6 +198,7 @@ final class ChatViewModel {
             outcomeFactory: turnOutcomeFactory,
             shadowLearningSignalRecorder: shadowLearningSignalRecorder,
             cognitionReviewer: CognitionReviewer(),
+            failureSkillCandidateStore: failureSkillCandidateStore,
             shouldSurfaceThinkingTraces: shouldPersistAssistantThinking,
             onPlanReady: { [governanceTelemetry] plan in
                 governanceTelemetry.recordPromptTrace(plan.promptTrace)
@@ -420,6 +422,7 @@ final class ChatViewModel {
         skillMatcher: SkillMatcher? = nil,
         skillTracker: SkillTracker? = nil,
         skillDogfoodLogger: (any SkillDogfoodLogging)? = nil,
+        failureSkillCandidateStore: FailureSkillCandidateStore? = nil,
         governanceTelemetry: GovernanceTelemetryStore = GovernanceTelemetryStore(),
         geminiPromptCache: GeminiPromptCacheService = GeminiPromptCacheService(),
         scratchPadStore: ScratchPadStore,
@@ -452,6 +455,7 @@ final class ChatViewModel {
         self.skillMatcher = skillMatcher
         self.skillTracker = skillTracker
         self.skillDogfoodLogger = skillDogfoodLogger
+        self.failureSkillCandidateStore = failureSkillCandidateStore
         self.governanceTelemetry = governanceTelemetry
         self.geminiPromptCache = geminiPromptCache
         self.scratchPadStore = scratchPadStore
@@ -1659,6 +1663,12 @@ extension ChatViewModel {
             newFeedback: feedback,
             newReason: nil
         )
+        dismissFailureSkillCandidateIfNeeded(
+            previousEvent: event,
+            newFeedback: feedback,
+            newReason: nil,
+            newNote: nil
+        )
         let eventId = event.id
         governanceTelemetry.recordFeedback(eventId: eventId, feedback: feedback)
         if feedback == .up {
@@ -1685,8 +1695,22 @@ extension ChatViewModel {
             newFeedback: feedback,
             newReason: reason
         )
+        dismissFailureSkillCandidateIfNeeded(
+            previousEvent: event,
+            newFeedback: feedback,
+            newReason: reason,
+            newNote: note
+        )
         let eventId = event.id
         governanceTelemetry.recordFeedback(eventId: eventId, feedback: feedback, reason: reason, note: note)
+        if feedback == .down {
+            var feedbackEvent = event
+            feedbackEvent.userFeedback = feedback
+            feedbackEvent.feedbackTs = Date()
+            feedbackEvent.feedbackReason = reason
+            feedbackEvent.feedbackNote = note
+            recordFailureSkillCandidate(from: feedbackEvent)
+        }
         recordShadowFeedbackSignal(
             forMessageId: messageId,
             feedback: feedback,
@@ -1694,6 +1718,53 @@ extension ChatViewModel {
             note: note
         )
         bumpJudgeFeedbackVersion()
+    }
+
+    private func recordFailureSkillCandidate(from event: JudgeEvent) {
+        guard let failureSkillCandidateStore else { return }
+        guard let candidate = FailureToSkillDetector().candidate(from: event) else { return }
+        do {
+            try failureSkillCandidateStore.upsertCandidate(candidate)
+        } catch {
+            print("[FailureToSkill] failed to record feedback candidate: \(error)")
+        }
+    }
+
+    private func dismissFailureSkillCandidateIfNeeded(
+        previousEvent: JudgeEvent,
+        newFeedback: JudgeFeedback,
+        newReason: JudgeFeedbackReason?,
+        newNote: String?
+    ) {
+        guard previousEvent.userFeedback == .down else { return }
+        guard let previousCandidate = FailureToSkillDetector().candidate(from: previousEvent) else { return }
+
+        if newFeedback != .down {
+            dismissFailureSkillCandidates(for: previousEvent)
+            return
+        }
+
+        var updatedEvent = previousEvent
+        updatedEvent.userFeedback = newFeedback
+        updatedEvent.feedbackReason = newReason
+        updatedEvent.feedbackNote = newNote
+        guard let updatedCandidate = FailureToSkillDetector().candidate(from: updatedEvent),
+              updatedCandidate.signature == previousCandidate.signature else {
+            dismissFailureSkillCandidates(for: previousEvent)
+            return
+        }
+    }
+
+    private func dismissFailureSkillCandidates(for event: JudgeEvent) {
+        guard let failureSkillCandidateStore else { return }
+        do {
+            try failureSkillCandidateStore.dismissCandidates(
+                sourceKind: .judgeFeedback,
+                sourceId: event.id.uuidString
+            )
+        } catch {
+            print("[FailureToSkill] failed to dismiss feedback candidate: \(error)")
+        }
     }
 
     @MainActor
@@ -1706,6 +1777,12 @@ extension ChatViewModel {
                 reason: event.feedbackReason
             )
         }
+        dismissFailureSkillCandidateIfNeeded(
+            previousEvent: event,
+            newFeedback: .up,
+            newReason: nil,
+            newNote: nil
+        )
         let eventId = event.id
         governanceTelemetry.clearFeedback(eventId: eventId)
         bumpJudgeFeedbackVersion()

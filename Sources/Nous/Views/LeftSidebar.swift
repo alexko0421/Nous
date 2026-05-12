@@ -331,7 +331,7 @@ struct LeftSidebar: View {
     var body: some View {
         NativeGlassPanel(
             cornerRadius: 32,
-            tintColor: AppColor.sidebarGlassTint
+            tintColor: AppColor.surfaceGlassTint
         ) {
             VStack(alignment: .leading, spacing: 0) {
                 MacOSTrafficLights()
@@ -526,6 +526,7 @@ struct LeftSidebar: View {
             RoundedRectangle(cornerRadius: 32, style: .continuous)
                 .stroke(AppColor.sidebarGlassStroke.opacity(0.22), lineWidth: 1)
         )
+        .shadow(color: .black.opacity(0.12), radius: 18, x: 0, y: 8)
         .onAppear { loadData() }
         .onReceive(
             NotificationCenter.default.publisher(

@@ -24,18 +24,29 @@ final class SkillifyChecklistEvaluatorTests: XCTestCase {
         XCTAssertEqual(result.completedCount, result.requiredCount)
     }
 
+    func testPromptSkillMissingPayloadDoesNotShowCompleteChecklistScore() {
+        let candidate = makeCandidate(payload: nil)
+
+        let result = SkillifyChecklistEvaluator().evaluate(candidate)
+
+        XCTAssertFalse(result.canActivate)
+        XCTAssertEqual(result.blockingReason, SkillifyChecklistBlockingReason.incompleteChecklist)
+        XCTAssertTrue(result.missingItems.contains(.proposedSkillPayload))
+        XCTAssertLessThan(result.completedCount, result.requiredCount)
+    }
+
     func testBlocksDeterministicFixActivationEvenWhenChecklistIsComplete() {
         var candidate = makeCandidate(
             repairKind: .deterministicFix,
-            checklist: completeChecklist(codeReference: "Sources/Nous/Services/VectorStore.swift")
+            checklist: Self.completeChecklist(codeReference: "Sources/Nous/Services/VectorStore.swift")
         )
         candidate.proposedSkillPayload = nil
 
         let result = SkillifyChecklistEvaluator().evaluate(candidate)
 
         XCTAssertFalse(result.canActivate)
-        XCTAssertEqual(result.blockingReason, .deterministicFixCannotActivateSkill)
-        XCTAssertEqual(result.missingItems, [])
+        XCTAssertEqual(result.blockingReason, SkillifyChecklistBlockingReason.deterministicFixCannotActivateSkill)
+        XCTAssertTrue(result.missingItems.isEmpty)
     }
 
     func testRejectsInvalidSkillPayload() {
@@ -55,7 +66,64 @@ final class SkillifyChecklistEvaluatorTests: XCTestCase {
         let result = SkillifyChecklistEvaluator().evaluate(candidate)
 
         XCTAssertFalse(result.canActivate)
-        XCTAssertEqual(result.blockingReason, .invalidSkillPayload)
+        XCTAssertEqual(result.blockingReason, SkillifyChecklistBlockingReason.invalidSkillPayload)
+    }
+
+    func testRejectsMissingRegressionTestReference() {
+        let candidate = makeCandidate(
+            checklist: SkillifyChecklist(
+                rootCause: "The reply ignored available own-corpus evidence.",
+                trigger: "own corpus available",
+                useWhen: "Use when Alex corpus cards are available.",
+                antiPatternExample: "Borrowed authority first.",
+                regressionTestReference: "MissingFailureTests.testDoesNotExist",
+                resolverTestReference: "SkillMatcherTests.testModeMatchFires",
+                smokeTestCommand: "xcodebuild test -project Nous.xcodeproj -scheme NousTests -destination 'platform=macOS'"
+            )
+        )
+
+        let result = SkillifyChecklistEvaluator().evaluate(candidate)
+
+        XCTAssertFalse(result.canActivate)
+        XCTAssertEqual(result.blockingReason?.rawValue, "invalidRegressionTestReference")
+    }
+
+    func testRejectsSmokeCommandThatDoesNotRunRegressionAndResolverTargets() {
+        let candidate = makeCandidate(
+            checklist: SkillifyChecklist(
+                rootCause: "The reply ignored available own-corpus evidence.",
+                trigger: "own corpus available",
+                useWhen: "Use when Alex corpus cards are available.",
+                antiPatternExample: "Borrowed authority first.",
+                regressionTestReference: "FailureToSkillDetectorTests.testCorpusIgnoredCreatesPromptSkillCandidate",
+                resolverTestReference: "SkillMatcherTests.testModeMatchFires",
+                smokeTestCommand: "xcodebuild test -project Nous.xcodeproj -scheme NousTests -destination 'platform=macOS'"
+            )
+        )
+
+        let result = SkillifyChecklistEvaluator().evaluate(candidate)
+
+        XCTAssertFalse(result.canActivate)
+        XCTAssertEqual(result.blockingReason?.rawValue, "invalidSmokeTestCommand")
+    }
+
+    func testRejectsSmokeCommandWithShellChaining() {
+        let candidate = makeCandidate(
+            checklist: SkillifyChecklist(
+                rootCause: "The reply ignored available own-corpus evidence.",
+                trigger: "own corpus available",
+                useWhen: "Use when Alex corpus cards are available.",
+                antiPatternExample: "Borrowed authority first.",
+                regressionTestReference: "FailureToSkillDetectorTests.testCorpusIgnoredCreatesPromptSkillCandidate",
+                resolverTestReference: "SkillMatcherTests.testModeMatchFires",
+                smokeTestCommand: "xcodebuild test -project Nous.xcodeproj -scheme NousTests -destination 'platform=macOS' -only-testing:NousTests/FailureToSkillDetectorTests/testCorpusIgnoredCreatesPromptSkillCandidate -only-testing:NousTests/SkillMatcherTests/testModeMatchFires && open /tmp/out"
+            )
+        )
+
+        let result = SkillifyChecklistEvaluator().evaluate(candidate)
+
+        XCTAssertFalse(result.canActivate)
+        XCTAssertEqual(result.blockingReason?.rawValue, "invalidSmokeTestCommand")
     }
 
     private func makeCandidate(
@@ -105,7 +173,7 @@ final class SkillifyChecklistEvaluatorTests: XCTestCase {
             antiPatternExample: "Borrowed authority first.",
             regressionTestReference: "FailureToSkillDetectorTests.testCorpusIgnoredCreatesPromptSkillCandidate",
             resolverTestReference: "SkillMatcherTests.testModeMatchFires",
-            smokeTestCommand: "xcodebuild test -project Nous.xcodeproj -scheme NousTests -destination 'platform=macOS'",
+            smokeTestCommand: "xcodebuild test -project Nous.xcodeproj -scheme NousTests -destination 'platform=macOS' -only-testing:NousTests/FailureToSkillDetectorTests/testCorpusIgnoredCreatesPromptSkillCandidate -only-testing:NousTests/SkillMatcherTests/testModeMatchFires -only-testing:NousTests/SkillifyChecklistEvaluatorTests",
             codeReference: codeReference
         )
     }

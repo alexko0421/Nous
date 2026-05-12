@@ -94,6 +94,39 @@ final class FailureToSkillDetectorTests: XCTestCase {
         XCTAssertEqual(candidates[0].evidence.map(\.id), [sourceNodeId.uuidString])
     }
 
+    func testPartialSourceMaterialUseDoesNotCreateIgnoredCandidate() {
+        let usedSourceId = UUID()
+        let unusedSourceId = UUID()
+        let record = ContextManifestRecord(
+            turnId: UUID(),
+            conversationId: UUID(),
+            assistantMessageId: UUID(),
+            resources: [
+                ContextManifestResource(
+                    source: .sourceMaterial,
+                    label: "source_material",
+                    referenceId: usedSourceId.uuidString,
+                    state: .loaded,
+                    used: true
+                ),
+                ContextManifestResource(
+                    source: .sourceMaterial,
+                    label: "source_material",
+                    referenceId: unusedSourceId.uuidString,
+                    state: .loaded,
+                    used: false
+                )
+            ]
+        )
+
+        let candidates = FailureToSkillDetector().candidates(
+            corpusFidelity: nil,
+            contextManifest: record
+        )
+
+        XCTAssertTrue(candidates.isEmpty)
+    }
+
     func testHealthySignalsCreateNoCandidate() {
         let fidelity = CorpusFidelityRecord(
             turnId: UUID(),
@@ -160,5 +193,31 @@ final class FailureToSkillDetectorTests: XCTestCase {
 
         XCTAssertEqual(candidates.count, 1)
         XCTAssertEqual(candidates[0].evidence.count, 1)
+    }
+
+    func testFeedbackNoteCanOverridePromptSkillToRegressionOnly() {
+        var event = JudgeEvent(
+            id: UUID(),
+            ts: Date(timeIntervalSince1970: 1),
+            nodeId: UUID(),
+            messageId: UUID(),
+            chatMode: .strategist,
+            provider: .claude,
+            verdictJSON: "{}",
+            fallbackReason: .ok,
+            userFeedback: .down,
+            feedbackTs: Date(timeIntervalSince1970: 1),
+            feedbackReason: .notUseful,
+            feedbackNote: "This should be regression only, not a new prompt skill."
+        )
+
+        let candidate = FailureToSkillDetector().candidate(from: event)
+
+        XCTAssertEqual(candidate?.signature, .judgeFeedbackNotUseful)
+        XCTAssertEqual(candidate?.repairKind, .regressionOnly)
+        XCTAssertNil(candidate?.proposedSkillPayload)
+
+        event.feedbackNote = "This is deterministic, patch code instead."
+        XCTAssertEqual(FailureToSkillDetector().candidate(from: event)?.repairKind, .deterministicFix)
     }
 }

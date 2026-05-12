@@ -9,6 +9,7 @@ enum SkillStoreError: LocalizedError, Equatable {
     case payloadEncodingFailed
     case invalidSkillState(String)
     case invalidSkillIdentifier(String)
+    case nodeStoreMismatch
 
     var errorDescription: String? {
         switch self {
@@ -28,6 +29,39 @@ enum SkillStoreError: LocalizedError, Equatable {
             return "Invalid skill state: \(state)."
         case .invalidSkillIdentifier(let id):
             return "Invalid skill id: \(id)."
+        case .nodeStoreMismatch:
+            return "Skill activation must use the same NodeStore transaction."
+        }
+    }
+}
+
+enum SkillPayloadValidator {
+    static func validate(_ payload: SkillPayload) throws {
+        guard (1...2).contains(payload.payloadVersion) else {
+            throw SkillStoreError.invalidPayloadVersion(payload.payloadVersion)
+        }
+
+        switch payload.trigger.kind {
+        case .analysisGate:
+            let nonEmptyCues = payload.trigger.cues.filter {
+                !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            guard !nonEmptyCues.isEmpty else {
+                throw SkillStoreError.emptyCues
+            }
+        case .always:
+            break
+        case .mode:
+            guard !payload.trigger.modes.isEmpty else {
+                throw SkillStoreError.emptyModes
+            }
+        }
+
+        guard 0...100 ~= payload.trigger.priority else {
+            throw SkillStoreError.priorityOutOfRange(payload.trigger.priority)
+        }
+        guard !payload.action.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw SkillStoreError.emptyActionContent
         }
     }
 }
