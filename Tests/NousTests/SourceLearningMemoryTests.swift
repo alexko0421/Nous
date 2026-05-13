@@ -2,7 +2,7 @@ import XCTest
 @testable import Nous
 
 final class SourceLearningMemoryTests: XCTestCase {
-    func testAbsorbStoresAlexInsightWithMatchingEvidenceAndSourceProvenance() async throws {
+    func testAbsorbStagesAlexInsightWithMatchingEvidenceAndSourceProvenance() async throws {
         let store = try NodeStore(path: ":memory:")
         let fixture = try makeRequestFixture(store: store)
         let service = SourceLearningMemoryService(
@@ -35,6 +35,14 @@ final class SourceLearningMemoryTests: XCTestCase {
         XCTAssertEqual(atom.sourceNodeId, fixture.sourceNode.id)
         XCTAssertEqual(atom.sourceMessageId, fixture.userMessage.id)
         XCTAssertEqual(atom.confidence, 0.86, accuracy: 0.001)
+        XCTAssertEqual(atom.status, .pending)
+
+        let recall = try MemoryLifecycleEngine(nodeStore: store).hybridRecall(
+            currentMessage: "community strategy leader role",
+            projectId: fixture.projectId,
+            conversationId: fixture.request.conversationId
+        )
+        XCTAssertTrue(recall.isEmpty, "Source-attached learning must not enter active recall before approval.")
     }
 
     func testAbsorbRejectsMissingEvidenceAndPureSourceFacts() async throws {
@@ -152,6 +160,7 @@ final class SourceLearningMemoryTests: XCTestCase {
         XCTAssertEqual(atom.sourceMessageId, fixture.userMessage.id)
         XCTAssertEqual(atom.scope, .conversation)
         XCTAssertEqual(atom.scopeRefId, fixture.request.conversationId)
+        XCTAssertEqual(atom.status, .pending)
         XCTAssertTrue(atom.statement.contains("community building"))
     }
 }

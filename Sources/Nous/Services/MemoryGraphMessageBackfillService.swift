@@ -247,6 +247,7 @@ final class MemoryGraphMessageBackfillService {
                         confidence: chain.confidence,
                         scope: .conversation,
                         scopeRefId: conversation.id,
+                        status: .pending,
                         eventTime: match.message.timestamp,
                         sourceNodeId: conversation.id,
                         sourceMessageId: match.message.id,
@@ -271,37 +272,6 @@ final class MemoryGraphMessageBackfillService {
         result.updatedAtoms = writeResult.updatedAtoms
         result.insertedEdges = writeResult.insertedEdges
         return result
-    }
-
-    private func upsert(
-        atom candidate: MemoryAtom,
-        atoms: inout [MemoryAtom],
-        result: inout PersistResult
-    ) throws -> MemoryAtom {
-        if let index = atoms.firstIndex(where: { Self.matches($0, candidate: candidate) }) {
-            let existing = atoms[index]
-            var merged = existing
-            merged.statement = candidate.statement
-            merged.normalizedKey = candidate.normalizedKey ?? existing.normalizedKey
-            merged.status = .active
-            merged.confidence = max(existing.confidence, candidate.confidence)
-            merged.eventTime = existing.eventTime ?? candidate.eventTime
-            merged.updatedAt = max(existing.updatedAt, candidate.updatedAt)
-            merged.lastSeenAt = Self.maxDate(existing.lastSeenAt, candidate.lastSeenAt)
-            merged.sourceNodeId = existing.sourceNodeId ?? candidate.sourceNodeId
-
-            if Self.hasMeaningfulChange(existing, merged) {
-                try nodeStore.updateMemoryAtom(merged)
-                atoms[index] = merged
-                result.updatedAtoms += 1
-            }
-            return merged
-        }
-
-        try nodeStore.insertMemoryAtom(candidate)
-        atoms.append(candidate)
-        result.insertedAtoms += 1
-        return candidate
     }
 
     private func insertEdgeIfNeeded(
@@ -410,50 +380,6 @@ final class MemoryGraphMessageBackfillService {
             chain.rejection,
             "quote=\(quote)"
         ].joined(separator: "|")
-    }
-
-    private static func normalizedKey(type: MemoryAtomType, statement: String) -> String {
-        "\(type.rawValue)|\(MemoryGraphAtomMapper.normalizedLine(statement))"
-    }
-
-    private static func matches(_ atom: MemoryAtom, candidate: MemoryAtom) -> Bool {
-        guard atom.scope == candidate.scope,
-              atom.scopeRefId == candidate.scopeRefId,
-              atom.type == candidate.type
-        else { return false }
-
-        if let atomKey = atom.normalizedKey,
-           let candidateKey = candidate.normalizedKey,
-           atomKey == candidateKey {
-            return true
-        }
-
-        return MemoryGraphAtomMapper.normalizedLine(atom.statement)
-            == MemoryGraphAtomMapper.normalizedLine(candidate.statement)
-    }
-
-    private static func hasMeaningfulChange(_ lhs: MemoryAtom, _ rhs: MemoryAtom) -> Bool {
-        lhs.statement != rhs.statement
-            || lhs.normalizedKey != rhs.normalizedKey
-            || lhs.status != rhs.status
-            || lhs.confidence != rhs.confidence
-            || lhs.eventTime != rhs.eventTime
-            || lhs.updatedAt != rhs.updatedAt
-            || lhs.lastSeenAt != rhs.lastSeenAt
-            || lhs.sourceNodeId != rhs.sourceNodeId
-    }
-
-    private static func maxDate(_ lhs: Date?, _ rhs: Date?) -> Date? {
-        switch (lhs, rhs) {
-        case (.none, .none):
-            return nil
-        case (.some(let lhs), .none):
-            return lhs
-        case (.none, .some(let rhs)):
-            return rhs
-        case (.some(let lhs), .some(let rhs)):
-            return max(lhs, rhs)
-        }
     }
 
     private static func decodeExtraction(_ raw: String) throws -> RawMessageExtraction {

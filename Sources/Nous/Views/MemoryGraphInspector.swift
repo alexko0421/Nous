@@ -2,8 +2,18 @@ import SwiftUI
 
 struct MemoryGraphInspector: View {
     let nodeStore: NodeStore
+    let llmServiceProvider: () -> (any LLMService)?
+
+    init(
+        nodeStore: NodeStore,
+        llmServiceProvider: @escaping () -> (any LLMService)? = { nil }
+    ) {
+        self.nodeStore = nodeStore
+        self.llmServiceProvider = llmServiceProvider
+    }
 
     private enum GraphFocus: String, CaseIterable {
+        case inbox = "Inbox"
         case active = "Active"
         case chains = "Chains"
         case review = "Review"
@@ -29,6 +39,7 @@ struct MemoryGraphInspector: View {
     @State private var searchText = ""
     @State private var selectedFocus: GraphFocus = .active
     @State private var loadError: String?
+    @State private var actingAtomId: UUID?
 
     var body: some View {
         graphContainer {
@@ -81,6 +92,12 @@ struct MemoryGraphInspector: View {
     private var metrics: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 124), spacing: 10)], spacing: 10) {
             metric(title: "Atoms", value: "\(activeAtoms.count)", subtitle: "active claims")
+            metric(
+                title: "Inbox",
+                value: "\(pendingAtoms.count)",
+                subtitle: "waiting",
+                accent: pendingAtoms.isEmpty ? AppColor.surfacePrimary : Color.blue.opacity(0.10)
+            )
             metric(title: "Edges", value: "\(edges.count)", subtitle: "relationships")
             metric(title: "Chains", value: "\(decisionChains.count)", subtitle: "rejection paths")
             metric(
@@ -280,6 +297,38 @@ struct MemoryGraphInspector: View {
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundColor(AppColor.secondaryText)
                 .textSelection(.enabled)
+
+            if let correctsTarget = atom.correctsTarget,
+               !correctsTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                chainField("Corrects", correctsTarget)
+            }
+
+            if atom.status == .pending {
+                HStack(spacing: 8) {
+                    atomActionButton(title: "Save", tint: AppColor.colaOrange, textColor: .white) {
+                        mutateAtomAsync(atom.id) {
+                            _ = try await MemoryReflectionProposalService(
+                                nodeStore: nodeStore,
+                                llmServiceProvider: llmServiceProvider
+                            ).approveAndPropose(atom.id)
+                        }
+                    }
+                    atomActionButton(title: "Reject", tint: AppColor.surfaceSecondary, textColor: AppColor.colaDarkText) {
+                        mutateAtom(atom.id) {
+                            _ = try MemoryLifecycleEngine(nodeStore: nodeStore).reject(atom.id)
+                        }
+                    }
+                    atomActionButton(title: "Forget", tint: Color.red.opacity(0.12), textColor: .red) {
+                        mutateAtom(atom.id) {
+                            _ = try MemoryLifecycleEngine(nodeStore: nodeStore).forget(atom.id)
+                        }
+                    }
+                    if actingAtomId == atom.id {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                }
+            }
         }
         .padding(14)
         .background(AppColor.surfacePrimary)
@@ -522,6 +571,10 @@ struct MemoryGraphInspector: View {
         atoms.filter { $0.status == .active }
     }
 
+    private var pendingAtoms: [MemoryAtom] {
+        atoms.filter { $0.status == .pending }
+    }
+
     private var decisionAtoms: [MemoryAtom] {
         atoms.filter { [.proposal, .rejection, .reason, .currentPosition, .decision].contains($0.type) }
     }
@@ -533,6 +586,8 @@ struct MemoryGraphInspector: View {
     private var filteredAtoms: [MemoryAtom] {
         let base: [MemoryAtom]
         switch selectedFocus {
+        case .inbox:
+            base = pendingAtoms
         case .active:
             base = activeAtoms
         case .chains:
@@ -651,6 +706,37 @@ struct MemoryGraphInspector: View {
         }
     }
 
+    private func mutateAtom(_ atomId: UUID, action: () throws -> Void) {
+        actingAtomId = atomId
+        do {
+            try action()
+            loadError = nil
+            reload()
+        } catch {
+            loadError = "Failed to update memory atom: \(error.localizedDescription)"
+        }
+        actingAtomId = nil
+    }
+
+    private func mutateAtomAsync(_ atomId: UUID, action: @escaping () async throws -> Void) {
+        actingAtomId = atomId
+        Task {
+            do {
+                try await action()
+                await MainActor.run {
+                    loadError = nil
+                    reload()
+                    actingAtomId = nil
+                }
+            } catch {
+                await MainActor.run {
+                    loadError = "Failed to update memory atom: \(error.localizedDescription)"
+                    actingAtomId = nil
+                }
+            }
+        }
+    }
+
     private func syncSelectedAtom() {
         guard !filteredAtoms.isEmpty else {
             selectedAtomId = nil
@@ -734,6 +820,22 @@ struct MemoryGraphInspector: View {
             .clipShape(Capsule())
     }
 
+    private func atomActionButton(
+        title: String,
+        tint: Color,
+        textColor: Color,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(title, action: action)
+            .buttonStyle(.plain)
+            .font(.system(size: 11, weight: .semibold, design: .rounded))
+            .foregroundColor(textColor)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(tint)
+            .clipShape(Capsule())
+    }
+
     private func graphContainer<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10) { content() }
             .padding(18)
@@ -765,6 +867,8 @@ struct MemoryGraphInspector: View {
 
     private func statusTint(_ status: MemoryStatus) -> Color {
         switch status {
+        case .pending:
+            return Color.blue.opacity(0.12)
         case .active:
             return AppColor.colaOrange.opacity(0.12)
         case .conflicted:
@@ -778,16 +882,18 @@ struct MemoryGraphInspector: View {
 
     private func statusRank(_ status: MemoryStatus) -> Int {
         switch status {
-        case .active:
+        case .pending:
             return 0
-        case .conflicted:
+        case .active:
             return 1
-        case .expired:
+        case .conflicted:
             return 2
-        case .archived:
+        case .expired:
             return 3
-        case .superseded:
+        case .archived:
             return 4
+        case .superseded:
+            return 5
         }
     }
 

@@ -15,10 +15,39 @@ struct MemoryGraphDecisionChainInput {
     let confidence: Double
     let scope: MemoryScope
     let scopeRefId: UUID?
+    let status: MemoryStatus
     let eventTime: Date?
     let sourceNodeId: UUID?
     let sourceMessageId: UUID?
     let now: Date
+
+    init(
+        rejectedProposal: String,
+        rejection: String,
+        reasons: [String],
+        replacement: String?,
+        confidence: Double,
+        scope: MemoryScope,
+        scopeRefId: UUID?,
+        status: MemoryStatus = .active,
+        eventTime: Date?,
+        sourceNodeId: UUID?,
+        sourceMessageId: UUID?,
+        now: Date
+    ) {
+        self.rejectedProposal = rejectedProposal
+        self.rejection = rejection
+        self.reasons = reasons
+        self.replacement = replacement
+        self.confidence = confidence
+        self.scope = scope
+        self.scopeRefId = scopeRefId
+        self.status = status
+        self.eventTime = eventTime
+        self.sourceNodeId = sourceNodeId
+        self.sourceMessageId = sourceMessageId
+        self.now = now
+    }
 }
 
 final class MemoryGraphWriter {
@@ -128,14 +157,16 @@ final class MemoryGraphWriter {
             result: &result
         )
 
-        try supersedePriorPositions(
-            rejectedProposalText: input.rejectedProposal,
-            newRejection: rejectionAtom,
-            input: input,
-            atoms: &atoms,
-            edges: &edges,
-            result: &result
-        )
+        if input.status == .active {
+            try supersedePriorPositions(
+                rejectedProposalText: input.rejectedProposal,
+                newRejection: rejectionAtom,
+                input: input,
+                atoms: &atoms,
+                edges: &edges,
+                result: &result
+            )
+        }
 
         for reasonText in input.reasons {
             let reason = atom(
@@ -295,12 +326,12 @@ final class MemoryGraphWriter {
             normalizedKey: Self.normalizedKey(type: type, statement: statement),
             scope: input.scope,
             scopeRefId: input.scopeRefId,
-            status: .active,
+            status: input.status,
             confidence: input.confidence,
             eventTime: input.eventTime,
             createdAt: input.now,
             updatedAt: input.now,
-            lastSeenAt: input.now,
+            lastSeenAt: input.status == .active ? input.now : nil,
             sourceNodeId: input.sourceNodeId,
             sourceMessageId: input.sourceMessageId
         )
@@ -333,7 +364,7 @@ final class MemoryGraphWriter {
         merged.normalizedKey = candidate.normalizedKey ?? existing.normalizedKey
         merged.scope = candidate.scope
         merged.scopeRefId = candidate.scopeRefId
-        merged.status = candidate.status
+        merged.status = mergedStatus(existing: existing.status, candidate: candidate.status)
         merged.confidence = max(existing.confidence, candidate.confidence)
         merged.eventTime = existing.eventTime ?? candidate.eventTime
         merged.validFrom = existing.validFrom ?? candidate.validFrom
@@ -342,6 +373,7 @@ final class MemoryGraphWriter {
         merged.lastSeenAt = maxDate(existing.lastSeenAt, candidate.lastSeenAt)
         merged.sourceNodeId = existing.sourceNodeId ?? candidate.sourceNodeId
         merged.sourceMessageId = existing.sourceMessageId ?? candidate.sourceMessageId
+        merged.correctsTarget = candidate.correctsTarget ?? existing.correctsTarget
         merged.embedding = existing.embedding ?? candidate.embedding
         return merged
     }
@@ -361,7 +393,13 @@ final class MemoryGraphWriter {
             || lhs.lastSeenAt != rhs.lastSeenAt
             || lhs.sourceNodeId != rhs.sourceNodeId
             || lhs.sourceMessageId != rhs.sourceMessageId
+            || lhs.correctsTarget != rhs.correctsTarget
             || lhs.embedding != rhs.embedding
+    }
+
+    private static func mergedStatus(existing: MemoryStatus, candidate: MemoryStatus) -> MemoryStatus {
+        guard candidate == .pending else { return candidate }
+        return existing == .pending ? .pending : existing
     }
 
     private static func maxDate(_ lhs: Date?, _ rhs: Date?) -> Date? {

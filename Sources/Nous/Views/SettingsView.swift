@@ -91,7 +91,8 @@ struct SettingsView: View {
                         userMemoryService: userMemoryService,
                         telemetry: telemetry,
                         galaxyRelationTelemetry: galaxyRelationTelemetry,
-                        shadowLearningStore: shadowLearningStore
+                        shadowLearningStore: shadowLearningStore,
+                        llmServiceProvider: { vm.makeLLMService(openRouterWebSearchEnabled: false) }
                     )
                 case .agentWork:
                     AgentWorkView(vm: beadsAgentWorkVM)
