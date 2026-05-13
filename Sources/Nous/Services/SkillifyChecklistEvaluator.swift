@@ -234,7 +234,7 @@ struct SkillifyChecklistEvaluator {
     }
 
     private func containsShellChaining(_ value: String) -> Bool {
-        ["&&", "||", ";", "`", "$(", "|", ">", "<"].contains { value.contains($0) }
+        ["&&", "||", "&", ";", "`", "$(", "|", ">", "<"].contains { value.contains($0) }
     }
 
     private func onlyTestingTarget(for reference: String?) -> String? {

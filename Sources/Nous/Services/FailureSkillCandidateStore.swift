@@ -3,6 +3,7 @@ import Foundation
 enum FailureSkillCandidateStoreError: LocalizedError, Equatable {
     case encodingFailed
     case missingCandidate
+    case approvalNotAllowed
     case activationRequiresApproval
     case activationNotAllowed(SkillifyChecklistBlockingReason?)
     case alreadyActivated
@@ -13,6 +14,8 @@ enum FailureSkillCandidateStoreError: LocalizedError, Equatable {
             return "Failure skill candidate could not be encoded."
         case .missingCandidate:
             return "Failure skill candidate was not found."
+        case .approvalNotAllowed:
+            return "Failure skill candidate cannot be approved from its current state."
         case .activationRequiresApproval:
             return "Failure skill candidate must be approved before activation."
         case .activationNotAllowed(let reason):
@@ -283,6 +286,44 @@ final class FailureSkillCandidateStore {
                 now: updatedAt
             )
         }
+    }
+
+    @discardableResult
+    func approveCandidate(
+        id: UUID,
+        skillStore: SkillStore,
+        repairRunStore: FailureSkillRepairRunStore,
+        autoActivationEnabled: Bool,
+        updatedAt: Date = Date()
+    ) throws -> Skill? {
+        var approvedCandidate: FailureSkillCandidate?
+        try nodeStore.inTransaction {
+            guard var existing = try fetchCandidateWithoutTransaction(id: id) else {
+                throw FailureSkillCandidateStoreError.missingCandidate
+            }
+            guard existing.status != .activated, existing.activatedSkillId == nil else {
+                throw FailureSkillCandidateStoreError.alreadyActivated
+            }
+            guard existing.status == .proposed || existing.status == .approved else {
+                throw FailureSkillCandidateStoreError.approvalNotAllowed
+            }
+            if existing.status != .approved {
+                existing.status = .approved
+                existing.updatedAt = updatedAt
+                let encoded = try encodedColumns(for: existing)
+                try updateCandidateWithoutTransaction(existing, encoded: encoded)
+            }
+            approvedCandidate = existing
+        }
+        guard let candidate = approvedCandidate else {
+            throw FailureSkillCandidateStoreError.missingCandidate
+        }
+        let latestRun = try repairRunStore.fetchLatestRun(candidateId: id)
+        guard FailureSkillAutoActivationPolicy(isEnabled: autoActivationEnabled)
+            .canAutoActivate(candidate: candidate, latestRun: latestRun) else {
+            return nil
+        }
+        return try activateCandidate(id: id, skillStore: skillStore, now: updatedAt)
     }
 
     func dismissCandidates(
