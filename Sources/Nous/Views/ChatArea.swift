@@ -552,6 +552,7 @@ struct ChatArea: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(ChatContentBackgroundLayer())
         .background(
             NativeGlassPanel(
                 cornerRadius: 36,

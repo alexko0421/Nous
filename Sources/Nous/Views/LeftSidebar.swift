@@ -331,7 +331,7 @@ struct LeftSidebar: View {
     var body: some View {
         NativeGlassPanel(
             cornerRadius: 32,
-            tintColor: AppColor.surfaceGlassTint
+            tintColor: AppColor.sidebarGlassTint
         ) {
             VStack(alignment: .leading, spacing: 0) {
                 MacOSTrafficLights()

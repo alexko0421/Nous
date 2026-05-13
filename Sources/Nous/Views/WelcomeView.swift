@@ -24,6 +24,19 @@ enum WelcomeActionMenuHitRegion {
     }
 }
 
+struct ChatContentBackgroundLayer: View {
+    var body: some View {
+        LinearGradient(
+            colors: [
+                AppColor.welcomeGradientStart.opacity(0.72),
+                AppColor.welcomeGradientEnd.opacity(0.74)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+}
+
 // MARK: - Welcome Home Screen
 struct WelcomeView: View {
     @Binding var inputText: String
@@ -82,8 +95,6 @@ struct WelcomeView: View {
     
     var body: some View {
         ZStack {
-            backgroundLayer
-            
             VStack {
                 Spacer(minLength: 0)
                 
@@ -164,19 +175,6 @@ struct WelcomeView: View {
             }
         }
         .frame(height: 36)
-    }
-    
-    private var backgroundLayer: some View {
-        ZStack {
-            LinearGradient(
-                colors: [
-                    AppColor.welcomeGradientStart.opacity(0.72),
-                    AppColor.welcomeGradientEnd.opacity(0.74)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        }
     }
     
     private var composerRow: some View {
