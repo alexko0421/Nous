@@ -34,6 +34,24 @@ struct MemoryCuratorReviewPlan: Codable {
     }
 }
 
+struct MemoryAtomCuratorReviewItem: Codable, Identifiable {
+    var id: UUID { atom.id }
+    let atom: MemoryAtom
+    let issue: MemoryCuratorReviewIssue
+    let recommendedAction: MemoryCuratorRecommendedAction
+    let relatedAtomIds: [UUID]
+    let reason: String
+}
+
+struct MemoryAtomCuratorReviewPlan: Codable {
+    let generatedAt: Date
+    let items: [MemoryAtomCuratorReviewItem]
+
+    var isEmpty: Bool {
+        items.isEmpty
+    }
+}
+
 final class MemoryCuratorReviewPlanner {
     private let now: () -> Date
     private let staleConfirmationInterval: TimeInterval
@@ -78,6 +96,37 @@ final class MemoryCuratorReviewPlanner {
         .sorted(by: Self.sortReviewItems)
 
         return MemoryCuratorReviewPlan(
+            generatedAt: generatedAt,
+            items: Array(items.prefix(maxItems))
+        )
+    }
+
+    func plan(
+        atoms: [MemoryAtom],
+        hasSourceEvidence: ((MemoryAtom) -> Bool)? = nil
+    ) -> MemoryAtomCuratorReviewPlan {
+        let generatedAt = now()
+        let activeAtoms = atoms
+            .filter { $0.status == .active }
+            .sorted { left, right in
+                if left.updatedAt == right.updatedAt {
+                    return left.id.uuidString < right.id.uuidString
+                }
+                return left.updatedAt < right.updatedAt
+            }
+
+        let duplicateIds = duplicateRelationships(in: activeAtoms)
+        let items = activeAtoms.compactMap { atom -> MemoryAtomCuratorReviewItem? in
+            reviewItem(
+                for: atom,
+                duplicateIds: duplicateIds[atom.id] ?? [],
+                generatedAt: generatedAt,
+                hasSourceEvidence: hasSourceEvidence
+            )
+        }
+        .sorted(by: Self.sortAtomReviewItems)
+
+        return MemoryAtomCuratorReviewPlan(
             generatedAt: generatedAt,
             items: Array(items.prefix(maxItems))
         )
@@ -165,10 +214,103 @@ final class MemoryCuratorReviewPlanner {
         return duplicateIdsByEntryId
     }
 
+    private func reviewItem(
+        for atom: MemoryAtom,
+        duplicateIds: [UUID],
+        generatedAt: Date,
+        hasSourceEvidence: ((MemoryAtom) -> Bool)?
+    ) -> MemoryAtomCuratorReviewItem? {
+        if let validUntil = atom.validUntil, validUntil <= generatedAt {
+            return MemoryAtomCuratorReviewItem(
+                atom: atom,
+                issue: .expiredStillActive,
+                recommendedAction: .archiveOrRefresh,
+                relatedAtomIds: [],
+                reason: "memory atom is past validUntil but still active"
+            )
+        }
+
+        if shouldRequireEvidence(atom) {
+            let sourceEvidenceExists = hasSourceEvidence?(atom)
+                ?? (atom.sourceNodeId != nil || atom.sourceMessageId != nil)
+            if !sourceEvidenceExists {
+                return MemoryAtomCuratorReviewItem(
+                    atom: atom,
+                    issue: .missingSourceEvidence,
+                    recommendedAction: .findEvidenceOrQuarantine,
+                    relatedAtomIds: [],
+                    reason: "durable memory atom has no source evidence"
+                )
+            }
+        }
+
+        if !duplicateIds.isEmpty {
+            return MemoryAtomCuratorReviewItem(
+                atom: atom,
+                issue: .possibleDuplicate,
+                recommendedAction: .mergeOrArchiveDuplicate,
+                relatedAtomIds: duplicateIds,
+                reason: "same scope and type contain the same normalized active memory atom"
+            )
+        }
+
+        if atom.confidence < lowConfidenceThreshold {
+            return MemoryAtomCuratorReviewItem(
+                atom: atom,
+                issue: .lowConfidence,
+                recommendedAction: .reviewConfidence,
+                relatedAtomIds: [],
+                reason: "memory atom confidence is below curator review threshold"
+            )
+        }
+
+        let lastTouchedAt = atom.lastSeenAt ?? atom.updatedAt
+        if shouldRequireStaleConfirmation(atom),
+           generatedAt.timeIntervalSince(lastTouchedAt) >= staleConfirmationInterval {
+            return MemoryAtomCuratorReviewItem(
+                atom: atom,
+                issue: .staleConfirmation,
+                recommendedAction: .askForConfirmation,
+                relatedAtomIds: [],
+                reason: "durable memory atom has not been seen or refreshed recently"
+            )
+        }
+
+        return nil
+    }
+
+    private func duplicateRelationships(in atoms: [MemoryAtom]) -> [UUID: [UUID]] {
+        var firstAtomByKey: [AtomDuplicateKey: MemoryAtom] = [:]
+        var duplicateIdsByAtomId: [UUID: [UUID]] = [:]
+
+        for atom in atoms {
+            let key = AtomDuplicateKey(atom: atom)
+            guard !key.normalizedStatement.isEmpty else { continue }
+
+            if let first = firstAtomByKey[key] {
+                duplicateIdsByAtomId[atom.id, default: []].append(first.id)
+            } else {
+                firstAtomByKey[key] = atom
+            }
+        }
+
+        return duplicateIdsByAtomId
+    }
+
     private func shouldRequireEvidence(_ entry: MemoryEntry) -> Bool {
         entry.stability == .stable &&
             entry.scope != .conversation &&
             entry.kind != .temporaryContext
+    }
+
+    private func shouldRequireEvidence(_ atom: MemoryAtom) -> Bool {
+        atom.scope != .conversation &&
+            atom.scope != .selfReflection &&
+            Self.evidenceRequiredAtomTypes.contains(atom.type)
+    }
+
+    private func shouldRequireStaleConfirmation(_ atom: MemoryAtom) -> Bool {
+        Self.staleConfirmationAtomTypes.contains(atom.type)
     }
 
     private static func sortReviewItems(
@@ -182,6 +324,19 @@ final class MemoryCuratorReviewPlanner {
             return left.entry.updatedAt > right.entry.updatedAt
         }
         return left.entry.id.uuidString < right.entry.id.uuidString
+    }
+
+    private static func sortAtomReviewItems(
+        _ left: MemoryAtomCuratorReviewItem,
+        _ right: MemoryAtomCuratorReviewItem
+    ) -> Bool {
+        if priority(left.issue) != priority(right.issue) {
+            return priority(left.issue) < priority(right.issue)
+        }
+        if left.atom.updatedAt != right.atom.updatedAt {
+            return left.atom.updatedAt > right.atom.updatedAt
+        }
+        return left.atom.id.uuidString < right.atom.id.uuidString
     }
 
     private static func priority(_ issue: MemoryCuratorReviewIssue) -> Int {
@@ -198,6 +353,29 @@ final class MemoryCuratorReviewPlanner {
             return 4
         }
     }
+
+    private static let evidenceRequiredAtomTypes: Set<MemoryAtomType> = [
+        .identity,
+        .preference,
+        .rule,
+        .boundary,
+        .constraint,
+        .goal,
+        .plan,
+        .belief
+    ]
+
+    private static let staleConfirmationAtomTypes: Set<MemoryAtomType> = [
+        .identity,
+        .preference,
+        .rule,
+        .boundary,
+        .constraint,
+        .goal,
+        .plan,
+        .belief,
+        .currentPosition
+    ]
 }
 
 private struct DuplicateKey: Hashable {
@@ -211,6 +389,41 @@ private struct DuplicateKey: Hashable {
         self.scopeRefId = entry.scopeRefId
         self.kind = entry.kind
         self.normalizedContent = Self.normalized(entry.content)
+    }
+
+    private static func normalized(_ raw: String) -> String {
+        let lowered = raw.lowercased()
+        let numberNormalized = lowered
+            .replacingOccurrences(of: "phase one", with: "phase 1")
+            .replacingOccurrences(of: "phase-one", with: "phase 1")
+            .replacingOccurrences(of: "phase_one", with: "phase 1")
+        let scalars = numberNormalized.unicodeScalars.filter {
+            CharacterSet.alphanumerics.contains($0)
+        }
+        return String(String.UnicodeScalarView(scalars))
+    }
+}
+
+private struct AtomDuplicateKey: Hashable {
+    let scope: MemoryScope
+    let scopeRefId: UUID?
+    let type: MemoryAtomType
+    let normalizedStatement: String
+
+    init(atom: MemoryAtom) {
+        self.scope = atom.scope
+        self.scopeRefId = atom.scopeRefId
+        self.type = atom.type
+        self.normalizedStatement = Self.normalized(
+            atom.normalizedKey.map(Self.statementPortion(from:)) ?? atom.statement
+        )
+    }
+
+    private static func statementPortion(from normalizedKey: String) -> String {
+        normalizedKey.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
+            .dropFirst()
+            .first
+            .map(String.init) ?? normalizedKey
     }
 
     private static func normalized(_ raw: String) -> String {

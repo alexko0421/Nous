@@ -133,14 +133,15 @@ final class MemoryQueryPlanner {
         let retrievedAtomIds = orderedUnique(candidates.flatMap(\.atomIds))
         guard !items.isEmpty else { return .empty }
 
-        try? graphStore.appendRecallEvent(MemoryRecallEvent(
+        recordRecall(
             query: query,
             intent: intent.rawValue,
             timeWindowStart: timeWindow?.start,
             timeWindowEnd: timeWindow?.end,
             retrievedAtomIds: retrievedAtomIds,
-            answerSummary: "Retrieved \(items.count) graph memory item(s)."
-        ))
+            answerSummary: "Retrieved \(items.count) graph memory item(s).",
+            now: now
+        )
 
         return MemoryGraphRecallPacket(
             intent: intent,
@@ -212,14 +213,15 @@ final class MemoryQueryPlanner {
         let items = neighbors.map { formatAtomRecall($0, intent: .generalRecall) }
         let retrievedAtomIds = orderedUnique(neighbors.map(\.id))
 
-        try? graphStore.appendRecallEvent(MemoryRecallEvent(
+        recordRecall(
             query: query,
             intent: "vector_fallback",
             timeWindowStart: nil,
             timeWindowEnd: nil,
             retrievedAtomIds: retrievedAtomIds,
-            answerSummary: "Vector fallback returned \(items.count) atom(s)."
-        ))
+            answerSummary: "Vector fallback returned \(items.count) atom(s).",
+            now: now
+        )
 
         return MemoryGraphRecallPacket(
             intent: .generalRecall,
@@ -380,6 +382,43 @@ final class MemoryQueryPlanner {
             [chain.rejection.id, chain.rejectedProposal?.id, chain.replacement?.id]
                 .compactMap { $0 } + chain.reasons.map(\.id)
         )
+    }
+
+    private func recordRecall(
+        query: String,
+        intent: String,
+        timeWindowStart: Date?,
+        timeWindowEnd: Date?,
+        retrievedAtomIds: [UUID],
+        answerSummary: String,
+        now: Date
+    ) {
+        let uniqueIds = orderedUnique(retrievedAtomIds)
+        guard !uniqueIds.isEmpty else { return }
+
+        try? nodeStore.inTransaction {
+            try graphStore.appendRecallEvent(MemoryRecallEvent(
+                query: query,
+                intent: intent,
+                timeWindowStart: timeWindowStart,
+                timeWindowEnd: timeWindowEnd,
+                retrievedAtomIds: uniqueIds,
+                answerSummary: answerSummary,
+                createdAt: now
+            ))
+            try markRetrievedAtomsSeen(uniqueIds, now: now)
+        }
+    }
+
+    private func markRetrievedAtomsSeen(_ atomIds: [UUID], now: Date) throws {
+        for atomId in atomIds {
+            guard var atom = try nodeStore.fetchMemoryAtom(id: atomId),
+                  atom.status == .active,
+                  atom.lastSeenAt.map({ $0 < now }) ?? true
+            else { continue }
+            atom.lastSeenAt = now
+            try nodeStore.updateMemoryAtom(atom)
+        }
     }
 
     private func orderedUnique(_ ids: [UUID]) -> [UUID] {

@@ -19,6 +19,13 @@ final class MemoryCuratorReviewService {
         }
     }
 
+    func makeAtomPlan() throws -> MemoryAtomCuratorReviewPlan {
+        let atoms = try nodeStore.fetchMemoryAtoms()
+        return planner.plan(atoms: atoms) { [nodeStore] atom in
+            Self.hasInspectableSourceEvidence(for: atom, nodeStore: nodeStore)
+        }
+    }
+
     private static func hasInspectableSourceEvidence(
         for entry: MemoryEntry,
         nodeStore: NodeStore
@@ -29,6 +36,25 @@ final class MemoryCuratorReviewService {
                 return true
             }
         }
+        return false
+    }
+
+    private static func hasInspectableSourceEvidence(
+        for atom: MemoryAtom,
+        nodeStore: NodeStore
+    ) -> Bool {
+        if let sourceNodeId = atom.sourceNodeId,
+           let node = try? nodeStore.fetchNode(id: sourceNodeId),
+           hasInspectableContent(for: node, nodeStore: nodeStore) {
+            return true
+        }
+
+        if let sourceMessageId = atom.sourceMessageId,
+           let message = try? nodeStore.fetchMessage(id: sourceMessageId),
+           !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+
         return false
     }
 
