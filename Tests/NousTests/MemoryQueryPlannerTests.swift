@@ -26,7 +26,7 @@ final class MemoryQueryPlannerTests: XCTestCase {
             reason: "The first slice needed to stay small.",
             replacement: "Ship graph recall incrementally."
         )
-        _ = try insertDecisionChain(
+        let recentChain = try insertDecisionChain(
             eventTime: recent,
             proposal: "Spend a week redesigning the sidebar.",
             rejection: "Alex rejected pausing memory work for sidebar polish.",
@@ -58,6 +58,11 @@ final class MemoryQueryPlannerTests: XCTestCase {
         XCTAssertEqual(event.timeWindowStart, packet.timeWindowStart)
         XCTAssertEqual(event.timeWindowEnd, packet.timeWindowEnd)
         XCTAssertTrue(event.retrievedAtomIds.contains(oldChain.rejectionId))
+
+        for id in [oldChain.rejectionId, oldChain.proposalId, oldChain.reasonId, oldChain.replacementId] {
+            XCTAssertEqual(try store.fetchMemoryAtom(id: id)?.lastSeenAt, now)
+        }
+        XCTAssertNil(try store.fetchMemoryAtom(id: recentChain.rejectionId)?.lastSeenAt)
     }
 
     func testTemporalDecisionRecallDoesNotFallbackOutsideWindow() throws {
@@ -379,6 +384,7 @@ final class MemoryQueryPlannerTests: XCTestCase {
     /// without cue words can never reach memory even when relevant atoms
     /// exist with embeddings.
     func testVectorFallbackRecallsRelevantAtomWhenNoKeywordCue() throws {
+        let now = Date(timeIntervalSince1970: 17_500)
         let preference = MemoryAtom(
             type: .preference,
             statement: "Alex prefers direct, concise feedback.",
@@ -401,12 +407,14 @@ final class MemoryQueryPlannerTests: XCTestCase {
             projectId: nil,
             conversationId: UUID(),
             queryEmbedding: [0.95, 0.05, 0.0],
-            now: Date()
+            now: now
         )
 
         XCTAssertEqual(packet.intent, .generalRecall)
         XCTAssertEqual(packet.retrievedAtomIds.first, preference.id)
         XCTAssertTrue(packet.items.contains { $0.contains("direct, concise feedback") })
+        XCTAssertEqual(try store.fetchMemoryAtom(id: preference.id)?.lastSeenAt, now)
+        XCTAssertNil(try store.fetchMemoryAtom(id: belief.id)?.lastSeenAt)
     }
 
     /// Vector fallback must rerank by `cosine × decay + confidenceBoost`,

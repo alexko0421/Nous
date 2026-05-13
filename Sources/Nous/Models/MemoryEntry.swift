@@ -24,6 +24,7 @@ enum MemoryStability: String, Codable, CaseIterable {
 }
 
 enum MemoryStatus: String, Codable {
+    case pending
     case active
     case archived
     case conflicted

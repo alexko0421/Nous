@@ -426,9 +426,16 @@ final class NodeStore {
                 last_seen_at      REAL,
                 source_node_id    TEXT REFERENCES nodes(id) ON DELETE SET NULL,
                 source_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+                corrects_target   TEXT,
                 embedding         BLOB
             );
         """)
+
+        try ensureColumnExists(
+            table: "memory_atoms",
+            column: "corrects_target",
+            alterSQL: "ALTER TABLE memory_atoms ADD COLUMN corrects_target TEXT;"
+        )
 
         try db.exec("""
             CREATE TABLE IF NOT EXISTS memory_edges (
@@ -2286,8 +2293,9 @@ final class NodeStore {
             INSERT INTO memory_atoms
               (id, type, statement, normalized_key, scope, scope_ref_id, status,
                confidence, event_time, valid_from, valid_until, created_at,
-               updated_at, last_seen_at, source_node_id, source_message_id, embedding)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+               updated_at, last_seen_at, source_node_id, source_message_id,
+               corrects_target, embedding)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """)
         try stmt.bind(atom.id.uuidString, at: 1)
         try stmt.bind(atom.type.rawValue, at: 2)
@@ -2305,8 +2313,9 @@ final class NodeStore {
         try stmt.bind(atom.lastSeenAt?.timeIntervalSince1970, at: 14)
         try stmt.bind(atom.sourceNodeId?.uuidString, at: 15)
         try stmt.bind(atom.sourceMessageId?.uuidString, at: 16)
+        try stmt.bind(atom.correctsTarget, at: 17)
         let embeddingData = atom.embedding.map { encodeFloats($0) }
-        try stmt.bind(embeddingData, at: 17)
+        try stmt.bind(embeddingData, at: 18)
         try stmt.step()
     }
 
@@ -2321,7 +2330,7 @@ final class NodeStore {
             SET type = ?, statement = ?, normalized_key = ?, scope = ?, scope_ref_id = ?,
                 status = ?, confidence = ?, event_time = ?, valid_from = ?,
                 valid_until = ?, updated_at = ?, last_seen_at = ?, source_node_id = ?,
-                source_message_id = ?, embedding = ?
+                source_message_id = ?, corrects_target = ?, embedding = ?
             WHERE id = ?;
         """)
         try stmt.bind(atom.type.rawValue, at: 1)
@@ -2338,9 +2347,10 @@ final class NodeStore {
         try stmt.bind(atom.lastSeenAt?.timeIntervalSince1970, at: 12)
         try stmt.bind(atom.sourceNodeId?.uuidString, at: 13)
         try stmt.bind(atom.sourceMessageId?.uuidString, at: 14)
+        try stmt.bind(atom.correctsTarget, at: 15)
         let embeddingData = atom.embedding.map { encodeFloats($0) }
-        try stmt.bind(embeddingData, at: 15)
-        try stmt.bind(atom.id.uuidString, at: 16)
+        try stmt.bind(embeddingData, at: 16)
+        try stmt.bind(atom.id.uuidString, at: 17)
         try stmt.step()
     }
 
@@ -2348,7 +2358,8 @@ final class NodeStore {
         let stmt = try db.prepare("""
             SELECT id, type, statement, normalized_key, scope, scope_ref_id, status,
                    confidence, event_time, valid_from, valid_until, created_at,
-                   updated_at, last_seen_at, source_node_id, source_message_id, embedding
+                   updated_at, last_seen_at, source_node_id, source_message_id,
+                   corrects_target, embedding
             FROM memory_atoms
             WHERE id = ?
             LIMIT 1;
@@ -2362,7 +2373,8 @@ final class NodeStore {
         let stmt = try db.prepare("""
             SELECT id, type, statement, normalized_key, scope, scope_ref_id, status,
                    confidence, event_time, valid_from, valid_until, created_at,
-                   updated_at, last_seen_at, source_node_id, source_message_id, embedding
+                   updated_at, last_seen_at, source_node_id, source_message_id,
+                   corrects_target, embedding
             FROM memory_atoms
             ORDER BY COALESCE(event_time, created_at) DESC, created_at DESC;
         """)
@@ -2429,7 +2441,8 @@ final class NodeStore {
         let sql = """
             SELECT id, type, statement, normalized_key, scope, scope_ref_id, status,
                    confidence, event_time, valid_from, valid_until, created_at,
-                   updated_at, last_seen_at, source_node_id, source_message_id, embedding
+                   updated_at, last_seen_at, source_node_id, source_message_id,
+                   corrects_target, embedding
             FROM memory_atoms
             \(whereSQL)ORDER BY COALESCE(event_time, created_at) DESC, created_at DESC
             \(limitSQL);
@@ -2483,7 +2496,8 @@ final class NodeStore {
         let stmt = try db.prepare("""
             SELECT id, type, statement, normalized_key, scope, scope_ref_id, status,
                    confidence, event_time, valid_from, valid_until, created_at,
-                   updated_at, last_seen_at, source_node_id, source_message_id, embedding
+                   updated_at, last_seen_at, source_node_id, source_message_id,
+                   corrects_target, embedding
             FROM memory_atoms
             WHERE \(whereClauses.joined(separator: " AND "));
         """)
@@ -2533,7 +2547,8 @@ final class NodeStore {
         let stmt = try db.prepare("""
             SELECT id, type, statement, normalized_key, scope, scope_ref_id, status,
                    confidence, event_time, valid_from, valid_until, created_at,
-                   updated_at, last_seen_at, source_node_id, source_message_id, embedding
+                   updated_at, last_seen_at, source_node_id, source_message_id,
+                   corrects_target, embedding
             FROM memory_atoms
             WHERE source_node_id IN (\(placeholders))
             ORDER BY COALESCE(event_time, created_at) DESC, created_at DESC;
@@ -2551,11 +2566,15 @@ final class NodeStore {
 
     func deleteMemoryAtom(id: UUID) throws {
         try inTransaction {
-            try deleteEdgesSupportedByMemoryAtom(id: id)
-            let stmt = try db.prepare("DELETE FROM memory_atoms WHERE id = ?;")
-            try stmt.bind(id.uuidString, at: 1)
-            try stmt.step()
+            try deleteMemoryAtomInCurrentTransaction(id: id)
         }
+    }
+
+    func deleteMemoryAtomInCurrentTransaction(id: UUID) throws {
+        try deleteEdgesSupportedByMemoryAtom(id: id)
+        let stmt = try db.prepare("DELETE FROM memory_atoms WHERE id = ?;")
+        try stmt.bind(id.uuidString, at: 1)
+        try stmt.step()
     }
 
     func insertMemoryEdge(_ edge: MemoryEdge) throws {
@@ -2709,7 +2728,8 @@ final class NodeStore {
         let lastSeenAt = stmt.isNull(at: 13) ? nil : Date(timeIntervalSince1970: stmt.double(at: 13))
         let sourceNodeId = stmt.text(at: 14).flatMap { UUID(uuidString: $0) }
         let sourceMessageId = stmt.text(at: 15).flatMap { UUID(uuidString: $0) }
-        let embedding = stmt.blob(at: 16).map { decodeFloats($0) }
+        let correctsTarget = stmt.text(at: 16)
+        let embedding = stmt.blob(at: 17).map { decodeFloats($0) }
         return MemoryAtom(
             id: id,
             type: type,
@@ -2727,6 +2747,7 @@ final class NodeStore {
             lastSeenAt: lastSeenAt,
             sourceNodeId: sourceNodeId,
             sourceMessageId: sourceMessageId,
+            correctsTarget: correctsTarget,
             embedding: embedding
         )
     }
@@ -2736,7 +2757,8 @@ final class NodeStore {
             old.statement != new.statement ||
             old.status != new.status ||
             old.confidence != new.confidence ||
-            old.sourceNodeId != new.sourceNodeId
+            old.sourceNodeId != new.sourceNodeId ||
+            old.correctsTarget != new.correctsTarget
     }
 
     private func memoryEdgeFrom(_ stmt: Statement) -> MemoryEdge? {

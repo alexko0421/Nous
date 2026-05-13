@@ -2,8 +2,18 @@ import SwiftUI
 
 struct MemoryGraphInspector: View {
     let nodeStore: NodeStore
+    let llmServiceProvider: () -> (any LLMService)?
+
+    init(
+        nodeStore: NodeStore,
+        llmServiceProvider: @escaping () -> (any LLMService)? = { nil }
+    ) {
+        self.nodeStore = nodeStore
+        self.llmServiceProvider = llmServiceProvider
+    }
 
     private enum GraphFocus: String, CaseIterable {
+        case inbox = "Inbox"
         case active = "Active"
         case chains = "Chains"
         case review = "Review"
@@ -23,12 +33,14 @@ struct MemoryGraphInspector: View {
     @State private var edges: [MemoryEdge] = []
     @State private var observations: [MemoryObservation] = []
     @State private var recallEvents: [MemoryRecallEvent] = []
+    @State private var atomReviewPlan = MemoryAtomCuratorReviewPlan(generatedAt: .distantPast, items: [])
     @State private var nodeTitles: [UUID: String] = [:]
     @State private var projectTitles: [UUID: String] = [:]
     @State private var selectedAtomId: UUID?
     @State private var searchText = ""
     @State private var selectedFocus: GraphFocus = .active
     @State private var loadError: String?
+    @State private var actingAtomId: UUID?
 
     var body: some View {
         graphContainer {
@@ -81,6 +93,12 @@ struct MemoryGraphInspector: View {
     private var metrics: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 124), spacing: 10)], spacing: 10) {
             metric(title: "Atoms", value: "\(activeAtoms.count)", subtitle: "active claims")
+            metric(
+                title: "Inbox",
+                value: "\(pendingAtoms.count)",
+                subtitle: "waiting",
+                accent: pendingAtoms.isEmpty ? AppColor.surfacePrimary : Color.blue.opacity(0.10)
+            )
             metric(title: "Edges", value: "\(edges.count)", subtitle: "relationships")
             metric(title: "Chains", value: "\(decisionChains.count)", subtitle: "rejection paths")
             metric(
@@ -88,6 +106,12 @@ struct MemoryGraphInspector: View {
                 value: "\(unverifiedObservations.count)",
                 subtitle: "not promoted",
                 accent: unverifiedObservations.isEmpty ? AppColor.surfacePrimary : Color.yellow.opacity(0.12)
+            )
+            metric(
+                title: "Review",
+                value: "\(atomReviewPlan.items.count)",
+                subtitle: "active atoms",
+                accent: atomReviewPlan.items.isEmpty ? AppColor.surfacePrimary : Color.red.opacity(0.08)
             )
             metric(title: "Recalls", value: "\(recallEvents.count)", subtitle: "recent events")
         }
@@ -233,6 +257,9 @@ struct MemoryGraphInspector: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {
                     badge(text: atom.type.rawValue.replacingOccurrences(of: "_", with: " "), tint: typeTint(atom.type))
+                    if atomReviewItem(for: atom) != nil {
+                        badge(text: "review", tint: Color.red.opacity(0.12))
+                    }
                     if atom.status != .active {
                         badge(text: atom.status.rawValue, tint: statusTint(atom.status))
                     }
@@ -266,6 +293,9 @@ struct MemoryGraphInspector: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 badge(text: atom.type.rawValue.replacingOccurrences(of: "_", with: " "), tint: typeTint(atom.type))
+                if atomReviewItem(for: atom) != nil {
+                    badge(text: "review", tint: Color.red.opacity(0.12))
+                }
                 badge(text: atom.status.rawValue, tint: statusTint(atom.status))
                 badge(text: "\(Int((atom.confidence * 100).rounded()))% confidence", tint: AppColor.surfacePrimary)
             }
@@ -280,6 +310,42 @@ struct MemoryGraphInspector: View {
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundColor(AppColor.secondaryText)
                 .textSelection(.enabled)
+
+            if let correctsTarget = atom.correctsTarget,
+               !correctsTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                chainField("Corrects", correctsTarget)
+            }
+
+            if let item = atomReviewItem(for: atom) {
+                chainField("Review", atomReviewNote(for: item))
+            }
+
+            if atom.status == .pending {
+                HStack(spacing: 8) {
+                    atomActionButton(title: "Save", tint: AppColor.colaOrange, textColor: .white) {
+                        mutateAtomAsync(atom.id) {
+                            _ = try await MemoryReflectionProposalService(
+                                nodeStore: nodeStore,
+                                llmServiceProvider: llmServiceProvider
+                            ).approveAndPropose(atom.id)
+                        }
+                    }
+                    atomActionButton(title: "Reject", tint: AppColor.surfaceSecondary, textColor: AppColor.colaDarkText) {
+                        mutateAtom(atom.id) {
+                            _ = try MemoryLifecycleEngine(nodeStore: nodeStore).reject(atom.id)
+                        }
+                    }
+                    atomActionButton(title: "Forget", tint: Color.red.opacity(0.12), textColor: .red) {
+                        mutateAtom(atom.id) {
+                            _ = try MemoryLifecycleEngine(nodeStore: nodeStore).forget(atom.id)
+                        }
+                    }
+                    if actingAtomId == atom.id {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                }
+            }
         }
         .padding(14)
         .background(AppColor.surfacePrimary)
@@ -522,17 +588,30 @@ struct MemoryGraphInspector: View {
         atoms.filter { $0.status == .active }
     }
 
+    private var pendingAtoms: [MemoryAtom] {
+        atoms.filter { $0.status == .pending }
+    }
+
     private var decisionAtoms: [MemoryAtom] {
         atoms.filter { [.proposal, .rejection, .reason, .currentPosition, .decision].contains($0.type) }
     }
 
     private var reviewAtoms: [MemoryAtom] {
-        atoms.filter { $0.status != .active }
+        let planAtoms = atomReviewPlan.items.map(\.atom)
+        let planAtomIds = Set(planAtoms.map(\.id))
+        let statusReviewAtoms = atoms.filter { atom in
+            atom.status != .active &&
+                atom.status != .pending &&
+                !planAtomIds.contains(atom.id)
+        }
+        return planAtoms + statusReviewAtoms
     }
 
     private var filteredAtoms: [MemoryAtom] {
         let base: [MemoryAtom]
         switch selectedFocus {
+        case .inbox:
+            base = pendingAtoms
         case .active:
             base = activeAtoms
         case .chains:
@@ -564,6 +643,10 @@ struct MemoryGraphInspector: View {
 
     private var selectedAtom: MemoryAtom? {
         filteredAtoms.first(where: { $0.id == selectedAtomId })
+    }
+
+    private func atomReviewItem(for atom: MemoryAtom) -> MemoryAtomCuratorReviewItem? {
+        atomReviewPlan.items.first { $0.atom.id == atom.id }
     }
 
     private var atomById: [UUID: MemoryAtom] {
@@ -641,6 +724,7 @@ struct MemoryGraphInspector: View {
             edges = try nodeStore.fetchMemoryEdges()
             observations = try nodeStore.fetchMemoryObservations()
             recallEvents = try nodeStore.fetchMemoryRecallEvents(limit: 20)
+            atomReviewPlan = try MemoryCuratorReviewService(nodeStore: nodeStore).makeAtomPlan()
             nodeTitles = try nodeStore.fetchAllNodeTitles()
             let projects = try nodeStore.fetchAllProjects()
             projectTitles = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0.title) })
@@ -648,6 +732,37 @@ struct MemoryGraphInspector: View {
             syncSelectedAtom()
         } catch {
             loadError = "Failed to load graph memory: \(error.localizedDescription)"
+        }
+    }
+
+    private func mutateAtom(_ atomId: UUID, action: () throws -> Void) {
+        actingAtomId = atomId
+        do {
+            try action()
+            loadError = nil
+            reload()
+        } catch {
+            loadError = "Failed to update memory atom: \(error.localizedDescription)"
+        }
+        actingAtomId = nil
+    }
+
+    private func mutateAtomAsync(_ atomId: UUID, action: @escaping () async throws -> Void) {
+        actingAtomId = atomId
+        Task {
+            do {
+                try await action()
+                await MainActor.run {
+                    loadError = nil
+                    reload()
+                    actingAtomId = nil
+                }
+            } catch {
+                await MainActor.run {
+                    loadError = "Failed to update memory atom: \(error.localizedDescription)"
+                    actingAtomId = nil
+                }
+            }
         }
     }
 
@@ -734,6 +849,22 @@ struct MemoryGraphInspector: View {
             .clipShape(Capsule())
     }
 
+    private func atomActionButton(
+        title: String,
+        tint: Color,
+        textColor: Color,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(title, action: action)
+            .buttonStyle(.plain)
+            .font(.system(size: 11, weight: .semibold, design: .rounded))
+            .foregroundColor(textColor)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(tint)
+            .clipShape(Capsule())
+    }
+
     private func graphContainer<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10) { content() }
             .padding(18)
@@ -765,6 +896,8 @@ struct MemoryGraphInspector: View {
 
     private func statusTint(_ status: MemoryStatus) -> Color {
         switch status {
+        case .pending:
+            return Color.blue.opacity(0.12)
         case .active:
             return AppColor.colaOrange.opacity(0.12)
         case .conflicted:
@@ -776,18 +909,39 @@ struct MemoryGraphInspector: View {
         }
     }
 
+    private func atomReviewNote(for item: MemoryAtomCuratorReviewItem) -> String {
+        "\(issueDisplay(item.issue)): \(item.reason)"
+    }
+
+    private func issueDisplay(_ issue: MemoryCuratorReviewIssue) -> String {
+        switch issue {
+        case .expiredStillActive:
+            return "Expired active memory"
+        case .staleConfirmation:
+            return "Needs confirmation"
+        case .missingSourceEvidence:
+            return "Missing source evidence"
+        case .lowConfidence:
+            return "Low confidence"
+        case .possibleDuplicate:
+            return "Possible duplicate"
+        }
+    }
+
     private func statusRank(_ status: MemoryStatus) -> Int {
         switch status {
-        case .active:
+        case .pending:
             return 0
-        case .conflicted:
+        case .active:
             return 1
-        case .expired:
+        case .conflicted:
             return 2
-        case .archived:
+        case .expired:
             return 3
-        case .superseded:
+        case .archived:
             return 4
+        case .superseded:
+            return 5
         }
     }
 
