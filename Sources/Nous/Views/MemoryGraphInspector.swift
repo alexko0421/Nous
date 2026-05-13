@@ -33,6 +33,7 @@ struct MemoryGraphInspector: View {
     @State private var edges: [MemoryEdge] = []
     @State private var observations: [MemoryObservation] = []
     @State private var recallEvents: [MemoryRecallEvent] = []
+    @State private var atomReviewPlan = MemoryAtomCuratorReviewPlan(generatedAt: .distantPast, items: [])
     @State private var nodeTitles: [UUID: String] = [:]
     @State private var projectTitles: [UUID: String] = [:]
     @State private var selectedAtomId: UUID?
@@ -105,6 +106,12 @@ struct MemoryGraphInspector: View {
                 value: "\(unverifiedObservations.count)",
                 subtitle: "not promoted",
                 accent: unverifiedObservations.isEmpty ? AppColor.surfacePrimary : Color.yellow.opacity(0.12)
+            )
+            metric(
+                title: "Review",
+                value: "\(atomReviewPlan.items.count)",
+                subtitle: "active atoms",
+                accent: atomReviewPlan.items.isEmpty ? AppColor.surfacePrimary : Color.red.opacity(0.08)
             )
             metric(title: "Recalls", value: "\(recallEvents.count)", subtitle: "recent events")
         }
@@ -250,6 +257,9 @@ struct MemoryGraphInspector: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {
                     badge(text: atom.type.rawValue.replacingOccurrences(of: "_", with: " "), tint: typeTint(atom.type))
+                    if atomReviewItem(for: atom) != nil {
+                        badge(text: "review", tint: Color.red.opacity(0.12))
+                    }
                     if atom.status != .active {
                         badge(text: atom.status.rawValue, tint: statusTint(atom.status))
                     }
@@ -283,6 +293,9 @@ struct MemoryGraphInspector: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 badge(text: atom.type.rawValue.replacingOccurrences(of: "_", with: " "), tint: typeTint(atom.type))
+                if atomReviewItem(for: atom) != nil {
+                    badge(text: "review", tint: Color.red.opacity(0.12))
+                }
                 badge(text: atom.status.rawValue, tint: statusTint(atom.status))
                 badge(text: "\(Int((atom.confidence * 100).rounded()))% confidence", tint: AppColor.surfacePrimary)
             }
@@ -301,6 +314,10 @@ struct MemoryGraphInspector: View {
             if let correctsTarget = atom.correctsTarget,
                !correctsTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 chainField("Corrects", correctsTarget)
+            }
+
+            if let item = atomReviewItem(for: atom) {
+                chainField("Review", atomReviewNote(for: item))
             }
 
             if atom.status == .pending {
@@ -580,7 +597,14 @@ struct MemoryGraphInspector: View {
     }
 
     private var reviewAtoms: [MemoryAtom] {
-        atoms.filter { $0.status != .active }
+        let planAtoms = atomReviewPlan.items.map(\.atom)
+        let planAtomIds = Set(planAtoms.map(\.id))
+        let statusReviewAtoms = atoms.filter { atom in
+            atom.status != .active &&
+                atom.status != .pending &&
+                !planAtomIds.contains(atom.id)
+        }
+        return planAtoms + statusReviewAtoms
     }
 
     private var filteredAtoms: [MemoryAtom] {
@@ -619,6 +643,10 @@ struct MemoryGraphInspector: View {
 
     private var selectedAtom: MemoryAtom? {
         filteredAtoms.first(where: { $0.id == selectedAtomId })
+    }
+
+    private func atomReviewItem(for atom: MemoryAtom) -> MemoryAtomCuratorReviewItem? {
+        atomReviewPlan.items.first { $0.atom.id == atom.id }
     }
 
     private var atomById: [UUID: MemoryAtom] {
@@ -696,6 +724,7 @@ struct MemoryGraphInspector: View {
             edges = try nodeStore.fetchMemoryEdges()
             observations = try nodeStore.fetchMemoryObservations()
             recallEvents = try nodeStore.fetchMemoryRecallEvents(limit: 20)
+            atomReviewPlan = try MemoryCuratorReviewService(nodeStore: nodeStore).makeAtomPlan()
             nodeTitles = try nodeStore.fetchAllNodeTitles()
             let projects = try nodeStore.fetchAllProjects()
             projectTitles = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0.title) })
@@ -877,6 +906,25 @@ struct MemoryGraphInspector: View {
             return Color.yellow.opacity(0.16)
         case .archived, .superseded:
             return AppColor.subtleFill
+        }
+    }
+
+    private func atomReviewNote(for item: MemoryAtomCuratorReviewItem) -> String {
+        "\(issueDisplay(item.issue)): \(item.reason)"
+    }
+
+    private func issueDisplay(_ issue: MemoryCuratorReviewIssue) -> String {
+        switch issue {
+        case .expiredStillActive:
+            return "Expired active memory"
+        case .staleConfirmation:
+            return "Needs confirmation"
+        case .missingSourceEvidence:
+            return "Missing source evidence"
+        case .lowConfidence:
+            return "Low confidence"
+        case .possibleDuplicate:
+            return "Possible duplicate"
         }
     }
 

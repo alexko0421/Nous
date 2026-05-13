@@ -180,4 +180,129 @@ final class MemoryCuratorReviewServiceTests: XCTestCase {
 
         XCTAssertFalse(plan.items.contains { $0.entry.id == entry.id })
     }
+
+    func testBuildsAtomReviewPlanFromNodeStoreAtoms() throws {
+        let now = Date(timeIntervalSince1970: 90 * 24 * 60 * 60)
+        let source = NousNode(
+            type: .conversation,
+            title: "Atom source chat",
+            content: "Alex wants memory answers to cite their source.",
+            createdAt: now,
+            updatedAt: now
+        )
+        try store.insertNode(source)
+        let stale = MemoryAtom(
+            type: .preference,
+            statement: "Alex wants memory answers to cite their source.",
+            normalizedKey: MemoryGraphWriter.normalizedKey(
+                type: .preference,
+                statement: "Alex wants memory answers to cite their source."
+            ),
+            scope: .global,
+            confidence: 0.9,
+            eventTime: now.addingTimeInterval(-80 * 24 * 60 * 60),
+            createdAt: now.addingTimeInterval(-80 * 24 * 60 * 60),
+            updatedAt: now.addingTimeInterval(-80 * 24 * 60 * 60),
+            lastSeenAt: now.addingTimeInterval(-80 * 24 * 60 * 60),
+            sourceNodeId: source.id
+        )
+        try store.insertMemoryAtom(stale)
+        let service = MemoryCuratorReviewService(
+            nodeStore: store,
+            planner: MemoryCuratorReviewPlanner(now: { now })
+        )
+
+        let plan = try service.makeAtomPlan()
+
+        XCTAssertEqual(plan.generatedAt, now)
+        XCTAssertEqual(plan.items.map(\.atom.id), [stale.id])
+        XCTAssertEqual(plan.items.first?.issue, .staleConfirmation)
+    }
+
+    func testAtomEmptySourceMessageIsTreatedAsMissingEvidence() throws {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let conversation = NousNode(
+            type: .conversation,
+            title: "Empty message source",
+            content: "",
+            createdAt: now,
+            updatedAt: now
+        )
+        try store.insertNode(conversation)
+        let message = Message(
+            nodeId: conversation.id,
+            role: .user,
+            content: "   ",
+            timestamp: now
+        )
+        try store.insertMessage(message)
+        let atom = MemoryAtom(
+            type: .rule,
+            statement: "Memory atoms must point back to inspectable evidence.",
+            normalizedKey: MemoryGraphWriter.normalizedKey(
+                type: .rule,
+                statement: "Memory atoms must point back to inspectable evidence."
+            ),
+            scope: .global,
+            confidence: 0.92,
+            eventTime: now,
+            createdAt: now,
+            updatedAt: now,
+            lastSeenAt: now,
+            sourceMessageId: message.id
+        )
+        try store.insertMemoryAtom(atom)
+        let service = MemoryCuratorReviewService(
+            nodeStore: store,
+            planner: MemoryCuratorReviewPlanner(now: { now })
+        )
+
+        let plan = try service.makeAtomPlan()
+
+        XCTAssertEqual(plan.items.map(\.atom.id), [atom.id])
+        XCTAssertEqual(plan.items.first?.issue, .missingSourceEvidence)
+    }
+
+    func testAtomSourceMessageCountsAsInspectableEvidence() throws {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let conversation = NousNode(
+            type: .conversation,
+            title: "Source message",
+            content: "",
+            createdAt: now,
+            updatedAt: now
+        )
+        try store.insertNode(conversation)
+        let message = Message(
+            nodeId: conversation.id,
+            role: .user,
+            content: "Alex treats pending memory as invisible to active recall.",
+            timestamp: now
+        )
+        try store.insertMessage(message)
+        let atom = MemoryAtom(
+            type: .rule,
+            statement: "Pending memory stays invisible to active recall.",
+            normalizedKey: MemoryGraphWriter.normalizedKey(
+                type: .rule,
+                statement: "Pending memory stays invisible to active recall."
+            ),
+            scope: .global,
+            confidence: 0.92,
+            eventTime: now,
+            createdAt: now,
+            updatedAt: now,
+            lastSeenAt: now,
+            sourceMessageId: message.id
+        )
+        try store.insertMemoryAtom(atom)
+        let service = MemoryCuratorReviewService(
+            nodeStore: store,
+            planner: MemoryCuratorReviewPlanner(now: { now })
+        )
+
+        let plan = try service.makeAtomPlan()
+
+        XCTAssertFalse(plan.items.contains { $0.atom.id == atom.id })
+    }
 }
