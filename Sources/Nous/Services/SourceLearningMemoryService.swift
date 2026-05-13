@@ -35,19 +35,25 @@ final class SourceLearningMemoryService {
             let candidates = Self.decodeCandidates(from: raw)
             var insertedCount = 0
             var rejectedCount = 0
+            let lifecycleEngine = MemoryLifecycleEngine(nodeStore: nodeStore)
             for candidate in candidates {
+                let currentNow = now()
                 guard let atom = Self.memoryAtom(
                     from: candidate,
                     request: request,
-                    now: now()
+                    now: currentNow
                 ) else {
                     rejectedCount += 1
                     continue
                 }
 
                 do {
-                    try nodeStore.insertMemoryAtom(atom)
-                    insertedCount += 1
+                    let staged = try lifecycleEngine.stageAtomProposal(atom, now: currentNow)
+                    if staged.status == .archived {
+                        rejectedCount += 1
+                    } else {
+                        insertedCount += 1
+                    }
                 } catch {
                     rejectedCount += 1
                 }
@@ -158,12 +164,12 @@ final class SourceLearningMemoryService {
             normalizedKey: normalizedKey(statement),
             scope: scope.value,
             scopeRefId: scope.refId,
-            status: .active,
+            status: .pending,
             confidence: confidence,
             eventTime: request.userMessage.timestamp,
             createdAt: now,
             updatedAt: now,
-            lastSeenAt: now,
+            lastSeenAt: nil,
             sourceNodeId: sourceNodeId,
             sourceMessageId: request.userMessage.id
         )

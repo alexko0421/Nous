@@ -39,6 +39,7 @@ struct MemoryAtom: Identifiable, Codable, Equatable {
     var lastSeenAt: Date?
     var sourceNodeId: UUID?
     var sourceMessageId: UUID?
+    var correctsTarget: String?
     var embedding: [Float]?
 
     init(
@@ -58,6 +59,7 @@ struct MemoryAtom: Identifiable, Codable, Equatable {
         lastSeenAt: Date? = nil,
         sourceNodeId: UUID? = nil,
         sourceMessageId: UUID? = nil,
+        correctsTarget: String? = nil,
         embedding: [Float]? = nil
     ) {
         self.id = id
@@ -76,6 +78,7 @@ struct MemoryAtom: Identifiable, Codable, Equatable {
         self.lastSeenAt = lastSeenAt
         self.sourceNodeId = sourceNodeId
         self.sourceMessageId = sourceMessageId
+        self.correctsTarget = correctsTarget
         self.embedding = embedding
     }
 }

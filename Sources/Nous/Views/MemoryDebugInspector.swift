@@ -106,16 +106,18 @@ enum MemoryFactDebugFormatting {
 
     private static func statusRank(_ status: MemoryStatus) -> Int {
         switch status {
-        case .active:
+        case .pending:
             return 0
-        case .conflicted:
+        case .active:
             return 1
-        case .expired:
+        case .conflicted:
             return 2
-        case .archived:
+        case .expired:
             return 3
-        case .superseded:
+        case .archived:
             return 4
+        case .superseded:
+            return 5
         }
     }
 
@@ -217,6 +219,7 @@ struct MemoryDebugInspector: View {
     let telemetry: GovernanceTelemetryStore
     let galaxyRelationTelemetry: GalaxyRelationTelemetry
     let shadowLearningStore: ShadowLearningStore?
+    let llmServiceProvider: () -> (any LLMService)?
 
     private enum MemoryFocus: String, CaseIterable {
         case active = "All"
@@ -299,7 +302,10 @@ struct MemoryDebugInspector: View {
                 failureSkillCard
                 shadowLearningCard
                 #endif
-                MemoryGraphInspector(nodeStore: nodeStore)
+                MemoryGraphInspector(
+                    nodeStore: nodeStore,
+                    llmServiceProvider: llmServiceProvider
+                )
 
                 HStack(alignment: .top, spacing: 20) {
                     entriesPane
@@ -1315,9 +1321,9 @@ struct MemoryDebugInspector: View {
 
                 Spacer(minLength: 0)
 
-                if fact.status == .active {
+                if fact.status == .pending || fact.status == .active {
                     smallActionButton(
-                        title: "Confirm",
+                        title: fact.status == .pending ? "Save" : "Confirm",
                         tint: AppColor.colaOrange.opacity(0.15),
                         textColor: AppColor.colaDarkText
                     ) {
@@ -2086,6 +2092,8 @@ struct MemoryDebugInspector: View {
 
     private func reviewNote(for entry: MemoryEntry) -> String? {
         switch entry.status {
+        case .pending:
+            return "This memory is waiting for approval before Nous can use it."
         case .conflicted:
             return "This memory conflicts with newer evidence and needs review."
         case .expired:
@@ -2101,6 +2109,8 @@ struct MemoryDebugInspector: View {
 
     private func statusDisplay(_ status: MemoryStatus) -> String {
         switch status {
+        case .pending:
+            return "Pending"
         case .active:
             return "Active"
         case .archived:
@@ -2116,21 +2126,25 @@ struct MemoryDebugInspector: View {
 
     private func statusRank(_ status: MemoryStatus) -> Int {
         switch status {
-        case .active:
+        case .pending:
             return 0
-        case .conflicted:
+        case .active:
             return 1
-        case .expired:
+        case .conflicted:
             return 2
-        case .archived:
+        case .expired:
             return 3
-        case .superseded:
+        case .archived:
             return 4
+        case .superseded:
+            return 5
         }
     }
 
     private func statusTint(_ status: MemoryStatus) -> Color {
         switch status {
+        case .pending:
+            return Color.blue.opacity(0.12)
         case .active:
             return AppColor.colaOrange.opacity(0.14)
         case .conflicted:
@@ -2146,6 +2160,8 @@ struct MemoryDebugInspector: View {
 
     private func statusTextColor(_ status: MemoryStatus) -> Color {
         switch status {
+        case .pending:
+            return Color.blue.opacity(0.75)
         case .active:
             return AppColor.colaDarkText
         case .conflicted:
@@ -2159,6 +2175,8 @@ struct MemoryDebugInspector: View {
 
     private func statusBackground(_ status: MemoryStatus) -> Color {
         switch status {
+        case .pending:
+            return Color.blue.opacity(0.05)
         case .active:
             return AppColor.surfacePrimary
         case .conflicted:
@@ -2172,6 +2190,8 @@ struct MemoryDebugInspector: View {
 
     private func statusBorder(_ status: MemoryStatus) -> Color {
         switch status {
+        case .pending:
+            return Color.blue.opacity(0.2)
         case .active:
             return AppColor.panelStroke
         case .conflicted:

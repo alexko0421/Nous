@@ -15,7 +15,7 @@ final class MemoryGraphMessageBackfillServiceTests: XCTestCase {
         super.tearDown()
     }
 
-    func testBackfillsDecisionChainsFromRawUserMessages() async throws {
+    func testBackfillsDecisionChainsFromRawUserMessagesIntoPendingInbox() async throws {
         let capture = PromptListCapture()
         let mock = QueueBackfillLLM(capture: capture, replies: [
             """
@@ -76,6 +76,10 @@ final class MemoryGraphMessageBackfillServiceTests: XCTestCase {
         XCTAssertEqual(rejection.sourceNodeId, conversation.id)
         XCTAssertEqual(rejection.sourceMessageId, try store.fetchMessages(nodeId: conversation.id).last?.id)
         XCTAssertEqual(rejection.eventTime, Date(timeIntervalSince1970: 2))
+        XCTAssertEqual(rejection.status, .pending)
+        XCTAssertEqual(chain.rejectedProposal?.status, .pending)
+        XCTAssertEqual(chain.reasons.map(\.status), [.pending])
+        XCTAssertEqual(chain.replacement?.status, .pending)
 
         let recall = UserMemoryService(nodeStore: store, llmServiceProvider: { nil })
             .currentDecisionGraphRecall(
@@ -83,11 +87,77 @@ final class MemoryGraphMessageBackfillServiceTests: XCTestCase {
                 projectId: nil,
                 conversationId: UUID()
             )
-        XCTAssertEqual(recall.count, 1)
-        XCTAssertTrue(recall[0].contains("Rebuild the entire retrieval stack."))
-        XCTAssertTrue(recall[0].contains("Cash runway is tight."))
-        XCTAssertTrue(recall[0].contains("source_message_id="))
-        XCTAssertTrue(recall[0].contains("event_time=1970-01-01T00:00:02Z"))
+        XCTAssertTrue(recall.isEmpty, "Backfilled memory must not enter active recall before approval.")
+    }
+
+    func testRejectedBackfillProposalDoesNotRecreatePendingInboxItem() async throws {
+        let capture = PromptListCapture()
+        let mock = QueueBackfillLLM(capture: capture, replies: [
+            """
+            {
+              "decision_chains": [
+                {
+                  "rejected_proposal":"Rebuild the entire retrieval stack.",
+                  "rejection":"Alex rejected turning this into a full retrieval rewrite.",
+                  "reasons":["Cash runway is tight."],
+                  "replacement":"Build the smallest graph-memory slice first.",
+                  "evidence_quote":"No, don't turn this into a full retrieval rewrite. Cash runway is tight.",
+                  "confidence":0.91
+                }
+              ]
+            }
+            """
+        ])
+        let service = MemoryGraphMessageBackfillService(nodeStore: store, llmServiceProvider: { mock })
+
+        let conversation = NousNode(type: .conversation, title: "Rejected backfill")
+        try store.insertNode(conversation)
+        let userMessage = Message(
+            nodeId: conversation.id,
+            role: .user,
+            content: "No, don't turn this into a full retrieval rewrite. Cash runway is tight. Build the smallest graph-memory slice first.",
+            timestamp: Date(timeIntervalSince1970: 2)
+        )
+        try store.insertMessage(userMessage)
+
+        let first = await service.runIfNeeded(maxConversations: 4)
+        XCTAssertEqual(first.insertedAtoms, 4)
+
+        let lifecycle = MemoryLifecycleEngine(nodeStore: store)
+        let pendingIds = try lifecycle.inbox(limit: 10).map(\.atom.id)
+        XCTAssertEqual(pendingIds.count, 4)
+        for id in pendingIds {
+            _ = try lifecycle.reject(id)
+        }
+        XCTAssertTrue(try lifecycle.inbox(limit: 10).isEmpty)
+
+        var atoms = try store.fetchMemoryAtoms()
+        var edges = try store.fetchMemoryEdges()
+        var writeResult = MemoryGraphWriteResult()
+        let writer = MemoryGraphWriter(nodeStore: store)
+        try writer.writeDecisionChain(
+            MemoryGraphDecisionChainInput(
+                rejectedProposal: "Rebuild the entire retrieval stack.",
+                rejection: "Alex rejected turning this into a full retrieval rewrite.",
+                reasons: ["Cash runway is tight."],
+                replacement: "Build the smallest graph-memory slice first.",
+                confidence: 0.91,
+                scope: .conversation,
+                scopeRefId: conversation.id,
+                status: .pending,
+                eventTime: userMessage.timestamp,
+                sourceNodeId: conversation.id,
+                sourceMessageId: userMessage.id,
+                now: Date(timeIntervalSince1970: 20)
+            ),
+            atoms: &atoms,
+            edges: &edges,
+            result: &writeResult
+        )
+
+        XCTAssertTrue(try lifecycle.inbox(limit: 10).isEmpty)
+        XCTAssertEqual(try store.fetchMemoryAtoms().count, 4)
+        XCTAssertTrue(try store.fetchMemoryAtoms().allSatisfy { $0.status == .archived })
     }
 
     func testBackfillSkipsAlreadyProcessedFingerprint() async throws {

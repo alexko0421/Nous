@@ -304,7 +304,7 @@ final class MemoryQueryPlanner {
             guard let sourceNode = try? nodeStore.fetchNode(id: scopeRefId) else { return false }
             return sourceNode.projectId == projectId
         case .selfReflection:
-            return false
+            return true
         }
     }
 

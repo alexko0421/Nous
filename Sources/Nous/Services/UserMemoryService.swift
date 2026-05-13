@@ -216,21 +216,52 @@ final class UserMemoryCore {
 
     @discardableResult
     func confirmMemoryFactEntry(id: UUID) -> Bool {
-        mutateMemoryFactEntry(id: id) { fact in
-            guard fact.status == .active else { return false }
-            fact.updatedAt = Date()
-            fact.confidence = max(fact.confidence, fact.stability == .stable ? 0.95 : 0.9)
-            return true
+        let now = Date()
+        var didUpdate = false
+        do {
+            try nodeStore.inTransaction {
+                guard var fact = try nodeStore.fetchMemoryFactEntry(id: id),
+                      fact.status != .archived else {
+                    return
+                }
+                fact.status = .active
+                fact.updatedAt = now
+                fact.confidence = max(fact.confidence, fact.stability == .stable ? 0.95 : 0.9)
+                try nodeStore.updateMemoryFactEntry(fact)
+                try syncFactAtomLifecycle(for: fact, status: .active, now: now)
+                didUpdate = true
+            }
+            return didUpdate
+        } catch {
+            #if DEBUG
+            print("[UserMemoryService] confirmMemoryFactEntry failed: \(error)")
+            #endif
+            return false
         }
     }
 
     @discardableResult
     func archiveMemoryFactEntry(id: UUID) -> Bool {
-        mutateMemoryFactEntry(id: id) { fact in
-            guard fact.status != .archived else { return false }
-            fact.status = .archived
-            fact.updatedAt = Date()
-            return true
+        let now = Date()
+        var didUpdate = false
+        do {
+            try nodeStore.inTransaction {
+                guard var fact = try nodeStore.fetchMemoryFactEntry(id: id),
+                      fact.status != .archived else {
+                    return
+                }
+                fact.status = .archived
+                fact.updatedAt = now
+                try nodeStore.updateMemoryFactEntry(fact)
+                try syncFactAtomLifecycle(for: fact, status: .archived, now: now)
+                didUpdate = true
+            }
+            return didUpdate
+        } catch {
+            #if DEBUG
+            print("[UserMemoryService] archiveMemoryFactEntry failed: \(error)")
+            #endif
+            return false
         }
     }
 
@@ -1135,7 +1166,7 @@ final class UserMemoryCore {
                     kind: payload.kind,
                     content: redactedContent,
                     confidence: payload.confidence,
-                    status: .active,
+                    status: .pending,
                     stability: .stable,
                     sourceNodeIds: [nodeId],
                     createdAt: now,
@@ -1200,47 +1231,48 @@ final class UserMemoryCore {
                 var atoms = try nodeStore.fetchMemoryAtoms()
                 var edges = try nodeStore.fetchMemoryEdges()
                 var writeResult = MemoryGraphWriteResult()
-                let existing = try nodeStore.fetchActiveMemoryFactEntries(
-                    scope: scope,
-                    scopeRefId: scopeRefId,
-                    kinds: Self.contradictionFactKinds
-                )
+                let existing = try nodeStore.fetchMemoryFactEntries()
+                    .filter {
+                        $0.scope == scope &&
+                        $0.scopeRefId == scopeRefId &&
+                        Self.contradictionFactKinds.contains($0.kind)
+                    }
                 let newEntries = Self.dedupedFactEntries(entries)
-                var pendingByKey: [String: MemoryFactEntry] = [:]
+                var proposalByKey: [String: MemoryFactEntry] = [:]
                 var pendingOrder: [String] = []
                 for entry in newEntries {
                     let key = Self.factKey(kind: entry.kind, content: entry.content)
-                    pendingByKey[key] = entry
+                    proposalByKey[key] = entry
                     pendingOrder.append(key)
                 }
-                var consumedKeys = Set<String>()
-                var factsToMirror: [MemoryFactEntry] = []
-                for var fact in existing {
-                    let key = Self.factKey(kind: fact.kind, content: fact.content)
-                    if let replacement = pendingByKey[key] {
-                        fact.status = .active
-                        fact.stability = replacement.stability
-                        fact.confidence = max(fact.confidence, replacement.confidence)
-                        fact.sourceNodeIds = Self.mergedSourceNodeIds(fact.sourceNodeIds, replacement.sourceNodeIds)
-                        fact.updatedAt = now
-                        try nodeStore.updateMemoryFactEntry(fact)
-                        factsToMirror.append(fact)
-                        consumedKeys.insert(key)
-                    } else {
-                        fact.status = .archived
-                        fact.updatedAt = now
-                        try nodeStore.updateMemoryFactEntry(fact)
-                    }
+                let existingByKey = Dictionary(grouping: existing) {
+                    Self.factKey(kind: $0.kind, content: $0.content)
                 }
-                try archiveActiveExtractionAtoms(
-                    scope: scope,
-                    scopeRefId: scopeRefId,
-                    now: now
-                )
-                for key in pendingOrder where !consumedKeys.contains(key) {
-                    guard let entry = pendingByKey[key] else { continue }
-                    try nodeStore.insertMemoryFactEntry(entry)
-                    factsToMirror.append(entry)
+                var factsToMirror: [MemoryFactEntry] = []
+                for key in pendingOrder {
+                    guard var proposal = proposalByKey[key] else { continue }
+                    let matches = existingByKey[key] ?? []
+                    if var active = matches.first(where: { $0.status == .active }) {
+                        active.stability = proposal.stability
+                        active.confidence = max(active.confidence, proposal.confidence)
+                        active.sourceNodeIds = Self.mergedSourceNodeIds(active.sourceNodeIds, proposal.sourceNodeIds)
+                        active.updatedAt = now
+                        try nodeStore.updateMemoryFactEntry(active)
+                        factsToMirror.append(active)
+                    } else if var pending = matches.first(where: { $0.status == .pending }) {
+                        pending.stability = proposal.stability
+                        pending.confidence = max(pending.confidence, proposal.confidence)
+                        pending.sourceNodeIds = Self.mergedSourceNodeIds(pending.sourceNodeIds, proposal.sourceNodeIds)
+                        pending.updatedAt = now
+                        try nodeStore.updateMemoryFactEntry(pending)
+                        factsToMirror.append(pending)
+                    } else if matches.contains(where: { $0.status == .archived }) {
+                        continue
+                    } else {
+                        proposal.updatedAt = now
+                        try nodeStore.insertMemoryFactEntry(proposal)
+                        factsToMirror.append(proposal)
+                    }
                 }
                 for entry in factsToMirror {
                     if let atom = Self.memoryAtom(from: entry, now: now) {
@@ -1259,6 +1291,7 @@ final class UserMemoryCore {
                         result: &writeResult
                     )
                 }
+                let lifecycleEngine = MemoryLifecycleEngine(nodeStore: nodeStore, embed: embed)
                 for verified in semanticAtoms {
                     let candidate = Self.semanticAtom(
                         verified,
@@ -1266,12 +1299,9 @@ final class UserMemoryCore {
                         scopeRefId: scopeRefId,
                         now: now
                     )
-                    let upserted = try writer.upsertAtom(
-                        candidate,
-                        atoms: &atoms,
-                        result: &writeResult
-                    )
+                    let staged = try lifecycleEngine.stageAtomProposal(candidate, now: now)
                     if verified.atom.type == .correction,
+                       staged.status == .active,
                        let correctsText = verified.atom.correctsTarget {
                         // Pattern atoms intentionally excluded — patterns
                         // describe self-observation, not commitment, so they
@@ -1279,7 +1309,7 @@ final class UserMemoryCore {
                         try writer.supersedeMatchingClaims(
                             matching: correctsText,
                             targetTypes: [.belief, .preference, .goal, .plan, .rule],
-                            superseder: upserted,
+                            superseder: staged,
                             confidence: verified.atom.confidence,
                             now: now,
                             atoms: &atoms,
@@ -1308,14 +1338,15 @@ final class UserMemoryCore {
             ),
             scope: scope,
             scopeRefId: scopeRefId,
-            status: .active,
+            status: .pending,
             confidence: verified.atom.confidence,
             eventTime: verified.sourceMessage.timestamp,
             createdAt: now,
             updatedAt: now,
-            lastSeenAt: now,
+            lastSeenAt: nil,
             sourceNodeId: sourceNodeId,
-            sourceMessageId: verified.sourceMessage.id
+            sourceMessageId: verified.sourceMessage.id,
+            correctsTarget: verified.atom.correctsTarget
         )
     }
 
@@ -2251,7 +2282,27 @@ final class UserMemoryCore {
     }
 
     private static func memoryAtom(from entry: MemoryFactEntry, now: Date) -> MemoryAtom? {
-        MemoryGraphAtomMapper.atom(fromFact: entry, now: now)
+        guard var atom = MemoryGraphAtomMapper.atom(fromFact: entry, now: now) else { return nil }
+        if atom.status == .pending {
+            atom.lastSeenAt = nil
+        }
+        return atom
+    }
+
+    private func syncFactAtomLifecycle(
+        for fact: MemoryFactEntry,
+        status: MemoryStatus,
+        now: Date
+    ) throws {
+        guard var atom = MemoryGraphAtomMapper.atom(fromFact: fact, now: now) else { return }
+        atom.status = status
+        atom.updatedAt = now
+        atom.lastSeenAt = status == .active ? now : nil
+
+        let writer = MemoryGraphWriter(nodeStore: nodeStore, embed: embedFunction)
+        var atoms = try nodeStore.fetchMemoryAtoms()
+        var result = MemoryGraphWriteResult()
+        _ = try writer.upsertAtom(atom, atoms: &atoms, result: &result)
     }
 
     private func insertDecisionChainAtoms(
@@ -2274,6 +2325,7 @@ final class UserMemoryCore {
                 confidence: verified.chain.confidence,
                 scope: scope,
                 scopeRefId: scopeRefId,
+                status: .pending,
                 eventTime: verified.sourceMessage.timestamp,
                 sourceNodeId: sourceNodeId,
                 sourceMessageId: persistedSourceMessageId(verified.sourceMessage),
@@ -2292,34 +2344,6 @@ final class UserMemoryCore {
             return nil
         }
         return message.id
-    }
-
-    private static let extractionGeneratedAtomTypes: Set<MemoryAtomType> = [
-        .decision,
-        .boundary,
-        .constraint,
-        .proposal,
-        .rejection,
-        .reason,
-        .currentPosition
-    ]
-
-    private func archiveActiveExtractionAtoms(scope: MemoryScope, scopeRefId: UUID?, now: Date) throws {
-        let atoms = try nodeStore.fetchMemoryAtoms(
-            types: Self.extractionGeneratedAtomTypes,
-            statuses: [.active],
-            scope: scope,
-            scopeRefId: scopeRefId,
-            eventTimeStart: nil,
-            eventTimeEnd: nil,
-            limit: nil
-        )
-
-        for var atom in atoms {
-            atom.status = .archived
-            atom.updatedAt = now
-            try nodeStore.updateMemoryAtom(atom)
-        }
     }
 
 }

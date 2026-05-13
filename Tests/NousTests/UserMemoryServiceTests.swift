@@ -901,11 +901,13 @@ final class UserMemoryServiceTests: XCTestCase {
 
         await service.refreshConversation(nodeId: node.id, projectId: nil, messages: messages)
 
-        let facts = try store.fetchActiveMemoryFactEntries(
-            scope: .conversation,
-            scopeRefId: node.id,
-            kinds: [.decision, .boundary, .constraint]
-        ).sorted { $0.kind.rawValue < $1.kind.rawValue }
+        let facts = try store.fetchMemoryFactEntries()
+            .filter {
+                $0.scope == .conversation &&
+                $0.scopeRefId == node.id &&
+                [.decision, .boundary, .constraint].contains($0.kind)
+            }
+            .sorted { $0.kind.rawValue < $1.kind.rawValue }
 
         XCTAssertEqual(facts.count, 3, "only contradiction-oriented fact kinds should be persisted")
         XCTAssertEqual(facts.map(\.kind), [.boundary, .constraint, .decision])
@@ -917,18 +919,23 @@ final class UserMemoryServiceTests: XCTestCase {
         XCTAssertTrue(facts.allSatisfy { $0.scope == .conversation && $0.scopeRefId == node.id })
         XCTAssertTrue(facts.allSatisfy { $0.stability == .stable })
         XCTAssertTrue(facts.allSatisfy { $0.sourceNodeIds == [node.id] })
+        XCTAssertTrue(facts.allSatisfy { $0.status == .pending })
+        XCTAssertTrue(
+            try service.contradictionRecallFacts(projectId: nil, conversationId: node.id).isEmpty,
+            "pending sidecar facts must not enter contradiction recall before approval"
+        )
 
         let atoms = try store.fetchMemoryAtoms()
             .filter { $0.scope == .conversation && $0.scopeRefId == node.id }
             .sorted { $0.type.rawValue < $1.type.rawValue }
-        XCTAssertEqual(atoms.count, 3, "fact extraction should mirror active facts into graph atoms")
+        XCTAssertEqual(atoms.count, 3, "fact extraction should mirror facts into pending graph atom proposals")
         XCTAssertEqual(atoms.map(\.type), [.boundary, .constraint, .decision])
         XCTAssertEqual(Set(atoms.map(\.statement)), Set([
             "Do not turn this into a full retrieval rewrite.",
             "Do not auto-commit code without approval.",
             "Cash runway is tight."
         ]))
-        XCTAssertTrue(atoms.allSatisfy { $0.status == .active && $0.sourceNodeId == node.id })
+        XCTAssertTrue(atoms.allSatisfy { $0.status == .pending && $0.sourceNodeId == node.id })
         XCTAssertTrue(atoms.allSatisfy { $0.normalizedKey != nil })
 
         let prompts = await capture.prompts()
@@ -1002,14 +1009,16 @@ final class UserMemoryServiceTests: XCTestCase {
         let entry = try XCTUnwrap(store.fetchActiveMemoryEntry(scope: .conversation, scopeRefId: node.id))
         XCTAssertFalse(entry.content.contains("蓝色火车"), "thread memory must redact forbidden content even if the model echoes it")
 
-        let facts = try store.fetchActiveMemoryFactEntries(
-            scope: .conversation,
-            scopeRefId: node.id,
-            kinds: [.boundary]
-        )
+        let facts = try store.fetchMemoryFactEntries()
+            .filter { $0.scope == .conversation && $0.scopeRefId == node.id && $0.kind == .boundary }
         XCTAssertEqual(facts.count, 1)
         XCTAssertFalse(facts.contains { $0.content.contains("蓝色火车") })
         XCTAssertTrue(facts.first?.content.contains("explicitly says not to remember") == true)
+        XCTAssertEqual(facts.first?.status, .pending)
+        XCTAssertTrue(
+            try service.contradictionRecallFacts(projectId: nil, conversationId: node.id).isEmpty,
+            "redacted pending facts must still wait for approval before recall"
+        )
 
         let atoms = try store.fetchMemoryAtoms()
         XCTAssertFalse(atoms.contains { $0.statement.contains("蓝色火车") })
@@ -1354,12 +1363,12 @@ final class UserMemoryServiceTests: XCTestCase {
         let allFacts = try store.fetchMemoryFactEntries()
             .filter { $0.scope == .conversation && $0.scopeRefId == node.id }
         XCTAssertEqual(allFacts.count, 1, "unchanged facts should update in place, not create archived duplicate rows")
-        XCTAssertEqual(allFacts.first?.status, .active)
+        XCTAssertEqual(allFacts.first?.status, .pending)
 
         let atoms = try store.fetchMemoryAtoms()
             .filter { $0.scope == .conversation && $0.scopeRefId == node.id }
         XCTAssertEqual(atoms.count, 1, "unchanged fact atoms should upsert in place")
-        XCTAssertEqual(atoms.first?.status, .active)
+        XCTAssertEqual(atoms.first?.status, .pending)
     }
 
     func testRefreshConversationInvalidFactJSONFailsClosed() async throws {
@@ -1393,7 +1402,7 @@ final class UserMemoryServiceTests: XCTestCase {
                       "invalid fact JSON must fail closed and leave graph atoms untouched")
     }
 
-    func testRefreshConversationExtractsDecisionChainsIntoGraphRecall() async throws {
+    func testRefreshConversationStagesDecisionChainsIntoPendingInbox() async throws {
         let capture = PromptSequenceCapture()
         let mock = QueueMockLLMService(
             capture: capture,
@@ -1439,12 +1448,15 @@ final class UserMemoryServiceTests: XCTestCase {
         let graphStore = MemoryGraphStore(nodeStore: store)
         let rejection = try XCTUnwrap(
             try store.fetchMemoryAtoms()
-                .first { $0.type == .rejection && $0.status == .active }
+                .first { $0.type == .rejection && $0.status == .pending }
         )
         let chain = try XCTUnwrap(graphStore.decisionChain(for: rejection.id))
         XCTAssertEqual(chain.rejectedProposal?.statement, "Build Nous around solving emotions.")
         XCTAssertEqual(chain.reasons.map(\.statement), ["Emotions cannot be solved like a mechanical problem."])
         XCTAssertEqual(chain.replacement?.statement, "Observe and coexist with emotions.")
+        XCTAssertEqual(chain.rejectedProposal?.status, .pending)
+        XCTAssertEqual(chain.reasons.map(\.status), [.pending])
+        XCTAssertEqual(chain.replacement?.status, .pending)
         XCTAssertEqual(rejection.sourceNodeId, oldChat.id)
         XCTAssertEqual(rejection.eventTime, Date(timeIntervalSince1970: 1))
         XCTAssertEqual(rejection.sourceMessageId, userMessage.id)
@@ -1457,23 +1469,13 @@ final class UserMemoryServiceTests: XCTestCase {
             now: Date(timeIntervalSince1970: 1 + 21 * 24 * 60 * 60)
         )
 
-        XCTAssertEqual(recall.count, 1)
-        XCTAssertTrue(recall[0].contains("Build Nous around solving emotions."))
-        XCTAssertTrue(recall[0].contains("Emotions cannot be solved like a mechanical problem."))
-        XCTAssertTrue(recall[0].contains("Observe and coexist with emotions."))
-        XCTAssertTrue(recall[0].contains("status=active"))
-        XCTAssertTrue(recall[0].contains("source_message_id="))
-        XCTAssertTrue(recall[0].contains("event_time=1970-01-01T00:00:01Z"))
+        XCTAssertTrue(recall.isEmpty, "Pending decision chains must not enter active recall before approval.")
     }
 
-    /// Live-path integration: a prior `currentPosition` Alex held in this chat
-    /// must end up `superseded` (with a `supersedes` edge) once
-    /// `refreshConversation` extracts a decision chain rejecting the same
-    /// position. Without this, the audit's exact "fake memory" failure
-    /// reappears at the integration layer: pre-existing position stays as
-    /// just `archived` next to the new rejection, and recall has no way to
-    /// answer "when did I change my mind?".
-    func testRefreshConversationSupersedesPriorMatchingCurrentPositionInGraph() async throws {
+    /// Pending decision chains must not supersede active positions. Supersede
+    /// edges belong to an approved active path so unreviewed extraction cannot
+    /// rewrite Alex's active memory.
+    func testRefreshConversationPendingDecisionChainDoesNotSupersedePriorMatchingCurrentPosition() async throws {
         let capture = PromptSequenceCapture()
         let mock = QueueMockLLMService(
             capture: capture,
@@ -1533,29 +1535,20 @@ final class UserMemoryServiceTests: XCTestCase {
         let updatedPrior = try XCTUnwrap(store.fetchMemoryAtom(id: priorPosition.id))
         XCTAssertEqual(
             updatedPrior.status,
-            .superseded,
-            "Prior currentPosition must be flagged superseded after the live extractor produces a chain that rejects it."
+            .active,
+            "Prior currentPosition must stay active until the rejection chain is approved."
         )
 
         let supersedesEdges = try store.fetchMemoryEdges()
             .filter { $0.type == .supersedes && $0.toAtomId == priorPosition.id }
-        XCTAssertEqual(
-            supersedesEdges.count,
-            1,
-            "Exactly one supersedes edge must point at the prior atom."
-        )
-        let edge = try XCTUnwrap(supersedesEdges.first)
-        let fromAtom = try XCTUnwrap(store.fetchMemoryAtom(id: edge.fromAtomId))
-        XCTAssertEqual(fromAtom.type, .rejection)
-        XCTAssertTrue(
-            fromAtom.statement.contains("solving emotions"),
-            "Edge source should be the new rejection atom from the chain."
-        )
+        XCTAssertTrue(supersedesEdges.isEmpty)
+        let pendingRejection = try XCTUnwrap(try store.fetchMemoryAtoms().first { $0.type == .rejection })
+        XCTAssertEqual(pendingRejection.status, .pending)
     }
 
     /// Live extractor must produce `preference` / `belief` / `correction`
-    /// atoms with full provenance so the planner's preferenceRecall /
-    /// ruleRecall / contradictionReview intents finally have data to return.
+    /// atoms with full provenance, but they must enter the Memory Inbox as
+    /// pending proposals so unapproved claims cannot affect active recall.
     /// Each atom requires `evidence_quote` matching the source message — same
     /// hallucination guard as decision chains. Without these, planner intents
     /// covering the 3 most common recall surfaces stay forever empty.
@@ -1616,15 +1609,17 @@ final class UserMemoryServiceTests: XCTestCase {
         XCTAssertEqual(preference.statement, "Alex never wants em dashes in final copy.")
         XCTAssertEqual(preference.sourceMessageId, userMessage.id)
         XCTAssertEqual(preference.eventTime, userMessage.timestamp)
-        XCTAssertEqual(preference.status, .active)
+        XCTAssertEqual(preference.status, .pending)
 
         let belief = try XCTUnwrap(atoms.first(where: { $0.type == .belief }))
         XCTAssertEqual(belief.statement, "Alex believes naming products precisely is more important than naming them quickly.")
         XCTAssertEqual(belief.sourceMessageId, userMessage.id)
+        XCTAssertEqual(belief.status, .pending)
 
         let correction = try XCTUnwrap(atoms.first(where: { $0.type == .correction }))
         XCTAssertEqual(correction.statement, "Alex no longer trusts the original wow-curve framing of onboarding.")
         XCTAssertEqual(correction.sourceMessageId, userMessage.id)
+        XCTAssertEqual(correction.status, .pending)
     }
 
     /// Semantic atoms (preference/belief/correction) must NOT use the
@@ -1745,14 +1740,10 @@ final class UserMemoryServiceTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(merged.confidence, 0.92, "Upsert must take max confidence between old and new.")
     }
 
-    /// Live-path integration: when the extractor produces a `correction`
-    /// semantic atom that names a `corrects` target text, a prior `belief`
-    /// (or `preference`) atom in the same scope whose normalized statement
-    /// matches must end up `superseded` with a `supersedes` edge from the
-    /// new correction to it. Without this, "I no longer think X" coexists
-    /// as just another active atom alongside the original X — recall has
-    /// no way to answer "when did Alex change his mind about X?".
-    func testRefreshConversationCorrectionSupersedesPriorMatchingBelief() async throws {
+    /// Pending corrections must not supersede active beliefs. Superseding is
+    /// reserved for an approved correction path so an unreviewed extraction
+    /// cannot rewrite Alex's active memory.
+    func testRefreshConversationPendingCorrectionDoesNotSupersedePriorMatchingBelief() async throws {
         let capture = PromptSequenceCapture()
         let mock = QueueMockLLMService(
             capture: capture,
@@ -1805,16 +1796,32 @@ final class UserMemoryServiceTests: XCTestCase {
         let updated = try XCTUnwrap(store.fetchMemoryAtom(id: priorBelief.id))
         XCTAssertEqual(
             updated.status,
-            .superseded,
-            "Prior belief must be flagged superseded after the live extractor produces a correction targeting it."
+            .active,
+            "Prior belief must stay active until the correction has been approved."
         )
+        let pendingCorrection = try XCTUnwrap(try store.fetchMemoryAtoms().first { $0.type == .correction })
+        XCTAssertEqual(pendingCorrection.status, .pending)
+        XCTAssertEqual(pendingCorrection.correctsTarget, "Wow-curve framing of onboarding holds up.")
 
         let supersedesEdges = try store.fetchMemoryEdges()
             .filter { $0.type == .supersedes && $0.toAtomId == priorBelief.id }
-        XCTAssertEqual(supersedesEdges.count, 1)
-        let edge = try XCTUnwrap(supersedesEdges.first)
-        let fromAtom = try XCTUnwrap(store.fetchMemoryAtom(id: edge.fromAtomId))
-        XCTAssertEqual(fromAtom.type, .correction)
+        XCTAssertTrue(supersedesEdges.isEmpty)
+
+        _ = try MemoryLifecycleEngine(nodeStore: store).approve(
+            pendingCorrection.id,
+            now: Date(timeIntervalSince1970: 70)
+        )
+
+        XCTAssertEqual(try store.fetchMemoryAtom(id: pendingCorrection.id)?.status, .active)
+        XCTAssertEqual(try store.fetchMemoryAtom(id: priorBelief.id)?.status, .superseded)
+        XCTAssertTrue(
+            try store.fetchMemoryEdges().contains {
+                $0.type == .supersedes &&
+                $0.fromAtomId == pendingCorrection.id &&
+                $0.toAtomId == priorBelief.id
+            },
+            "Approving the correction should be the moment the old belief is superseded."
+        )
     }
 
     /// Without a `corrects` target text, a `correction` atom must NOT silently
@@ -1945,28 +1952,27 @@ final class UserMemoryServiceTests: XCTestCase {
         let goal = try XCTUnwrap(atoms.first(where: { $0.type == .goal }))
         XCTAssertEqual(goal.sourceMessageId, userMessage.id)
         XCTAssertEqual(goal.eventTime, userMessage.timestamp)
-        XCTAssertEqual(goal.status, .active)
+        XCTAssertEqual(goal.status, .pending)
 
         let plan = try XCTUnwrap(atoms.first(where: { $0.type == .plan }))
         XCTAssertTrue(plan.statement.contains("Memory Center"))
         XCTAssertEqual(plan.sourceMessageId, userMessage.id)
+        XCTAssertEqual(plan.status, .pending)
 
         let rule = try XCTUnwrap(atoms.first(where: { $0.type == .rule }))
         XCTAssertTrue(rule.statement.contains("failing tests"))
         XCTAssertEqual(rule.sourceMessageId, userMessage.id)
+        XCTAssertEqual(rule.status, .pending)
 
         let pattern = try XCTUnwrap(atoms.first(where: { $0.type == .pattern }))
         XCTAssertTrue(pattern.statement.contains("cross-team coordination"))
         XCTAssertEqual(pattern.sourceMessageId, userMessage.id)
+        XCTAssertEqual(pattern.status, .pending)
     }
 
-    /// Corrections must be able to retract a prior goal / plan / rule the
-    /// same way they can retract a belief or preference. Otherwise Alex's
-    /// abandoned plans remain "active" forever and recall still surfaces
-    /// them as live commitments. Pattern atoms are intentionally NOT
-    /// supersedable — patterns describe self-observation, not commitment;
-    /// they fade by absence, not by retraction.
-    func testRefreshConversationCorrectionCanSupersedePriorPlan() async throws {
+    /// Pending corrections for plans must not supersede active plans until the
+    /// correction is explicitly approved.
+    func testRefreshConversationPendingCorrectionDoesNotSupersedePriorPlan() async throws {
         let capture = PromptSequenceCapture()
         let mock = QueueMockLLMService(
             capture: capture,
@@ -2019,12 +2025,14 @@ final class UserMemoryServiceTests: XCTestCase {
         let updated = try XCTUnwrap(store.fetchMemoryAtom(id: priorPlan.id))
         XCTAssertEqual(
             updated.status,
-            .superseded,
-            "Prior plan must be flagged superseded by a correction whose `corrects` matches it."
+            .active,
+            "Prior plan must stay active until the correction has been approved."
         )
+        let pendingCorrection = try XCTUnwrap(try store.fetchMemoryAtoms().first { $0.type == .correction })
+        XCTAssertEqual(pendingCorrection.status, .pending)
         let supersedesEdges = try store.fetchMemoryEdges()
             .filter { $0.type == .supersedes && $0.toAtomId == priorPlan.id }
-        XCTAssertEqual(supersedesEdges.count, 1)
+        XCTAssertTrue(supersedesEdges.isEmpty)
     }
 
     /// Atoms produced by the live extractor must carry a populated embedding
@@ -2235,13 +2243,13 @@ final class UserMemoryServiceTests: XCTestCase {
         let atoms = try store.fetchMemoryAtoms()
             .filter { $0.scope == .conversation && $0.scopeRefId == node.id }
         XCTAssertEqual(atoms.count, 4)
-        XCTAssertEqual(atoms.filter { $0.status == .active }.count, 4)
+        XCTAssertEqual(atoms.filter { $0.status == .pending }.count, 4)
         XCTAssertEqual(atoms.filter { $0.type == .rejection }.first?.sourceMessageId, message.id)
         XCTAssertEqual(atoms.filter { $0.type == .rejection }.first?.eventTime, Date(timeIntervalSince1970: 12))
         XCTAssertEqual(try store.fetchMemoryEdges().count, 3)
     }
 
-    func testRefreshConversationSecondFactExtractionArchivesPriorActiveFacts() async throws {
+    func testRefreshConversationSecondFactExtractionLeavesFactEntriesAndGraphAtomsPending() async throws {
         let capture = PromptSequenceCapture()
         let mock = QueueMockLLMService(
             capture: capture,
@@ -2289,19 +2297,18 @@ final class UserMemoryServiceTests: XCTestCase {
             .filter { $0.scope == .conversation && $0.scopeRefId == node.id }
         XCTAssertEqual(allFacts.count, 2, "history should keep old fact rows instead of mutating in place")
 
-        let active = allFacts.filter { $0.status == .active }
-        XCTAssertEqual(active.count, 1)
-        XCTAssertEqual(active.first?.kind, .boundary)
-
-        let archived = allFacts.filter { $0.status == .archived }
-        XCTAssertEqual(archived.count, 1)
-        XCTAssertEqual(archived.first?.kind, .decision)
+        XCTAssertEqual(allFacts.filter { $0.status == .pending }.count, 2)
+        XCTAssertTrue(allFacts.contains { $0.status == .pending && $0.kind == .decision })
+        XCTAssertTrue(allFacts.contains { $0.status == .pending && $0.kind == .boundary })
+        XCTAssertTrue(allFacts.filter { $0.status == .active || $0.status == .archived }.isEmpty)
 
         let allAtoms = try store.fetchMemoryAtoms()
             .filter { $0.scope == .conversation && $0.scopeRefId == node.id }
-        XCTAssertEqual(allAtoms.count, 2, "graph atom history should mirror fact history")
-        XCTAssertEqual(allAtoms.filter { $0.status == .active }.first?.type, .boundary)
-        XCTAssertEqual(allAtoms.filter { $0.status == .archived }.first?.type, .decision)
+        XCTAssertEqual(allAtoms.count, 2, "graph atom proposals should stay reviewable in the Inbox")
+        XCTAssertEqual(allAtoms.filter { $0.status == .pending }.count, 2)
+        XCTAssertTrue(allAtoms.contains { $0.status == .pending && $0.type == .decision })
+        XCTAssertTrue(allAtoms.contains { $0.status == .pending && $0.type == .boundary })
+        XCTAssertTrue(allAtoms.filter { $0.status == .active || $0.status == .archived }.isEmpty)
     }
 
     /// v2.2d: `refreshProject` aggregates child conversation ENTRIES (not the
@@ -2717,7 +2724,7 @@ final class UserMemoryServiceTests: XCTestCase {
             kind: .boundary,
             content: "Do not store hard opt-out turns.",
             confidence: 0.52,
-            status: .active,
+            status: .pending,
             stability: .stable,
             createdAt: originalDate,
             updatedAt: originalDate
@@ -2727,7 +2734,7 @@ final class UserMemoryServiceTests: XCTestCase {
             kind: .decision,
             content: "Old decision.",
             confidence: 0.88,
-            status: .active,
+            status: .pending,
             stability: .temporary,
             createdAt: originalDate,
             updatedAt: originalDate
@@ -2746,6 +2753,10 @@ final class UserMemoryServiceTests: XCTestCase {
         try store.insertMemoryFactEntry(confirmedFact)
         try store.insertMemoryFactEntry(rejectedFact)
         try store.insertMemoryFactEntry(forgottenFact)
+        let confirmedAtom = try XCTUnwrap(MemoryGraphAtomMapper.atom(fromFact: confirmedFact, now: originalDate))
+        let rejectedAtom = try XCTUnwrap(MemoryGraphAtomMapper.atom(fromFact: rejectedFact, now: originalDate))
+        try store.insertMemoryAtom(confirmedAtom)
+        try store.insertMemoryAtom(rejectedAtom)
 
         XCTAssertTrue(service.confirmMemoryFactEntry(id: confirmedFact.id))
         XCTAssertTrue(service.archiveMemoryFactEntry(id: rejectedFact.id))
@@ -2757,6 +2768,11 @@ final class UserMemoryServiceTests: XCTestCase {
         XCTAssertGreaterThan(updatedConfirmed?.updatedAt ?? originalDate, originalDate)
         XCTAssertEqual(try store.fetchMemoryFactEntry(id: rejectedFact.id)?.status, .archived)
         XCTAssertNil(try store.fetchMemoryFactEntry(id: forgottenFact.id))
+
+        let updatedConfirmedAtom = try store.fetchMemoryAtom(id: confirmedAtom.id)
+        XCTAssertEqual(updatedConfirmedAtom?.status, .active)
+        let updatedRejectedAtom = try store.fetchMemoryAtom(id: rejectedAtom.id)
+        XCTAssertEqual(updatedRejectedAtom?.status, .archived)
     }
 
     func testSourceSnippetsUseLinkedSourceNodes() throws {
