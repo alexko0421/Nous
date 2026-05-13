@@ -618,6 +618,33 @@ final class NodeStore {
         """)
 
         try db.exec("""
+            CREATE TABLE IF NOT EXISTS failure_skill_repair_runs (
+                id          TEXT PRIMARY KEY,
+                candidate_id TEXT NOT NULL,
+                status      TEXT NOT NULL,
+                bead_id     TEXT,
+                branch_name TEXT NOT NULL,
+                commit_sha  TEXT,
+                pr_url      TEXT,
+                log_excerpt TEXT,
+                error       TEXT,
+                created_at  REAL NOT NULL,
+                updated_at  REAL NOT NULL
+            );
+        """)
+
+        try db.exec("""
+            CREATE INDEX IF NOT EXISTS idx_failure_skill_repair_runs_candidate_updated
+            ON failure_skill_repair_runs(candidate_id, updated_at DESC);
+        """)
+
+        try db.exec("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_failure_skill_repair_runs_active_candidate
+            ON failure_skill_repair_runs(candidate_id)
+            WHERE status IN ('requested', 'running');
+        """)
+
+        try db.exec("""
             CREATE TABLE IF NOT EXISTS shadow_patterns (
                 id                   TEXT PRIMARY KEY,
                 user_id              TEXT NOT NULL DEFAULT 'alex',
