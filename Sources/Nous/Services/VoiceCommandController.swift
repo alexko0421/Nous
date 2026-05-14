@@ -262,6 +262,16 @@ final class VoiceCommandController {
             markAppStateChanged()
             status = .action(visible ? "Opening Scratchpad" : "Closing Scratchpad")
 
+        case "replace_scratchpad_markdown":
+            handlers.replaceScratchPadMarkdown(try requiredString("markdown", in: args))
+            markAppStateChanged()
+            status = .action("Draft updated")
+
+        case "append_scratchpad_markdown":
+            handlers.appendScratchPadMarkdown(try requiredString("markdown", in: args))
+            markAppStateChanged()
+            status = .action("Draft expanded")
+
         case "set_appearance_mode":
             let raw = try requiredString("mode", in: args)
             guard let mode = VoiceAppearanceMode(rawValue: raw) else {

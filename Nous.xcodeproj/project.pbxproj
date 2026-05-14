@@ -316,6 +316,7 @@
 		AA4E84DE854DB802CA699A3B /* LLMService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F839455BCBC5668612A6A606 /* LLMService.swift */; };
 		AAE332283E28BC9EEA555957 /* SeedSkillImporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0B12826F2BC2C6775F59B97 /* SeedSkillImporter.swift */; };
 		AB843752CFE2AB97693BAF48 /* SycophancyRiskHeuristics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F9A57A56B2B946AD31B58BD /* SycophancyRiskHeuristics.swift */; };
+		ABF53E40674FBC67F6618297 /* StudyAgent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 459FC394C77DAF9745909A26 /* StudyAgent.swift */; };
 		ACA74472884F3ED36B88A191 /* AttachmentExtractorDropTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E43158D2CDDD42ABE34D88B3 /* AttachmentExtractorDropTests.swift */; };
 		ACC542F83437ECF80EF63CDD /* ClarificationCardParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69184F11E49CB01A84551833 /* ClarificationCardParserTests.swift */; };
 		ACD6FFA6F2C316E8256FCAF6 /* SourceBriefingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 814E7AD7BAD8BE3D7D047B46 /* SourceBriefingService.swift */; };
@@ -594,6 +595,7 @@
 		44A62579202142E717E52EAA /* CitationFeedbackStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CitationFeedbackStoreTests.swift; sourceTree = "<group>"; };
 		44C28A4978C6C55396ECB787 /* CitableEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CitableEntry.swift; sourceTree = "<group>"; };
 		44E3FEB2F641A63FE62D5A08 /* CorpusCardFormatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CorpusCardFormatterTests.swift; sourceTree = "<group>"; };
+		459FC394C77DAF9745909A26 /* StudyAgent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudyAgent.swift; sourceTree = "<group>"; };
 		45EAC5F0329B12707EBD06DB /* SkillDogfoodLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillDogfoodLog.swift; sourceTree = "<group>"; };
 		461912DF7FE051E264EB9E61 /* AppEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppEnvironment.swift; sourceTree = "<group>"; };
 		46E81FA7AC6106C3C19BCC49 /* ContextContinuationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextContinuationService.swift; sourceTree = "<group>"; };
@@ -1216,6 +1218,7 @@
 				1CBB699A907CF77A1922610E /* DirectionAgent.swift */,
 				30E4A1FDE001FAC7C22C918F /* PlanAgent.swift */,
 				D18F7D1D077A23BDBBD2B77A /* QuickActionAgent.swift */,
+				459FC394C77DAF9745909A26 /* StudyAgent.swift */,
 				B4FD97C39EE2F610E4B192D9 /* Tools */,
 			);
 			path = Agents;
@@ -2012,6 +2015,7 @@
 				7ECBC962529B157DAED7530D /* SourceTextExtractor.swift in Sources */,
 				72CAFD0435F2523B09C333D5 /* String+NonEmpty.swift in Sources */,
 				90F3DEB7C7B248585371FE51 /* StructuredLLMClient.swift in Sources */,
+				ABF53E40674FBC67F6618297 /* StudyAgent.swift in Sources */,
 				AB843752CFE2AB97693BAF48 /* SycophancyRiskHeuristics.swift in Sources */,
 				3D09DD924BC3D75D131E42E0 /* TemporaryBranchOverlay.swift in Sources */,
 				37C84A898F8CBC52C091FE0C /* TemporaryBranchViewModel.swift in Sources */,

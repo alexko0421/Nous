@@ -341,7 +341,7 @@ struct LeftSidebar: View {
 
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.system(size: 12, weight: .regular, design: .rounded))
                         .foregroundColor(AppColor.sidebarMutedText)
                     TextField("Search", text: $searchQuery)
                         .textFieldStyle(.plain)
@@ -371,7 +371,8 @@ struct LeftSidebar: View {
                 }) {
                     HStack(spacing: 6) {
                         Image(systemName: "square.and.pencil")
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.system(size: 12, weight: .regular, design: .rounded))
+                            .foregroundColor(AppColor.sidebarMutedText)
                         Text("New Chat")
                             .font(.system(size: 12, weight: .medium, design: .rounded))
                     }

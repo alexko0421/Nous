@@ -32,6 +32,21 @@ final class TurnStewardTests: XCTestCase {
         XCTAssertEqual(decision.latencyTier, .normal)
     }
 
+    func testActiveStudyQuickActionUsesSourceReadingLane() {
+        let decision = steward.steer(
+            prepared: preparedTurn(userText: "帮我读呢篇文章"),
+            request: request(input: "帮我读呢篇文章", activeQuickActionMode: .study)
+        )
+
+        XCTAssertEqual(decision.route, .sourceAnalysis)
+        XCTAssertEqual(decision.memoryPolicy, .full)
+        XCTAssertEqual(decision.challengeStance, .useSilently)
+        XCTAssertEqual(decision.judgePolicy, .off)
+        XCTAssertEqual(decision.responseShape, .answerNow)
+        XCTAssertEqual(decision.trace.reason, "active quick action mode")
+        XCTAssertTrue(decision.supervisorLanes.contains(.source))
+    }
+
     func testSimpleSelfContainedOrdinaryTurnsUseFastLatencyTier() {
         let examples = [
             "ping",

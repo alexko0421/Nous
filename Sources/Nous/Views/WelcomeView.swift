@@ -300,7 +300,7 @@ struct WelcomeView: View {
     private func primaryActionButton(isSeparated: Bool) -> some View {
         Button(action: onSend) {
             Image(systemName: "arrow.up")
-                .font(.system(size: 13, weight: .bold))
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
                 .foregroundColor(isSeparated ? .white : AppColor.secondaryText)
                 .opacity(composerActionMotion.iconOpacity(isSeparated: isSeparated))
         }
@@ -376,7 +376,8 @@ struct QuickActionButton: View {
         Button(action: perform) {
             HStack(spacing: 5) {
                 Image(systemName: action.icon)
-                    .font(.system(size: 10.5, weight: .semibold))
+                    .font(.system(size: 10.5, weight: .regular, design: .rounded))
+                    .foregroundColor(isHovered ? AppColor.colaDarkText.opacity(0.92) : AppColor.secondaryText)
 
                 Text(action.label)
                     .font(.system(size: 10.5, weight: .semibold, design: .rounded))

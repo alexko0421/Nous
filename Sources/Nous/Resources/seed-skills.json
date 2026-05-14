@@ -53,7 +53,7 @@
       "source": "alex",
       "trigger": {
         "kind": "always",
-        "modes": ["direction", "brainstorm", "plan"],
+        "modes": ["direction", "brainstorm", "plan", "study"],
         "priority": 70
       },
       "action": {
@@ -75,7 +75,7 @@
       "source": "alex",
       "trigger": {
         "kind": "always",
-        "modes": ["direction", "brainstorm", "plan"],
+        "modes": ["direction", "brainstorm", "plan", "study"],
         "priority": 70
       },
       "action": {
@@ -97,7 +97,7 @@
       "source": "alex",
       "trigger": {
         "kind": "always",
-        "modes": ["direction", "brainstorm", "plan"],
+        "modes": ["direction", "brainstorm", "plan", "study"],
         "priority": 65
       },
       "action": {
@@ -119,7 +119,7 @@
       "source": "alex",
       "trigger": {
         "kind": "always",
-        "modes": ["direction", "brainstorm", "plan"],
+        "modes": ["direction", "brainstorm", "plan", "study"],
         "priority": 60
       },
       "action": {
@@ -141,7 +141,7 @@
       "source": "alex",
       "trigger": {
         "kind": "always",
-        "modes": ["direction", "brainstorm", "plan"],
+        "modes": ["direction", "brainstorm", "plan", "study"],
         "priority": 55
       },
       "action": {
@@ -244,6 +244,58 @@
       "antiPatternExamples": [
         "Giving a confident recommendation without saying what could go wrong.",
         "Listing risks so vaguely that they do not change the judgment."
+      ]
+    },
+    "state": "active"
+  },
+  {
+    "id": "00000000-0000-0000-0000-000000000011",
+    "userId": "alex",
+    "payload": {
+      "payloadVersion": 1,
+      "name": "problem-tree-seven-step-analysis",
+      "description": "Use the seven-step problem-tree method for complex Plan and Direction turns",
+      "source": "alex",
+      "trigger": {
+        "kind": "always",
+        "modes": ["direction", "plan"],
+        "priority": 85
+      },
+      "action": {
+        "kind": "promptFragment",
+        "content": "Use the McKinsey-style seven-step problem-tree method as a hidden thinking spine for Direction and Plan when Alex brings a complex decision, execution, product, or business problem. Do not show the seven labels unless Alex explicitly asks for the method.\n\nSilent sequence: 陈述问题 -> 分解问题 -> 去掉非关键问题 -> 制定详细工作计划 -> 进行关键分析 -> 建构论证 -> 讲清楚.\n\nPlan Mode: define the real outcome, split the problem into a problem tree, remove non-key branches, turn the key assumptions into verification actions or deliverables, then produce a concrete plan that fits Alex's real capacity.\n\nDirection Mode: define the real question, separate the live paths and tradeoffs, remove distracting non-key branches, then give a decisive judgment plus one concrete next step.\n\nBrainstorm is intentionally excluded: do not use this method to narrow divergent ideation too early or turn brainstorming into a worksheet."
+      },
+      "rationale": "Added from Alex's 2026-05-13 PDF review of the seven-step anti-点子大王 method; useful as a hidden problem-solving spine for convergent modes.",
+      "antiPatternExamples": [
+        "Starting with disconnected ideas before defining the real problem.",
+        "Showing the seven-step worksheet when Alex only needs a concise judgment.",
+        "Using the method inside Brainstorm and killing divergence too early."
+      ]
+    },
+    "state": "active"
+  },
+  {
+    "id": "00000000-0000-0000-0000-000000000012",
+    "userId": "alex",
+    "payload": {
+      "payloadVersion": 1,
+      "name": "study-skeleton",
+      "description": "Study Mode Quality Contract",
+      "source": "alex",
+      "trigger": {
+        "kind": "mode",
+        "modes": ["study"],
+        "priority": 90
+      },
+      "action": {
+        "kind": "promptFragment",
+        "content": "---\n\nSTUDY MODE QUALITY CONTRACT:\n\nFeel: 一齐读书. Faithful to the source first, then useful to Alex.\n\nYour job is to help Alex read an article/source while learning from it. Stay faithful to the source before interpreting it. Do not turn the reading into Direction, Brainstorm, or Plan unless Alex asks.\n\nDefault loop:\n1. Name what the source is really saying in plain language.\n2. Break the article into sections or argument moves.\n3. Explain the current section with examples and necessary background.\n4. Surface one confusion point or tension worth checking against the text.\n5. Connect the insight to Alex's product/thinking context only after the source is clear.\n6. 沉淀 into one sentence Alex can carry forward.\n\nIf no source is attached or quoted, ask for the article/source. If a source is attached, start by dividing it into a few parts and propose starting with part one. Keep the hidden understanding phase marker while Alex is still reading through the source; drop it only when the study loop is done or Alex switches modes.\n\nAvoid: summarizing too fast, using the article as a launchpad for random ideas, judging before comprehension, turning study into a worksheet, or pretending source claims are stronger than the text supports."
+      },
+      "rationale": "Added from Alex's 2026-05-13 article-reading workflow request; Study Mode should support faithful article/source learning without forcing Direction, Brainstorm, or Plan.",
+      "antiPatternExamples": [
+        "Summarizing the article before Alex has understood the structure.",
+        "Using the source as a loose prompt for generic product ideas.",
+        "Judging the author's claim before naming what the text actually says."
       ]
     },
     "state": "active"

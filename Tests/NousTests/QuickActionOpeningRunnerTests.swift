@@ -183,6 +183,54 @@ final class QuickActionOpeningRunnerTests: XCTestCase {
         XCTAssertEqual(prepared.promptTrace.agentCoordination, expected)
     }
 
+    func testOpeningRunnerTracesAndInjectsQuickActionExperimentCandidate() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let conversationStore = ConversationSessionStore(nodeStore: nodeStore)
+        let node = NousNode(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            type: .conversation,
+            title: "Brainstorm"
+        )
+        try nodeStore.insertNode(node)
+        let llm = OpeningPromptCapturingLLM(output: "先发散三个方向。")
+        var capturedPlan: TurnPlan?
+        let runner = QuickActionOpeningRunner(
+            conversationSessionStore: conversationStore,
+            memoryContextBuilder: makeMemoryContextBuilder(nodeStore: nodeStore),
+            turnExecutor: TurnExecutor(
+                llmServiceProvider: { llm },
+                shouldUseGeminiHistoryCache: { false },
+                shouldPersistAssistantThinking: { false }
+            ),
+            outcomeFactory: TurnOutcomeFactory(shouldPersistMemory: { _, _ in false }),
+            onPlanReady: { capturedPlan = $0 }
+        )
+        let turnId = UUID()
+        let capture = OpeningTurnEventCapture()
+        let sink = TurnSequencedEventSink(turnId: turnId, sink: capture)
+
+        _ = await runner.run(
+            mode: .brainstorm,
+            node: node,
+            turnId: turnId,
+            sink: sink,
+            abortReason: { .unexpectedCancellation }
+        )
+
+        XCTAssertTrue(llm.receivedPromptText.contains("QUICK ACTION EXPERIMENT CANDIDATE"))
+        XCTAssertTrue(llm.receivedPromptText.contains("Brainstorm"))
+        XCTAssertEqual(capturedPlan?.promptTrace.quickActionExperiment?.experimentId, "brainstorm-quick-mode-ab-v1")
+        XCTAssertEqual(capturedPlan?.promptTrace.quickActionExperiment?.mode, .brainstorm)
+        XCTAssertEqual(capturedPlan?.promptTrace.quickActionExperiment?.variant, .candidate)
+        XCTAssertTrue(capturedPlan?.promptTrace.promptLayers.contains("quick_action_experiment") == true)
+
+        let events = await capture.events()
+        guard case .prepared(let prepared)? = events.first?.event else {
+            return XCTFail("opening runner should emit a prepared event")
+        }
+        XCTAssertEqual(prepared.promptTrace.quickActionExperiment, capturedPlan?.promptTrace.quickActionExperiment)
+    }
+
     func testOpeningRunnerRecordsReviewAndRuntimeSnapshotAfterSuccessfulCommit() async throws {
         let nodeStore = try NodeStore(path: ":memory:")
         let conversationStore = ConversationSessionStore(nodeStore: nodeStore)

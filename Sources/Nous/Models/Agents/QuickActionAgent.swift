@@ -258,6 +258,7 @@ extension QuickActionMode {
         case .direction:  return DirectionAgent()
         case .brainstorm: return BrainstormAgent()
         case .plan:       return PlanAgent()
+        case .study:      return StudyAgent()
         }
     }
 }

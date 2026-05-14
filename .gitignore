@@ -10,3 +10,4 @@ xcuserdata/
 # Git worktrees (for parallel feature implementation)
 .worktrees/
 build/
+.gstack/

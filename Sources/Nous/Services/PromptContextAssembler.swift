@@ -1778,6 +1778,7 @@ User: "我中意又软又硬嘅人，反差先系 depth"
         allowInteractiveClarification: Bool = false,
         turnSteward: TurnStewardTrace? = nil,
         agentCoordination: AgentCoordinationTrace? = nil,
+        quickActionExperiment: QuickActionExperimentTrace? = nil,
         shadowLearningHints: [String] = [],
         slowCognitionArtifacts: [CognitionArtifact] = [],
         now: Date = Date()
@@ -1805,6 +1806,7 @@ User: "我中意又软又硬嘅人，反差先系 depth"
             allowInteractiveClarification: allowInteractiveClarification,
             turnSteward: turnSteward,
             agentCoordination: agentCoordination,
+            quickActionExperiment: quickActionExperiment,
             shadowLearningHints: shadowLearningHints,
             slowCognitionArtifacts: slowCognitionArtifacts,
             now: now
@@ -1834,6 +1836,7 @@ User: "我中意又软又硬嘅人，反差先系 depth"
         allowInteractiveClarification: Bool = false,
         turnSteward: TurnStewardTrace? = nil,
         agentCoordination: AgentCoordinationTrace? = nil,
+        quickActionExperiment: QuickActionExperimentTrace? = nil,
         shadowLearningHints: [String] = [],
         slowCognitionArtifacts: [CognitionArtifact] = [],
         now: Date = Date()
@@ -1892,6 +1895,7 @@ User: "我中意又软又硬嘅人，反差先系 depth"
         if turnSteward?.supervisorLanes.contains(.analytics) == true { layers.append("analytics_lane_brief") }
         if turnSteward?.supervisorLanes.contains(.reflection) == true { layers.append("reflection_grounding_gate") }
         if agentCoordination != nil { layers.append("agent_coordination") }
+        if quickActionExperiment != nil { layers.append("quick_action_experiment") }
         if needsDirectJudgmentGuard(currentUserInput) { layers.append("direct_judgment_guard") }
         if needsTeachingExplanationGuard(currentUserInput) { layers.append("teaching_explanation_guard") }
         if needsSoftHardCalibrationGuard(currentUserInput) { layers.append("soft_hard_calibration_guard") }
@@ -1920,6 +1924,7 @@ User: "我中意又软又硬嘅人，反差先系 depth"
             agentCoordination: agentCoordination,
             citationTrace: citationTrace(for: promptCitations),
             slowCognitionTrace: selectedSlowCognitionArtifact.map(SlowCognitionPromptTrace.init),
+            quickActionExperiment: quickActionExperiment,
             visibleResponseLanguageTarget: visibleLanguageDecision.target,
             visibleResponseLanguageSource: visibleLanguageDecision.source
         )

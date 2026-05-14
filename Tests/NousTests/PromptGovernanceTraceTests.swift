@@ -18,6 +18,7 @@ final class PromptGovernanceTraceTests: XCTestCase {
         XCTAssertNil(trace.turnSteward)
         XCTAssertNil(trace.agentCoordination)
         XCTAssertNil(trace.citationTrace)
+        XCTAssertNil(trace.quickActionExperiment)
         XCTAssertEqual(trace.visibleResponseLanguageTarget, .unspecified)
         XCTAssertEqual(trace.visibleResponseLanguageSource, .none)
     }
@@ -54,6 +55,27 @@ final class PromptGovernanceTraceTests: XCTestCase {
 
         XCTAssertEqual(decoded.visibleResponseLanguageTarget, .cantonese)
         XCTAssertEqual(decoded.visibleResponseLanguageSource, .currentTurnCantonese)
+    }
+
+    func testEncodesAndDecodesQuickActionExperimentTrace() throws {
+        let experiment = QuickActionExperimentTrace(
+            experimentId: "study-quick-mode-ab-v1",
+            mode: .study,
+            variant: .candidate
+        )
+        let trace = PromptGovernanceTrace(
+            promptLayers: ["anchor", "chat_mode", "quick_action_experiment"],
+            evidenceAttached: false,
+            safetyPolicyInvoked: false,
+            highRiskQueryDetected: false,
+            quickActionExperiment: experiment
+        )
+
+        let data = try JSONEncoder().encode(trace)
+        let decoded = try JSONDecoder().decode(PromptGovernanceTrace.self, from: data)
+
+        XCTAssertEqual(decoded.quickActionExperiment, experiment)
+        XCTAssertTrue(decoded.promptLayers.contains("quick_action_experiment"))
     }
 
     func testEncodesAndDecodesTurnStewardTrace() throws {

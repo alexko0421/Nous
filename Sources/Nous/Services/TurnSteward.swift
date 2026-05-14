@@ -573,6 +573,16 @@ final class TurnSteward {
                 source: .deterministic,
                 reason: "active quick action mode"
             )
+        case .study:
+            return TurnStewardDecision(
+                route: .sourceAnalysis,
+                memoryPolicy: .full,
+                challengeStance: .useSilently,
+                responseShape: .answerNow,
+                source: .deterministic,
+                reason: "active quick action mode",
+                judgePolicy: .off
+            )
         }
     }
 

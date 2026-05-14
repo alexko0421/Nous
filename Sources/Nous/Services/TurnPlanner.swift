@@ -220,6 +220,13 @@ final class TurnPlanner {
             conversationID: prepared.node.id
         )
         let resolvedQuickActionAddendum = quickActionResolution.addendum
+        let quickActionExperiment = QuickActionExperimentAssigner.assignment(
+            mode: planningQuickActionMode,
+            conversationID: prepared.node.id
+        )
+        let quickActionExperimentAddendum = QuickActionExperimentAssigner.candidateAddendum(
+            for: quickActionExperiment
+        )
         let quickActionModeSupportsAgentLoop = planningQuickActionMode?.agent().useAgentLoop == true
         let canUseAgentLoop = quickActionModeSupportsAgentLoop
             && agentLoopProviderSupportsToolUse(provider)
@@ -246,7 +253,11 @@ final class TurnPlanner {
             provider: provider
         )
         let turnGuidanceBlock = Self.turnGuidanceBlock(for: stewardship)
-        let quickActionContextBlocks = [resolvedQuickActionAddendum, turnGuidanceBlock]
+        let quickActionContextBlocks = [
+            resolvedQuickActionAddendum,
+            quickActionExperimentAddendum,
+            turnGuidanceBlock
+        ]
             .compactMap { block -> String? in
                 guard let block,
                       !block.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -346,6 +357,7 @@ final class TurnPlanner {
             allowInteractiveClarification: shouldAllowInteractiveClarification,
             turnSteward: stewardship.trace,
             agentCoordination: agentCoordinationTrace,
+            quickActionExperiment: quickActionExperiment,
             shadowLearningHints: shadowLearningHints,
             slowCognitionArtifacts: slowCognitionArtifacts,
             now: request.now

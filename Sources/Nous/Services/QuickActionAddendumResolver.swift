@@ -121,8 +121,8 @@ final class QuickActionAddendumResolver {
 
     private func skillCap(for mode: QuickActionMode?) -> Int {
         switch mode {
-        case .direction, .plan:
-            6
+        case .direction, .plan, .study:
+            7
         case .brainstorm, .none:
             5
         }

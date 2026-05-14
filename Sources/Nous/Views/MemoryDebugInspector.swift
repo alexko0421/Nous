@@ -70,6 +70,15 @@ struct MemoryFactDebugRow: Equatable, Identifiable {
 }
 
 enum MemoryFactDebugFormatting {
+    static func needsReview(_ fact: MemoryFactEntry) -> Bool {
+        switch fact.status {
+        case .pending, .conflicted, .expired:
+            return true
+        case .active, .archived, .superseded:
+            return false
+        }
+    }
+
     static func rows(
         from facts: [MemoryFactEntry],
         nodeTitles: [UUID: String],
@@ -98,10 +107,13 @@ enum MemoryFactDebugFormatting {
         if lhsRank != rhsRank {
             return lhsRank < rhsRank
         }
+        if lhs.updatedAt != rhs.updatedAt {
+            return lhs.updatedAt > rhs.updatedAt
+        }
         if lhs.confidence != rhs.confidence {
             return lhs.confidence > rhs.confidence
         }
-        return lhs.updatedAt > rhs.updatedAt
+        return lhs.content.localizedCaseInsensitiveCompare(rhs.content) == .orderedAscending
     }
 
     private static func statusRank(_ status: MemoryStatus) -> Int {
@@ -460,7 +472,7 @@ struct MemoryDebugInspector: View {
                     Spacer()
 
                     statPill(title: "Active", value: "\(activeFactEntries.count)")
-                    statPill(title: "Review", value: "\(factEntries.filter { $0.status != .active }.count)")
+                    statPill(title: "Review", value: "\(factReviewEntries.count)")
                 }
 
                 let rows = filteredFactRows
@@ -896,6 +908,10 @@ struct MemoryDebugInspector: View {
 
     private var activeFactEntries: [MemoryFactEntry] {
         factEntries.filter { $0.status == .active }
+    }
+
+    private var factReviewEntries: [MemoryFactEntry] {
+        factEntries.filter(MemoryFactDebugFormatting.needsReview)
     }
 
     private var reviewEntries: [MemoryEntry] {

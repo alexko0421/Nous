@@ -189,7 +189,26 @@ final class QuickActionOpeningRunner {
             turnIndex: 0,
             conversationID: node.id
         )
-        let quickActionAddendum = quickActionResolution.addendum
+        let quickActionExperiment = QuickActionExperimentAssigner.assignment(
+            mode: mode,
+            conversationID: node.id
+        )
+        let quickActionExperimentAddendum = QuickActionExperimentAssigner.candidateAddendum(
+            for: quickActionExperiment
+        )
+        let quickActionAddendumBlocks = [
+            quickActionResolution.addendum,
+            quickActionExperimentAddendum
+        ]
+            .compactMap { block -> String? in
+                guard let block,
+                      !block.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                else { return nil }
+                return block
+            }
+        let quickActionAddendum = quickActionAddendumBlocks.isEmpty
+            ? nil
+            : quickActionAddendumBlocks.joined(separator: "\n\n")
         let provider = currentProviderProvider()
         let agentCoordination = AgentCoordinationTrace(
             executionMode: .singleShot,
@@ -255,7 +274,8 @@ final class QuickActionOpeningRunner {
             activeQuickActionMode: mode,
             quickActionAddendum: quickActionAddendum,
             allowInteractiveClarification: false,
-            agentCoordination: agentCoordination
+            agentCoordination: agentCoordination,
+            quickActionExperiment: quickActionExperiment
         )
         let syntheticUserMessage = Message(nodeId: node.id, role: .user, content: openingText)
         let prepared = PreparedConversationTurn(

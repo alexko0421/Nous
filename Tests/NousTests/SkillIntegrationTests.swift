@@ -58,6 +58,20 @@ final class SkillIntegrationTests: XCTestCase {
         XCTAssertTrue(vm.lastPromptGovernanceTrace?.promptLayers.contains("quick_action_addendum") == true)
     }
 
+    func testStudyOpeningTurnZeroUsesTasteOnlySeedSkills() async throws {
+        let seeded = try makeSeededStores()
+        let llm = FirstPromptCapturingLLMService(output: "Study opening")
+        let vm = makeViewModel(nodeStore: seeded.nodeStore, skillStore: seeded.skillStore, llm: llm)
+
+        await vm.beginQuickActionConversation(.study)
+
+        let prompt = llm.firstPromptText
+        assertContainsAllTasteSkills(prompt)
+        XCTAssertFalse(prompt.contains(studySkeletonMarker))
+        XCTAssertTrue(prompt.contains("Alex just entered Study mode"))
+        XCTAssertTrue(vm.lastPromptGovernanceTrace?.promptLayers.contains("quick_action_addendum") == true)
+    }
+
     func testDirectionTurnOneUsesSkeletonAndTopFourTasteSkills() async throws {
         let plan = try await plan(
             explicitMode: .direction,
@@ -129,6 +143,70 @@ final class SkillIntegrationTests: XCTestCase {
         XCTAssertTrue(turn4.turnSlice.volatile.contains("FINAL TURN"))
         XCTAssertFalse(turn4.turnSlice.volatile.contains("PLAN MODE PRODUCTION CONTRACT"))
         assertContainsAllTasteSkills(turn4.turnSlice.volatile)
+    }
+
+    func testStudyTurnOneUsesStudySkeletonAndTasteSkills() async throws {
+        let plan = try await plan(
+            explicitMode: .study,
+            route: .sourceAnalysis,
+            responseShape: .answerNow,
+            userTurnCount: 1,
+            conversationID: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+        )
+
+        let prompt = plan.turnSlice.volatile
+        let fullPrompt = plan.turnSlice.combined
+        XCTAssertTrue(prompt.contains(studySkeletonMarker))
+        XCTAssertFalse(prompt.contains(directionSkeletonMarker))
+        XCTAssertFalse(prompt.contains(brainstormSkeletonMarker))
+        assertContainsAllTasteSkills(prompt)
+        XCTAssertTrue(fullPrompt.contains("ACTIVE QUICK MODE: Study"))
+        XCTAssertTrue(fullPrompt.contains("EPISTEMIC GROUNDING POLICY"))
+        XCTAssertTrue(fullPrompt.contains("reason from ground truth before analogy"))
+        XCTAssertTrue(fullPrompt.contains("Do not announce \"first principles\""))
+        XCTAssertTrue(fullPrompt.contains("STUDY MODE QUALITY CONTRACT"))
+        XCTAssertTrue(fullPrompt.contains("Stay faithful to the source before interpreting it"))
+        XCTAssertTrue(fullPrompt.contains("Connect the insight to Alex's product/thinking context only after the source is clear"))
+        XCTAssertFalse(fullPrompt.contains("problem-tree-seven-step-analysis"))
+        XCTAssertFalse(fullPrompt.contains("Silent sequence: 陈述问题"))
+        XCTAssertFalse(fullPrompt.contains("制定详细工作计划"))
+        XCTAssertFalse(fullPrompt.contains("Plan Mode: define the real outcome"))
+        XCTAssertFalse(fullPrompt.contains("Direction Mode: define the real question"))
+        XCTAssertTrue(plan.promptTrace.promptLayers.contains("quick_action_addendum"))
+    }
+
+    func testQuickActionExperimentCandidateIsInjectedAndTraced() async throws {
+        let plan = try await plan(
+            explicitMode: .study,
+            route: .sourceAnalysis,
+            responseShape: .answerNow,
+            userTurnCount: 1,
+            conversationID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        )
+
+        XCTAssertEqual(plan.promptTrace.quickActionExperiment?.experimentId, "study-quick-mode-ab-v1")
+        XCTAssertEqual(plan.promptTrace.quickActionExperiment?.mode, .study)
+        XCTAssertEqual(plan.promptTrace.quickActionExperiment?.variant, .candidate)
+        XCTAssertTrue(plan.promptTrace.promptLayers.contains("quick_action_experiment"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("QUICK ACTION EXPERIMENT CANDIDATE"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("Study"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("one section at a time"))
+    }
+
+    func testQuickActionExperimentControlIsTracedWithoutPromptChange() async throws {
+        let plan = try await plan(
+            explicitMode: .direction,
+            route: .direction,
+            responseShape: .narrowNextStep,
+            userTurnCount: 1,
+            conversationID: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+        )
+
+        XCTAssertEqual(plan.promptTrace.quickActionExperiment?.experimentId, "direction-quick-mode-ab-v1")
+        XCTAssertEqual(plan.promptTrace.quickActionExperiment?.mode, .direction)
+        XCTAssertEqual(plan.promptTrace.quickActionExperiment?.variant, .control)
+        XCTAssertTrue(plan.promptTrace.promptLayers.contains("quick_action_experiment"))
+        XCTAssertFalse(plan.turnSlice.volatile.contains("QUICK ACTION EXPERIMENT CANDIDATE"))
     }
 
     func testStewardInferredDirectionUsesInferredModeSkeletonAtTurnOne() async throws {
@@ -215,11 +293,12 @@ final class SkillIntegrationTests: XCTestCase {
         explicitMode: QuickActionMode?,
         route: TurnRoute,
         responseShape: ResponseShape,
-        userTurnCount: Int
+        userTurnCount: Int,
+        conversationID: UUID = UUID()
     ) async throws -> TurnPlan {
         let seeded = try makeSeededStores()
         let planner = makePlanner(nodeStore: seeded.nodeStore, skillStore: seeded.skillStore)
-        let prepared = preparedTurn(userTurnCount: userTurnCount)
+        let prepared = preparedTurn(userTurnCount: userTurnCount, conversationID: conversationID)
         return try await planner.plan(
             from: prepared,
             request: request(input: "Need help", activeQuickActionMode: explicitMode),
@@ -301,8 +380,11 @@ final class SkillIntegrationTests: XCTestCase {
         )
     }
 
-    private func preparedTurn(userTurnCount: Int) -> PreparedTurnSession {
-        let node = NousNode(type: .conversation, title: "Skill integration test")
+    private func preparedTurn(
+        userTurnCount: Int,
+        conversationID: UUID = UUID()
+    ) -> PreparedTurnSession {
+        let node = NousNode(id: conversationID, type: .conversation, title: "Skill integration test")
         var messages: [Message] = []
         var lastUserMessage: Message?
 
@@ -387,6 +469,10 @@ final class SkillIntegrationTests: XCTestCase {
 
     private var brainstormSkeletonMarker: String {
         "BRAINSTORM MODE QUALITY CONTRACT"
+    }
+
+    private var studySkeletonMarker: String {
+        "STUDY MODE QUALITY CONTRACT"
     }
 
     private var weightAgainstDefaultChatBaselineMarker: String {

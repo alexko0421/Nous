@@ -33,6 +33,8 @@ final class VoiceActionRegistryTests: XCTestCase {
             "navigate_to_tab": .direct,
             "set_sidebar_visibility": .direct,
             "set_scratchpad_visibility": .direct,
+            "replace_scratchpad_markdown": .direct,
+            "append_scratchpad_markdown": .direct,
             "set_appearance_mode": .direct,
             "open_settings_section": .direct,
             "set_composer_text": .direct,
@@ -77,6 +79,7 @@ final class VoiceActionRegistryTests: XCTestCase {
                 "selected_project_name",
                 "sidebar_visible",
                 "scratchpad_visible",
+                "scratchpad_markdown",
                 "active_conversation_title",
                 "right_panel_mode",
                 "youtube_url_text",
@@ -92,6 +95,7 @@ final class VoiceActionRegistryTests: XCTestCase {
         XCTAssertEqual(json["selected_project_name"] as? String, "New York")
         XCTAssertEqual(json["sidebar_visible"] as? Bool, true)
         XCTAssertEqual(json["scratchpad_visible"] as? Bool, false)
+        XCTAssertEqual(json["scratchpad_markdown"] as? String, "")
         XCTAssertEqual(json["active_conversation_title"] as? String, "Voice mode")
     }
 
@@ -106,6 +110,8 @@ final class VoiceActionRegistryTests: XCTestCase {
         "navigate_to_tab",
         "set_sidebar_visibility",
         "set_scratchpad_visibility",
+        "replace_scratchpad_markdown",
+        "append_scratchpad_markdown",
         "set_appearance_mode",
         "open_settings_section",
         "set_composer_text",

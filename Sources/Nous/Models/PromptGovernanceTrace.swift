@@ -180,6 +180,7 @@ struct PromptGovernanceTrace: Equatable, Codable {
     let agentCoordination: AgentCoordinationTrace?
     let citationTrace: CitationTrace?
     let slowCognitionTrace: SlowCognitionPromptTrace?
+    let quickActionExperiment: QuickActionExperimentTrace?
     let visibleResponseLanguageTarget: VisibleResponseLanguageTarget
     let visibleResponseLanguageSource: VisibleResponseLanguageSource
 
@@ -196,6 +197,7 @@ struct PromptGovernanceTrace: Equatable, Codable {
         agentCoordination: AgentCoordinationTrace? = nil,
         citationTrace: CitationTrace? = nil,
         slowCognitionTrace: SlowCognitionPromptTrace? = nil,
+        quickActionExperiment: QuickActionExperimentTrace? = nil,
         visibleResponseLanguageTarget: VisibleResponseLanguageTarget = .unspecified,
         visibleResponseLanguageSource: VisibleResponseLanguageSource = .none
     ) {
@@ -207,6 +209,7 @@ struct PromptGovernanceTrace: Equatable, Codable {
         self.agentCoordination = agentCoordination
         self.citationTrace = citationTrace
         self.slowCognitionTrace = slowCognitionTrace
+        self.quickActionExperiment = quickActionExperiment
         self.visibleResponseLanguageTarget = visibleResponseLanguageTarget
         self.visibleResponseLanguageSource = visibleResponseLanguageSource
     }
@@ -220,6 +223,7 @@ struct PromptGovernanceTrace: Equatable, Codable {
         case agentCoordination
         case citationTrace
         case slowCognitionTrace
+        case quickActionExperiment
         case visibleResponseLanguageTarget
         case visibleResponseLanguageSource
     }
@@ -234,6 +238,10 @@ struct PromptGovernanceTrace: Equatable, Codable {
         agentCoordination = try container.decodeIfPresent(AgentCoordinationTrace.self, forKey: .agentCoordination)
         citationTrace = try container.decodeIfPresent(CitationTrace.self, forKey: .citationTrace)
         slowCognitionTrace = try container.decodeIfPresent(SlowCognitionPromptTrace.self, forKey: .slowCognitionTrace)
+        quickActionExperiment = try container.decodeIfPresent(
+            QuickActionExperimentTrace.self,
+            forKey: .quickActionExperiment
+        )
         let decodedLanguageTarget = try container.decodeIfPresent(
             VisibleResponseLanguageTarget.self,
             forKey: .visibleResponseLanguageTarget

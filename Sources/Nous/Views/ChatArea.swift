@@ -582,7 +582,7 @@ struct ChatArea: View {
                                     .stroke(AppColor.panelStroke, lineWidth: 1)
                             )
                         Image(systemName: "sidebar.left")
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.system(size: 16, weight: .regular, design: .rounded))
                             .foregroundColor(AppColor.secondaryText)
                     }
                 }
@@ -614,7 +614,7 @@ struct ChatArea: View {
         }
         .fileImporter(
             isPresented: $isFileImporterPresented,
-            allowedContentTypes: [.item],
+            allowedContentTypes: AttachmentDropSupport.fileImporterContentTypes,
             allowsMultipleSelection: true,
             onCompletion: handleFileImport
         )
@@ -711,7 +711,7 @@ struct ChatArea: View {
                     )
 
                 Image(systemName: systemImage)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 14, weight: .regular, design: .rounded))
                     .foregroundColor(isActive ? AppColor.colaOrange : AppColor.secondaryText)
             }
             .frame(width: 28, height: 28)
@@ -977,7 +977,7 @@ struct ChatArea: View {
     private func primaryActionButton(isSeparated: Bool) -> some View {
         Button(action: handlePrimaryAction) {
             Image(systemName: vm.isGenerating ? "stop.fill" : "arrow.up")
-                .font(.system(size: 13, weight: .bold))
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
                 .foregroundColor(isSeparated ? .white : AppColor.secondaryText)
                 .opacity(composerActionMotion.iconOpacity(isSeparated: isSeparated))
         }
@@ -1595,7 +1595,7 @@ struct ComposerLeadingActionButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: 15, weight: .regular, design: .rounded))
                 .foregroundColor(iconColor)
                 .frame(width: size, height: size)
                 .rotationEffect(.degrees(isMenuExpanded && !isVoiceActive ? 90 : 0))
@@ -1761,7 +1761,8 @@ struct ActionMenuButton: View {
         Button(action: action) {
             VStack(spacing: 5) {
                 Image(systemName: icon)
-                    .font(.system(size: 15, weight: .medium))
+                    .font(.system(size: 16, weight: .regular, design: .rounded))
+                    .foregroundColor(isEnabled ? AppColor.colaDarkText.opacity(0.88) : AppColor.secondaryText.opacity(0.72))
                 Text(title)
                     .font(.system(size: 10, weight: .medium, design: .rounded))
             }

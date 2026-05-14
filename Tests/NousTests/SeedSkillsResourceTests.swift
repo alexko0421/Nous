@@ -6,8 +6,8 @@ final class SeedSkillsResourceTests: XCTestCase {
     func testSeedSkillsResourceDecodesExpectedRows() throws {
         let rows = try decodeSeedRows()
 
-        XCTAssertEqual(rows.count, 10)
-        XCTAssertEqual(Set(rows.map(\.id)).count, 10)
+        XCTAssertEqual(rows.count, 12)
+        XCTAssertEqual(Set(rows.map(\.id)).count, 12)
         XCTAssertTrue(rows.allSatisfy { $0.userId == "alex" })
         XCTAssertTrue(rows.allSatisfy { $0.state == .active })
         XCTAssertTrue(rows.allSatisfy { (1...2).contains($0.payload.payloadVersion) })
@@ -36,7 +36,9 @@ final class SeedSkillsResourceTests: XCTestCase {
                 "weight-against-default-chat-baseline",
                 "analysis-judge-gate",
                 "pain-test-before-building",
-                "inversion-before-commitment"
+                "inversion-before-commitment",
+                "problem-tree-seven-step-analysis",
+                "study-skeleton"
             ]
         )
 
@@ -51,9 +53,9 @@ final class SeedSkillsResourceTests: XCTestCase {
         XCTAssertEqual(brainstorm.payload.trigger.priority, 90)
 
         let tasteRows = rows.filter { $0.payload.trigger.kind == .always }
-        XCTAssertEqual(tasteRows.count, 7)
+        XCTAssertEqual(tasteRows.count, 8)
         let broadTasteRows = tasteRows.filter {
-            $0.payload.trigger.modes == [.direction, .brainstorm, .plan]
+            $0.payload.trigger.modes == [.direction, .brainstorm, .plan, .study]
         }
         XCTAssertEqual(broadTasteRows.count, 5)
 
@@ -82,6 +84,34 @@ final class SeedSkillsResourceTests: XCTestCase {
         XCTAssertEqual(inversion.payload.trigger.modes, [.direction])
         XCTAssertEqual(inversion.payload.trigger.priority, 80)
         XCTAssertTrue(inversion.payload.action.content.contains("worst version"))
+
+        let problemTree = try XCTUnwrap(rows.first { $0.payload.name == "problem-tree-seven-step-analysis" })
+        XCTAssertEqual(problemTree.id, UUID(uuidString: "00000000-0000-0000-0000-000000000011"))
+        XCTAssertEqual(problemTree.payload.payloadVersion, 1)
+        XCTAssertEqual(problemTree.payload.trigger.kind, .always)
+        XCTAssertEqual(problemTree.payload.trigger.modes, [.direction, .plan])
+        XCTAssertEqual(problemTree.payload.trigger.priority, 85)
+        XCTAssertTrue(problemTree.payload.action.content.contains("hidden thinking spine"))
+        XCTAssertTrue(problemTree.payload.action.content.contains("陈述问题"))
+        XCTAssertTrue(problemTree.payload.action.content.contains("讲清楚"))
+        XCTAssertTrue(problemTree.payload.action.content.contains("Brainstorm"))
+        XCTAssertFalse(problemTree.payload.trigger.modes.contains(.study))
+
+        let study = try XCTUnwrap(rows.first { $0.payload.name == "study-skeleton" })
+        XCTAssertEqual(study.id, UUID(uuidString: "00000000-0000-0000-0000-000000000012"))
+        XCTAssertEqual(study.payload.payloadVersion, 1)
+        XCTAssertEqual(study.payload.trigger.kind, .mode)
+        XCTAssertEqual(study.payload.trigger.modes, [.study])
+        XCTAssertEqual(study.payload.trigger.priority, 90)
+        XCTAssertTrue(study.payload.action.content.contains("STUDY MODE QUALITY CONTRACT"))
+        XCTAssertTrue(study.payload.action.content.contains("faithful to the source"))
+        XCTAssertTrue(study.payload.action.content.contains("Do not turn the reading into Direction, Brainstorm, or Plan unless Alex asks"))
+        XCTAssertTrue(study.payload.action.content.contains("Connect the insight to Alex's product/thinking context only after the source is clear"))
+        XCTAssertTrue(study.payload.action.content.contains("沉淀"))
+        XCTAssertFalse(study.payload.action.content.contains("problem-tree"))
+        XCTAssertFalse(study.payload.action.content.contains("seven-step"))
+        XCTAssertFalse(study.payload.action.content.contains("陈述问题"))
+        XCTAssertFalse(study.payload.action.content.contains("制定详细工作计划"))
     }
 
     func testSeedSkillsResourceImportsActiveAnalysisGate() throws {

@@ -124,6 +124,23 @@ enum VoiceOutputVoice: String, CaseIterable, Identifiable {
     }
 }
 
+enum RealtimeVoiceModel: String, CaseIterable, Identifiable {
+    case realtime2 = "gpt-realtime-2"
+    case realtimeMini = "gpt-realtime-mini"
+
+    var id: String { rawValue }
+}
+
+enum RealtimeReasoningEffort: String, CaseIterable, Identifiable {
+    case minimal
+    case low
+    case medium
+    case high
+    case xhigh
+
+    var id: String { rawValue }
+}
+
 enum VoiceLanguage: String, CaseIterable, Identifiable {
     case automatic
     case cantonese
@@ -190,12 +207,28 @@ enum VoiceLanguage: String, CaseIterable, Identifiable {
 }
 
 struct RealtimeVoiceConfiguration: Equatable {
+    var model: RealtimeVoiceModel
     var voice: VoiceOutputVoice
     var language: VoiceLanguage
+    var reasoningEffort: RealtimeReasoningEffort?
+
+    init(
+        model: RealtimeVoiceModel = .realtime2,
+        voice: VoiceOutputVoice,
+        language: VoiceLanguage,
+        reasoningEffort: RealtimeReasoningEffort? = .medium
+    ) {
+        self.model = model
+        self.voice = voice
+        self.language = language
+        self.reasoningEffort = reasoningEffort
+    }
 
     static let `default` = RealtimeVoiceConfiguration(
+        model: .realtime2,
         voice: .cedar,
-        language: .automatic
+        language: .automatic,
+        reasoningEffort: .medium
     )
 }
 
@@ -206,6 +239,7 @@ struct VoiceAppSnapshot: Equatable {
     var selectedProjectName: String?
     var sidebarVisible: Bool
     var scratchpadVisible: Bool
+    var scratchpadMarkdown: String
     var activeConversationTitle: String?
     var rightPanelMode: String?
     var youtubeURLText: String?
@@ -221,6 +255,7 @@ struct VoiceAppSnapshot: Equatable {
         selectedProjectName: String?,
         sidebarVisible: Bool,
         scratchpadVisible: Bool,
+        scratchpadMarkdown: String = "",
         activeConversationTitle: String?,
         rightPanelMode: String? = nil,
         youtubeURLText: String? = nil,
@@ -235,6 +270,7 @@ struct VoiceAppSnapshot: Equatable {
         self.selectedProjectName = selectedProjectName
         self.sidebarVisible = sidebarVisible
         self.scratchpadVisible = scratchpadVisible
+        self.scratchpadMarkdown = scratchpadMarkdown
         self.activeConversationTitle = activeConversationTitle
         self.rightPanelMode = rightPanelMode
         self.youtubeURLText = youtubeURLText
@@ -253,6 +289,7 @@ struct VoiceAppSnapshot: Equatable {
                 "selected_project_name": Self.stringOrNull(selectedProjectName),
                 "sidebar_visible": sidebarVisible,
                 "scratchpad_visible": scratchpadVisible,
+                "scratchpad_markdown": scratchpadMarkdown,
                 "active_conversation_title": Self.stringOrNull(activeConversationTitle),
                 "right_panel_mode": Self.stringOrNull(rightPanelMode),
                 "youtube_url_text": Self.stringOrNull(youtubeURLText),
@@ -277,6 +314,7 @@ struct VoiceAppSnapshot: Equatable {
         selectedProjectName: nil,
         sidebarVisible: false,
         scratchpadVisible: false,
+        scratchpadMarkdown: "",
         activeConversationTitle: nil
     )
 }
@@ -361,6 +399,8 @@ struct VoiceActionHandlers {
     var navigate: (VoiceNavigationTarget) -> Void
     var setSidebarVisible: (Bool) -> Void
     var setScratchPadVisible: (Bool) -> Void
+    var replaceScratchPadMarkdown: (String) -> Void
+    var appendScratchPadMarkdown: (String) -> Void
     var setComposerText: (String) -> Void
     var appendComposerText: (String) -> Void
     var clearComposer: () -> Void
@@ -376,6 +416,8 @@ struct VoiceActionHandlers {
         navigate: @escaping (VoiceNavigationTarget) -> Void,
         setSidebarVisible: @escaping (Bool) -> Void,
         setScratchPadVisible: @escaping (Bool) -> Void,
+        replaceScratchPadMarkdown: @escaping (String) -> Void = { _ in },
+        appendScratchPadMarkdown: @escaping (String) -> Void = { _ in },
         setComposerText: @escaping (String) -> Void,
         appendComposerText: @escaping (String) -> Void,
         clearComposer: @escaping () -> Void,
@@ -390,6 +432,8 @@ struct VoiceActionHandlers {
         self.navigate = navigate
         self.setSidebarVisible = setSidebarVisible
         self.setScratchPadVisible = setScratchPadVisible
+        self.replaceScratchPadMarkdown = replaceScratchPadMarkdown
+        self.appendScratchPadMarkdown = appendScratchPadMarkdown
         self.setComposerText = setComposerText
         self.appendComposerText = appendComposerText
         self.clearComposer = clearComposer
@@ -406,6 +450,8 @@ struct VoiceActionHandlers {
         navigate: { _ in },
         setSidebarVisible: { _ in },
         setScratchPadVisible: { _ in },
+        replaceScratchPadMarkdown: { _ in },
+        appendScratchPadMarkdown: { _ in },
         setComposerText: { _ in },
         appendComposerText: { _ in },
         clearComposer: {},
