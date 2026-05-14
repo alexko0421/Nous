@@ -29,8 +29,9 @@ enum TurnMemoryPolicyPreset: String, Codable, Equatable {
 }
 
 enum TurnLatencyTier: String, Codable, Equatable {
-    case normal
     case fast
+    case normal
+    case deep
 }
 
 enum TurnSupervisorLane: String, Codable, Equatable {

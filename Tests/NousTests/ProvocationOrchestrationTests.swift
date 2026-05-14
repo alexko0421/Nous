@@ -259,10 +259,9 @@ final class ProvocationOrchestrationTests: XCTestCase {
             $0.contains("ACTIVE QUICK MODE: \(mode.label)")
         }
 
-        XCTAssertEqual(chatSystems.count, 3)
-        XCTAssertFalse(chatSystems[0].contains("INTERACTIVE CLARIFICATION UI"))
-        XCTAssertTrue(chatSystems[1].contains("INTERACTIVE CLARIFICATION UI"))
-        XCTAssertFalse(chatSystems[2].contains("INTERACTIVE CLARIFICATION UI"))
+        XCTAssertEqual(chatSystems.count, 2)
+        XCTAssertTrue(chatSystems[0].contains("INTERACTIVE CLARIFICATION UI"))
+        XCTAssertFalse(chatSystems[1].contains("INTERACTIVE CLARIFICATION UI"))
         XCTAssertNil(viewModel.activeQuickActionMode)
         XCTAssertEqual(viewModel.messages.last?.content, finalGuidance)
     }
@@ -288,15 +287,9 @@ final class ProvocationOrchestrationTests: XCTestCase {
             $0.contains("ACTIVE QUICK MODE: \(mode.label)")
         }
 
-        // Single-turn: opening + 1 user reply = 2 LLM calls under the active mode marker.
-        XCTAssertEqual(chatSystems.count, 2,
-                       "single-turn mode should produce 2 systems with active marker (opening + final)")
-        // Opening turn: no clarify card UI (the agent has not seen any user context yet).
+        XCTAssertEqual(chatSystems.count, 1,
+                       "single-turn mode should only call the LLM for the first real user reply")
         XCTAssertFalse(chatSystems[0].contains("INTERACTIVE CLARIFICATION UI"),
-                       "opening turn must not offer a clarify card")
-        // Final turn (first user reply): Direction and Brainstorm should produce a
-        // real take, not enter another clarification UI pass.
-        XCTAssertFalse(chatSystems[1].contains("INTERACTIVE CLARIFICATION UI"),
                        "single-turn modes should not include clarification UI on final turn")
         XCTAssertNil(viewModel.activeQuickActionMode,
                      "mode must drop after single-turn completion")
@@ -1713,17 +1706,14 @@ final class ProvocationOrchestrationTests: XCTestCase {
 
         await viewModel.beginQuickActionConversation(.direction)
 
-        // (a) assembled context used .companion
-        let system = llm.receivedSystem ?? ""
-        XCTAssertTrue(system.contains("COMPANION MODE"),
-                      "quick-action opener must assemble with .companion")
-        XCTAssertFalse(system.contains("STRATEGIST MODE"))
-        // (b) no judge_events row
+        XCTAssertEqual(llm.receivedSystems.count, 0, "quick-action opener should not call the LLM")
+        XCTAssertEqual(viewModel.messages.map(\.content), [QuickActionMode.direction.openingMessage])
+        XCTAssertEqual(viewModel.activeQuickActionMode, .direction)
+        XCTAssertNil(viewModel.currentThinkingStartedAt)
+
         let events = telemetry.recentJudgeEvents(limit: 5, filter: .none)
         XCTAssertTrue(events.isEmpty, "quick-action opener must not append judge_events")
-        // (c) activeChatMode still nil
         XCTAssertNil(viewModel.activeChatMode)
-        // (d) the recording stub's history stays empty (no judge.judge(...) call)
         XCTAssertTrue(judge.previousModeHistory.isEmpty)
     }
 }

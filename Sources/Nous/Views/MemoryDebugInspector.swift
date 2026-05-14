@@ -2623,6 +2623,7 @@ struct JudgeEventsTab: View {
             HStack(spacing: 12) {
                 cacheStat(title: "Fast TTFT", value: tierStat(summary.fastRequestCount, summary.averageFastTTFTSeconds))
                 cacheStat(title: "Normal TTFT", value: tierStat(summary.normalRequestCount, summary.averageNormalTTFTSeconds))
+                cacheStat(title: "Deep TTFT", value: tierStat(summary.deepRequestCount, summary.averageDeepTTFTSeconds))
             }
 
             if let last = summary.lastSnapshot {

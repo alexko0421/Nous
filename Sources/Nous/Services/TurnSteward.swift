@@ -120,12 +120,12 @@ final class TurnSteward {
         prepared: PreparedTurnSession,
         request: TurnRequest
     ) -> TurnStewardDecision {
-        if let activeMode = request.snapshot.activeQuickActionMode {
-            return decision(forActiveMode: activeMode)
-        }
-
         let text = request.inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalized = text.lowercased()
+
+        if let activeMode = request.snapshot.activeQuickActionMode {
+            return decision(forActiveMode: activeMode, normalizedText: normalized)
+        }
 
         if !request.sourceMaterials.isEmpty {
             return TurnStewardDecision(
@@ -134,7 +134,8 @@ final class TurnSteward {
                 challengeStance: .surfaceTension,
                 responseShape: .answerNow,
                 source: .deterministic,
-                reason: "source material attached"
+                reason: "source material attached",
+                latencyTier: .deep
             )
         }
 
@@ -161,7 +162,8 @@ final class TurnSteward {
                 challengeStance: .surfaceTension,
                 responseShape: .answerNow,
                 source: .deterministic,
-                reason: "analysis skill cue"
+                reason: "analysis skill cue",
+                latencyTier: .deep
             )
         }
 
@@ -173,7 +175,8 @@ final class TurnSteward {
                 challengeStance: .useSilently,
                 responseShape: .listDirections,
                 source: .deterministic,
-                reason: memoryOptOut ? "explicit brainstorm with memory opt-out" : "explicit brainstorm cue"
+                reason: memoryOptOut ? "explicit brainstorm with memory opt-out" : "explicit brainstorm cue",
+                latencyTier: hasExplicitDeepLatencyCue(normalized) ? .deep : .normal
             )
         case .plan:
             return TurnStewardDecision(
@@ -182,7 +185,8 @@ final class TurnSteward {
                 challengeStance: distress ? .supportFirst : .surfaceTension,
                 responseShape: distress ? .answerNow : .producePlan,
                 source: .deterministic,
-                reason: "explicit plan cue"
+                reason: "explicit plan cue",
+                latencyTier: .deep
             )
         case .direction:
             return TurnStewardDecision(
@@ -191,7 +195,8 @@ final class TurnSteward {
                 challengeStance: distress ? .supportFirst : .surfaceTension,
                 responseShape: distress ? .answerNow : .narrowNextStep,
                 source: .deterministic,
-                reason: "explicit direction cue"
+                reason: "explicit direction cue",
+                latencyTier: .deep
             )
         case .sourceAnalysis:
             return TurnStewardDecision(
@@ -200,7 +205,8 @@ final class TurnSteward {
                 challengeStance: .surfaceTension,
                 responseShape: .answerNow,
                 source: .deterministic,
-                reason: "source material attached"
+                reason: "source material attached",
+                latencyTier: .deep
             )
         case .ordinaryChat:
             let latencyTier = latencyTier(
@@ -439,7 +445,7 @@ final class TurnSteward {
                 softerFallback: routing.softerFallback,
                 fallbackUsed: routing.fallbackUsed,
                 routerReason: routing.reason,
-                latencyTier: .normal
+                latencyTier: preserveDistressRoute ? legacy.latencyTier : .normal
             )
         case .companion, .reflective:
             return TurnStewardDecision(
@@ -457,7 +463,7 @@ final class TurnSteward {
                 softerFallback: routing.softerFallback,
                 fallbackUsed: routing.fallbackUsed,
                 routerReason: routing.reason,
-                latencyTier: routing.stance == .companion ? legacy.latencyTier : .normal
+                latencyTier: legacy.latencyTier
             )
         case .softAnalysis:
             let effectiveJudgePolicy: JudgePolicy = memoryOptOut ? .off : .silentFraming
@@ -477,7 +483,7 @@ final class TurnSteward {
                 softerFallback: routing.softerFallback,
                 fallbackUsed: routing.fallbackUsed,
                 routerReason: routing.reason,
-                latencyTier: .normal
+                latencyTier: .deep
             )
         case .hardJudge:
             let effectiveJudgePolicy: JudgePolicy = memoryOptOut ? .off : .visibleTension
@@ -497,7 +503,7 @@ final class TurnSteward {
                 softerFallback: routing.softerFallback,
                 fallbackUsed: routing.fallbackUsed,
                 routerReason: routing.reason,
-                latencyTier: .normal
+                latencyTier: .deep
             )
         }
     }
@@ -544,7 +550,10 @@ final class TurnSteward {
         )
     }
 
-    private func decision(forActiveMode mode: QuickActionMode) -> TurnStewardDecision {
+    private func decision(
+        forActiveMode mode: QuickActionMode,
+        normalizedText: String
+    ) -> TurnStewardDecision {
         switch mode {
         case .direction:
             return TurnStewardDecision(
@@ -553,7 +562,8 @@ final class TurnSteward {
                 challengeStance: .surfaceTension,
                 responseShape: .narrowNextStep,
                 source: .deterministic,
-                reason: "active quick action mode"
+                reason: "active quick action mode",
+                latencyTier: .deep
             )
         case .brainstorm:
             return TurnStewardDecision(
@@ -562,7 +572,8 @@ final class TurnSteward {
                 challengeStance: .useSilently,
                 responseShape: .listDirections,
                 source: .deterministic,
-                reason: "active quick action mode"
+                reason: "active quick action mode",
+                latencyTier: hasExplicitDeepLatencyCue(normalizedText) ? .deep : .normal
             )
         case .plan:
             return TurnStewardDecision(
@@ -571,7 +582,8 @@ final class TurnSteward {
                 challengeStance: .surfaceTension,
                 responseShape: .producePlan,
                 source: .deterministic,
-                reason: "active quick action mode"
+                reason: "active quick action mode",
+                latencyTier: .deep
             )
         case .study:
             return TurnStewardDecision(
@@ -581,7 +593,8 @@ final class TurnSteward {
                 responseShape: .answerNow,
                 source: .deterministic,
                 reason: "active quick action mode",
-                judgePolicy: .off
+                judgePolicy: .off,
+                latencyTier: .deep
             )
         }
     }
@@ -608,24 +621,43 @@ final class TurnSteward {
         distress: Bool
     ) -> TurnLatencyTier {
         guard route == .ordinaryChat,
-              request.snapshot.activeQuickActionMode == nil,
-              request.attachments.isEmpty,
-              request.sourceMaterials.isEmpty,
-              (1...160).contains(text.count),
-              !memoryOptOut,
-              !distress,
-              !hasExplicitHardJudgeCue(normalized),
-              !containsAny(normalized, in: Self.softAnalysisCues),
-              !containsAny(normalized, in: Self.reflectiveCues),
-              !containsAny(normalized, in: Self.ambiguousDecisionCues),
-              !containsAny(normalized, in: Self.broadOpinionCues),
-              !containsAny(normalized, in: Self.memoryRecallCues),
-              !containsAny(normalized, in: Self.contextDependentCues),
+              request.snapshot.activeQuickActionMode == nil
+        else {
+            return .normal
+        }
+
+        if !request.attachments.isEmpty || !request.sourceMaterials.isEmpty {
+            return .deep
+        }
+
+        if distress {
+            return .normal
+        }
+
+        if hasExplicitDeepLatencyCue(normalized)
+            || containsAny(normalized, in: Self.ambiguousDecisionCues)
+            || containsAny(normalized, in: Self.broadOpinionCues)
+            || containsAny(normalized, in: Self.memoryRecallCues)
+            || containsAny(normalized, in: Self.contextDependentCues) {
+            return .deep
+        }
+
+        if memoryOptOut {
+            return .normal
+        }
+
+        guard (1...160).contains(text.count),
               isExplicitFastUtilityRequest(normalized)
         else {
             return .normal
         }
         return .fast
+    }
+
+    private func hasExplicitDeepLatencyCue(_ normalized: String) -> Bool {
+        hasExplicitHardJudgeCue(normalized)
+            || containsAny(normalized, in: Self.deepAnalysisCues)
+            || containsAny(normalized, in: Self.softAnalysisCues)
     }
 
     private func isExplicitFastUtilityRequest(_ normalized: String) -> Bool {
@@ -762,6 +794,19 @@ final class TurnSteward {
         "trade-off",
         "权衡",
         "權衡"
+    ]
+
+    private static let deepAnalysisCues = [
+        "深度",
+        "深入",
+        "认真拆",
+        "認真拆",
+        "仔细拆",
+        "仔細拆",
+        "deep analysis",
+        "deep reasoning",
+        "think deeply",
+        "seriously unpack"
     ]
 
     private static let reflectiveCues = [

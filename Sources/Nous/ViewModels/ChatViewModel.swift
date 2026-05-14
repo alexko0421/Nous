@@ -535,6 +535,7 @@ final class ChatViewModel {
         didHitBudgetExhaustion = false
         activeQuickActionMode = nil
         activeChatMode = nil  // brand-new chat has no prior judgment
+        lastPromptGovernanceTrace = nil
         activeSourceDiscussionContext = nil
         pendingSourceMaterialsByTurnId.removeAll()
         pendingSourceDiscussionContextByTurnId.removeAll()
@@ -685,7 +686,7 @@ final class ChatViewModel {
         isGenerating = true
         currentResponse = ""
         currentThinking = ""
-        currentThinkingStartedAt = Date()
+        currentThinkingStartedAt = nil
         currentAgentTrace = []
         didHitBudgetExhaustion = false
         defer {

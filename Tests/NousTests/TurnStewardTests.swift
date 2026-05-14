@@ -29,7 +29,7 @@ final class TurnStewardTests: XCTestCase {
         XCTAssertEqual(decision.memoryPolicy, .full)
         XCTAssertEqual(decision.responseShape, .producePlan)
         XCTAssertEqual(decision.trace.reason, "active quick action mode")
-        XCTAssertEqual(decision.latencyTier, .normal)
+        XCTAssertEqual(decision.latencyTier, .deep)
     }
 
     func testActiveStudyQuickActionUsesSourceReadingLane() {
@@ -45,6 +45,31 @@ final class TurnStewardTests: XCTestCase {
         XCTAssertEqual(decision.responseShape, .answerNow)
         XCTAssertEqual(decision.trace.reason, "active quick action mode")
         XCTAssertTrue(decision.supervisorLanes.contains(.source))
+        XCTAssertEqual(decision.latencyTier, .deep)
+    }
+
+    func testActiveBrainstormQuickActionStaysNormalLatency() {
+        let decision = steward.steer(
+            prepared: preparedTurn(userText: "give me a few ideas"),
+            request: request(input: "give me a few ideas", activeQuickActionMode: .brainstorm)
+        )
+
+        XCTAssertEqual(decision.route, .brainstorm)
+        XCTAssertEqual(decision.memoryPolicy, .lean)
+        XCTAssertEqual(decision.responseShape, .listDirections)
+        XCTAssertEqual(decision.latencyTier, .normal)
+    }
+
+    func testActiveBrainstormQuickActionUsesDeepLatencyForExplicitDeepCue() {
+        let decision = steward.steer(
+            prepared: preparedTurn(userText: "认真拆一下呢个 tradeoff"),
+            request: request(input: "认真拆一下呢个 tradeoff", activeQuickActionMode: .brainstorm)
+        )
+
+        XCTAssertEqual(decision.route, .brainstorm)
+        XCTAssertEqual(decision.responseShape, .listDirections)
+        XCTAssertEqual(decision.latencyTier, .deep)
+        XCTAssertEqual(decision.trace.latencyTier, .deep)
     }
 
     func testSimpleSelfContainedOrdinaryTurnsUseFastLatencyTier() {
@@ -67,7 +92,7 @@ final class TurnStewardTests: XCTestCase {
         }
     }
 
-    func testContextDependentAndRiskyTurnsStayNormalLatency() {
+    func testDeepReasoningTurnsUseDeepLatency() {
         let examples = [
             "继续",
             "呢个点解",
@@ -75,7 +100,8 @@ final class TurnStewardTests: XCTestCase {
             "我係咪错",
             "help me plan this week",
             "what does this mean?",
-            "我好焦虑，点算"
+            "帮我深度分析呢个决定",
+            "认真拆一下呢个 tradeoff"
         ]
 
         for text in examples {
@@ -84,6 +110,24 @@ final class TurnStewardTests: XCTestCase {
                 request: request(input: text)
             )
 
+            XCTAssertEqual(decision.latencyTier, .deep, text)
+            XCTAssertEqual(decision.trace.latencyTier, .deep, text)
+        }
+    }
+
+    func testDistressSupportFirstTurnsStayNormalLatency() {
+        let examples = [
+            "我好焦虑，点算",
+            "今日真系好崩溃"
+        ]
+
+        for text in examples {
+            let decision = steward.steer(
+                prepared: preparedTurn(userText: text),
+                request: request(input: text)
+            )
+
+            XCTAssertEqual(decision.challengeStance, .supportFirst, text)
             XCTAssertEqual(decision.latencyTier, .normal, text)
             XCTAssertEqual(decision.trace.latencyTier, .normal, text)
         }
@@ -110,7 +154,7 @@ final class TurnStewardTests: XCTestCase {
         }
     }
 
-    func testAttachmentsAndSourcesStayNormalLatency() {
+    func testAttachmentsAndSourcesUseDeepLatency() {
         let sourceNodeId = UUID()
         let attachedDecision = steward.steer(
             prepared: preparedTurn(userText: "summarize this"),
@@ -144,8 +188,8 @@ final class TurnStewardTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(attachedDecision.latencyTier, .normal)
-        XCTAssertEqual(sourceDecision.latencyTier, .normal)
+        XCTAssertEqual(attachedDecision.latencyTier, .deep)
+        XCTAssertEqual(sourceDecision.latencyTier, .deep)
     }
 
     func testActivePlanQuickActionWithDistressKeepsPlanRouteButAnswersNow() {
@@ -160,6 +204,7 @@ final class TurnStewardTests: XCTestCase {
         XCTAssertEqual(decision.responseShape, .answerNow)
         XCTAssertEqual(decision.judgePolicy, .off)
         XCTAssertEqual(decision.trace.responseStance, .supportFirst)
+        XCTAssertEqual(decision.latencyTier, .deep)
     }
 
     func testExplicitBrainstormRoutesLean() {
@@ -174,6 +219,19 @@ final class TurnStewardTests: XCTestCase {
         XCTAssertEqual(decision.responseShape, .listDirections)
     }
 
+    func testExplicitBrainstormUsesDeepLatencyForExplicitDeepCue() {
+        let decision = steward.steer(
+            prepared: preparedTurn(userText: "brainstorm deep analysis of this tradeoff"),
+            request: request(input: "brainstorm deep analysis of this tradeoff")
+        )
+
+        XCTAssertEqual(decision.route, .brainstorm)
+        XCTAssertEqual(decision.memoryPolicy, .lean)
+        XCTAssertEqual(decision.responseShape, .listDirections)
+        XCTAssertEqual(decision.latencyTier, .deep)
+        XCTAssertEqual(decision.trace.latencyTier, .deep)
+    }
+
     func testExplicitPlanRoutesFullAndProducePlan() {
         let decision = steward.steer(
             prepared: preparedTurn(userText: "help me plan this week"),
@@ -184,6 +242,7 @@ final class TurnStewardTests: XCTestCase {
         XCTAssertEqual(decision.memoryPolicy, .full)
         XCTAssertEqual(decision.challengeStance, .surfaceTension)
         XCTAssertEqual(decision.responseShape, .producePlan)
+        XCTAssertEqual(decision.latencyTier, .deep)
     }
 
     func testExplicitDirectionRoutesFullAndNarrowNextStep() {
@@ -196,6 +255,7 @@ final class TurnStewardTests: XCTestCase {
         XCTAssertEqual(decision.memoryPolicy, .full)
         XCTAssertEqual(decision.challengeStance, .surfaceTension)
         XCTAssertEqual(decision.responseShape, .narrowNextStep)
+        XCTAssertEqual(decision.latencyTier, .deep)
     }
 
     func testSourceMaterialsRouteToSourceAnalysis() {
@@ -364,6 +424,18 @@ final class TurnStewardTests: XCTestCase {
         XCTAssertEqual(decision.route, .ordinaryChat)
         XCTAssertEqual(decision.memoryPolicy, .lean)
         XCTAssertEqual(decision.challengeStance, .useSilently)
+    }
+
+    func testMemoryOptOutDoesNotSuppressExplicitDeepLatency() {
+        let decision = steward.steer(
+            prepared: preparedTurn(userText: "don't use memory, deep analysis this tradeoff"),
+            request: request(input: "don't use memory, deep analysis this tradeoff")
+        )
+
+        XCTAssertEqual(decision.route, .ordinaryChat)
+        XCTAssertEqual(decision.memoryPolicy, .lean)
+        XCTAssertEqual(decision.latencyTier, .deep)
+        XCTAssertEqual(decision.trace.latencyTier, .deep)
     }
 
     func testOrdinaryChatDefaultForAmbiguousText() {
@@ -750,6 +822,8 @@ final class TurnStewardTests: XCTestCase {
         XCTAssertEqual(decision.trace.responseStance, .reflective)
         XCTAssertEqual(decision.trace.fallbackUsed, true)
         XCTAssertEqual(decision.judgePolicy, .off)
+        XCTAssertEqual(decision.latencyTier, .deep)
+        XCTAssertEqual(decision.trace.latencyTier, .deep)
     }
 
     func testLowClassifierConfidenceFallsBackSoftly() async {
@@ -775,6 +849,8 @@ final class TurnStewardTests: XCTestCase {
         XCTAssertEqual(decision.trace.responseStance, .reflective)
         XCTAssertEqual(decision.trace.fallbackUsed, true)
         XCTAssertEqual(decision.judgePolicy, .off)
+        XCTAssertEqual(decision.latencyTier, .deep)
+        XCTAssertEqual(decision.trace.latencyTier, .deep)
     }
 
     func testLocalProviderDoesNotCallClassifier() async {

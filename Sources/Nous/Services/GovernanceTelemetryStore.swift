@@ -53,9 +53,11 @@ struct TurnInferenceTelemetrySummary: Equatable {
     let requestCount: Int
     let fastRequestCount: Int
     let normalRequestCount: Int
+    let deepRequestCount: Int
     let averageTTFTSeconds: TimeInterval?
     let averageFastTTFTSeconds: TimeInterval?
     let averageNormalTTFTSeconds: TimeInterval?
+    let averageDeepTTFTSeconds: TimeInterval?
     let averageStreamDurationSeconds: TimeInterval
     let averageChunkGapSeconds: TimeInterval?
     let lastSnapshot: TurnInferenceTelemetrySnapshot?
@@ -1526,6 +1528,10 @@ final class GovernanceTelemetryStore {
         let averageNormalTTFT = normalTTFTCount > 0
             ? defaults.double(forKey: Keys.turnInferenceTierTTFTTotal(.normal)) / Double(normalTTFTCount)
             : nil
+        let deepTTFTCount = defaults.integer(forKey: Keys.turnInferenceTierTTFTCount(.deep))
+        let averageDeepTTFT = deepTTFTCount > 0
+            ? defaults.double(forKey: Keys.turnInferenceTierTTFTTotal(.deep)) / Double(deepTTFTCount)
+            : nil
         let averageStream = requestCount > 0
             ? defaults.double(forKey: Keys.turnInferenceStreamDurationTotal) / Double(requestCount)
             : 0
@@ -1538,9 +1544,11 @@ final class GovernanceTelemetryStore {
             requestCount: requestCount,
             fastRequestCount: defaults.integer(forKey: Keys.turnInferenceTierRequestCount(.fast)),
             normalRequestCount: defaults.integer(forKey: Keys.turnInferenceTierRequestCount(.normal)),
+            deepRequestCount: defaults.integer(forKey: Keys.turnInferenceTierRequestCount(.deep)),
             averageTTFTSeconds: averageTTFT,
             averageFastTTFTSeconds: averageFastTTFT,
             averageNormalTTFTSeconds: averageNormalTTFT,
+            averageDeepTTFTSeconds: averageDeepTTFT,
             averageStreamDurationSeconds: averageStream,
             averageChunkGapSeconds: averageChunkGap,
             lastSnapshot: lastSnapshot

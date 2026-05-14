@@ -23,8 +23,8 @@ struct RotatingComposerPromptLabel: View {
         Group {
             if shouldShow {
                 Text(currentText)
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
-                    .foregroundColor(AppColor.secondaryText.opacity(0.72))
+                    .font(.system(size: 13, weight: .regular, design: .rounded))
+                    .foregroundColor(AppColor.secondaryText.opacity(0.60))
                     .lineLimit(1)
                     .padding(.horizontal, horizontalPadding)
                     .frame(maxWidth: .infinity, alignment: .leading)

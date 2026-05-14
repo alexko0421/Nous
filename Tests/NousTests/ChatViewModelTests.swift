@@ -136,6 +136,10 @@ final class CapturingSingleReplyLLMService: LLMService {
         }
     }
 
+    var generateCallCount: Int {
+        lock.withLock { didCapturePrompt ? 1 : 0 }
+    }
+
     init(output: String) {
         self.output = output
     }
@@ -1393,7 +1397,7 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertEqual(vm.currentNode?.projectId, project.id)
     }
 
-    func testQuickActionOpeningUsesTasteSkillsAndSkipsModeSkeleton() async throws {
+    func testQuickActionOpeningUsesLocalModeMessageAndSkipsLLM() async throws {
         let nodeStore = try NodeStore(path: ":memory:")
         let vectorStore = VectorStore(nodeStore: nodeStore)
         let embeddingService = EmbeddingService()
@@ -1430,16 +1434,23 @@ final class ChatViewModelTests: XCTestCase {
             skillTracker: SkillTracker(store: skillStore),
             scratchPadStore: makeScratchPadStore(nodeStore: nodeStore)
         )
+        vm.lastPromptGovernanceTrace = PromptGovernanceTrace(
+            promptLayers: ["previous_turn"],
+            evidenceAttached: true,
+            safetyPolicyInvoked: false,
+            highRiskQueryDetected: false
+        )
 
         await vm.beginQuickActionConversation(.direction)
 
-        let promptText = llm.receivedPromptText
-        XCTAssertTrue(promptText.contains("OPENING TASTE SKILL SHOULD APPEAR"))
-        XCTAssertFalse(promptText.contains("OPENING MODE SKELETON SHOULD NOT APPEAR"))
-        XCTAssertTrue(vm.lastPromptGovernanceTrace?.promptLayers.contains("quick_action_addendum") == true)
+        XCTAssertEqual(llm.generateCallCount, 0)
+        XCTAssertEqual(vm.messages.map(\.content), [QuickActionMode.direction.openingMessage])
+        XCTAssertEqual(vm.activeQuickActionMode, .direction)
+        XCTAssertNil(vm.currentThinkingStartedAt)
+        XCTAssertNil(vm.lastPromptGovernanceTrace)
     }
 
-    func testQuickActionConversationPromotesHiddenChatTitle() async throws {
+    func testQuickActionConversationUsesModeTitleForInstantOpening() async throws {
         let nodeStore = try NodeStore(path: ":memory:")
         let vectorStore = VectorStore(nodeStore: nodeStore)
         let embeddingService = EmbeddingService()
@@ -1472,9 +1483,9 @@ final class ChatViewModelTests: XCTestCase {
         let storedMessages = try nodeStore.fetchMessages(nodeId: nodeId)
         let assistant = try XCTUnwrap(storedMessages.last)
 
-        XCTAssertEqual(vm.currentNode?.title, "搬去纽约定Austin")
-        XCTAssertEqual(storedNode.title, "搬去纽约定Austin")
-        XCTAssertEqual(assistant.content, "我想先听你讲多少少。")
+        XCTAssertEqual(vm.currentNode?.title, "Direction")
+        XCTAssertEqual(storedNode.title, "Direction")
+        XCTAssertEqual(assistant.content, QuickActionMode.direction.openingMessage)
         XCTAssertFalse(assistant.content.contains("<chat_title>"))
     }
 
@@ -1745,24 +1756,46 @@ final class ChatViewModelTests: XCTestCase {
             ),
             at: Date(timeIntervalSince1970: 20)
         )
+        telemetry.recordTurnInferenceTelemetry(
+            TurnInferenceTelemetryRecord(
+                provider: .claude,
+                modelName: "claude-sonnet-4-6",
+                latencyTier: .deep,
+                outcome: .completed,
+                ttftSeconds: 5.0,
+                streamDurationSeconds: 10.0,
+                chunkCount: 4,
+                averageChunkGapSeconds: 2.0,
+                maxChunkGapSeconds: 2.5,
+                outputCharacterCount: 48,
+                stablePromptCharacterCount: 80,
+                volatilePromptCharacterCount: 30,
+                requestPromptCharacterCount: 110,
+                usedCachedHistory: false,
+                geminiUsage: nil
+            ),
+            at: Date(timeIntervalSince1970: 30)
+        )
 
         let summary = try XCTUnwrap(telemetry.turnInferenceTelemetrySummary)
         let last = try XCTUnwrap(summary.lastSnapshot)
         let encoded = String(data: try JSONEncoder().encode(last), encoding: .utf8) ?? ""
 
-        XCTAssertEqual(summary.requestCount, 2)
-        XCTAssertEqual(summary.averageTTFTSeconds ?? -1, 2.0, accuracy: 0.001)
+        XCTAssertEqual(summary.requestCount, 3)
+        XCTAssertEqual(summary.averageTTFTSeconds ?? -1, 3.0, accuracy: 0.001)
         XCTAssertEqual(summary.fastRequestCount, 1)
         XCTAssertEqual(summary.normalRequestCount, 1)
+        XCTAssertEqual(summary.deepRequestCount, 1)
         XCTAssertEqual(summary.averageFastTTFTSeconds ?? -1, 1.0, accuracy: 0.001)
         XCTAssertEqual(summary.averageNormalTTFTSeconds ?? -1, 3.0, accuracy: 0.001)
-        XCTAssertEqual(summary.averageStreamDurationSeconds, 4.0, accuracy: 0.001)
-        XCTAssertEqual(summary.averageChunkGapSeconds ?? -1, 0.75, accuracy: 0.001)
-        XCTAssertEqual(last.record.provider, .openrouter)
-        XCTAssertEqual(last.record.modelName, "anthropic/claude-sonnet-4.6")
-        XCTAssertEqual(last.record.latencyTier, .normal)
-        XCTAssertTrue(last.record.usedCachedHistory)
-        XCTAssertEqual(last.record.geminiUsage?.cachedContentTokenCount, 75)
+        XCTAssertEqual(summary.averageDeepTTFTSeconds ?? -1, 5.0, accuracy: 0.001)
+        XCTAssertEqual(summary.averageStreamDurationSeconds, 6.0, accuracy: 0.001)
+        XCTAssertEqual(summary.averageChunkGapSeconds ?? -1, 1.166, accuracy: 0.001)
+        XCTAssertEqual(last.record.provider, .claude)
+        XCTAssertEqual(last.record.modelName, "claude-sonnet-4-6")
+        XCTAssertEqual(last.record.latencyTier, .deep)
+        XCTAssertFalse(last.record.usedCachedHistory)
+        XCTAssertNil(last.record.geminiUsage)
         XCTAssertFalse(encoded.contains("stable prompt text"))
         XCTAssertFalse(encoded.contains("volatile prompt text"))
     }

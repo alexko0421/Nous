@@ -15,61 +15,56 @@ final class SkillIntegrationTests: XCTestCase {
         super.tearDown()
     }
 
-    func testDirectionOpeningTurnZeroUsesTasteOnlySeedSkills() async throws {
+    func testDirectionOpeningTurnZeroUsesLocalMessageWithoutPromptingLLM() async throws {
         let seeded = try makeSeededStores()
         let llm = FirstPromptCapturingLLMService(output: "Direction opening")
         let vm = makeViewModel(nodeStore: seeded.nodeStore, skillStore: seeded.skillStore, llm: llm)
 
         await vm.beginQuickActionConversation(.direction)
 
-        let prompt = llm.firstPromptText
-        assertContainsAllTasteSkills(prompt)
-        XCTAssertFalse(prompt.contains(directionSkeletonMarker))
-        XCTAssertFalse(prompt.contains(brainstormSkeletonMarker))
-        XCTAssertTrue(vm.lastPromptGovernanceTrace?.promptLayers.contains("quick_action_addendum") == true)
+        XCTAssertEqual(llm.generateCallCount, 0)
+        XCTAssertEqual(vm.messages.map(\.content), [QuickActionMode.direction.openingMessage])
+        XCTAssertEqual(vm.activeQuickActionMode, .direction)
+        XCTAssertNil(vm.currentThinkingStartedAt)
     }
 
-    func testBrainstormOpeningTurnZeroUsesTasteOnlySeedSkills() async throws {
+    func testBrainstormOpeningTurnZeroUsesLocalMessageWithoutPromptingLLM() async throws {
         let seeded = try makeSeededStores()
         let llm = FirstPromptCapturingLLMService(output: "Brainstorm opening")
         let vm = makeViewModel(nodeStore: seeded.nodeStore, skillStore: seeded.skillStore, llm: llm)
 
         await vm.beginQuickActionConversation(.brainstorm)
 
-        let prompt = llm.firstPromptText
-        assertContainsAllTasteSkills(prompt)
-        XCTAssertFalse(prompt.contains(directionSkeletonMarker))
-        XCTAssertFalse(prompt.contains(brainstormSkeletonMarker))
-        XCTAssertTrue(vm.lastPromptGovernanceTrace?.promptLayers.contains("quick_action_addendum") == true)
+        XCTAssertEqual(llm.generateCallCount, 0)
+        XCTAssertEqual(vm.messages.map(\.content), [QuickActionMode.brainstorm.openingMessage])
+        XCTAssertEqual(vm.activeQuickActionMode, .brainstorm)
+        XCTAssertNil(vm.currentThinkingStartedAt)
     }
 
-    func testPlanOpeningTurnZeroUsesAllTasteSkillsWithoutPlanContract() async throws {
+    func testPlanOpeningTurnZeroUsesLocalMessageWithoutPromptingLLM() async throws {
         let seeded = try makeSeededStores()
         let llm = FirstPromptCapturingLLMService(output: "Plan opening")
         let vm = makeViewModel(nodeStore: seeded.nodeStore, skillStore: seeded.skillStore, llm: llm)
 
         await vm.beginQuickActionConversation(.plan)
 
-        let prompt = llm.firstPromptText
-        assertContainsAllTasteSkills(prompt)
-        XCTAssertFalse(prompt.contains("TURN 1 CONTRACT"))
-        XCTAssertFalse(prompt.contains("PLAN MODE PRODUCTION CONTRACT"))
-        XCTAssertFalse(prompt.contains("FINAL TURN"))
-        XCTAssertTrue(vm.lastPromptGovernanceTrace?.promptLayers.contains("quick_action_addendum") == true)
+        XCTAssertEqual(llm.generateCallCount, 0)
+        XCTAssertEqual(vm.messages.map(\.content), [QuickActionMode.plan.openingMessage])
+        XCTAssertEqual(vm.activeQuickActionMode, .plan)
+        XCTAssertNil(vm.currentThinkingStartedAt)
     }
 
-    func testStudyOpeningTurnZeroUsesTasteOnlySeedSkills() async throws {
+    func testStudyOpeningTurnZeroUsesLocalMessageWithoutPromptingLLM() async throws {
         let seeded = try makeSeededStores()
         let llm = FirstPromptCapturingLLMService(output: "Study opening")
         let vm = makeViewModel(nodeStore: seeded.nodeStore, skillStore: seeded.skillStore, llm: llm)
 
         await vm.beginQuickActionConversation(.study)
 
-        let prompt = llm.firstPromptText
-        assertContainsAllTasteSkills(prompt)
-        XCTAssertFalse(prompt.contains(studySkeletonMarker))
-        XCTAssertTrue(prompt.contains("Alex just entered Study mode"))
-        XCTAssertTrue(vm.lastPromptGovernanceTrace?.promptLayers.contains("quick_action_addendum") == true)
+        XCTAssertEqual(llm.generateCallCount, 0)
+        XCTAssertEqual(vm.messages.map(\.content), [QuickActionMode.study.openingMessage])
+        XCTAssertEqual(vm.activeQuickActionMode, .study)
+        XCTAssertNil(vm.currentThinkingStartedAt)
     }
 
     func testDirectionTurnOneUsesSkeletonAndTopFourTasteSkills() async throws {
@@ -502,6 +497,10 @@ private final class FirstPromptCapturingLLMService: LLMService {
             ([storedFirstSystem ?? ""] + storedFirstMessages.map(\.content))
                 .joined(separator: "\n\n")
         }
+    }
+
+    var generateCallCount: Int {
+        lock.withLock { didCaptureFirstPrompt ? 1 : 0 }
     }
 
     init(output: String) {

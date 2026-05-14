@@ -4,7 +4,7 @@ enum ComposerTextInputMetrics {
     static let maxVisibleLines = 6
     static let minimumTextHeight: CGFloat = 18
     static let maximumTextHeight: CGFloat = 108
-    static let verticalPadding: CGFloat = 10
+    static let verticalPadding: CGFloat = 9
 
     static var minimumControlHeight: CGFloat {
         minimumTextHeight + verticalPadding * 2

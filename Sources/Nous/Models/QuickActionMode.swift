@@ -38,6 +38,19 @@ enum QuickActionMode: String, CaseIterable, Codable, Sendable {
         }
     }
 
+    var openingMessage: String {
+        switch self {
+        case .direction:
+            return "入 Direction。讲低而家最拉锯嗰件事，我会帮你拆出真正问题、取舍，同一个下一步。"
+        case .brainstorm:
+            return "入 Brainstorm。抛一个主题、产品位或者卡住嘅念头过嚟，我哋先发散，再收返去最值得试嗰几条线。"
+        case .plan:
+            return "入 Plan。讲低你想完成嘅结果、期限同现实限制，我会帮你变成一个可执行计划。"
+        case .study:
+            return "入 Study。贴篇文章、PDF 或者一段内容过嚟，我哋先读懂原文，再拆重点同连返你而家做嘅事。"
+        }
+    }
+
     static func isPlaceholderConversationTitle(_ title: String) -> Bool {
         let normalized = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !normalized.isEmpty else { return false }

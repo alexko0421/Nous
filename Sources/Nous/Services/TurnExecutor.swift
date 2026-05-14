@@ -27,6 +27,19 @@ final class TurnExecutor {
         self.nowProvider = nowProvider
     }
 
+    static func reasoningBudgetTokens(
+        for provider: LLMProvider,
+        latencyTier: TurnLatencyTier
+    ) -> Int? {
+        guard latencyTier == .deep else { return nil }
+        switch provider {
+        case .gemini, .claude, .openrouter:
+            return ModelHarnessProfileCatalog.thinkingBudgetTokens(for: provider)
+        case .local, .openai:
+            return nil
+        }
+    }
+
     func execute(
         plan: TurnPlan,
         sink: TurnSequencedEventSink,
@@ -75,7 +88,7 @@ final class TurnExecutor {
         var chunkGaps: [TimeInterval] = []
         var chunkCount = 0
         let startedAt = nowProvider()
-        let captureThinkingForExecution = captureThinking && plan.latencyTier != .fast
+        let captureThinkingForExecution = captureThinking && plan.latencyTier == .deep
         do {
             let stream = try await configuredStreamingService(
                 from: configuredGeminiService(from: llm, cacheEntry: resolvedCacheEntry),
@@ -268,7 +281,15 @@ final class TurnExecutor {
                 return gemini
             }
 
-            gemini.thinkingBudgetTokens = ModelHarnessProfileCatalog.thinkingBudgetTokens(for: .gemini)
+            gemini.thinkingBudgetTokens = Self.reasoningBudgetTokens(
+                for: .gemini,
+                latencyTier: latencyTier
+            )
+            guard latencyTier == .deep else {
+                gemini.onThinkingDelta = nil
+                gemini.onBudgetExhausted = nil
+                return gemini
+            }
             gemini.onBudgetExhausted = {
                 await state.markBudgetExhausted()
             }
@@ -293,7 +314,14 @@ final class TurnExecutor {
                 claude.onThinkingDelta = nil
                 return claude
             }
-            claude.thinkingBudgetTokens = ModelHarnessProfileCatalog.thinkingBudgetTokens(for: .claude)
+            claude.thinkingBudgetTokens = Self.reasoningBudgetTokens(
+                for: .claude,
+                latencyTier: latencyTier
+            )
+            guard latencyTier == .deep else {
+                claude.onThinkingDelta = nil
+                return claude
+            }
             guard captureThinking else { return claude }
             claude.onThinkingDelta = { delta in
                 if let displayDelta = await state.appendThinking(
@@ -312,7 +340,14 @@ final class TurnExecutor {
                 openRouter.onThinkingDelta = nil
                 return openRouter
             }
-            openRouter.reasoningBudgetTokens = ModelHarnessProfileCatalog.thinkingBudgetTokens(for: .openrouter)
+            openRouter.reasoningBudgetTokens = Self.reasoningBudgetTokens(
+                for: .openrouter,
+                latencyTier: latencyTier
+            )
+            guard latencyTier == .deep else {
+                openRouter.onThinkingDelta = nil
+                return openRouter
+            }
             guard captureThinking else { return openRouter }
             openRouter.onThinkingDelta = { delta in
                 if let displayDelta = await state.appendThinking(
