@@ -85,7 +85,11 @@ enum VisibleResponseLanguageTarget: String, Equatable, Codable, Sendable {
         case .english:
             return "Answer in English unless the user explicitly asks otherwise."
         case .cantonese:
-            return "Answer naturally in Cantonese unless the user explicitly asks otherwise."
+            return [
+                "Answer naturally in Cantonese unless the user explicitly asks otherwise.",
+                "Treat Cantonese as dialect, not just Chinese script: prefer Cantonese vocabulary and particles (嘅, 咗, 哋, 咩, 点, 攰, 睇, 讲) over Mandarin substitutions (的, 了, 们, 什么, 怎么, 累, 看, 说) when those are the intended words.",
+                "Do not flatten Cantonese into Mandarin prose with Cantonese endings."
+            ].joined(separator: " ")
         case .mandarin:
             return "Answer naturally in Mandarin unless the user explicitly asks otherwise."
         case .mixed:
@@ -163,6 +167,7 @@ struct PromptGovernanceTrace: Equatable, Codable {
         "user_model",
         "project_goal",
         "recent_conversations",
+        "corpus_context",
         "citations",
         "long_gap_bridge_guidance",
         "slow_cognition"
@@ -176,6 +181,7 @@ struct PromptGovernanceTrace: Equatable, Codable {
     let agentCoordination: AgentCoordinationTrace?
     let citationTrace: CitationTrace?
     let slowCognitionTrace: SlowCognitionPromptTrace?
+    let quickActionExperiment: QuickActionExperimentTrace?
     let visibleResponseLanguageTarget: VisibleResponseLanguageTarget
     let visibleResponseLanguageSource: VisibleResponseLanguageSource
 
@@ -192,6 +198,7 @@ struct PromptGovernanceTrace: Equatable, Codable {
         agentCoordination: AgentCoordinationTrace? = nil,
         citationTrace: CitationTrace? = nil,
         slowCognitionTrace: SlowCognitionPromptTrace? = nil,
+        quickActionExperiment: QuickActionExperimentTrace? = nil,
         visibleResponseLanguageTarget: VisibleResponseLanguageTarget = .unspecified,
         visibleResponseLanguageSource: VisibleResponseLanguageSource = .none
     ) {
@@ -203,6 +210,7 @@ struct PromptGovernanceTrace: Equatable, Codable {
         self.agentCoordination = agentCoordination
         self.citationTrace = citationTrace
         self.slowCognitionTrace = slowCognitionTrace
+        self.quickActionExperiment = quickActionExperiment
         self.visibleResponseLanguageTarget = visibleResponseLanguageTarget
         self.visibleResponseLanguageSource = visibleResponseLanguageSource
     }
@@ -216,6 +224,7 @@ struct PromptGovernanceTrace: Equatable, Codable {
         case agentCoordination
         case citationTrace
         case slowCognitionTrace
+        case quickActionExperiment
         case visibleResponseLanguageTarget
         case visibleResponseLanguageSource
     }
@@ -230,6 +239,10 @@ struct PromptGovernanceTrace: Equatable, Codable {
         agentCoordination = try container.decodeIfPresent(AgentCoordinationTrace.self, forKey: .agentCoordination)
         citationTrace = try container.decodeIfPresent(CitationTrace.self, forKey: .citationTrace)
         slowCognitionTrace = try container.decodeIfPresent(SlowCognitionPromptTrace.self, forKey: .slowCognitionTrace)
+        quickActionExperiment = try container.decodeIfPresent(
+            QuickActionExperimentTrace.self,
+            forKey: .quickActionExperiment
+        )
         let decodedLanguageTarget = try container.decodeIfPresent(
             VisibleResponseLanguageTarget.self,
             forKey: .visibleResponseLanguageTarget

@@ -157,6 +157,7 @@ struct EnqueueMemoryRefreshRequest {
 enum MemorySuppressionReason: String, Codable, Equatable, Sendable {
     case hardOptOut = "hard_opt_out"
     case sensitiveConsentRequired = "sensitive_consent_required"
+    case fastLatencyTier = "fast_latency_tier"
     case unspecified
 }
 
@@ -182,6 +183,7 @@ struct ContextContinuationPlan {
     let scratchpadIngest: ScratchpadIngestRequest?
     let memoryRefresh: EnqueueMemoryRefreshRequest?
     let memorySuppressionReason: MemorySuppressionReason?
+    let recordsMemorySuppressionTelemetry: Bool
     let sourceLearningDigest: SourceLearningDigestRequest?
 
     init(
@@ -191,6 +193,7 @@ struct ContextContinuationPlan {
         scratchpadIngest: ScratchpadIngestRequest?,
         memoryRefresh: EnqueueMemoryRefreshRequest?,
         memorySuppressionReason: MemorySuppressionReason? = nil,
+        recordsMemorySuppressionTelemetry: Bool = true,
         sourceLearningDigest: SourceLearningDigestRequest? = nil
     ) {
         self.turnId = turnId
@@ -199,6 +202,7 @@ struct ContextContinuationPlan {
         self.scratchpadIngest = scratchpadIngest
         self.memoryRefresh = memoryRefresh
         self.memorySuppressionReason = memorySuppressionReason
+        self.recordsMemorySuppressionTelemetry = recordsMemorySuppressionTelemetry
         self.sourceLearningDigest = sourceLearningDigest
     }
 }
@@ -400,6 +404,7 @@ struct TurnPlan {
     let transcriptMessages: [LLMMessage]
     let focusBlock: String?
     let provider: LLMProvider
+    let latencyTier: TurnLatencyTier
     let indexedSkillIds: Set<UUID>
     let loadedSkillIds: Set<UUID>
     let memoryEvidenceSourceIds: Set<UUID>
@@ -432,6 +437,7 @@ struct TurnPlan {
         transcriptMessages: [LLMMessage],
         focusBlock: String?,
         provider: LLMProvider,
+        latencyTier: TurnLatencyTier = .normal,
         indexedSkillIds: Set<UUID> = [],
         loadedSkillIds: Set<UUID> = [],
         memoryEvidenceSourceIds: Set<UUID> = [],
@@ -455,6 +461,7 @@ struct TurnPlan {
         self.transcriptMessages = transcriptMessages
         self.focusBlock = focusBlock
         self.provider = provider
+        self.latencyTier = latencyTier
         self.indexedSkillIds = indexedSkillIds
         self.loadedSkillIds = loadedSkillIds
         self.memoryEvidenceSourceIds = memoryEvidenceSourceIds
@@ -478,6 +485,7 @@ struct TurnPlan {
         transcriptMessages: [LLMMessage],
         focusBlock: String?,
         provider: LLMProvider,
+        latencyTier: TurnLatencyTier = .normal,
         indexedSkillIds: Set<UUID> = [],
         loadedSkillIds: Set<UUID> = [],
         memoryEvidenceSourceIds: Set<UUID> = [],
@@ -502,6 +510,7 @@ struct TurnPlan {
             transcriptMessages: transcriptMessages,
             focusBlock: focusBlock,
             provider: provider,
+            latencyTier: latencyTier,
             indexedSkillIds: indexedSkillIds,
             loadedSkillIds: loadedSkillIds,
             memoryEvidenceSourceIds: memoryEvidenceSourceIds,

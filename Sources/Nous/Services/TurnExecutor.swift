@@ -6,19 +6,38 @@ final class TurnExecutor {
     private let shouldUseGeminiHistoryCache: () -> Bool
     private let shouldPersistAssistantThinking: () -> Bool
     private let recordGeminiUsage: @Sendable (GeminiUsageMetadata) -> Void
+    private let recordTurnInferenceTelemetry: (TurnInferenceTelemetryRecord) -> Void
+    private let nowProvider: () -> Date
 
     init(
         llmServiceProvider: @escaping () -> (any LLMService)?,
         geminiPromptCache: GeminiPromptCacheService = GeminiPromptCacheService(),
         shouldUseGeminiHistoryCache: @escaping () -> Bool = { true },
         shouldPersistAssistantThinking: @escaping () -> Bool = { true },
-        recordGeminiUsage: @escaping @Sendable (GeminiUsageMetadata) -> Void = { _ in }
+        recordGeminiUsage: @escaping @Sendable (GeminiUsageMetadata) -> Void = { _ in },
+        recordTurnInferenceTelemetry: @escaping (TurnInferenceTelemetryRecord) -> Void = { _ in },
+        nowProvider: @escaping () -> Date = Date.init
     ) {
         self.llmServiceProvider = llmServiceProvider
         self.geminiPromptCache = geminiPromptCache
         self.shouldUseGeminiHistoryCache = shouldUseGeminiHistoryCache
         self.shouldPersistAssistantThinking = shouldPersistAssistantThinking
         self.recordGeminiUsage = recordGeminiUsage
+        self.recordTurnInferenceTelemetry = recordTurnInferenceTelemetry
+        self.nowProvider = nowProvider
+    }
+
+    static func reasoningBudgetTokens(
+        for provider: LLMProvider,
+        latencyTier: TurnLatencyTier
+    ) -> Int? {
+        guard latencyTier == .deep else { return nil }
+        switch provider {
+        case .gemini, .claude, .openrouter:
+            return ModelHarnessProfileCatalog.thinkingBudgetTokens(for: provider)
+        case .local, .openai:
+            return nil
+        }
     }
 
     func execute(
@@ -55,15 +74,28 @@ final class TurnExecutor {
             forSlice: plan.turnSlice,
             cacheEntry: resolvedCacheEntry
         )
+        let requestPromptCharacterCount = Self.requestPromptCharacterCount(
+            system: requestSystem,
+            messages: requestMessages
+        )
+        let modelName = modelIdentifier(for: llm)
+        let usedCachedHistory = resolvedCacheEntry != nil
 
         let state = TurnExecutionStreamState()
         var streamedText = ""
+        var firstChunkAt: Date?
+        var lastChunkAt: Date?
+        var chunkGaps: [TimeInterval] = []
+        var chunkCount = 0
+        let startedAt = nowProvider()
+        let captureThinkingForExecution = captureThinking && plan.latencyTier == .deep
         do {
             let stream = try await configuredStreamingService(
                 from: configuredGeminiService(from: llm, cacheEntry: resolvedCacheEntry),
                 sink: sink,
                 state: state,
-                captureThinking: captureThinking,
+                captureThinking: captureThinkingForExecution,
+                latencyTier: plan.latencyTier,
                 cacheableSystemPrefix: resolvedCacheEntry == nil ? plan.turnSlice.stable : nil
             ).generate(
                 messages: requestMessages,
@@ -73,12 +105,37 @@ final class TurnExecutor {
 
             for try await chunk in stream {
                 try Task.checkCancellation()
+                let chunkAt = nowProvider()
+                if let lastChunkAt {
+                    chunkGaps.append(chunkAt.timeIntervalSince(lastChunkAt))
+                } else {
+                    firstChunkAt = chunkAt
+                }
+                lastChunkAt = chunkAt
+                chunkCount += 1
                 streamedText += chunk
                 await sink.emit(.textDelta(chunk))
             }
         } catch is CancellationError {
             return nil
         } catch {
+            let finishedAt = nowProvider()
+            let latestGeminiUsage = await state.latestGeminiUsage
+            recordTurnInferenceTelemetry(Self.telemetryRecord(
+                plan: plan,
+                provider: plan.provider,
+                modelName: modelName,
+                outcome: .error,
+                startedAt: startedAt,
+                finishedAt: finishedAt,
+                firstChunkAt: firstChunkAt,
+                chunkGaps: chunkGaps,
+                chunkCount: chunkCount,
+                outputCharacterCount: streamedText.count,
+                requestPromptCharacterCount: requestPromptCharacterCount,
+                usedCachedHistory: usedCachedHistory,
+                geminiUsage: latestGeminiUsage
+            ))
             if resolvedCacheEntry != nil {
                 geminiPromptCache.removeEntry(for: plan.prepared.node.id)
             }
@@ -89,12 +146,30 @@ final class TurnExecutor {
             )
         }
 
+        let finishedAt = nowProvider()
+        let latestGeminiUsage = await state.latestGeminiUsage
+        recordTurnInferenceTelemetry(Self.telemetryRecord(
+            plan: plan,
+            provider: plan.provider,
+            modelName: modelName,
+            outcome: .completed,
+            startedAt: startedAt,
+            finishedAt: finishedAt,
+            firstChunkAt: firstChunkAt,
+            chunkGaps: chunkGaps,
+            chunkCount: chunkCount,
+            outputCharacterCount: streamedText.count,
+            requestPromptCharacterCount: requestPromptCharacterCount,
+            usedCachedHistory: usedCachedHistory,
+            geminiUsage: latestGeminiUsage
+        ))
+
         let didHitBudgetExhaustion = await state.didHitBudgetExhaustion
         if didHitBudgetExhaustion && streamedText.isEmpty {
             streamedText = "(I ran out of thinking budget on that one. Try asking again, maybe a touch simpler.)"
         }
         let persistedThinking: String?
-        if captureThinking && shouldPersistAssistantThinking() {
+        if captureThinkingForExecution && shouldPersistAssistantThinking() {
             persistedThinking = await state.persistedThinking
         } else {
             persistedThinking = nil
@@ -191,13 +266,30 @@ final class TurnExecutor {
         sink: TurnSequencedEventSink,
         state: TurnExecutionStreamState,
         captureThinking: Bool,
+        latencyTier: TurnLatencyTier,
         cacheableSystemPrefix: String?
     ) -> any LLMService {
         if var gemini = llm as? GeminiLLMService {
             gemini.onUsageMetadata = { [recordGeminiUsage] usage in
+                await state.recordGeminiUsage(usage)
                 recordGeminiUsage(usage)
             }
-            gemini.thinkingBudgetTokens = ModelHarnessProfileCatalog.thinkingBudgetTokens(for: .gemini)
+            if latencyTier == .fast {
+                gemini.thinkingBudgetTokens = nil
+                gemini.onThinkingDelta = nil
+                gemini.onBudgetExhausted = nil
+                return gemini
+            }
+
+            gemini.thinkingBudgetTokens = Self.reasoningBudgetTokens(
+                for: .gemini,
+                latencyTier: latencyTier
+            )
+            guard latencyTier == .deep else {
+                gemini.onThinkingDelta = nil
+                gemini.onBudgetExhausted = nil
+                return gemini
+            }
             gemini.onBudgetExhausted = {
                 await state.markBudgetExhausted()
             }
@@ -217,7 +309,19 @@ final class TurnExecutor {
 
         if var claude = llm as? ClaudeLLMService {
             claude.cacheableSystemPrefix = cacheableSystemPrefix
-            claude.thinkingBudgetTokens = ModelHarnessProfileCatalog.thinkingBudgetTokens(for: .claude)
+            if latencyTier == .fast {
+                claude.thinkingBudgetTokens = nil
+                claude.onThinkingDelta = nil
+                return claude
+            }
+            claude.thinkingBudgetTokens = Self.reasoningBudgetTokens(
+                for: .claude,
+                latencyTier: latencyTier
+            )
+            guard latencyTier == .deep else {
+                claude.onThinkingDelta = nil
+                return claude
+            }
             guard captureThinking else { return claude }
             claude.onThinkingDelta = { delta in
                 if let displayDelta = await state.appendThinking(
@@ -231,7 +335,19 @@ final class TurnExecutor {
         }
 
         if var openRouter = llm as? OpenRouterLLMService {
-            openRouter.reasoningBudgetTokens = ModelHarnessProfileCatalog.thinkingBudgetTokens(for: .openrouter)
+            if latencyTier == .fast {
+                openRouter.reasoningBudgetTokens = nil
+                openRouter.onThinkingDelta = nil
+                return openRouter
+            }
+            openRouter.reasoningBudgetTokens = Self.reasoningBudgetTokens(
+                for: .openrouter,
+                latencyTier: latencyTier
+            )
+            guard latencyTier == .deep else {
+                openRouter.onThinkingDelta = nil
+                return openRouter
+            }
             guard captureThinking else { return openRouter }
             openRouter.onThinkingDelta = { delta in
                 if let displayDelta = await state.appendThinking(
@@ -268,11 +384,65 @@ final class TurnExecutor {
         """
     }
 
+    private func modelIdentifier(for llm: any LLMService) -> String {
+        if let identifying = llm as? any LLMModelIdentifying {
+            return identifying.modelIdentifier
+        }
+        return String(describing: type(of: llm))
+    }
+
+    private static func requestPromptCharacterCount(
+        system: String?,
+        messages: [LLMMessage]
+    ) -> Int {
+        (system?.count ?? 0) + messages.reduce(0) { total, message in
+            total + message.content.count
+        }
+    }
+
+    private static func telemetryRecord(
+        plan: TurnPlan,
+        provider: LLMProvider,
+        modelName: String,
+        outcome: TurnInferenceOutcome,
+        startedAt: Date,
+        finishedAt: Date,
+        firstChunkAt: Date?,
+        chunkGaps: [TimeInterval],
+        chunkCount: Int,
+        outputCharacterCount: Int,
+        requestPromptCharacterCount: Int,
+        usedCachedHistory: Bool,
+        geminiUsage: GeminiUsageMetadata?
+    ) -> TurnInferenceTelemetryRecord {
+        let averageGap = chunkGaps.isEmpty
+            ? nil
+            : chunkGaps.reduce(0, +) / Double(chunkGaps.count)
+        return TurnInferenceTelemetryRecord(
+            provider: provider,
+            modelName: modelName,
+            latencyTier: plan.latencyTier,
+            outcome: outcome,
+            ttftSeconds: firstChunkAt.map { $0.timeIntervalSince(startedAt) },
+            streamDurationSeconds: finishedAt.timeIntervalSince(startedAt),
+            chunkCount: chunkCount,
+            averageChunkGapSeconds: averageGap,
+            maxChunkGapSeconds: chunkGaps.max(),
+            outputCharacterCount: outputCharacterCount,
+            stablePromptCharacterCount: plan.turnSlice.stable.count,
+            volatilePromptCharacterCount: plan.turnSlice.volatile.count,
+            requestPromptCharacterCount: requestPromptCharacterCount,
+            usedCachedHistory: usedCachedHistory,
+            geminiUsage: geminiUsage
+        )
+    }
+
 }
 
 actor TurnExecutionStreamState {
     private var thinking: String = ""
     private var thinkingTrace = ThinkingTraceAccumulator()
+    private(set) var latestGeminiUsage: GeminiUsageMetadata?
     private(set) var didHitBudgetExhaustion: Bool = false
 
     func appendThinking(_ delta: String, title: String) -> String? {
@@ -285,6 +455,10 @@ actor TurnExecutionStreamState {
 
     func markBudgetExhausted() {
         didHitBudgetExhaustion = true
+    }
+
+    func recordGeminiUsage(_ usage: GeminiUsageMetadata) {
+        latestGeminiUsage = usage
     }
 
     var persistedThinking: String? {

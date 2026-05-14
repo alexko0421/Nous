@@ -70,6 +70,15 @@ struct MemoryFactDebugRow: Equatable, Identifiable {
 }
 
 enum MemoryFactDebugFormatting {
+    static func needsReview(_ fact: MemoryFactEntry) -> Bool {
+        switch fact.status {
+        case .pending, .conflicted, .expired:
+            return true
+        case .active, .archived, .superseded:
+            return false
+        }
+    }
+
     static func rows(
         from facts: [MemoryFactEntry],
         nodeTitles: [UUID: String],
@@ -98,10 +107,13 @@ enum MemoryFactDebugFormatting {
         if lhsRank != rhsRank {
             return lhsRank < rhsRank
         }
+        if lhs.updatedAt != rhs.updatedAt {
+            return lhs.updatedAt > rhs.updatedAt
+        }
         if lhs.confidence != rhs.confidence {
             return lhs.confidence > rhs.confidence
         }
-        return lhs.updatedAt > rhs.updatedAt
+        return lhs.content.localizedCaseInsensitiveCompare(rhs.content) == .orderedAscending
     }
 
     private static func statusRank(_ status: MemoryStatus) -> Int {
@@ -464,7 +476,7 @@ struct MemoryDebugInspector: View {
                     Spacer()
 
                     statPill(title: "Active", value: "\(activeFactEntries.count)")
-                    statPill(title: "Review", value: "\(factEntries.filter { $0.status != .active }.count)")
+                    statPill(title: "Review", value: "\(factReviewEntries.count)")
                 }
 
                 let rows = filteredFactRows
@@ -986,6 +998,10 @@ struct MemoryDebugInspector: View {
 
     private var activeFactEntries: [MemoryFactEntry] {
         factEntries.filter { $0.status == .active }
+    }
+
+    private var factReviewEntries: [MemoryFactEntry] {
+        factEntries.filter(MemoryFactDebugFormatting.needsReview)
     }
 
     private var reviewEntries: [MemoryEntry] {
@@ -2619,6 +2635,9 @@ struct JudgeEventsTab: View {
             if let summary = telemetry.geminiCacheSummary {
                 geminiCacheSummaryCard(summary)
             }
+            if let summary = telemetry.turnInferenceTelemetrySummary {
+                apiInferenceSummaryCard(summary)
+            }
             HStack {
                 Picker("Filter", selection: $filter) {
                     Text("All").tag(JudgeEventFilter.none)
@@ -2736,6 +2755,38 @@ struct JudgeEventsTab: View {
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
+    private func apiInferenceSummaryCard(_ summary: TurnInferenceTelemetrySummary) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("API Inference")
+                .font(.headline)
+
+            HStack(spacing: 12) {
+                cacheStat(title: "Requests", value: "\(summary.requestCount)")
+                cacheStat(title: "Avg TTFT", value: seconds(summary.averageTTFTSeconds))
+                cacheStat(title: "Avg Stream", value: seconds(summary.averageStreamDurationSeconds))
+                cacheStat(title: "Avg Gap", value: seconds(summary.averageChunkGapSeconds))
+            }
+
+            HStack(spacing: 12) {
+                cacheStat(title: "Fast TTFT", value: tierStat(summary.fastRequestCount, summary.averageFastTTFTSeconds))
+                cacheStat(title: "Normal TTFT", value: tierStat(summary.normalRequestCount, summary.averageNormalTTFTSeconds))
+                cacheStat(title: "Deep TTFT", value: tierStat(summary.deepRequestCount, summary.averageDeepTTFTSeconds))
+            }
+
+            if let last = summary.lastSnapshot {
+                let record = last.record
+                Text(
+                    "Last request: \(record.latencyTier.rawValue) \(record.provider.rawValue)/\(record.modelName), chunks \(record.chunkCount), stable \(record.stablePromptCharacterCount), volatile \(record.volatilePromptCharacterCount), cache \(record.usedCachedHistory ? "yes" : "no") \(MemoryDebugInspector.relative(last.recordedAt))."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+        .padding()
+        .background(Color.secondary.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
     private func cacheStat(title: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
@@ -2754,6 +2805,16 @@ struct JudgeEventsTab: View {
     private func percentage(_ value: Double?) -> String {
         guard let value else { return "n/a" }
         return "\(Int((value * 100).rounded()))%"
+    }
+
+    private func seconds(_ value: TimeInterval?) -> String {
+        guard let value else { return "n/a" }
+        return String(format: "%.2fs", value)
+    }
+
+    private func tierStat(_ requestCount: Int, _ value: TimeInterval?) -> String {
+        guard requestCount > 0 else { return "n/a" }
+        return "\(seconds(value)) / \(requestCount)"
     }
 
     private func verdictColor(_ verdict: PromptTraceEvaluationVerdict) -> Color {

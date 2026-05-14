@@ -2,10 +2,10 @@ import XCTest
 @testable import Nous
 
 final class RealtimeVoiceSessionTests: XCTestCase {
-    func testDefaultRealtimeRequestUsesMiniModel() throws {
+    func testDefaultRealtimeRequestUsesRealtime2Model() throws {
         let request = RealtimeVoiceSession.makeRequest(apiKey: "sk-test")
 
-        XCTAssertEqual(request.url?.absoluteString, "wss://api.openai.com/v1/realtime?model=gpt-realtime-mini")
+        XCTAssertEqual(request.url?.absoluteString, "wss://api.openai.com/v1/realtime?model=gpt-realtime-2")
     }
 
     func testBuildsRealtimeRequestWithBearerTokenAndModel() throws {
@@ -24,12 +24,14 @@ final class RealtimeVoiceSessionTests: XCTestCase {
         let transcription = try XCTUnwrap(input["transcription"] as? [String: Any])
         let output = try XCTUnwrap(audio["output"] as? [String: Any])
         let format = try XCTUnwrap(output["format"] as? [String: Any])
+        let reasoning = try XCTUnwrap(session["reasoning"] as? [String: Any])
         let toolNames = try Self.toolNames(from: session)
 
         XCTAssertEqual(json["type"] as? String, "session.update")
         XCTAssertEqual(session["type"] as? String, "realtime")
-        XCTAssertNil(session["model"])
+        XCTAssertEqual(session["model"] as? String, "gpt-realtime-2")
         XCTAssertEqual(session["output_modalities"] as? [String], ["audio"])
+        XCTAssertEqual(reasoning["effort"] as? String, "medium")
         XCTAssertEqual(transcription["model"] as? String, "gpt-4o-mini-transcribe")
         XCTAssertEqual(output["voice"] as? String, "cedar")
         XCTAssertEqual(format["type"] as? String, "audio/pcm")
@@ -37,8 +39,26 @@ final class RealtimeVoiceSessionTests: XCTestCase {
         XCTAssertEqual(session["tool_choice"] as? String, "auto")
         XCTAssertFalse(toolNames.isEmpty)
         XCTAssertTrue(toolNames.contains("get_app_state"))
+        XCTAssertTrue(toolNames.contains("replace_scratchpad_markdown"))
+        XCTAssertTrue(toolNames.contains("append_scratchpad_markdown"))
         XCTAssertFalse(toolNames.contains("search_memory"))
         XCTAssertFalse(toolNames.contains("recall_recent_conversations"))
+    }
+
+    func testSessionUpdateCanDisableRealtimeReasoningConfiguration() throws {
+        let data = try RealtimeVoiceSession.makeSessionUpdateEvent(
+            configuration: .init(
+                model: .realtimeMini,
+                voice: .cedar,
+                language: .automatic,
+                reasoningEffort: nil
+            )
+        )
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let session = try XCTUnwrap(json["session"] as? [String: Any])
+
+        XCTAssertEqual(session["model"] as? String, "gpt-realtime-mini")
+        XCTAssertNil(session["reasoning"])
     }
 
     func testSessionUpdateIncludesMemoryToolsOnlyWhenRequested() throws {
@@ -82,6 +102,9 @@ final class RealtimeVoiceSessionTests: XCTestCase {
         XCTAssertTrue(payload.instructions.contains("short conversational turns"))
         XCTAssertTrue(payload.instructions.contains("not a command menu"))
         XCTAssertTrue(payload.instructions.contains("Acknowledge what Alex said before taking action"))
+        XCTAssertTrue(payload.instructions.contains("scratchpad as the live writing surface"))
+        XCTAssertTrue(payload.instructions.contains("replace_scratchpad_markdown"))
+        XCTAssertTrue(payload.instructions.contains("append_scratchpad_markdown"))
     }
 
     func testSessionUpdateRoutesSummariesToPaperPreviewTool() throws {
@@ -265,6 +288,7 @@ final class RealtimeVoiceSessionTests: XCTestCase {
         session.stop()
 
         XCTAssertEqual(socket.connectedRequest?.value(forHTTPHeaderField: "Authorization"), "Bearer sk-test")
+        XCTAssertEqual(socket.connectedRequest?.url?.absoluteString, "wss://api.openai.com/v1/realtime?model=gpt-realtime-2")
         XCTAssertEqual(socket.sentTypes, ["session.update"])
     }
 

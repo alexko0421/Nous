@@ -261,27 +261,7 @@ struct ChatMarkdownView: View {
             }
 
         case .table(let headers, let rows):
-            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 16, verticalSpacing: 6) {
-                GridRow {
-                    ForEach(Array(headers.enumerated()), id: \.offset) { _, header in
-                        Text(header)
-                            .font(tableHeaderFont)
-                            .foregroundColor(AppColor.colaDarkText)
-                            .textSelection(.enabled)
-                    }
-                }
-                Divider()
-                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                    GridRow {
-                        ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
-                            Text(cell)
-                                .font(bodyFont)
-                                .foregroundColor(AppColor.colaDarkText)
-                                .textSelection(.enabled)
-                        }
-                    }
-                }
-            }
+            ChatMarkdownTableView(headers: headers, rows: rows)
 
         case .horizontalRule:
             Divider()
@@ -303,5 +283,132 @@ struct ChatMarkdownView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
         }
+    }
+}
+
+private struct ChatMarkdownTableView: View {
+    let headers: [String]
+    let rows: [[String]]
+
+    private let bodyFont: Font = .system(size: 14, weight: .regular)
+    private let headerFont: Font = .system(size: 14, weight: .semibold)
+    private let bodyLineSpacing: CGFloat = 6
+    private let rowVerticalPadding: CGFloat = 10
+    private let headerVerticalPadding: CGFloat = 8
+    private let firstColumnWidth: CGFloat = 86
+    private let secondColumnWidth: CGFloat = 158
+    private let dividerOpacity: Double = 0.72
+    private let columnDividerOpacity: Double = 0.48
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            tableDivider
+
+            ChatMarkdownTableRow(
+                cells: headers,
+                isHeader: true,
+                bodyFont: bodyFont,
+                headerFont: headerFont,
+                bodyLineSpacing: bodyLineSpacing,
+                firstColumnWidth: firstColumnWidth,
+                secondColumnWidth: secondColumnWidth,
+                columnDividerOpacity: columnDividerOpacity
+            )
+            .padding(.vertical, headerVerticalPadding)
+
+            tableDivider
+
+            ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                ChatMarkdownTableRow(
+                    cells: row,
+                    isHeader: false,
+                    bodyFont: bodyFont,
+                    headerFont: headerFont,
+                    bodyLineSpacing: bodyLineSpacing,
+                    firstColumnWidth: firstColumnWidth,
+                    secondColumnWidth: secondColumnWidth,
+                    columnDividerOpacity: columnDividerOpacity
+                )
+                .padding(.vertical, rowVerticalPadding)
+
+                if index < rows.count - 1 {
+                    tableDivider
+                }
+            }
+
+            tableDivider
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 6)
+    }
+
+    private var tableDivider: some View {
+        Rectangle()
+            .fill(AppColor.panelStroke.opacity(dividerOpacity))
+            .frame(height: 1)
+    }
+}
+
+private struct ChatMarkdownTableRow: View {
+    let cells: [String]
+    let isHeader: Bool
+    let bodyFont: Font
+    let headerFont: Font
+    let bodyLineSpacing: CGFloat
+    let firstColumnWidth: CGFloat
+    let secondColumnWidth: CGFloat
+    let columnDividerOpacity: Double
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 0) {
+            ForEach(Array(cells.enumerated()), id: \.offset) { index, cell in
+                tableCell(cell, at: index)
+
+                if index < cells.count - 1 {
+                    Rectangle()
+                        .fill(AppColor.panelStroke.opacity(columnDividerOpacity))
+                        .frame(width: 1)
+                        .padding(.vertical, 1)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func tableCell(_ text: String, at index: Int) -> some View {
+        Text(text.isEmpty ? " " : text)
+            .font(isHeader ? headerFont : bodyFont)
+            .foregroundColor(AppColor.colaDarkText)
+            .lineSpacing(bodyLineSpacing)
+            .fixedSize(horizontal: false, vertical: true)
+            .textSelection(.enabled)
+            .frame(width: fixedWidth(for: index), alignment: .leading)
+            .frame(maxWidth: index == cells.count - 1 ? .infinity : nil, alignment: .leading)
+            .layoutPriority(index == cells.count - 1 ? 1 : 0)
+            .padding(.leading, leadingPadding(for: index))
+            .padding(.trailing, trailingPadding(for: index))
+    }
+
+    private func fixedWidth(for index: Int) -> CGFloat? {
+        guard cells.count >= 3 else {
+            return index == 0 ? 164 : nil
+        }
+
+        switch index {
+        case 0:
+            return firstColumnWidth
+        case 1:
+            return secondColumnWidth
+        default:
+            return nil
+        }
+    }
+
+    private func leadingPadding(for index: Int) -> CGFloat {
+        index == 0 ? 2 : 18
+    }
+
+    private func trailingPadding(for index: Int) -> CGFloat {
+        index == cells.count - 1 ? 2 : 18
     }
 }

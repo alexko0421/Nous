@@ -130,9 +130,213 @@ final class CognitionDirectorTests: XCTestCase {
         XCTAssertEqual(frame.records.first(where: { $0.label == "memory_retriever" })?.status, .skipped)
         XCTAssertEqual(frame.records.first(where: { $0.label == "skill_fold" })?.status, .skipped)
         XCTAssertEqual(frame.records.first(where: { $0.label == "provocation_judge" })?.status, .skipped)
+        XCTAssertEqual(frame.records.first(where: { $0.label == "in_turn_pattern_naming" })?.status, .skipped)
         XCTAssertEqual(frame.records.first(where: { $0.label == "slow_cognition" })?.status, .skipped)
         XCTAssertEqual(frame.records.first(where: { $0.label == "agent_loop" })?.status, .skipped)
         XCTAssertEqual(frame.records.first(where: { $0.label == "reviewer" })?.status, .skipped)
+    }
+
+    func testFrameRecordsInTurnPatternSignalWithoutUserText() throws {
+        let sensitiveInput = "I keep comparing myself to private school details and F-1 status."
+        let plan = makePlan(
+            promptTrace: PromptGovernanceTrace(
+                promptLayers: ["anchor", "turn_steward"],
+                evidenceAttached: false,
+                safetyPolicyInvoked: true,
+                highRiskQueryDetected: false,
+                turnSteward: TurnStewardTrace(
+                    route: .ordinaryChat,
+                    memoryPolicy: .full,
+                    challengeStance: .useSilently,
+                    responseShape: .answerNow,
+                    projectSignalKind: nil,
+                    source: .deterministic,
+                    reason: sensitiveInput,
+                    inTurnPatternSignal: InTurnPatternSignal(
+                        kind: .comparisonLoop,
+                        confidence: 0.92,
+                        surfacePolicy: .directName,
+                        reasonCode: "comparison_status_progress"
+                    )
+                )
+            ),
+            judgeFallback: .judgeUnavailable
+        )
+        let committed = CommittedAssistantTurn(
+            node: plan.prepared.node,
+            assistantMessage: Message(nodeId: plan.prepared.node.id, role: .assistant, content: "ok"),
+            messagesAfterAssistantAppend: plan.prepared.messagesAfterUserAppend
+        )
+
+        let frame = CognitionDirector().frame(plan: plan, committed: committed, reviewArtifact: nil)
+        let record = try XCTUnwrap(frame.records.first { $0.label == "in_turn_pattern_naming" })
+        let encoded = String(data: try JSONEncoder().encode(frame), encoding: .utf8)!
+
+        XCTAssertEqual(record.organ, .patternAnalyst)
+        XCTAssertEqual(record.status, .used)
+        XCTAssertEqual(record.reason, "pattern:comparisonLoop reason:comparison_status_progress")
+        XCTAssertEqual(record.resourceIds, ["pattern:comparisonLoop"])
+        XCTAssertFalse(encoded.contains(sensitiveInput))
+        XCTAssertFalse(encoded.contains("private school"))
+    }
+
+    func testFrameSanitizesUnexpectedPatternReasonCode() throws {
+        let rawReason = "私立学校身份"
+        let plan = makePlan(
+            promptTrace: PromptGovernanceTrace(
+                promptLayers: ["anchor", "turn_steward"],
+                evidenceAttached: false,
+                safetyPolicyInvoked: true,
+                highRiskQueryDetected: false,
+                turnSteward: TurnStewardTrace(
+                    route: .ordinaryChat,
+                    memoryPolicy: .full,
+                    challengeStance: .useSilently,
+                    responseShape: .answerNow,
+                    projectSignalKind: nil,
+                    source: .deterministic,
+                    reason: "ordinary chat default",
+                    inTurnPatternSignal: InTurnPatternSignal(
+                        kind: .comparisonLoop,
+                        confidence: 0.92,
+                        surfacePolicy: .directName,
+                        reasonCode: rawReason
+                    )
+                )
+            ),
+            judgeFallback: .judgeUnavailable
+        )
+        let committed = CommittedAssistantTurn(
+            node: plan.prepared.node,
+            assistantMessage: Message(nodeId: plan.prepared.node.id, role: .assistant, content: "ok"),
+            messagesAfterAssistantAppend: plan.prepared.messagesAfterUserAppend
+        )
+
+        let frame = CognitionDirector().frame(plan: plan, committed: committed, reviewArtifact: nil)
+        let record = try XCTUnwrap(frame.records.first { $0.label == "in_turn_pattern_naming" })
+        let encoded = String(data: try JSONEncoder().encode(frame), encoding: .utf8)!
+
+        XCTAssertEqual(record.reason, "pattern:comparisonLoop reason:invalid_reason_code")
+        XCTAssertFalse(encoded.contains(rawReason))
+        XCTAssertFalse(encoded.contains("private school"))
+    }
+
+    func testFrameRecordsReflectiveMeaningSignalWithoutUserTextOrHypothesis() throws {
+        let sensitiveInput = "演唱会嗰个女仔真正牵住我嘅係咩"
+        let plan = makePlan(
+            promptTrace: PromptGovernanceTrace(
+                promptLayers: ["anchor", "turn_steward"],
+                evidenceAttached: false,
+                safetyPolicyInvoked: true,
+                highRiskQueryDetected: false,
+                turnSteward: TurnStewardTrace(
+                    route: .ordinaryChat,
+                    memoryPolicy: .full,
+                    challengeStance: .useSilently,
+                    responseShape: .answerNow,
+                    projectSignalKind: nil,
+                    source: .deterministic,
+                    reason: sensitiveInput,
+                    reflectiveMeaningSignal: ReflectiveMeaningSignal(
+                        confidence: 0.86,
+                        surfacePolicy: .compact,
+                        reasonCode: "reflective_meaning_request"
+                    )
+                )
+            ),
+            judgeFallback: .judgeUnavailable
+        )
+        let committed = CommittedAssistantTurn(
+            node: plan.prepared.node,
+            assistantMessage: Message(nodeId: plan.prepared.node.id, role: .assistant, content: "ok"),
+            messagesAfterAssistantAppend: plan.prepared.messagesAfterUserAppend
+        )
+
+        let frame = CognitionDirector().frame(plan: plan, committed: committed, reviewArtifact: nil)
+        let record = try XCTUnwrap(frame.records.first { $0.label == "reflective_meaning_signal" })
+        let encoded = String(data: try JSONEncoder().encode(frame), encoding: .utf8)!
+
+        XCTAssertEqual(record.organ, .meaningAnalyst)
+        XCTAssertEqual(record.status, .used)
+        XCTAssertEqual(record.reason, "surface:compact reason:reflective_meaning_request")
+        XCTAssertTrue(record.resourceIds.isEmpty)
+        XCTAssertFalse(encoded.contains(sensitiveInput))
+        XCTAssertFalse(encoded.contains("演唱会"))
+        XCTAssertFalse(encoded.contains("女仔"))
+        XCTAssertFalse(encoded.contains("atmosphere"))
+    }
+
+    func testFrameMarksReflectiveMeaningSkippedWhenAbsent() throws {
+        let plan = makePlan(
+            promptTrace: PromptGovernanceTrace(
+                promptLayers: ["anchor", "turn_steward"],
+                evidenceAttached: false,
+                safetyPolicyInvoked: true,
+                highRiskQueryDetected: false,
+                turnSteward: TurnStewardTrace(
+                    route: .ordinaryChat,
+                    memoryPolicy: .full,
+                    challengeStance: .useSilently,
+                    responseShape: .answerNow,
+                    projectSignalKind: nil,
+                    source: .deterministic,
+                    reason: "ordinary chat default"
+                )
+            ),
+            judgeFallback: .judgeUnavailable
+        )
+        let committed = CommittedAssistantTurn(
+            node: plan.prepared.node,
+            assistantMessage: Message(nodeId: plan.prepared.node.id, role: .assistant, content: "ok"),
+            messagesAfterAssistantAppend: plan.prepared.messagesAfterUserAppend
+        )
+
+        let frame = CognitionDirector().frame(plan: plan, committed: committed, reviewArtifact: nil)
+        let record = try XCTUnwrap(frame.records.first { $0.label == "reflective_meaning_signal" })
+
+        XCTAssertEqual(record.organ, .meaningAnalyst)
+        XCTAssertEqual(record.status, .skipped)
+        XCTAssertEqual(record.reason, "no_reflective_meaning_signal")
+    }
+
+    func testFrameSanitizesUnexpectedReflectiveMeaningReasonCode() throws {
+        let rawReason = "牵动点：演唱会氛围"
+        let plan = makePlan(
+            promptTrace: PromptGovernanceTrace(
+                promptLayers: ["anchor", "turn_steward"],
+                evidenceAttached: false,
+                safetyPolicyInvoked: true,
+                highRiskQueryDetected: false,
+                turnSteward: TurnStewardTrace(
+                    route: .ordinaryChat,
+                    memoryPolicy: .full,
+                    challengeStance: .useSilently,
+                    responseShape: .answerNow,
+                    projectSignalKind: nil,
+                    source: .deterministic,
+                    reason: "ordinary chat default",
+                    reflectiveMeaningSignal: ReflectiveMeaningSignal(
+                        confidence: 0.86,
+                        surfacePolicy: .compact,
+                        reasonCode: rawReason
+                    )
+                )
+            ),
+            judgeFallback: .judgeUnavailable
+        )
+        let committed = CommittedAssistantTurn(
+            node: plan.prepared.node,
+            assistantMessage: Message(nodeId: plan.prepared.node.id, role: .assistant, content: "ok"),
+            messagesAfterAssistantAppend: plan.prepared.messagesAfterUserAppend
+        )
+
+        let frame = CognitionDirector().frame(plan: plan, committed: committed, reviewArtifact: nil)
+        let record = try XCTUnwrap(frame.records.first { $0.label == "reflective_meaning_signal" })
+        let encoded = String(data: try JSONEncoder().encode(frame), encoding: .utf8)!
+
+        XCTAssertEqual(record.reason, "surface:compact reason:invalid_reason_code")
+        XCTAssertFalse(encoded.contains(rawReason))
+        XCTAssertFalse(encoded.contains("演唱会"))
     }
 
     func testFrameMarksReviewerFailedWhenSilentReviewThrows() throws {

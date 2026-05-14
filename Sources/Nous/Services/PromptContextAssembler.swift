@@ -244,6 +244,7 @@ enum PromptContextAssembler {
     - Cantonese message → reply in Cantonese.
     - Mandarin message → reply in Mandarin.
     - Genuine mixed message → mirror the user's natural mix.
+    For Cantonese, dialect matters more than script: write natural Cantonese chat, not Mandarin prose with a few Cantonese particles.
     This rule overrides anchor examples, prior turns, internal memory, and Alex's usual style. Switching languages is only allowed when the user explicitly requests another language, or when quoting source text in its original language.
     Keep technical terms in English when that is clearer.
     Hidden metadata such as chat titles follows the visible conversation language.
@@ -1410,6 +1411,10 @@ User: "我中意又软又硬嘅人，反差先系 depth"
                 return "- analytics: notice useful patterns, gaps, and repeated structure without inventing metrics."
             case .reflection:
                 return "- reflection: separate evidence from inference and preserve source/memory boundaries."
+            case .pattern:
+                return "- pattern: if a live pattern signal exists, surface at most one restrained name with its paired action."
+            case .meaning:
+                return "- meaning: if a reflective meaning signal exists, offer one tentative underlying pull and one reusable action."
             }
         }.joined(separator: "\n")
 
@@ -1777,8 +1782,10 @@ User: "我中意又软又硬嘅人，反差先系 depth"
         allowInteractiveClarification: Bool = false,
         turnSteward: TurnStewardTrace? = nil,
         agentCoordination: AgentCoordinationTrace? = nil,
+        quickActionExperiment: QuickActionExperimentTrace? = nil,
         shadowLearningHints: [String] = [],
         slowCognitionArtifacts: [CognitionArtifact] = [],
+        corpusContext: CitableContext = .empty,
         now: Date = Date()
     ) -> PromptGovernanceTrace {
         governanceTrace(
@@ -1804,8 +1811,10 @@ User: "我中意又软又硬嘅人，反差先系 depth"
             allowInteractiveClarification: allowInteractiveClarification,
             turnSteward: turnSteward,
             agentCoordination: agentCoordination,
+            quickActionExperiment: quickActionExperiment,
             shadowLearningHints: shadowLearningHints,
             slowCognitionArtifacts: slowCognitionArtifacts,
+            corpusContext: corpusContext,
             now: now
         )
     }
@@ -1833,8 +1842,10 @@ User: "我中意又软又硬嘅人，反差先系 depth"
         allowInteractiveClarification: Bool = false,
         turnSteward: TurnStewardTrace? = nil,
         agentCoordination: AgentCoordinationTrace? = nil,
+        quickActionExperiment: QuickActionExperimentTrace? = nil,
         shadowLearningHints: [String] = [],
         slowCognitionArtifacts: [CognitionArtifact] = [],
+        corpusContext: CitableContext = .empty,
         now: Date = Date()
     ) -> PromptGovernanceTrace {
         var layers = ["anchor", "memory_interpretation_policy", "core_safety_policy", "user_address_policy", "visible_response_language_policy", "epistemic_grounding_policy", "explanation_clarity_policy", "answer_closure_policy", "enumerable_list_format_policy", "stoic_grounding_policy", "real_world_decision_policy", "summary_output_policy", "conversation_title_output_policy", "chat_mode"]
@@ -1845,9 +1856,11 @@ User: "我中意又软又硬嘅人，反差先系 depth"
             }
             return visibleResponseLanguageDecision(for: currentUserInput)
         }()
+        let corpusBlock = CorpusCardFormatter.formatContext(corpusContext)
+        let effectiveGlobalMemory = corpusBlock != nil ? nil : globalMemory
         let memoryPacket = MemoryPromptPacket(
             operatingContext: operatingContext,
-            globalMemory: globalMemory,
+            globalMemory: effectiveGlobalMemory,
             essentialStory: essentialStory,
             userModel: userModel,
             memoryEvidence: memoryEvidence,
@@ -1861,7 +1874,8 @@ User: "我中意又软又硬嘅人，反差先系 depth"
         let promptRecentConversations = memoryPacket.promptRecentConversations
 
         if operatingContext?.promptBlock() != nil { layers.append("operating_context") }
-        if let globalMemory, !globalMemory.isEmpty { layers.append("global_memory") }
+        if let effectiveGlobalMemory, !effectiveGlobalMemory.isEmpty { layers.append("global_memory") }
+        if corpusBlock != nil { layers.append("corpus_context") }
         if let essentialStory, !essentialStory.isEmpty { layers.append("essential_story") }
         if let projectMemory, !projectMemory.isEmpty { layers.append("project_memory") }
         if let conversationMemory, !conversationMemory.isEmpty { layers.append("conversation_memory") }
@@ -1891,6 +1905,7 @@ User: "我中意又软又硬嘅人，反差先系 depth"
         if turnSteward?.supervisorLanes.contains(.analytics) == true { layers.append("analytics_lane_brief") }
         if turnSteward?.supervisorLanes.contains(.reflection) == true { layers.append("reflection_grounding_gate") }
         if agentCoordination != nil { layers.append("agent_coordination") }
+        if quickActionExperiment != nil { layers.append("quick_action_experiment") }
         if needsDirectJudgmentGuard(currentUserInput) { layers.append("direct_judgment_guard") }
         if needsTeachingExplanationGuard(currentUserInput) { layers.append("teaching_explanation_guard") }
         if needsSoftHardCalibrationGuard(currentUserInput) { layers.append("soft_hard_calibration_guard") }
@@ -1919,6 +1934,7 @@ User: "我中意又软又硬嘅人，反差先系 depth"
             agentCoordination: agentCoordination,
             citationTrace: citationTrace(for: promptCitations),
             slowCognitionTrace: selectedSlowCognitionArtifact.map(SlowCognitionPromptTrace.init),
+            quickActionExperiment: quickActionExperiment,
             visibleResponseLanguageTarget: visibleLanguageDecision.target,
             visibleResponseLanguageSource: visibleLanguageDecision.source
         )

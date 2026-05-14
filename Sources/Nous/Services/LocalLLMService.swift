@@ -83,3 +83,7 @@ final class LocalLLMService: LLMService {
         }
     }
 }
+
+extension LocalLLMService: LLMModelIdentifying {
+    var modelIdentifier: String { Self.defaultModelId }
+}

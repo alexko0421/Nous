@@ -28,12 +28,20 @@ enum TurnMemoryPolicyPreset: String, Codable, Equatable {
     case conversationOnly
 }
 
+enum TurnLatencyTier: String, Codable, Equatable {
+    case fast
+    case normal
+    case deep
+}
+
 enum TurnSupervisorLane: String, Codable, Equatable {
     case source
     case memory
     case project
     case analytics
     case reflection
+    case pattern
+    case meaning
 }
 
 enum ChallengeStance: String, Codable, Equatable {
@@ -109,6 +117,67 @@ enum ResponseStanceRouterSource: String, Codable, Equatable {
     case fallback
 }
 
+enum InTurnPatternKind: String, Codable, Equatable {
+    case comparisonLoop
+    case identityPressure
+    case planningAsAvoidance
+    case learningInsteadOfShipping
+    case overTrustingSystem
+
+    var displayLabel: String {
+        switch self {
+        case .comparisonLoop:
+            return "comparison loop"
+        case .identityPressure:
+            return "identity pressure"
+        case .planningAsAvoidance:
+            return "planning as avoidance"
+        case .learningInsteadOfShipping:
+            return "learning instead of shipping"
+        case .overTrustingSystem:
+            return "over-trusting the system"
+        }
+    }
+
+    var pairedAction: String {
+        switch self {
+        case .comparisonLoop:
+            return "say the comparison out loud, then separate signal from self-attack"
+        case .identityPressure:
+            return "split the real constraint from the imagined judgment"
+        case .planningAsAvoidance:
+            return "reduce the plan to one 30-minute action"
+        case .learningInsteadOfShipping:
+            return "turn one insight into behavior or a test before consuming more"
+        case .overTrustingSystem:
+            return "ask what real-world evidence would change Alex's own judgment"
+        }
+    }
+}
+
+enum PatternSurfacePolicy: String, Codable, Equatable {
+    case softName
+    case directName
+}
+
+struct InTurnPatternSignal: Codable, Equatable {
+    let kind: InTurnPatternKind
+    let confidence: Double
+    let surfacePolicy: PatternSurfacePolicy
+    let reasonCode: String
+}
+
+enum ReflectiveMeaningSurfacePolicy: String, Codable, Equatable {
+    case compact
+    case layered
+}
+
+struct ReflectiveMeaningSignal: Codable, Equatable {
+    let confidence: Double
+    let surfacePolicy: ReflectiveMeaningSurfacePolicy
+    let reasonCode: String
+}
+
 struct SpeechActClassifierOutput: Codable, Equatable {
     let stance: ResponseStance
     let confidence: Double
@@ -181,6 +250,7 @@ enum TurnStewardSource: String, Codable, Equatable {
 struct TurnStewardTrace: Codable, Equatable {
     let route: TurnRoute
     let memoryPolicy: TurnMemoryPolicyPreset
+    let latencyTier: TurnLatencyTier
     let challengeStance: ChallengeStance
     let responseShape: ResponseShape
     let projectSignalKind: ProjectSignalKind?
@@ -194,11 +264,14 @@ struct TurnStewardTrace: Codable, Equatable {
     let softerFallback: ResponseStance?
     let fallbackUsed: Bool?
     let routerReason: String?
+    let inTurnPatternSignal: InTurnPatternSignal?
+    let reflectiveMeaningSignal: ReflectiveMeaningSignal?
     let supervisorLanes: [TurnSupervisorLane]
 
     init(
         route: TurnRoute,
         memoryPolicy: TurnMemoryPolicyPreset,
+        latencyTier: TurnLatencyTier = .normal,
         challengeStance: ChallengeStance,
         responseShape: ResponseShape,
         projectSignalKind: ProjectSignalKind?,
@@ -212,10 +285,13 @@ struct TurnStewardTrace: Codable, Equatable {
         softerFallback: ResponseStance? = nil,
         fallbackUsed: Bool? = nil,
         routerReason: String? = nil,
+        inTurnPatternSignal: InTurnPatternSignal? = nil,
+        reflectiveMeaningSignal: ReflectiveMeaningSignal? = nil,
         supervisorLanes: [TurnSupervisorLane] = []
     ) {
         self.route = route
         self.memoryPolicy = memoryPolicy
+        self.latencyTier = latencyTier
         self.challengeStance = challengeStance
         self.responseShape = responseShape
         self.projectSignalKind = projectSignalKind
@@ -229,12 +305,24 @@ struct TurnStewardTrace: Codable, Equatable {
         self.softerFallback = softerFallback
         self.fallbackUsed = fallbackUsed
         self.routerReason = routerReason
-        self.supervisorLanes = supervisorLanes
+        self.inTurnPatternSignal = inTurnPatternSignal
+        self.reflectiveMeaningSignal = reflectiveMeaningSignal
+        var resolvedSupervisorLanes = supervisorLanes
+        if inTurnPatternSignal != nil,
+           !resolvedSupervisorLanes.contains(.pattern) {
+            resolvedSupervisorLanes.append(.pattern)
+        }
+        if reflectiveMeaningSignal != nil,
+           !resolvedSupervisorLanes.contains(.meaning) {
+            resolvedSupervisorLanes.append(.meaning)
+        }
+        self.supervisorLanes = resolvedSupervisorLanes
     }
 
     enum CodingKeys: String, CodingKey {
         case route
         case memoryPolicy
+        case latencyTier
         case challengeStance
         case responseShape
         case projectSignalKind
@@ -248,6 +336,8 @@ struct TurnStewardTrace: Codable, Equatable {
         case softerFallback
         case fallbackUsed
         case routerReason
+        case inTurnPatternSignal
+        case reflectiveMeaningSignal
         case supervisorLanes
     }
 
@@ -255,6 +345,7 @@ struct TurnStewardTrace: Codable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         route = try container.decode(TurnRoute.self, forKey: .route)
         memoryPolicy = try container.decode(TurnMemoryPolicyPreset.self, forKey: .memoryPolicy)
+        latencyTier = try container.decodeIfPresent(TurnLatencyTier.self, forKey: .latencyTier) ?? .normal
         challengeStance = try container.decode(ChallengeStance.self, forKey: .challengeStance)
         responseShape = try container.decode(ResponseShape.self, forKey: .responseShape)
         projectSignalKind = try container.decodeIfPresent(ProjectSignalKind.self, forKey: .projectSignalKind)
@@ -268,17 +359,42 @@ struct TurnStewardTrace: Codable, Equatable {
         softerFallback = try container.decodeIfPresent(ResponseStance.self, forKey: .softerFallback)
         fallbackUsed = try container.decodeIfPresent(Bool.self, forKey: .fallbackUsed)
         routerReason = try container.decodeIfPresent(String.self, forKey: .routerReason)
-        supervisorLanes = try container.decodeIfPresent([TurnSupervisorLane].self, forKey: .supervisorLanes) ?? []
+        let decodedPatternSignal = try container.decodeIfPresent(
+            InTurnPatternSignal.self,
+            forKey: .inTurnPatternSignal
+        )
+        inTurnPatternSignal = decodedPatternSignal
+        let decodedMeaningSignal = try container.decodeIfPresent(
+            ReflectiveMeaningSignal.self,
+            forKey: .reflectiveMeaningSignal
+        )
+        reflectiveMeaningSignal = decodedMeaningSignal
+        var decodedSupervisorLanes = try container.decodeIfPresent(
+            [TurnSupervisorLane].self,
+            forKey: .supervisorLanes
+        ) ?? []
+        if decodedPatternSignal != nil,
+           !decodedSupervisorLanes.contains(.pattern) {
+            decodedSupervisorLanes.append(.pattern)
+        }
+        if decodedMeaningSignal != nil,
+           !decodedSupervisorLanes.contains(.meaning) {
+            decodedSupervisorLanes.append(.meaning)
+        }
+        supervisorLanes = decodedSupervisorLanes
     }
 }
 
 struct TurnStewardDecision: Codable, Equatable {
     let route: TurnRoute
     let memoryPolicy: TurnMemoryPolicyPreset
+    let latencyTier: TurnLatencyTier
     let challengeStance: ChallengeStance
     let judgePolicy: JudgePolicy
     let responseShape: ResponseShape
     let projectSignal: ProjectSignal?
+    let inTurnPatternSignal: InTurnPatternSignal?
+    let reflectiveMeaningSignal: ReflectiveMeaningSignal?
     let trace: TurnStewardTrace
     let supervisorLanes: [TurnSupervisorLane]
 
@@ -299,26 +415,43 @@ struct TurnStewardDecision: Codable, Equatable {
         softerFallback: ResponseStance? = nil,
         fallbackUsed: Bool? = nil,
         routerReason: String? = nil,
-        supervisorLanes: [TurnSupervisorLane]? = nil
+        inTurnPatternSignal: InTurnPatternSignal? = nil,
+        reflectiveMeaningSignal: ReflectiveMeaningSignal? = nil,
+        supervisorLanes: [TurnSupervisorLane]? = nil,
+        latencyTier: TurnLatencyTier = .normal
     ) {
         let resolvedJudgePolicy = judgePolicy ?? JudgePolicy(challengeStance: challengeStance)
-        let resolvedSupervisorLanes = supervisorLanes ?? Self.defaultSupervisorLanes(
+        var resolvedSupervisorLanes = supervisorLanes ?? Self.defaultSupervisorLanes(
             route: route,
             memoryPolicy: memoryPolicy,
             challengeStance: challengeStance,
             judgePolicy: resolvedJudgePolicy,
-            projectSignal: projectSignal
+            projectSignal: projectSignal,
+            inTurnPatternSignal: inTurnPatternSignal,
+            reflectiveMeaningSignal: reflectiveMeaningSignal
         )
+        if inTurnPatternSignal != nil,
+           !resolvedSupervisorLanes.contains(.pattern) {
+            resolvedSupervisorLanes.append(.pattern)
+        }
+        if reflectiveMeaningSignal != nil,
+           !resolvedSupervisorLanes.contains(.meaning) {
+            resolvedSupervisorLanes.append(.meaning)
+        }
         self.route = route
         self.memoryPolicy = memoryPolicy
+        self.latencyTier = latencyTier
         self.challengeStance = challengeStance
         self.judgePolicy = resolvedJudgePolicy
         self.responseShape = responseShape
         self.projectSignal = projectSignal
+        self.inTurnPatternSignal = inTurnPatternSignal
+        self.reflectiveMeaningSignal = reflectiveMeaningSignal
         self.supervisorLanes = resolvedSupervisorLanes
         self.trace = TurnStewardTrace(
             route: route,
             memoryPolicy: memoryPolicy,
+            latencyTier: latencyTier,
             challengeStance: challengeStance,
             responseShape: responseShape,
             projectSignalKind: projectSignal?.kind,
@@ -332,6 +465,8 @@ struct TurnStewardDecision: Codable, Equatable {
             softerFallback: softerFallback,
             fallbackUsed: fallbackUsed,
             routerReason: routerReason,
+            inTurnPatternSignal: inTurnPatternSignal,
+            reflectiveMeaningSignal: reflectiveMeaningSignal,
             supervisorLanes: resolvedSupervisorLanes
         )
     }
@@ -341,7 +476,9 @@ struct TurnStewardDecision: Codable, Equatable {
         memoryPolicy: TurnMemoryPolicyPreset,
         challengeStance: ChallengeStance,
         judgePolicy: JudgePolicy,
-        projectSignal: ProjectSignal?
+        projectSignal: ProjectSignal?,
+        inTurnPatternSignal: InTurnPatternSignal? = nil,
+        reflectiveMeaningSignal: ReflectiveMeaningSignal? = nil
     ) -> [TurnSupervisorLane] {
         var lanes: [TurnSupervisorLane] = []
 
@@ -377,6 +514,14 @@ struct TurnStewardDecision: Codable, Equatable {
             || challengeStance == .surfaceTension
             || judgePolicy != .off {
             add(.reflection)
+        }
+
+        if inTurnPatternSignal != nil {
+            add(.pattern)
+        }
+
+        if reflectiveMeaningSignal != nil {
+            add(.meaning)
         }
 
         return lanes

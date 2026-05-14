@@ -367,6 +367,12 @@ struct ContentView: View {
                         }
                     }
                 },
+                replaceScratchPadMarkdown: { markdown in
+                    writeVoiceScratchPadDraft(markdown, mode: .replace, dependencies: dependencies)
+                },
+                appendScratchPadMarkdown: { markdown in
+                    writeVoiceScratchPadDraft(markdown, mode: .append, dependencies: dependencies)
+                },
                 setComposerText: { text in
                     dependencies.chatVM.inputText = text
                     selectedTab = .chat
@@ -414,6 +420,34 @@ struct ContentView: View {
                 }
             )
         )
+    }
+
+    private enum VoiceScratchPadWriteMode {
+        case replace
+        case append
+    }
+
+    private func writeVoiceScratchPadDraft(
+        _ markdown: String,
+        mode: VoiceScratchPadWriteMode,
+        dependencies: AppDependencies
+    ) {
+        let trimmed = markdown.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        withAnimation(AppMotion.markdownPanelSpring.animation) {
+            rightPanelMode = .markdown
+            selectedTab = .chat
+        }
+
+        switch mode {
+        case .replace:
+            dependencies.scratchPadStore.updateContent(trimmed)
+        case .append:
+            let current = dependencies.scratchPadStore.currentContent.trimmingCharacters(in: .whitespacesAndNewlines)
+            let next = current.isEmpty ? trimmed : "\(current)\n\n\(trimmed)"
+            dependencies.scratchPadStore.updateContent(next)
+        }
     }
 
     private func toggleVoiceMode(dependencies: AppDependencies) {
@@ -485,6 +519,7 @@ struct ContentView: View {
             selectedProjectName: projectName,
             sidebarVisible: isSidebarVisible,
             scratchpadVisible: rightPanelMode == .markdown,
+            scratchpadMarkdown: dependencies.scratchPadStore.currentContent,
             activeConversationTitle: dependencies.chatVM.currentNode?.title,
             rightPanelMode: voiceSnapshotRightPanelMode,
             youtubeURLText: dependencies.youtubeLearningVM.urlText,

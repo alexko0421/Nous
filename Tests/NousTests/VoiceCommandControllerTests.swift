@@ -739,6 +739,40 @@ final class VoiceCommandControllerTests: XCTestCase {
         )
     }
 
+    func testScratchpadWritingToolsUpdateDraftSurface() async throws {
+        let controller = VoiceCommandController()
+        var replacedMarkdown: String?
+        var appendedMarkdown: String?
+        controller.configure(
+            VoiceActionHandlers(
+                navigate: { _ in },
+                setSidebarVisible: { _ in },
+                setScratchPadVisible: { _ in },
+                replaceScratchPadMarkdown: { replacedMarkdown = $0 },
+                appendScratchPadMarkdown: { appendedMarkdown = $0 },
+                setComposerText: { _ in },
+                appendComposerText: { _ in },
+                clearComposer: {},
+                startNewChat: {},
+                createNote: { _, _ in }
+            )
+        )
+
+        try await controller.handleToolCall(.init(
+            name: "replace_scratchpad_markdown",
+            arguments: ##"{"markdown":"# Essay\n\nDraft thesis."}"##
+        ))
+        XCTAssertEqual(replacedMarkdown, "# Essay\n\nDraft thesis.")
+        XCTAssertEqual(controller.status, .action("Draft updated"))
+
+        try await controller.handleToolCall(.init(
+            name: "append_scratchpad_markdown",
+            arguments: "{\"markdown\":\"## Body\\n\\nAdd the example.\"}"
+        ))
+        XCTAssertEqual(appendedMarkdown, "## Body\n\nAdd the example.")
+        XCTAssertEqual(controller.status, .action("Draft expanded"))
+    }
+
     func testDismissSummaryPreviewToolClearsPaperPreview() async throws {
         let controller = VoiceCommandController()
         try await controller.handleToolCall(.init(

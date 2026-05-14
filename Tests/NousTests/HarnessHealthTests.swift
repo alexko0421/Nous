@@ -582,6 +582,23 @@ final class HarnessHealthTests: XCTestCase {
         XCTAssertFalse(profile.allowsAgentToolUse(model: "provider/other-model"))
     }
 
+    func testTurnExecutorOnlyRequestsProviderReasoningBudgetForDeepTier() {
+        XCTAssertNil(TurnExecutor.reasoningBudgetTokens(for: .gemini, latencyTier: .fast))
+        XCTAssertNil(TurnExecutor.reasoningBudgetTokens(for: .gemini, latencyTier: .normal))
+        XCTAssertEqual(TurnExecutor.reasoningBudgetTokens(for: .gemini, latencyTier: .deep), 2000)
+
+        XCTAssertNil(TurnExecutor.reasoningBudgetTokens(for: .claude, latencyTier: .fast))
+        XCTAssertNil(TurnExecutor.reasoningBudgetTokens(for: .claude, latencyTier: .normal))
+        XCTAssertEqual(TurnExecutor.reasoningBudgetTokens(for: .claude, latencyTier: .deep), 1024)
+
+        XCTAssertNil(TurnExecutor.reasoningBudgetTokens(for: .openrouter, latencyTier: .fast))
+        XCTAssertNil(TurnExecutor.reasoningBudgetTokens(for: .openrouter, latencyTier: .normal))
+        XCTAssertEqual(TurnExecutor.reasoningBudgetTokens(for: .openrouter, latencyTier: .deep), 1024)
+
+        XCTAssertNil(TurnExecutor.reasoningBudgetTokens(for: .openai, latencyTier: .deep))
+        XCTAssertNil(TurnExecutor.reasoningBudgetTokens(for: .local, latencyTier: .deep))
+    }
+
     func testOpenRouterToolSupportUsesRequiredProfileModel() throws {
         let requiredModel = try XCTUnwrap(
             ModelHarnessProfileCatalog.profile(for: .openrouter).requiredToolLoopModel

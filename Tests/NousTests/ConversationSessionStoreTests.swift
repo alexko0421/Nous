@@ -230,6 +230,23 @@ final class ConversationSessionStoreTests: XCTestCase {
         XCTAssertEqual(storedEvent.messageId, committed.assistantMessage.id)
     }
 
+    func testCommitAssistantTurnRenamesQuickActionOpeningPlaceholderTitle() throws {
+        let node = try sessionStore.startConversation(title: "Study mode 开场")
+        let opening = Message(nodeId: node.id, role: .assistant, content: "今日想读咩？")
+        let userMessage = Message(nodeId: node.id, role: .user, content: "帮我读呢篇文章。")
+        try store.insertMessage(opening)
+        try store.insertMessage(userMessage)
+
+        let committed = try sessionStore.commitAssistantTurn(
+            nodeId: node.id,
+            currentMessages: [opening, userMessage],
+            assistantContent: "先讲原文讲乜。",
+            conversationTitle: "《别做公司里的点子大王》"
+        )
+
+        XCTAssertEqual(committed.node.title, "《别做公司里的点子大王》")
+    }
+
     func testCommitAssistantTurnKeepsCuratedTitle() throws {
         let node = try sessionStore.startConversation(title: "Future of Parenting")
         let userMessage = Message(nodeId: node.id, role: .user, content: "AI时代仲要唔要生细路？")

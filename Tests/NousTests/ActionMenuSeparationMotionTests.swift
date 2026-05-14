@@ -195,17 +195,17 @@ final class ActionMenuSeparationMotionTests: XCTestCase {
             XCTAssertTrue(source.contains("tintColor: AppColor.controlGlassTint"), relativePath)
         }
 
-        let surfaceFiles = [
-            "Sources/Nous/Views/LeftSidebar.swift",
-            "Sources/Nous/Views/ScratchPadPanel.swift",
-            "Sources/Nous/Views/GalaxyView.swift"
+        let surfaceTintExpectations = [
+            "Sources/Nous/Views/LeftSidebar.swift": "tintColor: AppColor.sidebarGlassTint",
+            "Sources/Nous/Views/ScratchPadPanel.swift": "tintColor: AppColor.surfaceGlassTint",
+            "Sources/Nous/Views/GalaxyView.swift": "tintColor: AppColor.surfaceGlassTint"
         ]
 
-        for relativePath in surfaceFiles {
+        for (relativePath, expectedTint) in surfaceTintExpectations {
             let fileURL = repoRoot.appendingPathComponent(relativePath)
             let source = try String(contentsOf: fileURL, encoding: .utf8)
 
-            XCTAssertTrue(source.contains("tintColor: AppColor.surfaceGlassTint"), relativePath)
+            XCTAssertTrue(source.contains(expectedTint), relativePath)
         }
     }
 

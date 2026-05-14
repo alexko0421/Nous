@@ -279,6 +279,9 @@ final class ChatViewModel {
             shouldPersistAssistantThinking: shouldPersistAssistantThinking,
             recordGeminiUsage: { [governanceTelemetry] usage in
                 governanceTelemetry.recordGeminiUsage(usage)
+            },
+            recordTurnInferenceTelemetry: { [governanceTelemetry] record in
+                governanceTelemetry.recordTurnInferenceTelemetry(record)
             }
         )
         cachedTurnExecutor = executor
@@ -532,6 +535,7 @@ final class ChatViewModel {
         didHitBudgetExhaustion = false
         activeQuickActionMode = nil
         activeChatMode = nil  // brand-new chat has no prior judgment
+        lastPromptGovernanceTrace = nil
         activeSourceDiscussionContext = nil
         pendingSourceMaterialsByTurnId.removeAll()
         pendingSourceDiscussionContextByTurnId.removeAll()
@@ -682,7 +686,7 @@ final class ChatViewModel {
         isGenerating = true
         currentResponse = ""
         currentThinking = ""
-        currentThinkingStartedAt = Date()
+        currentThinkingStartedAt = nil
         currentAgentTrace = []
         didHitBudgetExhaustion = false
         defer {

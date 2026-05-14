@@ -71,6 +71,20 @@ enum VoiceActionRegistry {
             risk: .direct
         ),
         Tool(
+            name: "replace_scratchpad_markdown",
+            description: "Replace the scratchpad white paper with a complete markdown draft. Use when Alex explicitly asks for a fresh draft, rewrite, essay, post, note, outline, or full replacement.",
+            properties: ["markdown": ["type": "string"]],
+            required: ["markdown"],
+            risk: .direct
+        ),
+        Tool(
+            name: "append_scratchpad_markdown",
+            description: "Append markdown to the scratchpad white paper without discarding existing content. Prefer this for adding sections, examples, interview notes, outline pieces, or incremental draft work.",
+            properties: ["markdown": ["type": "string"]],
+            required: ["markdown"],
+            risk: .direct
+        ),
+        Tool(
             name: "set_appearance_mode",
             description: "Set the Nous appearance directly. Use for light mode, dark mode, or automatic system appearance requests.",
             properties: [

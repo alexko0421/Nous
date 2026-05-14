@@ -339,6 +339,17 @@ enum AttachmentExtractor {
 }
 
 enum AttachmentDropSupport {
+    /// Explicit importer types keep NSOpenPanel from disabling selectable PDFs.
+    static let fileImporterContentTypes: [UTType] = [
+        .pdf,
+        .text,
+        .plainText,
+        .utf8PlainText,
+        .rtf,
+        .image,
+        .data
+    ]
+
     /// Composer image-only drop targets (used where only images make sense).
     static let acceptedTypeIdentifiers = [
         UTType.fileURL.identifier,

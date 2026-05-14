@@ -155,6 +155,59 @@ final class QuickActionAddendumResolverTests: XCTestCase {
         XCTAssertEqual(logger.events[0].matchedSkills.map(\.priority), [70, 70])
     }
 
+    func testDirectionPlanAndStudyKeepSevenMatchingSkills() {
+        for mode in [QuickActionMode.direction, .plan, .study] {
+            let skills = (1...7).map { index in
+                makeSkill(
+                    name: "\(mode.rawValue)-cap-\(String(format: "%02d", index))",
+                    mode: mode,
+                    content: "\(mode.label) skill \(index)."
+                )
+            }
+            let resolver = QuickActionAddendumResolver(
+                skillStore: StubSkillStore(activeSkills: skills),
+                skillMatcher: SkillMatcher(),
+                skillTracker: nil
+            )
+
+            let resolution = resolver.resolution(
+                mode: mode,
+                agent: StubAgent(mode: mode, addendum: nil),
+                turnIndex: 1,
+                conversationID: nil
+            )
+
+            XCTAssertEqual(resolution.matchedSkills.count, 7)
+            XCTAssertTrue(resolution.addendum?.contains("\(mode.label) skill 7.") == true)
+        }
+    }
+
+    func testBrainstormStillCapsMatchingSkillsAtFive() {
+        let skills = (1...6).map { index in
+            makeSkill(
+                name: "brainstorm-cap-\(String(format: "%02d", index))",
+                mode: .brainstorm,
+                content: "Brainstorm skill \(index)."
+            )
+        }
+        let resolver = QuickActionAddendumResolver(
+            skillStore: StubSkillStore(activeSkills: skills),
+            skillMatcher: SkillMatcher(),
+            skillTracker: nil
+        )
+
+        let resolution = resolver.resolution(
+            mode: .brainstorm,
+            agent: StubAgent(mode: .brainstorm, addendum: nil),
+            turnIndex: 1,
+            conversationID: nil
+        )
+
+        XCTAssertEqual(resolution.matchedSkills.count, 5)
+        XCTAssertTrue(resolution.addendum?.contains("Brainstorm skill 5.") == true)
+        XCTAssertFalse(resolution.addendum?.contains("Brainstorm skill 6.") == true)
+    }
+
     private func makeSkill(
         id: UUID = UUID(),
         name: String,

@@ -4,7 +4,7 @@ enum ComposerTextInputMetrics {
     static let maxVisibleLines = 6
     static let minimumTextHeight: CGFloat = 18
     static let maximumTextHeight: CGFloat = 108
-    static let verticalPadding: CGFloat = 10
+    static let verticalPadding: CGFloat = 9
 
     static var minimumControlHeight: CGFloat {
         minimumTextHeight + verticalPadding * 2
@@ -20,6 +20,19 @@ enum WelcomeActionMenuHitRegion {
         composerHeight + max(
             ActionMenuPopoutMetrics.reservedTopPadding,
             actionMenuGap + actionMenuHeight
+        )
+    }
+}
+
+struct ChatContentBackgroundLayer: View {
+    var body: some View {
+        LinearGradient(
+            colors: [
+                AppColor.welcomeGradientStart.opacity(0.72),
+                AppColor.welcomeGradientEnd.opacity(0.74)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
         )
     }
 }
@@ -82,8 +95,6 @@ struct WelcomeView: View {
     
     var body: some View {
         ZStack {
-            backgroundLayer
-            
             VStack {
                 Spacer(minLength: 0)
                 
@@ -164,19 +175,6 @@ struct WelcomeView: View {
             }
         }
         .frame(height: 36)
-    }
-    
-    private var backgroundLayer: some View {
-        ZStack {
-            LinearGradient(
-                colors: [
-                    AppColor.welcomeGradientStart.opacity(0.72),
-                    AppColor.welcomeGradientEnd.opacity(0.74)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        }
     }
     
     private var composerRow: some View {
@@ -302,7 +300,7 @@ struct WelcomeView: View {
     private func primaryActionButton(isSeparated: Bool) -> some View {
         Button(action: onSend) {
             Image(systemName: "arrow.up")
-                .font(.system(size: 13, weight: .bold))
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
                 .foregroundColor(isSeparated ? .white : AppColor.secondaryText)
                 .opacity(composerActionMotion.iconOpacity(isSeparated: isSeparated))
         }
@@ -378,7 +376,8 @@ struct QuickActionButton: View {
         Button(action: perform) {
             HStack(spacing: 5) {
                 Image(systemName: action.icon)
-                    .font(.system(size: 10.5, weight: .semibold))
+                    .font(.system(size: 10.5, weight: .regular, design: .rounded))
+                    .foregroundColor(isHovered ? AppColor.colaDarkText.opacity(0.92) : AppColor.secondaryText)
 
                 Text(action.label)
                     .font(.system(size: 10.5, weight: .semibold, design: .rounded))

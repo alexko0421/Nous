@@ -87,8 +87,13 @@ final class TurnPlanner {
         }
         let retrievalQuery = ([promptQuery] + attachmentNames + sourceRetrievalText).joined(separator: "\n")
 
-        let explicitQuickActionMode = request.snapshot.activeQuickActionMode
+        let snapshotQuickActionMode = request.snapshot.activeQuickActionMode
+        let explicitQuickActionMode = Self.effectiveExplicitQuickActionMode(
+            snapshotQuickActionMode,
+            stewardship: stewardship
+        )
         let inferredQuickActionMode = explicitQuickActionMode == nil
+            && stewardship.challengeStance != .supportFirst
             ? stewardship.route.quickActionMode
             : nil
         let planningQuickActionMode = explicitQuickActionMode ?? inferredQuickActionMode
@@ -99,10 +104,20 @@ final class TurnPlanner {
             now: request.now
         )) ?? []
         let planningAgent: (any QuickActionAgent)? = planningQuickActionMode?.agent()
-        let basePolicy: QuickActionMemoryPolicy = if let explicitQuickActionMode {
+        let isFastLatencyTurn = stewardship.latencyTier == .fast
+        let stewardPolicy = QuickActionMemoryPolicy.fromStewardPreset(stewardship.memoryPolicy)
+        let stewardPolicyOverridesExplicitMode = Self.shouldUseStewardPolicyOverExplicitMode(
+            stewardship: stewardship,
+            inputText: request.inputText
+        )
+        let basePolicy: QuickActionMemoryPolicy = if isFastLatencyTurn {
+            .lean
+        } else if let explicitQuickActionMode, !stewardPolicyOverridesExplicitMode {
             explicitQuickActionMode.agent().memoryPolicy()
+        } else if stewardship.memoryPolicy != .full {
+            stewardPolicy
         } else {
-            QuickActionMemoryPolicy.fromStewardPreset(stewardship.memoryPolicy)
+            stewardPolicy
         }
         let policy = basePolicy
             .applyingChallengeStance(stewardship.challengeStance)
@@ -217,6 +232,13 @@ final class TurnPlanner {
             conversationID: prepared.node.id
         )
         let resolvedQuickActionAddendum = quickActionResolution.addendum
+        let quickActionExperiment = QuickActionExperimentAssigner.assignment(
+            mode: planningQuickActionMode,
+            conversationID: prepared.node.id
+        )
+        let quickActionExperimentAddendum = QuickActionExperimentAssigner.candidateAddendum(
+            for: quickActionExperiment
+        )
         let quickActionModeSupportsAgentLoop = planningQuickActionMode?.agent().useAgentLoop == true
         let canUseAgentLoop = quickActionModeSupportsAgentLoop
             && agentLoopProviderSupportsToolUse(provider)
@@ -243,7 +265,11 @@ final class TurnPlanner {
             provider: provider
         )
         let turnGuidanceBlock = Self.turnGuidanceBlock(for: stewardship)
-        let quickActionContextBlocks = [resolvedQuickActionAddendum, turnGuidanceBlock]
+        let quickActionContextBlocks = [
+            resolvedQuickActionAddendum,
+            quickActionExperimentAddendum,
+            turnGuidanceBlock
+        ]
             .compactMap { block -> String? in
                 guard let block,
                       !block.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -343,8 +369,10 @@ final class TurnPlanner {
             allowInteractiveClarification: shouldAllowInteractiveClarification,
             turnSteward: stewardship.trace,
             agentCoordination: agentCoordinationTrace,
+            quickActionExperiment: quickActionExperiment,
             shadowLearningHints: shadowLearningHints,
             slowCognitionArtifacts: slowCognitionArtifacts,
+            corpusContext: memoryContext.corpusContext,
             now: request.now
         )
 
@@ -362,6 +390,9 @@ final class TurnPlanner {
         let plannedSlice = TurnSystemSlice(
             stable: turnSlice.stable,
             volatile: volatilePartsForTurn.filter { !$0.isEmpty }.joined(separator: "\n\n")
+        )
+        let plannedTranscriptMessages = transcriptMessages(
+            from: isFastLatencyTurn ? [prepared.userMessage] : prepared.messagesAfterUserAppend
         )
 
         if var verdictForLog {
@@ -388,9 +419,10 @@ final class TurnPlanner {
                     fallbackReason: fallbackReason
                 ),
                 turnSlice: plannedSlice,
-                transcriptMessages: transcriptMessages(from: prepared.messagesAfterUserAppend),
+                transcriptMessages: plannedTranscriptMessages,
                 focusBlock: focusBlock,
                 provider: provider,
+                latencyTier: stewardship.latencyTier,
                 indexedSkillIds: indexedSkillIds,
                 loadedSkillIds: Set(quickActionResolution.loadedSkills.map(\.skillID)),
                 memoryEvidenceSourceIds: promptResourceIds.memoryEvidenceSourceIds,
@@ -421,9 +453,10 @@ final class TurnPlanner {
                 fallbackReason: fallbackReason
             ),
             turnSlice: plannedSlice,
-            transcriptMessages: transcriptMessages(from: prepared.messagesAfterUserAppend),
+            transcriptMessages: plannedTranscriptMessages,
             focusBlock: focusBlock,
             provider: provider,
+            latencyTier: stewardship.latencyTier,
             indexedSkillIds: indexedSkillIds,
             loadedSkillIds: Set(quickActionResolution.loadedSkills.map(\.skillID)),
             memoryEvidenceSourceIds: promptResourceIds.memoryEvidenceSourceIds,
@@ -631,6 +664,34 @@ final class TurnPlanner {
         }
     }
 
+    private static func effectiveExplicitQuickActionMode(
+        _ snapshotMode: QuickActionMode?,
+        stewardship: TurnStewardDecision
+    ) -> QuickActionMode? {
+        guard let snapshotMode else { return nil }
+        if stewardship.challengeStance == .supportFirst {
+            return nil
+        }
+        return snapshotMode
+    }
+
+    private static func shouldUseStewardPolicyOverExplicitMode(
+        stewardship: TurnStewardDecision,
+        inputText: String
+    ) -> Bool {
+        guard stewardship.memoryPolicy != .full else { return false }
+        let normalized = inputText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if TurnSteward.hasMemoryOptOutCue(normalized) {
+            return true
+        }
+        switch stewardship.memoryPolicy {
+        case .conversationOnly, .projectOnly:
+            return true
+        case .full, .lean:
+            return false
+        }
+    }
+
     private static func turnGuidanceBlock(for decision: TurnStewardDecision) -> String? {
         if isSupportFirstDwellTurn(decision) {
             return """
@@ -646,7 +707,9 @@ final class TurnPlanner {
 
         let guidance = [
             responseShapeInstruction(for: decision.responseShape).map { "Response shape: \($0)" },
-            responseStanceInstruction(for: decision).map { "Response stance: \($0)" }
+            responseStanceInstruction(for: decision).map { "Response stance: \($0)" },
+            reflectiveMeaningInstruction(for: decision.reflectiveMeaningSignal).map { "Reflective meaning: \($0)" },
+            patternNamingInstruction(for: decision.inTurnPatternSignal).map { "Pattern naming: \($0)" }
         ].compactMap { $0 }
 
         guard !guidance.isEmpty else { return nil }
@@ -700,6 +763,36 @@ final class TurnPlanner {
             instruction = "Alex explicitly invited challenge. You may name a real tension plainly, but stay useful and proportionate."
         }
         return instruction
+    }
+
+    private static func reflectiveMeaningInstruction(for signal: ReflectiveMeaningSignal?) -> String? {
+        guard let signal else { return nil }
+
+        let shapeInstruction = switch signal.surfacePolicy {
+        case .compact:
+            "Use the default compact shape: one sentence for the possible underlying pull, one sentence for one reusable action."
+        case .layered:
+            "Use compact three-layer form: surface event, possible underlying pull, reusable action."
+        }
+
+        return """
+        Use current turn plus available recalled context; do not invent beyond evidence. Name one possible underlying pull, using tentative language such as "可能真正牵住你嘅唔只係 X，而係 Y." Give one reusable action tied to the pull. \(shapeInstruction) If evidence is thin, ask one clarifying question instead of naming a pull. Never diagnose, say "you always", mention routing, or turn this into therapy/coaching theater. Continue Alex's original task.
+        """
+    }
+
+    private static func patternNamingInstruction(for signal: InTurnPatternSignal?) -> String? {
+        guard let signal else { return nil }
+
+        let surfaceInstruction = switch signal.surfacePolicy {
+        case .softName:
+            "Use soft hypothesis language; do not force the label."
+        case .directName:
+            "Name it directly but keep it proportionate."
+        }
+
+        return """
+        Name at most one live pattern. Pattern: \(signal.kind.displayLabel). Action: \(signal.kind.pairedAction). \(surfaceInstruction) Use one sentence of evidence from Alex's current words, then give the action. Continue helping with Alex's original task. Never use always-style identity claims, diagnosis language, routing language, or clinical worksheets.
+        """
     }
 
     private func makeJudgeEvent(

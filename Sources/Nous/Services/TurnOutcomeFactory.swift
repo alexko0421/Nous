@@ -57,14 +57,20 @@ struct TurnOutcomeFactory: Sendable {
         assistantContent: String,
         stableSystem: String,
         userMessage: Message? = nil,
-        sourceMaterials: [SourceMaterialContext] = []
+        sourceMaterials: [SourceMaterialContext] = [],
+        latencyTier: TurnLatencyTier = .normal,
+        recordsMemorySuppressionTelemetry: Bool = true
     ) -> TurnCompletion {
-        let memoryDecision = memoryPersistenceDecision(
-            committed.messagesAfterAssistantAppend,
-            committed.node.projectId
-        )
+        let suppressHeavyPostTurnWork = latencyTier == .fast
+        let memoryDecision: MemoryPersistenceDecision = suppressHeavyPostTurnWork
+            ? .suppress(.fastLatencyTier)
+            : memoryPersistenceDecision(
+                committed.messagesAfterAssistantAppend,
+                committed.node.projectId
+            )
         let sourceLearningDigest: SourceLearningDigestRequest?
-        if memoryDecision.shouldPersist,
+        if !suppressHeavyPostTurnWork,
+           memoryDecision.shouldPersist,
            let userMessage,
            !sourceMaterials.isEmpty {
             sourceLearningDigest = SourceLearningDigestRequest(
@@ -81,7 +87,7 @@ struct TurnOutcomeFactory: Sendable {
             turnId: turnId,
             conversationId: committed.node.id,
             assistantMessageId: committed.assistantMessage.id,
-            scratchpadIngest: ScratchpadIngestRequest(
+            scratchpadIngest: suppressHeavyPostTurnWork ? nil : ScratchpadIngestRequest(
                 content: assistantContent,
                 sourceMessageId: committed.assistantMessage.id,
                 conversationId: committed.node.id
@@ -92,12 +98,13 @@ struct TurnOutcomeFactory: Sendable {
                 messages: committed.messagesAfterAssistantAppend
             ) : nil,
             memorySuppressionReason: memoryDecision.suppressionReason,
+            recordsMemorySuppressionTelemetry: recordsMemorySuppressionTelemetry,
             sourceLearningDigest: sourceLearningDigest
         )
         let housekeepingPlan = TurnHousekeepingPlan(
             turnId: turnId,
             conversationId: committed.node.id,
-            geminiCacheRefresh: GeminiCacheRefreshRequest(
+            geminiCacheRefresh: suppressHeavyPostTurnWork ? nil : GeminiCacheRefreshRequest(
                 nodeId: committed.node.id,
                 stableSystem: stableSystem,
                 persistedMessages: committed.messagesAfterAssistantAppend
@@ -106,7 +113,7 @@ struct TurnOutcomeFactory: Sendable {
                 nodeId: committed.node.id,
                 fullContent: committed.messagesAfterAssistantAppend.map(\.content).joined(separator: "\n")
             ) : nil,
-            emojiRefresh: ConversationEmojiRefreshRequest(
+            emojiRefresh: suppressHeavyPostTurnWork ? nil : ConversationEmojiRefreshRequest(
                 node: committed.node,
                 messages: committed.messagesAfterAssistantAppend
             )

@@ -48,7 +48,7 @@ final class MemoryDebugInspectorShadowLearningTests: XCTestCase {
         XCTAssertEqual(rows.map(\.label), ["shared_label", "shared_label"])
     }
 
-    func testMemoryFactRowsExposeScopeSourceConfidenceAndSortByTrustRisk() {
+    func testMemoryFactRowsExposeScopeSourceConfidenceAndSortByStatusThenRecency() {
         let projectId = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
         let threadId = UUID(uuidString: "44444444-4444-4444-4444-444444444444")!
         let sourceId = UUID(uuidString: "55555555-5555-5555-5555-555555555555")!
@@ -66,6 +66,19 @@ final class MemoryDebugInspectorShadowLearningTests: XCTestCase {
             createdAt: now,
             updatedAt: now
         )
+        let olderHighConfidenceActiveFact = MemoryFactEntry(
+            id: UUID(uuidString: "88888888-8888-8888-8888-888888888888")!,
+            scope: .conversation,
+            scopeRefId: threadId,
+            kind: .decision,
+            content: "Older high confidence decision.",
+            confidence: 0.99,
+            status: .active,
+            stability: .stable,
+            sourceNodeIds: [sourceId],
+            createdAt: now.addingTimeInterval(-20),
+            updatedAt: now.addingTimeInterval(-20)
+        )
         let conflictedFact = MemoryFactEntry(
             id: UUID(uuidString: "77777777-7777-7777-7777-777777777777")!,
             scope: .project,
@@ -81,12 +94,12 @@ final class MemoryDebugInspectorShadowLearningTests: XCTestCase {
         )
 
         let rows = MemoryFactDebugFormatting.rows(
-            from: [conflictedFact, activeFact],
+            from: [conflictedFact, olderHighConfidenceActiveFact, activeFact],
             nodeTitles: [threadId: "Arc 3 Thread", sourceId: "Opt-out Source"],
             projectTitles: [projectId: "QA Project"]
         )
 
-        XCTAssertEqual(rows.map(\.id), [activeFact.id, conflictedFact.id])
+        XCTAssertEqual(rows.map(\.id), [activeFact.id, olderHighConfidenceActiveFact.id, conflictedFact.id])
         XCTAssertEqual(rows.first?.kind, "Boundary")
         XCTAssertEqual(rows.first?.status, "Active")
         XCTAssertEqual(rows.first?.stability, "Stable")
@@ -95,6 +108,16 @@ final class MemoryDebugInspectorShadowLearningTests: XCTestCase {
         XCTAssertEqual(rows.first?.source, "Opt-out Source")
         XCTAssertEqual(rows.last?.scope, "Project · QA Project")
         XCTAssertEqual(rows.last?.source, "No linked source")
+    }
+
+    func testMemoryFactNeedsReviewIgnoresArchivedFacts() {
+        let now = Date(timeIntervalSince1970: 30_000)
+        XCTAssertTrue(MemoryFactDebugFormatting.needsReview(fact(status: .pending, now: now)))
+        XCTAssertTrue(MemoryFactDebugFormatting.needsReview(fact(status: .conflicted, now: now)))
+        XCTAssertTrue(MemoryFactDebugFormatting.needsReview(fact(status: .expired, now: now)))
+        XCTAssertFalse(MemoryFactDebugFormatting.needsReview(fact(status: .active, now: now)))
+        XCTAssertFalse(MemoryFactDebugFormatting.needsReview(fact(status: .archived, now: now)))
+        XCTAssertFalse(MemoryFactDebugFormatting.needsReview(fact(status: .superseded, now: now)))
     }
 
     private func pattern(
@@ -124,6 +147,19 @@ final class MemoryDebugInspectorShadowLearningTests: XCTestCase {
             lastCorrectedAt: nil,
             activeFrom: now,
             activeUntil: nil
+        )
+    }
+
+    private func fact(status: MemoryStatus, now: Date) -> MemoryFactEntry {
+        MemoryFactEntry(
+            scope: .global,
+            kind: .constraint,
+            content: "Fact for \(status.rawValue)",
+            confidence: 0.8,
+            status: status,
+            stability: .stable,
+            createdAt: now,
+            updatedAt: now
         )
     }
 }

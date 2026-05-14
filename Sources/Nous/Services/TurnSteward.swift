@@ -120,36 +120,84 @@ final class TurnSteward {
         prepared: PreparedTurnSession,
         request: TurnRequest
     ) -> TurnStewardDecision {
-        if let activeMode = request.snapshot.activeQuickActionMode {
-            return decision(forActiveMode: activeMode)
-        }
-
         let text = request.inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalized = text.lowercased()
+        let memoryOptOut = Self.hasMemoryOptOutCue(normalized)
+        let hasSourceContext = !request.attachments.isEmpty || !request.sourceMaterials.isEmpty
+        let distress = !Self.isTextTransformRequest(normalized)
+            && containsAny(normalized, in: Self.distressCues)
+
+        if let activeMode = request.snapshot.activeQuickActionMode {
+            return decision(
+                forActiveMode: activeMode,
+                normalizedText: normalized,
+                memoryOptOut: memoryOptOut,
+                hasSourceContext: hasSourceContext,
+                distress: distress,
+                request: request
+            )
+        }
 
         if !request.sourceMaterials.isEmpty {
+            let sourceMeaningSignal = reflectiveMeaningSignal(
+                for: normalized,
+                route: .sourceAnalysis,
+                request: request,
+                memoryOptOut: memoryOptOut,
+                distress: distress,
+                allowSourceAnalysis: true
+            )
+            if distress {
+                return TurnStewardDecision(
+                    route: .sourceAnalysis,
+                    memoryPolicy: memoryOptOut ? .lean : .full,
+                    challengeStance: .supportFirst,
+                    responseShape: .answerNow,
+                    source: .deterministic,
+                    reason: memoryOptOut ? "source material distress with memory opt-out" : "source material distress cue",
+                    responseStance: .supportFirst,
+                    judgePolicy: .off,
+                    latencyTier: .deep
+                )
+            }
             return TurnStewardDecision(
                 route: .sourceAnalysis,
-                memoryPolicy: .full,
+                memoryPolicy: memoryOptOut ? .lean : .full,
                 challengeStance: .surfaceTension,
                 responseShape: .answerNow,
                 source: .deterministic,
-                reason: "source material attached"
+                reason: memoryOptOut ? "source material attached with memory opt-out" : "source material attached",
+                reflectiveMeaningSignal: sourceMeaningSignal,
+                latencyTier: .deep
             )
         }
 
         let route = route(for: normalized)
-        let memoryOptOut = containsAny(normalized, in: Self.memoryOptOutCues)
-        let distress = containsAny(normalized, in: Self.distressCues)
+        let meaningSignal = reflectiveMeaningSignal(
+            for: normalized,
+            route: route,
+            request: request,
+            memoryOptOut: memoryOptOut,
+            distress: distress
+        )
+        let patternSignal = meaningSignal == nil
+            ? inTurnPatternSignal(
+                for: normalized,
+                route: route,
+                request: request,
+                memoryOptOut: memoryOptOut,
+                distress: distress
+            )
+            : nil
 
         if distress, route == .ordinaryChat {
             return TurnStewardDecision(
                 route: .ordinaryChat,
-                memoryPolicy: .conversationOnly,
+                memoryPolicy: memoryOptOut ? .lean : .conversationOnly,
                 challengeStance: .supportFirst,
                 responseShape: .answerNow,
                 source: .deterministic,
-                reason: "emotional distress cue"
+                reason: memoryOptOut ? "emotional distress with memory opt-out" : "emotional distress cue"
             )
         }
 
@@ -160,7 +208,10 @@ final class TurnSteward {
                 challengeStance: .surfaceTension,
                 responseShape: .answerNow,
                 source: .deterministic,
-                reason: "analysis skill cue"
+                reason: "analysis skill cue",
+                inTurnPatternSignal: patternSignal,
+                reflectiveMeaningSignal: meaningSignal,
+                latencyTier: .deep
             )
         }
 
@@ -172,7 +223,8 @@ final class TurnSteward {
                 challengeStance: .useSilently,
                 responseShape: .listDirections,
                 source: .deterministic,
-                reason: memoryOptOut ? "explicit brainstorm with memory opt-out" : "explicit brainstorm cue"
+                reason: memoryOptOut ? "explicit brainstorm with memory opt-out" : "explicit brainstorm cue",
+                latencyTier: hasSourceContext || hasExplicitDeepLatencyCue(normalized) ? .deep : .normal
             )
         case .plan:
             return TurnStewardDecision(
@@ -181,7 +233,10 @@ final class TurnSteward {
                 challengeStance: distress ? .supportFirst : .surfaceTension,
                 responseShape: distress ? .answerNow : .producePlan,
                 source: .deterministic,
-                reason: "explicit plan cue"
+                reason: "explicit plan cue",
+                inTurnPatternSignal: patternSignal,
+                reflectiveMeaningSignal: meaningSignal,
+                latencyTier: .deep
             )
         case .direction:
             return TurnStewardDecision(
@@ -190,7 +245,10 @@ final class TurnSteward {
                 challengeStance: distress ? .supportFirst : .surfaceTension,
                 responseShape: distress ? .answerNow : .narrowNextStep,
                 source: .deterministic,
-                reason: "explicit direction cue"
+                reason: "explicit direction cue",
+                inTurnPatternSignal: patternSignal,
+                reflectiveMeaningSignal: meaningSignal,
+                latencyTier: .deep
             )
         case .sourceAnalysis:
             return TurnStewardDecision(
@@ -199,16 +257,29 @@ final class TurnSteward {
                 challengeStance: .surfaceTension,
                 responseShape: .answerNow,
                 source: .deterministic,
-                reason: "source material attached"
+                reason: "source material attached",
+                reflectiveMeaningSignal: meaningSignal,
+                latencyTier: .deep
             )
         case .ordinaryChat:
+            let latencyTier = latencyTier(
+                for: request,
+                text: text,
+                normalized: normalized,
+                route: route,
+                memoryOptOut: memoryOptOut,
+                distress: distress
+            )
             return TurnStewardDecision(
                 route: .ordinaryChat,
                 memoryPolicy: memoryOptOut ? .lean : .full,
                 challengeStance: distress ? .supportFirst : .useSilently,
                 responseShape: .answerNow,
                 source: .deterministic,
-                reason: memoryOptOut ? "memory opt-out cue" : "ordinary chat default"
+                reason: memoryOptOut ? "memory opt-out cue" : "ordinary chat default",
+                inTurnPatternSignal: patternSignal,
+                reflectiveMeaningSignal: meaningSignal,
+                latencyTier: latencyTier
             )
         }
     }
@@ -248,7 +319,8 @@ final class TurnSteward {
     }
 
     private func deterministicResponseStance(for normalized: String) -> DeterministicStanceResult {
-        if containsAny(normalized, in: Self.distressCues) {
+        if !Self.isTextTransformRequest(normalized),
+           containsAny(normalized, in: Self.distressCues) {
             return DeterministicStanceResult(
                 result: SpeechActRoutingResult(
                     stance: .supportFirst,
@@ -406,7 +478,7 @@ final class TurnSteward {
         routing: SpeechActRoutingResult,
         mode: ResponseStanceRouterMode
     ) -> TurnStewardDecision {
-        let memoryOptOut = containsAny(normalizedText, in: Self.memoryOptOutCues)
+        let memoryOptOut = Self.hasMemoryOptOutCue(normalizedText)
 
         switch routing.stance {
         case .supportFirst:
@@ -415,7 +487,7 @@ final class TurnSteward {
                 || (hasDeterministicDistress && (legacy.route == .plan || legacy.route == .direction))
             return TurnStewardDecision(
                 route: preserveDistressRoute ? legacy.route : .ordinaryChat,
-                memoryPolicy: preserveDistressRoute ? legacy.memoryPolicy : .conversationOnly,
+                memoryPolicy: preserveDistressRoute ? legacy.memoryPolicy : (memoryOptOut ? .lean : .conversationOnly),
                 challengeStance: .supportFirst,
                 responseShape: .answerNow,
                 source: legacy.trace.source,
@@ -427,7 +499,10 @@ final class TurnSteward {
                 confidence: routing.confidence,
                 softerFallback: routing.softerFallback,
                 fallbackUsed: routing.fallbackUsed,
-                routerReason: routing.reason
+                routerReason: routing.reason,
+                inTurnPatternSignal: nil,
+                reflectiveMeaningSignal: nil,
+                latencyTier: preserveDistressRoute ? legacy.latencyTier : .normal
             )
         case .companion, .reflective:
             return TurnStewardDecision(
@@ -444,7 +519,10 @@ final class TurnSteward {
                 confidence: routing.confidence,
                 softerFallback: routing.softerFallback,
                 fallbackUsed: routing.fallbackUsed,
-                routerReason: routing.reason
+                routerReason: routing.reason,
+                inTurnPatternSignal: legacy.inTurnPatternSignal,
+                reflectiveMeaningSignal: legacy.reflectiveMeaningSignal,
+                latencyTier: legacy.latencyTier
             )
         case .softAnalysis:
             let effectiveJudgePolicy: JudgePolicy = memoryOptOut ? .off : .silentFraming
@@ -463,7 +541,10 @@ final class TurnSteward {
                 confidence: routing.confidence,
                 softerFallback: routing.softerFallback,
                 fallbackUsed: routing.fallbackUsed,
-                routerReason: routing.reason
+                routerReason: routing.reason,
+                inTurnPatternSignal: legacy.inTurnPatternSignal,
+                reflectiveMeaningSignal: legacy.reflectiveMeaningSignal,
+                latencyTier: .deep
             )
         case .hardJudge:
             let effectiveJudgePolicy: JudgePolicy = memoryOptOut ? .off : .visibleTension
@@ -482,7 +563,10 @@ final class TurnSteward {
                 confidence: routing.confidence,
                 softerFallback: routing.softerFallback,
                 fallbackUsed: routing.fallbackUsed,
-                routerReason: routing.reason
+                routerReason: routing.reason,
+                inTurnPatternSignal: legacy.inTurnPatternSignal,
+                reflectiveMeaningSignal: legacy.reflectiveMeaningSignal,
+                latencyTier: .deep
             )
         }
     }
@@ -529,16 +613,50 @@ final class TurnSteward {
         )
     }
 
-    private func decision(forActiveMode mode: QuickActionMode) -> TurnStewardDecision {
+    private func decision(
+        forActiveMode mode: QuickActionMode,
+        normalizedText: String,
+        memoryOptOut: Bool,
+        hasSourceContext: Bool,
+        distress: Bool,
+        request: TurnRequest
+    ) -> TurnStewardDecision {
+        if distress {
+            return distressDecisionForActiveMode(
+                mode,
+                memoryOptOut: memoryOptOut,
+                hasSourceContext: hasSourceContext
+            )
+        }
+
         switch mode {
         case .direction:
+            let meaningSignal = reflectiveMeaningSignal(
+                for: normalizedText,
+                route: .direction,
+                request: request,
+                memoryOptOut: memoryOptOut,
+                distress: distress
+            )
+            let patternSignal = meaningSignal == nil
+                ? inTurnPatternSignal(
+                    for: normalizedText,
+                    route: .direction,
+                    request: request,
+                    memoryOptOut: memoryOptOut,
+                    distress: distress
+                )
+                : nil
             return TurnStewardDecision(
                 route: .direction,
-                memoryPolicy: .full,
+                memoryPolicy: memoryOptOut ? .lean : .full,
                 challengeStance: .surfaceTension,
                 responseShape: .narrowNextStep,
                 source: .deterministic,
-                reason: "active quick action mode"
+                reason: memoryOptOut ? "active quick action mode with memory opt-out" : "active quick action mode",
+                inTurnPatternSignal: patternSignal,
+                reflectiveMeaningSignal: meaningSignal,
+                latencyTier: .deep
             )
         case .brainstorm:
             return TurnStewardDecision(
@@ -547,18 +665,272 @@ final class TurnSteward {
                 challengeStance: .useSilently,
                 responseShape: .listDirections,
                 source: .deterministic,
-                reason: "active quick action mode"
+                reason: memoryOptOut ? "active quick action mode with memory opt-out" : "active quick action mode",
+                latencyTier: hasSourceContext || hasExplicitDeepLatencyCue(normalizedText) ? .deep : .normal
+            )
+        case .plan:
+            let meaningSignal = reflectiveMeaningSignal(
+                for: normalizedText,
+                route: .plan,
+                request: request,
+                memoryOptOut: memoryOptOut,
+                distress: distress
+            )
+            let patternSignal = meaningSignal == nil
+                ? inTurnPatternSignal(
+                    for: normalizedText,
+                    route: .plan,
+                    request: request,
+                    memoryOptOut: memoryOptOut,
+                    distress: distress
+                )
+                : nil
+            return TurnStewardDecision(
+                route: .plan,
+                memoryPolicy: memoryOptOut ? .lean : .full,
+                challengeStance: .surfaceTension,
+                responseShape: .producePlan,
+                source: .deterministic,
+                reason: memoryOptOut ? "active quick action mode with memory opt-out" : "active quick action mode",
+                inTurnPatternSignal: patternSignal,
+                reflectiveMeaningSignal: meaningSignal,
+                latencyTier: .deep
+            )
+        case .study:
+            let meaningSignal = reflectiveMeaningSignal(
+                for: normalizedText,
+                route: .sourceAnalysis,
+                request: request,
+                memoryOptOut: memoryOptOut,
+                distress: distress,
+                allowSourceAnalysis: true
+            )
+            return TurnStewardDecision(
+                route: .sourceAnalysis,
+                memoryPolicy: memoryOptOut ? .lean : .full,
+                challengeStance: .useSilently,
+                responseShape: .answerNow,
+                source: .deterministic,
+                reason: memoryOptOut ? "active quick action mode with memory opt-out" : "active quick action mode",
+                judgePolicy: .off,
+                reflectiveMeaningSignal: meaningSignal,
+                latencyTier: .deep
+            )
+        }
+    }
+
+    private func distressDecisionForActiveMode(
+        _ mode: QuickActionMode,
+        memoryOptOut: Bool,
+        hasSourceContext: Bool
+    ) -> TurnStewardDecision {
+        let memoryPolicy: TurnMemoryPolicyPreset = memoryOptOut ? .lean : .full
+        let reason = memoryOptOut
+            ? "active quick action distress with memory opt-out"
+            : "active quick action distress cue"
+
+        switch mode {
+        case .direction:
+            return TurnStewardDecision(
+                route: .direction,
+                memoryPolicy: memoryPolicy,
+                challengeStance: .supportFirst,
+                responseShape: .answerNow,
+                source: .deterministic,
+                reason: reason,
+                responseStance: .supportFirst,
+                judgePolicy: .off,
+                latencyTier: .deep
             )
         case .plan:
             return TurnStewardDecision(
                 route: .plan,
-                memoryPolicy: .full,
-                challengeStance: .surfaceTension,
-                responseShape: .producePlan,
+                memoryPolicy: memoryPolicy,
+                challengeStance: .supportFirst,
+                responseShape: .answerNow,
                 source: .deterministic,
-                reason: "active quick action mode"
+                reason: reason,
+                responseStance: .supportFirst,
+                judgePolicy: .off,
+                latencyTier: .deep
+            )
+        case .study where hasSourceContext:
+            return TurnStewardDecision(
+                route: .sourceAnalysis,
+                memoryPolicy: memoryPolicy,
+                challengeStance: .supportFirst,
+                responseShape: .answerNow,
+                source: .deterministic,
+                reason: reason,
+                responseStance: .supportFirst,
+                judgePolicy: .off,
+                latencyTier: .deep
+            )
+        case .brainstorm, .study:
+            return TurnStewardDecision(
+                route: .ordinaryChat,
+                memoryPolicy: memoryOptOut ? .lean : .conversationOnly,
+                challengeStance: .supportFirst,
+                responseShape: .answerNow,
+                source: .deterministic,
+                reason: reason,
+                responseStance: .supportFirst,
+                judgePolicy: .off,
+                latencyTier: .normal
             )
         }
+    }
+
+    private func inTurnPatternSignal(
+        for normalized: String,
+        route: TurnRoute,
+        request: TurnRequest,
+        memoryOptOut: Bool,
+        distress: Bool
+    ) -> InTurnPatternSignal? {
+        guard route == .ordinaryChat || route == .direction || route == .plan else {
+            return nil
+        }
+        guard request.sourceMaterials.isEmpty,
+              request.attachments.isEmpty,
+              !memoryOptOut,
+              !distress,
+              !Self.isTextTransformRequest(normalized),
+              !containsAny(normalized, in: Self.patternSafetyBypassCues)
+        else {
+            return nil
+        }
+
+        let candidates = [
+            comparisonLoopCandidate(normalized),
+            identityPressureCandidate(normalized),
+            learningInsteadOfShippingCandidate(normalized),
+            planningAsAvoidanceCandidate(normalized),
+            overTrustingSystemCandidate(normalized)
+        ].compactMap { $0 }
+
+        guard let candidate = candidates.first(where: { $0.confidence >= Self.patternConfidenceThreshold }) else {
+            return nil
+        }
+        return InTurnPatternSignal(
+            kind: candidate.kind,
+            confidence: candidate.confidence,
+            surfacePolicy: candidate.confidence >= Self.directPatternConfidenceThreshold ? .directName : .softName,
+            reasonCode: candidate.reasonCode
+        )
+    }
+
+    private func reflectiveMeaningSignal(
+        for normalized: String,
+        route: TurnRoute,
+        request: TurnRequest,
+        memoryOptOut: Bool,
+        distress: Bool,
+        allowSourceAnalysis: Bool = false
+    ) -> ReflectiveMeaningSignal? {
+        let sourceEligible = route == .sourceAnalysis
+            && allowSourceAnalysis
+            && !request.sourceMaterials.isEmpty
+        let ordinaryEligible = route == .ordinaryChat || route == .direction || route == .plan
+        guard sourceEligible || ordinaryEligible else {
+            return nil
+        }
+        guard request.attachments.isEmpty,
+              !memoryOptOut,
+              !distress,
+              !Self.isTextTransformRequest(normalized),
+              !containsAny(normalized, in: Self.patternSafetyBypassCues)
+        else {
+            return nil
+        }
+        if ordinaryEligible,
+           !request.sourceMaterials.isEmpty {
+            return nil
+        }
+        guard hasSelfReference(normalized) else {
+            return nil
+        }
+
+        let hasMeaningIntent = hasReflectiveMeaningIntent(normalized)
+        let hasRegretIntent = hasRegretMeaningAnalysis(normalized)
+        guard hasMeaningIntent || hasRegretIntent else {
+            return nil
+        }
+
+        let surfacePolicy: ReflectiveMeaningSurfacePolicy = containsAny(
+            normalized,
+            in: Self.reflectiveMeaningLayeredCues
+        ) ? .layered : .compact
+        let reasonCode: String
+        if sourceEligible {
+            reasonCode = "source_personal_meaning_request"
+        } else if hasRegretIntent {
+            reasonCode = "regret_meaning_request"
+        } else if surfacePolicy == .layered {
+            reasonCode = "reflective_meaning_layered_request"
+        } else {
+            reasonCode = "reflective_meaning_request"
+        }
+
+        return ReflectiveMeaningSignal(
+            confidence: Self.reflectiveMeaningConfidence,
+            surfacePolicy: surfacePolicy,
+            reasonCode: reasonCode
+        )
+    }
+
+    private func hasReflectiveMeaningIntent(_ text: String) -> Bool {
+        containsAny(text, in: Self.reflectiveMeaningIntentCues)
+            || (
+                containsAny(text, in: Self.reflectiveMeaningClarityCues)
+                    && containsAny(text, in: Self.reflectiveMeaningQuestionCues)
+            )
+    }
+
+    private func hasRegretMeaningAnalysis(_ text: String) -> Bool {
+        containsAny(text, in: Self.reflectiveMeaningRegretCues)
+            && containsAny(text, in: Self.reflectiveMeaningAnalysisCues)
+    }
+
+    private func comparisonLoopCandidate(_ text: String) -> PatternCandidate? {
+        guard hasSelfReference(text) else { return nil }
+        let comparisonSignal = containsAnyPatternCue(text, in: Self.comparisonLoopCues)
+        let statusSignal = containsAnyPatternCue(text, in: Self.comparisonStatusCues)
+        guard comparisonSignal && statusSignal else { return nil }
+        return PatternCandidate(kind: .comparisonLoop, confidence: 0.90, reasonCode: "comparison_status_progress")
+    }
+
+    private func identityPressureCandidate(_ text: String) -> PatternCandidate? {
+        guard hasSelfReference(text),
+              containsAnyPatternCue(text, in: Self.identityConstraintCues),
+              containsAnyPatternCue(text, in: Self.identityJudgmentCues) else {
+            return nil
+        }
+        return PatternCandidate(kind: .identityPressure, confidence: 0.88, reasonCode: "identity_constraint_judgment")
+    }
+
+    private func learningInsteadOfShippingCandidate(_ text: String) -> PatternCandidate? {
+        guard containsAnyPatternCue(text, in: Self.learningDelayCues),
+              containsAnyPatternCue(text, in: Self.shippingEvidenceCues) else {
+            return nil
+        }
+        return PatternCandidate(kind: .learningInsteadOfShipping, confidence: 0.88, reasonCode: "learning_shipping_delay")
+    }
+
+    private func planningAsAvoidanceCandidate(_ text: String) -> PatternCandidate? {
+        guard containsAnyPatternCue(text, in: Self.planningExpansionCues),
+              containsAnyPatternCue(text, in: Self.availableActionCues) else {
+            return nil
+        }
+        return PatternCandidate(kind: .planningAsAvoidance, confidence: 0.86, reasonCode: "planning_before_action")
+    }
+
+    private func overTrustingSystemCandidate(_ text: String) -> PatternCandidate? {
+        guard containsAnyPatternCue(text, in: Self.systemDeferenceCues),
+              containsAnyPatternCue(text, in: Self.ownEvidenceCues) else {
+            return nil
+        }
+        return PatternCandidate(kind: .overTrustingSystem, confidence: 0.88, reasonCode: "over_trusting_system")
     }
 
     private func route(for text: String) -> TurnRoute {
@@ -574,8 +946,127 @@ final class TurnSteward {
         return .ordinaryChat
     }
 
+    private func latencyTier(
+        for request: TurnRequest,
+        text: String,
+        normalized: String,
+        route: TurnRoute,
+        memoryOptOut: Bool,
+        distress: Bool
+    ) -> TurnLatencyTier {
+        guard route == .ordinaryChat,
+              request.snapshot.activeQuickActionMode == nil
+        else {
+            return .normal
+        }
+
+        if !request.attachments.isEmpty || !request.sourceMaterials.isEmpty {
+            return .deep
+        }
+
+        if distress {
+            return .normal
+        }
+
+        if hasExplicitDeepLatencyCue(normalized)
+            || containsAny(normalized, in: Self.ambiguousDecisionCues)
+            || containsAny(normalized, in: Self.broadOpinionCues)
+            || containsAny(normalized, in: Self.memoryRecallCues)
+            || containsAny(normalized, in: Self.contextDependentCues) {
+            return .deep
+        }
+
+        if memoryOptOut {
+            return .normal
+        }
+
+        guard (1...160).contains(text.count),
+              isExplicitFastUtilityRequest(normalized)
+        else {
+            return .normal
+        }
+        return .fast
+    }
+
+    private func hasExplicitDeepLatencyCue(_ normalized: String) -> Bool {
+        hasExplicitHardJudgeCue(normalized)
+            || containsAny(normalized, in: Self.deepAnalysisCues)
+            || containsAny(normalized, in: Self.softAnalysisCues)
+    }
+
+    private func isExplicitFastUtilityRequest(_ normalized: String) -> Bool {
+        if normalized == "ping" {
+            return true
+        }
+        if Self.isTextTransformRequest(normalized) {
+            return true
+        }
+        if normalized.hasPrefix("define ") {
+            return true
+        }
+        if normalized.range(
+            of: #"^what does [a-z0-9][a-z0-9 ._/\-]{1,80} mean\??$"#,
+            options: .regularExpression
+        ) != nil {
+            return true
+        }
+        return containsAny(normalized, in: Self.fastMeaningCues)
+    }
+
     private func containsAny(_ text: String, in cues: [String]) -> Bool {
         cues.contains { text.contains($0) }
+    }
+
+    private func containsAnyPatternCue(_ text: String, in cues: [String]) -> Bool {
+        cues.contains { patternCue($0, matches: text) }
+    }
+
+    private func patternCue(_ cue: String, matches text: String) -> Bool {
+        let cue = cue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cue.isEmpty else { return false }
+        guard Self.isBareASCIIToken(cue) else {
+            return text.contains(cue)
+        }
+
+        let escapedCue = NSRegularExpression.escapedPattern(for: cue)
+        return text.range(
+            of: "(?<![A-Za-z0-9])\(escapedCue)(?![A-Za-z0-9])",
+            options: .regularExpression
+        ) != nil
+    }
+
+    private func hasSelfReference(_ text: String) -> Bool {
+        if text.contains("我") || text.contains("自己") {
+            return true
+        }
+        return text.range(
+            of: #"(?<![A-Za-z0-9])(i|me|my|mine|myself)(?![A-Za-z0-9])"#,
+            options: .regularExpression
+        ) != nil
+    }
+
+    private static func isBareASCIIToken(_ text: String) -> Bool {
+        text.unicodeScalars.allSatisfy { scalar in
+            (48...57).contains(scalar.value)
+                || (65...90).contains(scalar.value)
+                || (97...122).contains(scalar.value)
+        }
+    }
+
+    static func hasMemoryOptOutCue(_ normalizedText: String) -> Bool {
+        memoryOptOutCues.contains { cue in
+            let cue = cue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cue.isEmpty else { return false }
+            guard Self.isBareASCIIToken(cue) else {
+                return normalizedText.contains(cue)
+            }
+
+            let escapedCue = NSRegularExpression.escapedPattern(for: cue)
+            return normalizedText.range(
+                of: "(?<![A-Za-z0-9])\(escapedCue)(?![A-Za-z0-9])",
+                options: .regularExpression
+            ) != nil
+        }
     }
 
     private func analysisGateMatches(_ text: String) -> Bool {
@@ -691,6 +1182,19 @@ final class TurnSteward {
         "權衡"
     ]
 
+    private static let deepAnalysisCues = [
+        "深度",
+        "深入",
+        "认真拆",
+        "認真拆",
+        "仔细拆",
+        "仔細拆",
+        "deep analysis",
+        "deep reasoning",
+        "think deeply",
+        "seriously unpack"
+    ]
+
     private static let reflectiveCues = [
         "点解",
         "點解",
@@ -748,8 +1252,362 @@ final class TurnSteward {
         "panic",
         "紧张",
         "緊張",
-        "崩"
+        "崩",
+        "想死",
+        "唔想活",
+        "不想活",
+        "轻生",
+        "輕生",
+        "结束生命",
+        "結束生命",
+        "end my life",
+        "don't want to live",
+        "dont want to live"
     ]
+
+    private static let memoryRecallCues = [
+        "你记得",
+        "你記得",
+        "记得",
+        "記得",
+        "上次",
+        "last time",
+        "remember",
+        "memory"
+    ]
+
+    private static let contextDependentCues = [
+        "继续",
+        "繼續",
+        "接住",
+        "上面",
+        "前面",
+        "之前",
+        "刚才",
+        "剛才",
+        "啱先",
+        "呢个",
+        "呢個",
+        "这个",
+        "這個",
+        "what does this mean",
+        "what does that mean",
+        "what is this",
+        "what is that",
+        "this one",
+        "that one",
+        "above",
+        "previous"
+    ]
+
+    private static let textTransformCues = [
+        "翻译",
+        "翻譯",
+        "translate",
+        "改短",
+        "shorten",
+        "rewrite",
+        "润色",
+        "潤色",
+        "polish"
+    ]
+
+    private static let fastMeaningCues = [
+        "咩意思",
+        "什么意思",
+        "什麼意思",
+        "甚麼意思"
+    ]
+
+    private static let patternConfidenceThreshold = 0.75
+    private static let directPatternConfidenceThreshold = 0.85
+    private static let reflectiveMeaningConfidence = 0.86
+
+    private static let reflectiveMeaningIntentCues = [
+        "点解我咁在意",
+        "點解我咁在意",
+        "点解我会咁在意",
+        "點解我會咁在意",
+        "为什么我这么在意",
+        "為什麼我這麼在意",
+        "真正牵住",
+        "真正牽住",
+        "真正牵动",
+        "真正牽動",
+        "真正代表",
+        "真正係咩",
+        "真正系咩",
+        "咁有感觉",
+        "咁有感覺",
+        "这么有感觉",
+        "這麼有感覺",
+        "会让我这么在意",
+        "會讓我這麼在意",
+        "why did this matter",
+        "why did it matter",
+        "why do i care",
+        "why did missing",
+        "matter so much to me",
+        "what did this mean to me",
+        "meaning behind this for me"
+    ]
+
+    private static let reflectiveMeaningClarityCues = [
+        "帮我睇清楚",
+        "幫我睇清楚",
+        "帮我看清楚",
+        "幫我看清楚",
+        "复盘",
+        "復盤"
+    ]
+
+    private static let reflectiveMeaningQuestionCues = [
+        "点解",
+        "點解",
+        "为什么",
+        "為什麼",
+        "在意",
+        "真正",
+        "牵住",
+        "牽住",
+        "牵动",
+        "牽動",
+        "代表",
+        "感觉",
+        "感覺",
+        "matter",
+        "mean to me",
+        "why"
+    ]
+
+    private static let reflectiveMeaningRegretCues = [
+        "后悔",
+        "後悔",
+        "错过",
+        "錯過",
+        "missed",
+        "missing",
+        "regret",
+        "missed opportunity"
+    ]
+
+    private static let reflectiveMeaningAnalysisCues = [
+        "分析",
+        "睇清楚",
+        "看清楚",
+        "复盘",
+        "復盤",
+        "点解",
+        "點解",
+        "为什么",
+        "為什麼",
+        "why",
+        "真正",
+        "understand"
+    ]
+
+    private static let reflectiveMeaningLayeredCues = [
+        "分析清楚啲",
+        "分析清楚d",
+        "分析清楚",
+        "分析得再清楚",
+        "分析再清楚",
+        "睇清楚啲",
+        "睇清楚d",
+        "看清楚一点",
+        "看清楚一點",
+        "更清楚",
+        "deeper",
+        "break down"
+    ]
+
+    private static let patternSafetyBypassCues = [
+        "self-harm",
+        "suicide",
+        "kill myself",
+        "end my life",
+        "don't want to live",
+        "dont want to live",
+        "hurt myself",
+        "伤害自己",
+        "傷害自己",
+        "自杀",
+        "自殺",
+        "想死",
+        "唔想活",
+        "不想活",
+        "轻生",
+        "輕生",
+        "结束生命",
+        "結束生命",
+        "安唔安全",
+        "不安全",
+        "diagnose",
+        "diagnosis",
+        "诊断",
+        "診斷",
+        "depression",
+        "medication",
+        "treatment",
+        "食药",
+        "食藥",
+        "药",
+        "藥",
+        "psychosis",
+        "eating disorder",
+        "substance"
+    ]
+
+    private static let comparisonLoopCues = [
+        "compare",
+        "comparing",
+        "comparison",
+        "其他人",
+        "别人",
+        "別人",
+        "同龄",
+        "同齡",
+        "everyone seems ahead",
+        "they are ahead",
+        "others are ahead",
+        "other people are ahead",
+        "peer",
+        "peers",
+        "落后",
+        "落後",
+        "慢好多",
+        "量自己"
+    ]
+
+    private static let comparisonStatusCues = [
+        "school",
+        "学校",
+        "學校",
+        "usc",
+        "berkeley",
+        "credentials",
+        "founder",
+        "founders",
+        "progress",
+        "进度",
+        "進度",
+        "shipping",
+        "够唔够格",
+        "夠唔夠格",
+        "够格",
+        "夠格"
+    ]
+
+    private static let identityConstraintCues = [
+        "f-1",
+        "visa",
+        "school",
+        "smc",
+        "学校",
+        "學校",
+        "19",
+        "age",
+        "身份"
+    ]
+
+    private static let identityJudgmentCues = [
+        "legitimate",
+        "legitimacy",
+        "real enough",
+        "真正 founder",
+        "唔似一个真正",
+        "唔似一個真正",
+        "够格",
+        "夠格",
+        "证明",
+        "證明",
+        "not real"
+    ]
+
+    private static let learningDelayCues = [
+        "research",
+        "研究",
+        "pdf",
+        "pdfs",
+        "docs",
+        "model docs",
+        "realtime docs",
+        "read a few more",
+        "provider comparison"
+    ]
+
+    private static let shippingEvidenceCues = [
+        "shipping",
+        "ship",
+        "prototype",
+        "slice",
+        "shippable",
+        "交付",
+        "已經清楚",
+        "已经清楚",
+        "之后先决定",
+        "之後先決定",
+        "before shipping"
+    ]
+
+    private static let planningExpansionCues = [
+        "whole architecture",
+        "full framework",
+        "system design",
+        "完整 roadmap",
+        "whole operating system",
+        "redesign the whole",
+        "replace the small step with architecture"
+    ]
+
+    private static let availableActionCues = [
+        "before shipping",
+        "before doing",
+        "小 demo",
+        "demo",
+        "30-minute",
+        "30 分钟",
+        "30 分鐘",
+        "exposed next step",
+        "small slice",
+        "今日做",
+        "先排",
+        "又想先"
+    ]
+
+    private static let systemDeferenceCues = [
+        "你直接帮我决定",
+        "你直接幫我決定",
+        "替我定案",
+        "tell me the product decision",
+        "choose for me",
+        "帮我定案",
+        "幫我定案"
+    ]
+
+    private static let ownEvidenceCues = [
+        "live evidence",
+        "product taste",
+        "用户反应",
+        "用戶反應",
+        "已经见到",
+        "已經見到",
+        "already know",
+        "已经知道",
+        "已經知道",
+        "我其实已经知道",
+        "我其實已經知道"
+    ]
+
+    private static func isTextTransformRequest(_ normalized: String) -> Bool {
+        textTransformCues.contains { normalized.contains($0) }
+    }
+}
+
+private struct PatternCandidate {
+    let kind: InTurnPatternKind
+    let confidence: Double
+    let reasonCode: String
 }
 
 private struct DeterministicStanceResult {
@@ -805,7 +1663,10 @@ private extension TurnStewardDecision {
             confidence: routing.confidence,
             softerFallback: routing.softerFallback,
             fallbackUsed: routing.fallbackUsed,
-            routerReason: routing.reason
+            routerReason: routing.reason,
+            inTurnPatternSignal: inTurnPatternSignal,
+            reflectiveMeaningSignal: reflectiveMeaningSignal,
+            latencyTier: latencyTier
         )
     }
 }

@@ -170,6 +170,247 @@ final class TurnPlannerShadowLearningTests: XCTestCase {
         XCTAssertNil(plan.promptTrace.slowCognitionTrace)
     }
 
+    func testActiveQuickActionOptOutUsesStewardLeanPolicyInsteadOfModeDefault() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        try nodeStore.insertMemoryEntry(MemoryEntry(
+            scope: .global,
+            kind: .identity,
+            stability: .stable,
+            content: "- This global memory should not be loaded."
+        ))
+        try nodeStore.insertNode(NousNode(type: .conversation, title: "Prior decision"))
+        try nodeStore.insertMemoryAtom(MemoryAtom(
+            type: .decision,
+            statement: "This corpus atom should not be loaded when memory is opted out.",
+            scope: .global,
+            confidence: 0.9
+        ))
+        let artifact = CognitionArtifact(
+            organ: .patternAnalyst,
+            title: "Should stay out",
+            summary: "This slow cognition artifact should not be loaded when steward selected lean.",
+            confidence: 0.9,
+            jurisdiction: .selfReflection,
+            evidenceRefs: [],
+            suggestedSurfacing: "Only when memory is allowed."
+        )
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            slowCognitionArtifactProvider: FixedSlowCognitionArtifactProvider(artifacts: [artifact])
+        )
+        let node = NousNode(type: .conversation, title: "Plan opt-out")
+        let message = Message(
+            nodeId: node.id,
+            role: .user,
+            content: "from scratch, don't use memory, help me plan around the decision we made before"
+        )
+        let prepared = PreparedConversationTurn(node: node, userMessage: message, messagesAfterUserAppend: [message])
+        let request = self.request(input: message.content, node: node, activeQuickActionMode: .plan)
+        let stewardship = TurnStewardDecision(
+            route: .plan,
+            memoryPolicy: .lean,
+            challengeStance: .surfaceTension,
+            responseShape: .producePlan,
+            source: .deterministic,
+            reason: "active quick action memory opt-out",
+            latencyTier: .deep
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertFalse(plan.promptTrace.promptLayers.contains("global_memory"))
+        XCTAssertFalse(plan.promptTrace.promptLayers.contains("slow_cognition"))
+        XCTAssertFalse(plan.turnSlice.volatile.contains("This global memory should not be loaded."))
+        XCTAssertFalse(plan.turnSlice.volatile.contains("ALEX'S CORPUS"))
+        XCTAssertFalse(plan.turnSlice.volatile.contains("This corpus atom should not be loaded"))
+        XCTAssertTrue(plan.resolvedCorpusEntries.isEmpty)
+        XCTAssertFalse(plan.turnSlice.volatile.contains(artifact.summary))
+    }
+
+    func testActiveBrainstormKeepsGroundedBrainstormMemoryPolicy() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        try nodeStore.insertMemoryEntry(MemoryEntry(
+            scope: .global,
+            kind: .preference,
+            stability: .stable,
+            content: "- Brainstorm should use this grounded memory seed."
+        ))
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "Brainstorm")
+        let message = Message(nodeId: node.id, role: .user, content: "give me ideas")
+        let prepared = PreparedConversationTurn(node: node, userMessage: message, messagesAfterUserAppend: [message])
+        let request = self.request(input: message.content, node: node, activeQuickActionMode: .brainstorm)
+        let stewardship = TurnStewardDecision(
+            route: .brainstorm,
+            memoryPolicy: .lean,
+            challengeStance: .useSilently,
+            responseShape: .listDirections,
+            source: .deterministic,
+            reason: "active quick action mode",
+            latencyTier: .normal
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertTrue(plan.promptTrace.promptLayers.contains("global_memory"))
+        XCTAssertTrue(plan.turnSlice.combined.contains("Brainstorm should use this grounded memory seed."))
+    }
+
+    func testSupportFirstOrdinaryTurnSuppressesActiveQuickModePromptContext() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "Support first")
+        let message = Message(nodeId: node.id, role: .user, content: "我好焦虑，先陪我一下")
+        let prepared = PreparedConversationTurn(node: node, userMessage: message, messagesAfterUserAppend: [message])
+        let request = self.request(input: message.content, node: node, activeQuickActionMode: .brainstorm)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .conversationOnly,
+            challengeStance: .supportFirst,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "emotional distress cue",
+            responseStance: .supportFirst,
+            judgePolicy: .off,
+            latencyTier: .normal
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertNil(plan.nextQuickActionModeIfCompleted)
+        XCTAssertNil(plan.agentLoopMode)
+        XCTAssertFalse(plan.promptTrace.promptLayers.contains("quick_action_mode"))
+        XCTAssertFalse(plan.turnSlice.volatile.contains("ACTIVE QUICK MODE: Brainstorm"))
+    }
+
+    func testSupportFirstPlanTurnSuppressesActiveQuickModePromptContext() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "Support plan")
+        let message = Message(nodeId: node.id, role: .user, content: "我好焦虑，帮我 plan this week")
+        let prepared = PreparedConversationTurn(node: node, userMessage: message, messagesAfterUserAppend: [message])
+        let request = self.request(input: message.content, node: node, activeQuickActionMode: .plan)
+        let stewardship = TurnStewardDecision(
+            route: .plan,
+            memoryPolicy: .full,
+            challengeStance: .supportFirst,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "active quick action distress cue",
+            responseStance: .supportFirst,
+            judgePolicy: .off,
+            latencyTier: .deep
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertNil(plan.nextQuickActionModeIfCompleted)
+        XCTAssertNil(plan.agentLoopMode)
+        XCTAssertFalse(plan.promptTrace.promptLayers.contains("quick_action_mode"))
+        XCTAssertFalse(plan.turnSlice.volatile.contains("ACTIVE QUICK MODE: Plan"))
+        XCTAssertFalse(plan.turnSlice.volatile.contains("INTERACTIVE CLARIFICATION UI"))
+    }
+
+    func testFastLatencyTierPlansLeanSingleMessageTurn() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let judge = CountingJudge()
+        let artifact = CognitionArtifact(
+            organ: .patternAnalyst,
+            title: "Should stay out",
+            summary: "This slow cognition artifact should not be loaded on fast turns.",
+            confidence: 0.9,
+            jurisdiction: .selfReflection,
+            evidenceRefs: [],
+            suggestedSurfacing: "Only for slow turns."
+        )
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { TrackingThinkingLLMService() },
+            provocationJudgeFactory: { _ in judge },
+            slowCognitionArtifactProvider: FixedSlowCognitionArtifactProvider(artifacts: [artifact])
+        )
+        let node = NousNode(type: .conversation, title: "Fast turn")
+        let earlier = Message(nodeId: node.id, role: .assistant, content: "Earlier context should not be resent.")
+        let message = Message(nodeId: node.id, role: .user, content: "what does TTFT mean?")
+        let prepared = PreparedConversationTurn(
+            node: node,
+            userMessage: message,
+            messagesAfterUserAppend: [earlier, message]
+        )
+        let request = self.request(input: message.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "ordinary companion default",
+            latencyTier: .fast
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertEqual(plan.latencyTier, .fast)
+        XCTAssertEqual(plan.transcriptMessages.map(\.content), [message.content])
+        XCTAssertEqual(judge.callCount, 0)
+        XCTAssertFalse(plan.turnSlice.volatile.contains("SLOW COGNITION SIGNAL:"))
+        XCTAssertFalse(plan.promptTrace.promptLayers.contains("global_memory"))
+        XCTAssertFalse(plan.promptTrace.promptLayers.contains("slow_cognition"))
+        XCTAssertFalse(plan.promptTrace.promptLayers.contains("citations"))
+        XCTAssertNil(plan.focusBlock)
+    }
+
+    func testNormalOrdinaryChatKeepsFullMemoryAndTranscript() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        try nodeStore.insertMemoryEntry(MemoryEntry(
+            scope: .global,
+            kind: .identity,
+            stability: .stable,
+            content: "- Alex uses Nous to think."
+        ))
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "Normal turn")
+        let earlier = Message(nodeId: node.id, role: .assistant, content: "Earlier context should stay.")
+        let message = Message(nodeId: node.id, role: .user, content: "just thinking out loud")
+        let prepared = PreparedConversationTurn(
+            node: node,
+            userMessage: message,
+            messagesAfterUserAppend: [earlier, message]
+        )
+        let request = self.request(input: message.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "ordinary chat default",
+            latencyTier: .normal
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertEqual(plan.latencyTier, .normal)
+        XCTAssertEqual(plan.transcriptMessages.map(\.content), [earlier.content, message.content])
+        XCTAssertTrue(plan.promptTrace.promptLayers.contains("global_memory"))
+    }
+
     func testSoftAnalysisRunsJudgeSilentlyWithoutVisibleThinkingOrFocusBlock() async throws {
         let nodeStore = try NodeStore(path: ":memory:")
         let judgeLLM = TrackingThinkingLLMService()
@@ -375,6 +616,175 @@ final class TurnPlannerShadowLearningTests: XCTestCase {
         XCTAssertFalse(plan.turnSlice.volatile.contains("RESPONSE STANCE:"))
     }
 
+    func testTurnGuidanceRendersInTurnPatternNamingWhenSignalExists() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "Pattern naming")
+        let message = Message(
+            nodeId: node.id,
+            role: .user,
+            content: "I keep comparing myself to other founders and it changes what I do next."
+        )
+        let prepared = PreparedConversationTurn(node: node, userMessage: message, messagesAfterUserAppend: [message])
+        let request = self.request(input: message.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "ordinary chat default",
+            inTurnPatternSignal: InTurnPatternSignal(
+                kind: .comparisonLoop,
+                confidence: 0.9,
+                surfacePolicy: .directName,
+                reasonCode: "comparison_status_progress"
+            )
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertEqual(plan.turnSlice.volatile.components(separatedBy: "TURN GUIDANCE:").count - 1, 1)
+        XCTAssertTrue(plan.turnSlice.volatile.contains("Pattern naming: Name at most one live pattern."))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("comparison loop"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("say the comparison out loud"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("Continue helping with Alex's original task."))
+        XCTAssertFalse(plan.turnSlice.volatile.contains("therapy worksheet"))
+        XCTAssertFalse(plan.turnSlice.volatile.contains("you always"))
+    }
+
+    func testTurnGuidanceDoesNotMentionPatternNamingWithoutSignal() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "No pattern")
+        let message = Message(nodeId: node.id, role: .user, content: "Should I do this or not?")
+        let prepared = PreparedConversationTurn(node: node, userMessage: message, messagesAfterUserAppend: [message])
+        let request = self.request(input: message.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "ordinary chat default"
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertFalse(plan.turnSlice.volatile.contains("Pattern naming:"))
+        XCTAssertFalse(plan.turnSlice.volatile.contains("comparison loop"))
+    }
+
+    func testTurnGuidanceRendersReflectiveMeaningWhenSignalExists() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "Meaning")
+        let message = Message(
+            nodeId: node.id,
+            role: .user,
+            content: "我想复盘下演唱会嗰个女仔，点解我会咁在意？"
+        )
+        let prepared = PreparedConversationTurn(node: node, userMessage: message, messagesAfterUserAppend: [message])
+        let request = self.request(input: message.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "ordinary chat default",
+            reflectiveMeaningSignal: ReflectiveMeaningSignal(
+                confidence: 0.86,
+                surfacePolicy: .compact,
+                reasonCode: "reflective_meaning_request"
+            )
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertEqual(plan.turnSlice.volatile.components(separatedBy: "TURN GUIDANCE:").count - 1, 1)
+        XCTAssertTrue(plan.turnSlice.volatile.contains("Reflective meaning:"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("Name one possible underlying pull"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("one reusable action"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("tentative language"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("If evidence is thin, ask one clarifying question"))
+        XCTAssertFalse(plan.turnSlice.volatile.contains("演唱会"))
+        XCTAssertFalse(plan.turnSlice.volatile.lowercased().contains("concert"))
+        XCTAssertFalse(plan.turnSlice.volatile.lowercased().contains("girl"))
+        XCTAssertFalse(plan.turnSlice.volatile.lowercased().contains("atmosphere"))
+    }
+
+    func testTurnGuidanceRendersLayeredReflectiveMeaningWhenAskedForClearerAnalysis() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "Layered meaning")
+        let message = Message(nodeId: node.id, role: .user, content: "分析清楚啲，点解我咁在意？")
+        let prepared = PreparedConversationTurn(node: node, userMessage: message, messagesAfterUserAppend: [message])
+        let request = self.request(input: message.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "ordinary chat default",
+            reflectiveMeaningSignal: ReflectiveMeaningSignal(
+                confidence: 0.86,
+                surfacePolicy: .layered,
+                reasonCode: "reflective_meaning_layered_request"
+            )
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertTrue(plan.turnSlice.volatile.contains("Use compact three-layer form"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("surface event"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("possible underlying pull"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("reusable action"))
+    }
+
+    func testTurnGuidanceDoesNotMentionReflectiveMeaningWithoutSignal() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "No meaning")
+        let message = Message(nodeId: node.id, role: .user, content: "What do you think about this UI?")
+        let prepared = PreparedConversationTurn(node: node, userMessage: message, messagesAfterUserAppend: [message])
+        let request = self.request(input: message.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "ordinary chat default"
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertFalse(plan.turnSlice.volatile.contains("Reflective meaning:"))
+        XCTAssertFalse(plan.turnSlice.volatile.contains("underlying pull"))
+    }
+
     func testSupportFirstTraceSuppressesConflictingShapeGuidance() async throws {
         let nodeStore = try NodeStore(path: ":memory:")
         let planner = makePlanner(
@@ -452,7 +862,11 @@ final class TurnPlannerShadowLearningTests: XCTestCase {
         )
     }
 
-    private func request(input: String, node: NousNode) -> TurnRequest {
+    private func request(
+        input: String,
+        node: NousNode,
+        activeQuickActionMode: QuickActionMode? = nil
+    ) -> TurnRequest {
         TurnRequest(
             turnId: UUID(),
             snapshot: TurnSessionSnapshot(
@@ -460,7 +874,7 @@ final class TurnPlannerShadowLearningTests: XCTestCase {
                 messages: [],
                 defaultProjectId: nil,
                 activeChatMode: nil,
-                activeQuickActionMode: nil
+                activeQuickActionMode: activeQuickActionMode
             ),
             inputText: input,
             attachments: [],

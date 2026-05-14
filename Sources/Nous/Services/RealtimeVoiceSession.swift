@@ -203,7 +203,7 @@ enum RealtimeVoiceEventParser {
 }
 
 final class RealtimeVoiceSession: RealtimeVoiceSessioning {
-    static let defaultModel = "gpt-realtime-mini"
+    static let defaultModel = RealtimeVoiceModel.realtime2.rawValue
 
     private let socket: RealtimeVoiceSocketing
     private let audioCapture: VoiceAudioCapturing?
@@ -258,12 +258,12 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
         stop()
 
         do {
-            try await socket.connect(request: Self.makeRequest(apiKey: apiKey))
+            let configuration = configurationLock.withLock { $0 }
+            try await socket.connect(request: Self.makeRequest(apiKey: apiKey, model: configuration.model.rawValue))
             try audioPlayback?.start()
             let queue = RealtimeVoiceOutboundQueue(maxPendingAudioChunks: 8)
             outboundQueue = queue
             queue.start(socket: socket, onEvent: onEvent)
-            let configuration = configurationLock.withLock { $0 }
             try await queue.enqueueControl(Self.makeSessionUpdateEvent(
                 includeMemoryTools: includeMemoryTools,
                 configuration: configuration
@@ -309,7 +309,6 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
     }
 
     static func makeSessionUpdateEvent(
-        model: String = defaultModel,
         includeMemoryTools: Bool = false,
         configuration: RealtimeVoiceConfiguration = .default
     ) throws -> Data {
@@ -320,31 +319,37 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
             transcription["language"] = languageCode
         }
 
+        var session: [String: Any] = [
+            "type": "realtime",
+            "model": configuration.model.rawValue,
+            "instructions": voiceInstructions(configuration: configuration),
+            "output_modalities": ["audio"],
+            "audio": [
+                "input": [
+                    "format": [
+                        "type": "audio/pcm",
+                        "rate": 24000
+                    ],
+                    "noise_reduction": [
+                        "type": "near_field"
+                    ],
+                    "transcription": transcription,
+                    "turn_detection": [
+                        "type": "semantic_vad"
+                    ]
+                ],
+                "output": audioOutputConfiguration(configuration: configuration)
+            ],
+            "tools": VoiceActionRegistry.declarations(includeMemoryTools: includeMemoryTools),
+            "tool_choice": "auto"
+        ]
+        if let reasoningEffort = configuration.reasoningEffort {
+            session["reasoning"] = ["effort": reasoningEffort.rawValue]
+        }
+
         let body: [String: Any] = [
             "type": "session.update",
-            "session": [
-                "type": "realtime",
-                "instructions": voiceInstructions(configuration: configuration),
-                "output_modalities": ["audio"],
-                "audio": [
-                    "input": [
-                        "format": [
-                            "type": "audio/pcm",
-                            "rate": 24000
-                        ],
-                        "noise_reduction": [
-                            "type": "near_field"
-                        ],
-                        "transcription": transcription,
-                        "turn_detection": [
-                            "type": "semantic_vad"
-                        ]
-                    ],
-                    "output": audioOutputConfiguration(configuration: configuration)
-                ],
-                "tools": VoiceActionRegistry.declarations(includeMemoryTools: includeMemoryTools),
-                "tool_choice": "auto"
-            ]
+            "session": session
         ]
         return try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
     }
@@ -441,7 +446,9 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
         """
         You are the live voice layer for Nous. Sound like a calm, present thinking partner, not a command menu. \
         Speak naturally in short conversational turns. Acknowledge what Alex said before taking action, especially before tool calls. \
-        Call tools only for explicit user intent. Use direct tools for navigation, settings sections, appearance, scratchpad/sidebar visibility, and composer drafting. \
+        Call tools only for explicit user intent. Use direct tools for navigation, settings sections, appearance, scratchpad/sidebar visibility, scratchpad drafting, and composer drafting. \
+        When Alex asks to write an essay, post, script, note, draft, outline, paragraph, or revision, treat the scratchpad as the live writing surface: interview briefly, open it, then write usable markdown with replace_scratchpad_markdown or append_scratchpad_markdown. \
+        Prefer appending unless Alex clearly asks to replace the existing white paper; never silently discard a draft. \
         When Alex asks to summarize, recap, or organize the current spoken thought, write concise markdown and call show_summary_preview so it appears as a summary paper below the floating capsule. \
         Use propose_note for creating notes. When a tool succeeds, report the result plainly; never claim you clicked UI. \
         Voice user utterances are automatically recorded into the chat history. Language: \(configuration.language.realtimeInstruction)

@@ -21,6 +21,48 @@ struct GeminiCacheSummary: Equatable {
     }
 }
 
+enum TurnInferenceOutcome: String, Codable, Equatable {
+    case completed
+    case error
+}
+
+struct TurnInferenceTelemetryRecord: Codable, Equatable {
+    let provider: LLMProvider
+    let modelName: String
+    let latencyTier: TurnLatencyTier
+    let outcome: TurnInferenceOutcome
+    let ttftSeconds: TimeInterval?
+    let streamDurationSeconds: TimeInterval
+    let chunkCount: Int
+    let averageChunkGapSeconds: TimeInterval?
+    let maxChunkGapSeconds: TimeInterval?
+    let outputCharacterCount: Int
+    let stablePromptCharacterCount: Int
+    let volatilePromptCharacterCount: Int
+    let requestPromptCharacterCount: Int
+    let usedCachedHistory: Bool
+    let geminiUsage: GeminiUsageMetadata?
+}
+
+struct TurnInferenceTelemetrySnapshot: Codable, Equatable {
+    let record: TurnInferenceTelemetryRecord
+    let recordedAt: Date
+}
+
+struct TurnInferenceTelemetrySummary: Equatable {
+    let requestCount: Int
+    let fastRequestCount: Int
+    let normalRequestCount: Int
+    let deepRequestCount: Int
+    let averageTTFTSeconds: TimeInterval?
+    let averageFastTTFTSeconds: TimeInterval?
+    let averageNormalTTFTSeconds: TimeInterval?
+    let averageDeepTTFTSeconds: TimeInterval?
+    let averageStreamDurationSeconds: TimeInterval
+    let averageChunkGapSeconds: TimeInterval?
+    let lastSnapshot: TurnInferenceTelemetrySnapshot?
+}
+
 struct PromptTraceEvaluationMetrics: Equatable {
     let runCount: Int
     let failedRunCount: Int
@@ -1016,6 +1058,23 @@ final class GovernanceTelemetryStore {
         static let geminiCacheRequestCount = "nous.governance.geminiCacheRequestCount"
         static let geminiCachePromptTokens = "nous.governance.geminiCachePromptTokens"
         static let geminiCacheHitTokens = "nous.governance.geminiCacheHitTokens"
+
+        static let lastTurnInferenceTelemetrySnapshot = "nous.governance.lastTurnInferenceTelemetrySnapshot"
+        static let turnInferenceRequestCount = "nous.governance.turnInferenceRequestCount"
+        static let turnInferenceTTFTTotal = "nous.governance.turnInferenceTTFTTotal"
+        static let turnInferenceTTFTCount = "nous.governance.turnInferenceTTFTCount"
+        static let turnInferenceStreamDurationTotal = "nous.governance.turnInferenceStreamDurationTotal"
+        static let turnInferenceChunkGapTotal = "nous.governance.turnInferenceChunkGapTotal"
+        static let turnInferenceChunkGapCount = "nous.governance.turnInferenceChunkGapCount"
+        static func turnInferenceTierRequestCount(_ tier: TurnLatencyTier) -> String {
+            "nous.governance.turnInference.\(tier.rawValue).requestCount"
+        }
+        static func turnInferenceTierTTFTTotal(_ tier: TurnLatencyTier) -> String {
+            "nous.governance.turnInference.\(tier.rawValue).ttftTotal"
+        }
+        static func turnInferenceTierTTFTCount(_ tier: TurnLatencyTier) -> String {
+            "nous.governance.turnInference.\(tier.rawValue).ttftCount"
+        }
     }
 
     init(defaults: UserDefaults = .standard, nodeStore: NodeStore? = nil) {
@@ -1391,6 +1450,107 @@ final class GovernanceTelemetryStore {
             requestCount: requestCount,
             totalPromptTokens: totalPromptTokens,
             totalCachedTokens: totalCachedTokens,
+            lastSnapshot: lastSnapshot
+        )
+    }
+
+    func recordTurnInferenceTelemetry(
+        _ record: TurnInferenceTelemetryRecord,
+        at date: Date = Date()
+    ) {
+        let snapshot = TurnInferenceTelemetrySnapshot(record: record, recordedAt: date)
+        if let data = try? JSONEncoder().encode(snapshot) {
+            defaults.set(data, forKey: Keys.lastTurnInferenceTelemetrySnapshot)
+        }
+
+        defaults.set(
+            defaults.integer(forKey: Keys.turnInferenceRequestCount) + 1,
+            forKey: Keys.turnInferenceRequestCount
+        )
+        defaults.set(
+            defaults.integer(forKey: Keys.turnInferenceTierRequestCount(record.latencyTier)) + 1,
+            forKey: Keys.turnInferenceTierRequestCount(record.latencyTier)
+        )
+        if let ttft = record.ttftSeconds {
+            defaults.set(
+                defaults.double(forKey: Keys.turnInferenceTTFTTotal) + ttft,
+                forKey: Keys.turnInferenceTTFTTotal
+            )
+            defaults.set(
+                defaults.integer(forKey: Keys.turnInferenceTTFTCount) + 1,
+                forKey: Keys.turnInferenceTTFTCount
+            )
+            defaults.set(
+                defaults.double(forKey: Keys.turnInferenceTierTTFTTotal(record.latencyTier)) + ttft,
+                forKey: Keys.turnInferenceTierTTFTTotal(record.latencyTier)
+            )
+            defaults.set(
+                defaults.integer(forKey: Keys.turnInferenceTierTTFTCount(record.latencyTier)) + 1,
+                forKey: Keys.turnInferenceTierTTFTCount(record.latencyTier)
+            )
+        }
+        defaults.set(
+            defaults.double(forKey: Keys.turnInferenceStreamDurationTotal) + record.streamDurationSeconds,
+            forKey: Keys.turnInferenceStreamDurationTotal
+        )
+        if let averageGap = record.averageChunkGapSeconds {
+            defaults.set(
+                defaults.double(forKey: Keys.turnInferenceChunkGapTotal) + averageGap,
+                forKey: Keys.turnInferenceChunkGapTotal
+            )
+            defaults.set(
+                defaults.integer(forKey: Keys.turnInferenceChunkGapCount) + 1,
+                forKey: Keys.turnInferenceChunkGapCount
+            )
+        }
+    }
+
+    var lastTurnInferenceTelemetrySnapshot: TurnInferenceTelemetrySnapshot? {
+        guard let data = defaults.data(forKey: Keys.lastTurnInferenceTelemetrySnapshot) else { return nil }
+        return try? JSONDecoder().decode(TurnInferenceTelemetrySnapshot.self, from: data)
+    }
+
+    var turnInferenceTelemetrySummary: TurnInferenceTelemetrySummary? {
+        let requestCount = defaults.integer(forKey: Keys.turnInferenceRequestCount)
+        let lastSnapshot = lastTurnInferenceTelemetrySnapshot
+
+        guard requestCount > 0 || lastSnapshot != nil else { return nil }
+
+        let ttftCount = defaults.integer(forKey: Keys.turnInferenceTTFTCount)
+        let averageTTFT = ttftCount > 0
+            ? defaults.double(forKey: Keys.turnInferenceTTFTTotal) / Double(ttftCount)
+            : nil
+        let fastTTFTCount = defaults.integer(forKey: Keys.turnInferenceTierTTFTCount(.fast))
+        let averageFastTTFT = fastTTFTCount > 0
+            ? defaults.double(forKey: Keys.turnInferenceTierTTFTTotal(.fast)) / Double(fastTTFTCount)
+            : nil
+        let normalTTFTCount = defaults.integer(forKey: Keys.turnInferenceTierTTFTCount(.normal))
+        let averageNormalTTFT = normalTTFTCount > 0
+            ? defaults.double(forKey: Keys.turnInferenceTierTTFTTotal(.normal)) / Double(normalTTFTCount)
+            : nil
+        let deepTTFTCount = defaults.integer(forKey: Keys.turnInferenceTierTTFTCount(.deep))
+        let averageDeepTTFT = deepTTFTCount > 0
+            ? defaults.double(forKey: Keys.turnInferenceTierTTFTTotal(.deep)) / Double(deepTTFTCount)
+            : nil
+        let averageStream = requestCount > 0
+            ? defaults.double(forKey: Keys.turnInferenceStreamDurationTotal) / Double(requestCount)
+            : 0
+        let chunkGapCount = defaults.integer(forKey: Keys.turnInferenceChunkGapCount)
+        let averageChunkGap = chunkGapCount > 0
+            ? defaults.double(forKey: Keys.turnInferenceChunkGapTotal) / Double(chunkGapCount)
+            : nil
+
+        return TurnInferenceTelemetrySummary(
+            requestCount: requestCount,
+            fastRequestCount: defaults.integer(forKey: Keys.turnInferenceTierRequestCount(.fast)),
+            normalRequestCount: defaults.integer(forKey: Keys.turnInferenceTierRequestCount(.normal)),
+            deepRequestCount: defaults.integer(forKey: Keys.turnInferenceTierRequestCount(.deep)),
+            averageTTFTSeconds: averageTTFT,
+            averageFastTTFTSeconds: averageFastTTFT,
+            averageNormalTTFTSeconds: averageNormalTTFT,
+            averageDeepTTFTSeconds: averageDeepTTFT,
+            averageStreamDurationSeconds: averageStream,
+            averageChunkGapSeconds: averageChunkGap,
             lastSnapshot: lastSnapshot
         )
     }

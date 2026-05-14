@@ -18,6 +18,7 @@ final class PromptGovernanceTraceTests: XCTestCase {
         XCTAssertNil(trace.turnSteward)
         XCTAssertNil(trace.agentCoordination)
         XCTAssertNil(trace.citationTrace)
+        XCTAssertNil(trace.quickActionExperiment)
         XCTAssertEqual(trace.visibleResponseLanguageTarget, .unspecified)
         XCTAssertEqual(trace.visibleResponseLanguageSource, .none)
     }
@@ -56,6 +57,27 @@ final class PromptGovernanceTraceTests: XCTestCase {
         XCTAssertEqual(decoded.visibleResponseLanguageSource, .currentTurnCantonese)
     }
 
+    func testEncodesAndDecodesQuickActionExperimentTrace() throws {
+        let experiment = QuickActionExperimentTrace(
+            experimentId: "study-quick-mode-ab-v1",
+            mode: .study,
+            variant: .candidate
+        )
+        let trace = PromptGovernanceTrace(
+            promptLayers: ["anchor", "chat_mode", "quick_action_experiment"],
+            evidenceAttached: false,
+            safetyPolicyInvoked: false,
+            highRiskQueryDetected: false,
+            quickActionExperiment: experiment
+        )
+
+        let data = try JSONEncoder().encode(trace)
+        let decoded = try JSONDecoder().decode(PromptGovernanceTrace.self, from: data)
+
+        XCTAssertEqual(decoded.quickActionExperiment, experiment)
+        XCTAssertTrue(decoded.promptLayers.contains("quick_action_experiment"))
+    }
+
     func testEncodesAndDecodesTurnStewardTrace() throws {
         let stewardTrace = TurnStewardTrace(
             route: .brainstorm,
@@ -72,6 +94,12 @@ final class PromptGovernanceTraceTests: XCTestCase {
             confidence: nil,
             softerFallback: nil,
             fallbackUsed: false,
+            inTurnPatternSignal: InTurnPatternSignal(
+                kind: .comparisonLoop,
+                confidence: 0.88,
+                surfacePolicy: .directName,
+                reasonCode: "comparison_status_progress"
+            ),
             supervisorLanes: [.memory, .project]
         )
         let trace = PromptGovernanceTrace(
@@ -86,7 +114,8 @@ final class PromptGovernanceTraceTests: XCTestCase {
         let decoded = try JSONDecoder().decode(PromptGovernanceTrace.self, from: data)
 
         XCTAssertEqual(decoded.turnSteward, stewardTrace)
-        XCTAssertEqual(decoded.turnSteward?.supervisorLanes, [.memory, .project])
+        XCTAssertEqual(decoded.turnSteward?.inTurnPatternSignal?.kind, .comparisonLoop)
+        XCTAssertEqual(decoded.turnSteward?.supervisorLanes, [.memory, .project, .pattern])
     }
 
     func testDecodesLegacyTurnStewardTraceWithoutResponseStanceFields() throws {
@@ -112,7 +141,34 @@ final class PromptGovernanceTraceTests: XCTestCase {
         XCTAssertNil(decoded.confidence)
         XCTAssertNil(decoded.softerFallback)
         XCTAssertNil(decoded.fallbackUsed)
+        XCTAssertNil(decoded.inTurnPatternSignal)
+        XCTAssertNil(decoded.reflectiveMeaningSignal)
         XCTAssertEqual(decoded.supervisorLanes, [])
+    }
+
+    func testEncodesAndDecodesReflectiveMeaningSignalAndLane() throws {
+        let stewardTrace = TurnStewardTrace(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            projectSignalKind: nil,
+            source: .deterministic,
+            reason: "ordinary chat default",
+            reflectiveMeaningSignal: ReflectiveMeaningSignal(
+                confidence: 0.86,
+                surfacePolicy: .compact,
+                reasonCode: "reflective_meaning_request"
+            ),
+            supervisorLanes: [.memory]
+        )
+
+        let data = try JSONEncoder().encode(stewardTrace)
+        let decoded = try JSONDecoder().decode(TurnStewardTrace.self, from: data)
+
+        XCTAssertEqual(decoded.reflectiveMeaningSignal?.surfacePolicy, .compact)
+        XCTAssertEqual(decoded.reflectiveMeaningSignal?.reasonCode, "reflective_meaning_request")
+        XCTAssertEqual(decoded.supervisorLanes, [.memory, .meaning])
     }
 
     func testEncodesAndDecodesCitationTrace() throws {
@@ -345,6 +401,30 @@ final class PromptGovernanceTraceTests: XCTestCase {
         XCTAssertTrue(withContext.hasMemorySignal)
         XCTAssertFalse(emptyContext.promptLayers.contains("operating_context"))
         XCTAssertFalse(emptyContext.hasMemorySignal)
+    }
+
+    func testGovernanceTraceCountsCorpusCardsAsMemorySignal() {
+        let entry = CitableEntry(
+            id: UUID().uuidString,
+            text: "Alex prefers momentum over polish for reversible product slices.",
+            scope: .global,
+            confidence: 0.91,
+            eventTime: Date(timeIntervalSince1970: 1_000),
+            atomType: .decision,
+            recordedAt: Date(timeIntervalSince1970: 1_000)
+        )
+        let trace = PromptContextAssembler.governanceTrace(
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil,
+            corpusContext: CitableContext(entries: [entry], manifest: .empty)
+        )
+
+        XCTAssertTrue(trace.promptLayers.contains("corpus_context"))
+        XCTAssertTrue(trace.hasMemorySignal)
     }
 
     func testGovernanceTraceAddsAgentCoordinationLayer() {
