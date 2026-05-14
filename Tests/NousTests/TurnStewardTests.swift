@@ -29,6 +29,108 @@ final class TurnStewardTests: XCTestCase {
         XCTAssertEqual(decision.memoryPolicy, .full)
         XCTAssertEqual(decision.responseShape, .producePlan)
         XCTAssertEqual(decision.trace.reason, "active quick action mode")
+        XCTAssertEqual(decision.latencyTier, .normal)
+    }
+
+    func testSimpleSelfContainedOrdinaryTurnsUseFastLatencyTier() {
+        let examples = [
+            "ping",
+            "翻译成英文：我今日好攰",
+            "帮我改短：今日会议主要讲产品节奏",
+            "what does TTFT mean?"
+        ]
+
+        for text in examples {
+            let decision = steward.steer(
+                prepared: preparedTurn(userText: text),
+                request: request(input: text)
+            )
+
+            XCTAssertEqual(decision.route, .ordinaryChat, text)
+            XCTAssertEqual(decision.latencyTier, .fast, text)
+            XCTAssertEqual(decision.trace.latencyTier, .fast, text)
+        }
+    }
+
+    func testContextDependentAndRiskyTurnsStayNormalLatency() {
+        let examples = [
+            "继续",
+            "呢个点解",
+            "你记得我上次讲咩",
+            "我係咪错",
+            "help me plan this week",
+            "what does this mean?",
+            "我好焦虑，点算"
+        ]
+
+        for text in examples {
+            let decision = steward.steer(
+                prepared: preparedTurn(userText: text),
+                request: request(input: text)
+            )
+
+            XCTAssertEqual(decision.latencyTier, .normal, text)
+            XCTAssertEqual(decision.trace.latencyTier, .normal, text)
+        }
+    }
+
+    func testShortPersonalConversationTurnsStayNormalLatency() {
+        let examples = [
+            "我今日同屋企人嘈咗",
+            "又諗起佢",
+            "最近状态麻麻",
+            "我有啲空",
+            "just thinking out loud"
+        ]
+
+        for text in examples {
+            let decision = steward.steer(
+                prepared: preparedTurn(userText: text),
+                request: request(input: text)
+            )
+
+            XCTAssertEqual(decision.route, .ordinaryChat, text)
+            XCTAssertEqual(decision.latencyTier, .normal, text)
+            XCTAssertEqual(decision.trace.latencyTier, .normal, text)
+        }
+    }
+
+    func testAttachmentsAndSourcesStayNormalLatency() {
+        let sourceNodeId = UUID()
+        let attachedDecision = steward.steer(
+            prepared: preparedTurn(userText: "summarize this"),
+            request: request(
+                input: "summarize this",
+                attachments: [
+                    AttachedFileContext(name: "note.txt", extractedText: "A short note.")
+                ]
+            )
+        )
+        let sourceDecision = steward.steer(
+            prepared: preparedTurn(userText: "what does this mean?"),
+            request: request(
+                input: "what does this mean?",
+                sourceMaterials: [
+                    SourceMaterialContext(
+                        sourceNodeId: sourceNodeId,
+                        title: "External source",
+                        originalURL: nil,
+                        originalFilename: "source.txt",
+                        chunks: [
+                            SourceChunkContext(
+                                sourceNodeId: sourceNodeId,
+                                ordinal: 0,
+                                text: "Source-backed context.",
+                                similarity: nil
+                            )
+                        ]
+                    )
+                ]
+            )
+        )
+
+        XCTAssertEqual(attachedDecision.latencyTier, .normal)
+        XCTAssertEqual(sourceDecision.latencyTier, .normal)
     }
 
     func testActivePlanQuickActionWithDistressKeepsPlanRouteButAnswersNow() {
@@ -778,6 +880,7 @@ final class TurnStewardTests: XCTestCase {
     private func request(
         input: String,
         activeQuickActionMode: QuickActionMode? = nil,
+        attachments: [AttachedFileContext] = [],
         sourceMaterials: [SourceMaterialContext] = []
     ) -> TurnRequest {
         TurnRequest(
@@ -790,7 +893,7 @@ final class TurnStewardTests: XCTestCase {
                 activeQuickActionMode: activeQuickActionMode
             ),
             inputText: input,
-            attachments: [],
+            attachments: attachments,
             sourceMaterials: sourceMaterials,
             now: Date()
         )

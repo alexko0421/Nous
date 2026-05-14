@@ -244,6 +244,7 @@ enum PromptContextAssembler {
     - Cantonese message → reply in Cantonese.
     - Mandarin message → reply in Mandarin.
     - Genuine mixed message → mirror the user's natural mix.
+    For Cantonese, dialect matters more than script: write natural Cantonese chat, not Mandarin prose with a few Cantonese particles.
     This rule overrides anchor examples, prior turns, internal memory, and Alex's usual style. Switching languages is only allowed when the user explicitly requests another language, or when quoting source text in its original language.
     Keep technical terms in English when that is clearer.
     Hidden metadata such as chat titles follows the visible conversation language.

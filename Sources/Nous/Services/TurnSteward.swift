@@ -140,7 +140,8 @@ final class TurnSteward {
 
         let route = route(for: normalized)
         let memoryOptOut = containsAny(normalized, in: Self.memoryOptOutCues)
-        let distress = containsAny(normalized, in: Self.distressCues)
+        let distress = !Self.isTextTransformRequest(normalized)
+            && containsAny(normalized, in: Self.distressCues)
 
         if distress, route == .ordinaryChat {
             return TurnStewardDecision(
@@ -202,13 +203,22 @@ final class TurnSteward {
                 reason: "source material attached"
             )
         case .ordinaryChat:
+            let latencyTier = latencyTier(
+                for: request,
+                text: text,
+                normalized: normalized,
+                route: route,
+                memoryOptOut: memoryOptOut,
+                distress: distress
+            )
             return TurnStewardDecision(
                 route: .ordinaryChat,
                 memoryPolicy: memoryOptOut ? .lean : .full,
                 challengeStance: distress ? .supportFirst : .useSilently,
                 responseShape: .answerNow,
                 source: .deterministic,
-                reason: memoryOptOut ? "memory opt-out cue" : "ordinary chat default"
+                reason: memoryOptOut ? "memory opt-out cue" : "ordinary chat default",
+                latencyTier: latencyTier
             )
         }
     }
@@ -248,7 +258,8 @@ final class TurnSteward {
     }
 
     private func deterministicResponseStance(for normalized: String) -> DeterministicStanceResult {
-        if containsAny(normalized, in: Self.distressCues) {
+        if !Self.isTextTransformRequest(normalized),
+           containsAny(normalized, in: Self.distressCues) {
             return DeterministicStanceResult(
                 result: SpeechActRoutingResult(
                     stance: .supportFirst,
@@ -427,7 +438,8 @@ final class TurnSteward {
                 confidence: routing.confidence,
                 softerFallback: routing.softerFallback,
                 fallbackUsed: routing.fallbackUsed,
-                routerReason: routing.reason
+                routerReason: routing.reason,
+                latencyTier: .normal
             )
         case .companion, .reflective:
             return TurnStewardDecision(
@@ -444,7 +456,8 @@ final class TurnSteward {
                 confidence: routing.confidence,
                 softerFallback: routing.softerFallback,
                 fallbackUsed: routing.fallbackUsed,
-                routerReason: routing.reason
+                routerReason: routing.reason,
+                latencyTier: routing.stance == .companion ? legacy.latencyTier : .normal
             )
         case .softAnalysis:
             let effectiveJudgePolicy: JudgePolicy = memoryOptOut ? .off : .silentFraming
@@ -463,7 +476,8 @@ final class TurnSteward {
                 confidence: routing.confidence,
                 softerFallback: routing.softerFallback,
                 fallbackUsed: routing.fallbackUsed,
-                routerReason: routing.reason
+                routerReason: routing.reason,
+                latencyTier: .normal
             )
         case .hardJudge:
             let effectiveJudgePolicy: JudgePolicy = memoryOptOut ? .off : .visibleTension
@@ -482,7 +496,8 @@ final class TurnSteward {
                 confidence: routing.confidence,
                 softerFallback: routing.softerFallback,
                 fallbackUsed: routing.fallbackUsed,
-                routerReason: routing.reason
+                routerReason: routing.reason,
+                latencyTier: .normal
             )
         }
     }
@@ -572,6 +587,54 @@ final class TurnSteward {
             return .direction
         }
         return .ordinaryChat
+    }
+
+    private func latencyTier(
+        for request: TurnRequest,
+        text: String,
+        normalized: String,
+        route: TurnRoute,
+        memoryOptOut: Bool,
+        distress: Bool
+    ) -> TurnLatencyTier {
+        guard route == .ordinaryChat,
+              request.snapshot.activeQuickActionMode == nil,
+              request.attachments.isEmpty,
+              request.sourceMaterials.isEmpty,
+              (1...160).contains(text.count),
+              !memoryOptOut,
+              !distress,
+              !hasExplicitHardJudgeCue(normalized),
+              !containsAny(normalized, in: Self.softAnalysisCues),
+              !containsAny(normalized, in: Self.reflectiveCues),
+              !containsAny(normalized, in: Self.ambiguousDecisionCues),
+              !containsAny(normalized, in: Self.broadOpinionCues),
+              !containsAny(normalized, in: Self.memoryRecallCues),
+              !containsAny(normalized, in: Self.contextDependentCues),
+              isExplicitFastUtilityRequest(normalized)
+        else {
+            return .normal
+        }
+        return .fast
+    }
+
+    private func isExplicitFastUtilityRequest(_ normalized: String) -> Bool {
+        if normalized == "ping" {
+            return true
+        }
+        if Self.isTextTransformRequest(normalized) {
+            return true
+        }
+        if normalized.hasPrefix("define ") {
+            return true
+        }
+        if normalized.range(
+            of: #"^what does [a-z0-9][a-z0-9 ._/\-]{1,80} mean\??$"#,
+            options: .regularExpression
+        ) != nil {
+            return true
+        }
+        return containsAny(normalized, in: Self.fastMeaningCues)
     }
 
     private func containsAny(_ text: String, in cues: [String]) -> Bool {
@@ -750,6 +813,64 @@ final class TurnSteward {
         "緊張",
         "崩"
     ]
+
+    private static let memoryRecallCues = [
+        "你记得",
+        "你記得",
+        "记得",
+        "記得",
+        "上次",
+        "last time",
+        "remember",
+        "memory"
+    ]
+
+    private static let contextDependentCues = [
+        "继续",
+        "繼續",
+        "接住",
+        "上面",
+        "前面",
+        "之前",
+        "刚才",
+        "剛才",
+        "啱先",
+        "呢个",
+        "呢個",
+        "这个",
+        "這個",
+        "what does this mean",
+        "what does that mean",
+        "what is this",
+        "what is that",
+        "this one",
+        "that one",
+        "above",
+        "previous"
+    ]
+
+    private static let textTransformCues = [
+        "翻译",
+        "翻譯",
+        "translate",
+        "改短",
+        "shorten",
+        "rewrite",
+        "润色",
+        "潤色",
+        "polish"
+    ]
+
+    private static let fastMeaningCues = [
+        "咩意思",
+        "什么意思",
+        "什麼意思",
+        "甚麼意思"
+    ]
+
+    private static func isTextTransformRequest(_ normalized: String) -> Bool {
+        textTransformCues.contains { normalized.contains($0) }
+    }
 }
 
 private struct DeterministicStanceResult {
@@ -805,7 +926,8 @@ private extension TurnStewardDecision {
             confidence: routing.confidence,
             softerFallback: routing.softerFallback,
             fallbackUsed: routing.fallbackUsed,
-            routerReason: routing.reason
+            routerReason: routing.reason,
+            latencyTier: latencyTier
         )
     }
 }

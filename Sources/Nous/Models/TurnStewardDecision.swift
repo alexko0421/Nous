@@ -28,6 +28,11 @@ enum TurnMemoryPolicyPreset: String, Codable, Equatable {
     case conversationOnly
 }
 
+enum TurnLatencyTier: String, Codable, Equatable {
+    case normal
+    case fast
+}
+
 enum TurnSupervisorLane: String, Codable, Equatable {
     case source
     case memory
@@ -181,6 +186,7 @@ enum TurnStewardSource: String, Codable, Equatable {
 struct TurnStewardTrace: Codable, Equatable {
     let route: TurnRoute
     let memoryPolicy: TurnMemoryPolicyPreset
+    let latencyTier: TurnLatencyTier
     let challengeStance: ChallengeStance
     let responseShape: ResponseShape
     let projectSignalKind: ProjectSignalKind?
@@ -199,6 +205,7 @@ struct TurnStewardTrace: Codable, Equatable {
     init(
         route: TurnRoute,
         memoryPolicy: TurnMemoryPolicyPreset,
+        latencyTier: TurnLatencyTier = .normal,
         challengeStance: ChallengeStance,
         responseShape: ResponseShape,
         projectSignalKind: ProjectSignalKind?,
@@ -216,6 +223,7 @@ struct TurnStewardTrace: Codable, Equatable {
     ) {
         self.route = route
         self.memoryPolicy = memoryPolicy
+        self.latencyTier = latencyTier
         self.challengeStance = challengeStance
         self.responseShape = responseShape
         self.projectSignalKind = projectSignalKind
@@ -235,6 +243,7 @@ struct TurnStewardTrace: Codable, Equatable {
     enum CodingKeys: String, CodingKey {
         case route
         case memoryPolicy
+        case latencyTier
         case challengeStance
         case responseShape
         case projectSignalKind
@@ -255,6 +264,7 @@ struct TurnStewardTrace: Codable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         route = try container.decode(TurnRoute.self, forKey: .route)
         memoryPolicy = try container.decode(TurnMemoryPolicyPreset.self, forKey: .memoryPolicy)
+        latencyTier = try container.decodeIfPresent(TurnLatencyTier.self, forKey: .latencyTier) ?? .normal
         challengeStance = try container.decode(ChallengeStance.self, forKey: .challengeStance)
         responseShape = try container.decode(ResponseShape.self, forKey: .responseShape)
         projectSignalKind = try container.decodeIfPresent(ProjectSignalKind.self, forKey: .projectSignalKind)
@@ -275,6 +285,7 @@ struct TurnStewardTrace: Codable, Equatable {
 struct TurnStewardDecision: Codable, Equatable {
     let route: TurnRoute
     let memoryPolicy: TurnMemoryPolicyPreset
+    let latencyTier: TurnLatencyTier
     let challengeStance: ChallengeStance
     let judgePolicy: JudgePolicy
     let responseShape: ResponseShape
@@ -299,7 +310,8 @@ struct TurnStewardDecision: Codable, Equatable {
         softerFallback: ResponseStance? = nil,
         fallbackUsed: Bool? = nil,
         routerReason: String? = nil,
-        supervisorLanes: [TurnSupervisorLane]? = nil
+        supervisorLanes: [TurnSupervisorLane]? = nil,
+        latencyTier: TurnLatencyTier = .normal
     ) {
         let resolvedJudgePolicy = judgePolicy ?? JudgePolicy(challengeStance: challengeStance)
         let resolvedSupervisorLanes = supervisorLanes ?? Self.defaultSupervisorLanes(
@@ -311,6 +323,7 @@ struct TurnStewardDecision: Codable, Equatable {
         )
         self.route = route
         self.memoryPolicy = memoryPolicy
+        self.latencyTier = latencyTier
         self.challengeStance = challengeStance
         self.judgePolicy = resolvedJudgePolicy
         self.responseShape = responseShape
@@ -319,6 +332,7 @@ struct TurnStewardDecision: Codable, Equatable {
         self.trace = TurnStewardTrace(
             route: route,
             memoryPolicy: memoryPolicy,
+            latencyTier: latencyTier,
             challengeStance: challengeStance,
             responseShape: responseShape,
             projectSignalKind: projectSignal?.kind,

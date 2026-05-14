@@ -324,7 +324,8 @@ final class ChatTurnRunner {
             assistantContent: executionResult.assistantContent,
             stableSystem: plan.turnSlice.stable,
             userMessage: plan.prepared.userMessage,
-            sourceMaterials: plan.sourceMaterials
+            sourceMaterials: plan.sourceMaterials,
+            latencyTier: plan.latencyTier
         )
         await sink.emit(.completed(completion))
         Self.debugLog("completed emitted turn=\(request.turnId)")

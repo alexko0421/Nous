@@ -173,6 +173,37 @@ final class ContextContinuationServiceTests: XCTestCase {
         )
     }
 
+    func testTurnOutcomeFactorySuppressesHeavyPostTurnWorkForFastLatencyTier() {
+        let conversation = NousNode(type: .conversation, title: "Fast utility")
+        let userMessage = Message(nodeId: conversation.id, role: .user, content: "what does TTFT mean?")
+        let assistantMessage = Message(nodeId: conversation.id, role: .assistant, content: "Time to first token.")
+        let factory = TurnOutcomeFactory(
+            memoryPersistenceDecision: { _, _ in .persist }
+        )
+
+        let completion = factory.makeCompletion(
+            turnId: UUID(),
+            nextQuickActionModeIfCompleted: nil,
+            committed: CommittedAssistantTurn(
+                node: conversation,
+                assistantMessage: assistantMessage,
+                messagesAfterAssistantAppend: [userMessage, assistantMessage]
+            ),
+            assistantContent: assistantMessage.content,
+            stableSystem: "stable",
+            userMessage: userMessage,
+            latencyTier: .fast
+        )
+
+        XCTAssertNil(completion.continuationPlan.scratchpadIngest)
+        XCTAssertNil(completion.continuationPlan.memoryRefresh)
+        XCTAssertEqual(completion.continuationPlan.memorySuppressionReason, .fastLatencyTier)
+        XCTAssertNil(completion.continuationPlan.sourceLearningDigest)
+        XCTAssertNil(completion.housekeepingPlan.geminiCacheRefresh)
+        XCTAssertNil(completion.housekeepingPlan.embeddingRefresh)
+        XCTAssertNil(completion.housekeepingPlan.emojiRefresh)
+    }
+
     func testTurnOutcomeFactoryCreatesSourceLearningDigestForAttachedSourceTurnWhenMemoryPersists() {
         let conversation = NousNode(type: .conversation, title: "YouTube discussion", projectId: UUID())
         let sourceNodeId = UUID()

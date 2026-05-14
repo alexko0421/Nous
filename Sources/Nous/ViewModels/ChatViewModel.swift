@@ -279,6 +279,9 @@ final class ChatViewModel {
             shouldPersistAssistantThinking: shouldPersistAssistantThinking,
             recordGeminiUsage: { [governanceTelemetry] usage in
                 governanceTelemetry.recordGeminiUsage(usage)
+            },
+            recordTurnInferenceTelemetry: { [governanceTelemetry] record in
+                governanceTelemetry.recordTurnInferenceTelemetry(record)
             }
         )
         cachedTurnExecutor = executor

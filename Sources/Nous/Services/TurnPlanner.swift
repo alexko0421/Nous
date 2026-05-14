@@ -99,7 +99,10 @@ final class TurnPlanner {
             now: request.now
         )) ?? []
         let planningAgent: (any QuickActionAgent)? = planningQuickActionMode?.agent()
-        let basePolicy: QuickActionMemoryPolicy = if let explicitQuickActionMode {
+        let isFastLatencyTurn = stewardship.latencyTier == .fast
+        let basePolicy: QuickActionMemoryPolicy = if isFastLatencyTurn {
+            .lean
+        } else if let explicitQuickActionMode {
             explicitQuickActionMode.agent().memoryPolicy()
         } else {
             QuickActionMemoryPolicy.fromStewardPreset(stewardship.memoryPolicy)
@@ -363,6 +366,9 @@ final class TurnPlanner {
             stable: turnSlice.stable,
             volatile: volatilePartsForTurn.filter { !$0.isEmpty }.joined(separator: "\n\n")
         )
+        let plannedTranscriptMessages = transcriptMessages(
+            from: isFastLatencyTurn ? [prepared.userMessage] : prepared.messagesAfterUserAppend
+        )
 
         if var verdictForLog {
             verdictForLog.provocationKind = TurnInteractionPolicy.deriveProvocationKind(
@@ -388,9 +394,10 @@ final class TurnPlanner {
                     fallbackReason: fallbackReason
                 ),
                 turnSlice: plannedSlice,
-                transcriptMessages: transcriptMessages(from: prepared.messagesAfterUserAppend),
+                transcriptMessages: plannedTranscriptMessages,
                 focusBlock: focusBlock,
                 provider: provider,
+                latencyTier: stewardship.latencyTier,
                 indexedSkillIds: indexedSkillIds,
                 loadedSkillIds: Set(quickActionResolution.loadedSkills.map(\.skillID)),
                 memoryEvidenceSourceIds: promptResourceIds.memoryEvidenceSourceIds,
@@ -421,9 +428,10 @@ final class TurnPlanner {
                 fallbackReason: fallbackReason
             ),
             turnSlice: plannedSlice,
-            transcriptMessages: transcriptMessages(from: prepared.messagesAfterUserAppend),
+            transcriptMessages: plannedTranscriptMessages,
             focusBlock: focusBlock,
             provider: provider,
+            latencyTier: stewardship.latencyTier,
             indexedSkillIds: indexedSkillIds,
             loadedSkillIds: Set(quickActionResolution.loadedSkills.map(\.skillID)),
             memoryEvidenceSourceIds: promptResourceIds.memoryEvidenceSourceIds,

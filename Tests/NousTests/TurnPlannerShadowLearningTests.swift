@@ -170,6 +170,94 @@ final class TurnPlannerShadowLearningTests: XCTestCase {
         XCTAssertNil(plan.promptTrace.slowCognitionTrace)
     }
 
+    func testFastLatencyTierPlansLeanSingleMessageTurn() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let judge = CountingJudge()
+        let artifact = CognitionArtifact(
+            organ: .patternAnalyst,
+            title: "Should stay out",
+            summary: "This slow cognition artifact should not be loaded on fast turns.",
+            confidence: 0.9,
+            jurisdiction: .selfReflection,
+            evidenceRefs: [],
+            suggestedSurfacing: "Only for slow turns."
+        )
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { TrackingThinkingLLMService() },
+            provocationJudgeFactory: { _ in judge },
+            slowCognitionArtifactProvider: FixedSlowCognitionArtifactProvider(artifacts: [artifact])
+        )
+        let node = NousNode(type: .conversation, title: "Fast turn")
+        let earlier = Message(nodeId: node.id, role: .assistant, content: "Earlier context should not be resent.")
+        let message = Message(nodeId: node.id, role: .user, content: "what does TTFT mean?")
+        let prepared = PreparedConversationTurn(
+            node: node,
+            userMessage: message,
+            messagesAfterUserAppend: [earlier, message]
+        )
+        let request = self.request(input: message.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "ordinary companion default",
+            latencyTier: .fast
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertEqual(plan.latencyTier, .fast)
+        XCTAssertEqual(plan.transcriptMessages.map(\.content), [message.content])
+        XCTAssertEqual(judge.callCount, 0)
+        XCTAssertFalse(plan.turnSlice.volatile.contains("SLOW COGNITION SIGNAL:"))
+        XCTAssertFalse(plan.promptTrace.promptLayers.contains("global_memory"))
+        XCTAssertFalse(plan.promptTrace.promptLayers.contains("slow_cognition"))
+        XCTAssertFalse(plan.promptTrace.promptLayers.contains("citations"))
+        XCTAssertNil(plan.focusBlock)
+    }
+
+    func testNormalOrdinaryChatKeepsFullMemoryAndTranscript() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        try nodeStore.insertMemoryEntry(MemoryEntry(
+            scope: .global,
+            kind: .identity,
+            stability: .stable,
+            content: "- Alex uses Nous to think."
+        ))
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "Normal turn")
+        let earlier = Message(nodeId: node.id, role: .assistant, content: "Earlier context should stay.")
+        let message = Message(nodeId: node.id, role: .user, content: "just thinking out loud")
+        let prepared = PreparedConversationTurn(
+            node: node,
+            userMessage: message,
+            messagesAfterUserAppend: [earlier, message]
+        )
+        let request = self.request(input: message.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "ordinary chat default",
+            latencyTier: .normal
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertEqual(plan.latencyTier, .normal)
+        XCTAssertEqual(plan.transcriptMessages.map(\.content), [earlier.content, message.content])
+        XCTAssertTrue(plan.promptTrace.promptLayers.contains("global_memory"))
+    }
+
     func testSoftAnalysisRunsJudgeSilentlyWithoutVisibleThinkingOrFocusBlock() async throws {
         let nodeStore = try NodeStore(path: ":memory:")
         let judgeLLM = TrackingThinkingLLMService()

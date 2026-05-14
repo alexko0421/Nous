@@ -12,6 +12,10 @@ protocol LLMService {
     func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error>
 }
 
+protocol LLMModelIdentifying {
+    var modelIdentifier: String { get }
+}
+
 protocol ToolCallingLLMService {
     var supportsAgentToolUse: Bool { get }
 
@@ -351,6 +355,10 @@ extension ClaudeLLMService: ThinkingDeltaConfigurableLLMService {
     }
 }
 
+extension ClaudeLLMService: LLMModelIdentifying {
+    var modelIdentifier: String { model }
+}
+
 // MARK: - OpenAI API
 
 struct OpenAILLMService: LLMService {
@@ -419,6 +427,10 @@ struct OpenAILLMService: LLMService {
             }
         }
     }
+}
+
+extension OpenAILLMService: LLMModelIdentifying {
+    var modelIdentifier: String { model }
 }
 
 // MARK: - OpenRouter API
@@ -496,6 +508,10 @@ extension OpenRouterLLMService: ThinkingDeltaConfigurableLLMService {
         copy.onThinkingDelta = handler
         return copy
     }
+}
+
+extension OpenRouterLLMService: LLMModelIdentifying {
+    var modelIdentifier: String { model }
 }
 
 extension OpenRouterLLMService: ToolCallingLLMService {
@@ -1273,6 +1289,10 @@ extension GeminiLLMService: ThinkingDeltaConfigurableLLMService {
         copy.onThinkingDelta = handler
         return copy
     }
+}
+
+extension GeminiLLMService: LLMModelIdentifying {
+    var modelIdentifier: String { model }
 }
 
 // MARK: - Errors

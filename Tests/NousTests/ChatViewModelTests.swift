@@ -258,6 +258,58 @@ final class CancellationFailingLLMService: LLMService {
     }
 }
 
+private final class TimedStreamingLLMService: LLMService, ThinkingDeltaConfigurableLLMService, LLMModelIdentifying {
+    private let lock = NSLock()
+    private let chunks: [String]
+    let modelIdentifier = "timed-test-model"
+
+    private var storedThinkingHandlerInstallCount = 0
+
+    var thinkingHandlerInstallCount: Int {
+        lock.withLock { storedThinkingHandlerInstallCount }
+    }
+
+    init(chunks: [String]) {
+        self.chunks = chunks
+    }
+
+    func withThinkingDeltaHandler(_ handler: @escaping ThinkingDeltaHandler) -> any LLMService {
+        lock.withLock {
+            storedThinkingHandlerInstallCount += 1
+        }
+        return self
+    }
+
+    func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
+        let chunks = self.chunks
+        return AsyncThrowingStream { continuation in
+            for chunk in chunks {
+                continuation.yield(chunk)
+            }
+            continuation.finish()
+        }
+    }
+}
+
+private final class SequenceDateProvider {
+    private let lock = NSLock()
+    private var offsets: [TimeInterval]
+
+    init(_ offsets: [TimeInterval]) {
+        self.offsets = offsets
+    }
+
+    func next() -> Date {
+        lock.withLock {
+            Date(timeIntervalSince1970: offsets.isEmpty ? 0 : offsets.removeFirst())
+        }
+    }
+}
+
+private struct ChatViewModelNoOpTurnEventSink: TurnEventSink {
+    func emit(_ envelope: TurnEventEnvelope) async {}
+}
+
 @MainActor
 final class ChatViewModelTests: XCTestCase {
 
@@ -1641,6 +1693,143 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertEqual(Int((summary.cacheHitRate! * 100).rounded()), 66)
     }
 
+    func testGovernanceTelemetryAggregatesApiInferenceWithoutPromptText() throws {
+        let suiteName = "ChatViewModelTests.api-inference.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let telemetry = GovernanceTelemetryStore(defaults: defaults)
+
+        telemetry.recordTurnInferenceTelemetry(
+            TurnInferenceTelemetryRecord(
+                provider: .gemini,
+                modelName: "gemini-test",
+                latencyTier: .fast,
+                outcome: .completed,
+                ttftSeconds: 1.0,
+                streamDurationSeconds: 2.0,
+                chunkCount: 2,
+                averageChunkGapSeconds: 0.5,
+                maxChunkGapSeconds: 0.5,
+                outputCharacterCount: 12,
+                stablePromptCharacterCount: 31,
+                volatilePromptCharacterCount: 11,
+                requestPromptCharacterCount: 42,
+                usedCachedHistory: false,
+                geminiUsage: nil
+            ),
+            at: Date(timeIntervalSince1970: 10)
+        )
+        telemetry.recordTurnInferenceTelemetry(
+            TurnInferenceTelemetryRecord(
+                provider: .openrouter,
+                modelName: "anthropic/claude-sonnet-4.6",
+                latencyTier: .normal,
+                outcome: .completed,
+                ttftSeconds: 3.0,
+                streamDurationSeconds: 6.0,
+                chunkCount: 3,
+                averageChunkGapSeconds: 1.0,
+                maxChunkGapSeconds: 1.5,
+                outputCharacterCount: 24,
+                stablePromptCharacterCount: 40,
+                volatilePromptCharacterCount: 20,
+                requestPromptCharacterCount: 60,
+                usedCachedHistory: true,
+                geminiUsage: GeminiUsageMetadata(
+                    promptTokenCount: 100,
+                    cachedContentTokenCount: 75,
+                    candidatesTokenCount: 25,
+                    thoughtsTokenCount: nil,
+                    totalTokenCount: 125
+                )
+            ),
+            at: Date(timeIntervalSince1970: 20)
+        )
+
+        let summary = try XCTUnwrap(telemetry.turnInferenceTelemetrySummary)
+        let last = try XCTUnwrap(summary.lastSnapshot)
+        let encoded = String(data: try JSONEncoder().encode(last), encoding: .utf8) ?? ""
+
+        XCTAssertEqual(summary.requestCount, 2)
+        XCTAssertEqual(summary.averageTTFTSeconds ?? -1, 2.0, accuracy: 0.001)
+        XCTAssertEqual(summary.fastRequestCount, 1)
+        XCTAssertEqual(summary.normalRequestCount, 1)
+        XCTAssertEqual(summary.averageFastTTFTSeconds ?? -1, 1.0, accuracy: 0.001)
+        XCTAssertEqual(summary.averageNormalTTFTSeconds ?? -1, 3.0, accuracy: 0.001)
+        XCTAssertEqual(summary.averageStreamDurationSeconds, 4.0, accuracy: 0.001)
+        XCTAssertEqual(summary.averageChunkGapSeconds ?? -1, 0.75, accuracy: 0.001)
+        XCTAssertEqual(last.record.provider, .openrouter)
+        XCTAssertEqual(last.record.modelName, "anthropic/claude-sonnet-4.6")
+        XCTAssertEqual(last.record.latencyTier, .normal)
+        XCTAssertTrue(last.record.usedCachedHistory)
+        XCTAssertEqual(last.record.geminiUsage?.cachedContentTokenCount, 75)
+        XCTAssertFalse(encoded.contains("stable prompt text"))
+        XCTAssertFalse(encoded.contains("volatile prompt text"))
+    }
+
+    func testTurnExecutorRecordsFastTierTimingAndPromptBudget() async throws {
+        let clock = SequenceDateProvider([
+            0.0,
+            2.0,
+            2.4,
+            3.0
+        ])
+        let llm = TimedStreamingLLMService(chunks: ["Hel", "lo"])
+        var records: [TurnInferenceTelemetryRecord] = []
+        let executor = TurnExecutor(
+            llmServiceProvider: { llm },
+            shouldUseGeminiHistoryCache: { false },
+            shouldPersistAssistantThinking: { true },
+            recordTurnInferenceTelemetry: { records.append($0) },
+            nowProvider: { clock.next() }
+        )
+        let plan = makeExecutorPlan(
+            latencyTier: .fast,
+            provider: .openrouter,
+            stable: "stable prompt text",
+            volatile: "volatile prompt text",
+            transcriptContents: ["prior assistant context", "what does TTFT mean?"]
+        )
+        let sink = TurnSequencedEventSink(turnId: plan.turnId, sink: ChatViewModelNoOpTurnEventSink())
+
+        let result = try await executor.execute(plan: plan, sink: sink, captureThinking: true)
+
+        let record = try XCTUnwrap(records.first)
+        XCTAssertEqual(result?.assistantContent, "Hello")
+        XCTAssertEqual(records.count, 1)
+        XCTAssertEqual(record.provider, .openrouter)
+        XCTAssertEqual(record.modelName, "timed-test-model")
+        XCTAssertEqual(record.latencyTier, .fast)
+        XCTAssertEqual(record.outcome, .completed)
+        XCTAssertEqual(record.ttftSeconds ?? -1, 2.0, accuracy: 0.001)
+        XCTAssertEqual(record.streamDurationSeconds, 3.0, accuracy: 0.001)
+        XCTAssertEqual(record.chunkCount, 2)
+        XCTAssertEqual(record.averageChunkGapSeconds ?? -1, 0.4, accuracy: 0.001)
+        XCTAssertEqual(record.maxChunkGapSeconds ?? -1, 0.4, accuracy: 0.001)
+        XCTAssertEqual(record.outputCharacterCount, 5)
+        XCTAssertEqual(record.stablePromptCharacterCount, "stable prompt text".count)
+        XCTAssertEqual(record.volatilePromptCharacterCount, "volatile prompt text".count)
+        XCTAssertFalse(record.usedCachedHistory)
+        XCTAssertEqual(llm.thinkingHandlerInstallCount, 0)
+    }
+
+    func testTurnExecutorDoesNotRecordCompletedTelemetryForCancellation() async throws {
+        var records: [TurnInferenceTelemetryRecord] = []
+        let executor = TurnExecutor(
+            llmServiceProvider: { CancellationFailingLLMService() },
+            shouldUseGeminiHistoryCache: { false },
+            recordTurnInferenceTelemetry: { records.append($0) },
+            nowProvider: { Date(timeIntervalSince1970: 1) }
+        )
+        let plan = makeExecutorPlan(latencyTier: .normal)
+        let sink = TurnSequencedEventSink(turnId: plan.turnId, sink: ChatViewModelNoOpTurnEventSink())
+
+        let result = try await executor.execute(plan: plan, sink: sink)
+
+        XCTAssertNil(result)
+        XCTAssertTrue(records.isEmpty)
+    }
+
     func testGovernanceTraceIncludesSummaryOutputPolicyLayer() {
         let trace = PromptContextAssembler.governanceTrace(
             globalMemory: nil,
@@ -1661,6 +1850,44 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertTrue(
             trace.promptLayers.contains("conversation_title_output_policy"),
             "Expected stable layer 'conversation_title_output_policy' in \(trace.promptLayers)"
+        )
+    }
+
+    private func makeExecutorPlan(
+        latencyTier: TurnLatencyTier,
+        provider: LLMProvider = .gemini,
+        stable: String = "stable",
+        volatile: String = "volatile",
+        transcriptContents: [String] = ["hello"]
+    ) -> TurnPlan {
+        let node = NousNode(type: .conversation, title: "Executor test")
+        let messages = transcriptContents.enumerated().map { offset, content in
+            LLMMessage(role: offset == transcriptContents.count - 1 ? "user" : "assistant", content: content)
+        }
+        let userMessage = Message(nodeId: node.id, role: .user, content: transcriptContents.last ?? "hello")
+        let prepared = PreparedConversationTurn(
+            node: node,
+            userMessage: userMessage,
+            messagesAfterUserAppend: [userMessage]
+        )
+        return TurnPlan(
+            turnId: UUID(),
+            prepared: prepared,
+            citations: [],
+            promptTrace: PromptGovernanceTrace(
+                promptLayers: [],
+                evidenceAttached: false,
+                safetyPolicyInvoked: false,
+                highRiskQueryDetected: false
+            ),
+            effectiveMode: .companion,
+            nextQuickActionModeIfCompleted: nil,
+            judgeEventDraft: nil,
+            turnSlice: TurnSystemSlice(stable: stable, volatile: volatile),
+            transcriptMessages: messages,
+            focusBlock: nil,
+            provider: provider,
+            latencyTier: latencyTier
         )
     }
 

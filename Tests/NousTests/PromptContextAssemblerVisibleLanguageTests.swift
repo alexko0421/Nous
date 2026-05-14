@@ -43,6 +43,16 @@ final class PromptContextAssemblerVisibleLanguageTests: XCTestCase {
         XCTAssertEqual(target(in: slice), "Cantonese")
     }
 
+    func testCantoneseTargetCarriesDialectVocabularyGuard() {
+        let slice = assemble("我今日同屋企人嘈咗，有啲烦。你会点陪我拆？")
+
+        XCTAssertEqual(target(in: slice), "Cantonese")
+        XCTAssertTrue(slice.volatile.contains("Treat Cantonese as dialect, not just Chinese script"))
+        XCTAssertTrue(slice.volatile.contains("嘅, 咗, 哋, 咩, 点, 攰, 睇, 讲"))
+        XCTAssertTrue(slice.volatile.contains("的, 了, 们, 什么, 怎么, 累, 看, 说"))
+        XCTAssertTrue(slice.volatile.contains("Do not flatten Cantonese into Mandarin prose with Cantonese endings."))
+    }
+
     func testMandarinWithoutCantoneseMarkersTargetsMandarin() {
         let slice = assemble("这个应用程序可以帮助我做什么？")
         XCTAssertEqual(target(in: slice), "Mandarin")
@@ -185,6 +195,8 @@ final class PromptContextAssemblerVisibleLanguageTests: XCTestCase {
                       "Stable policy must phrase language matching as a hard rule, not a default.")
         XCTAssertTrue(slice.stable.contains("overrides anchor examples"),
                       "Stable policy must explicitly override anchor / memory / prior-turn drift.")
+        XCTAssertTrue(slice.stable.contains("For Cantonese, dialect matters more than script"),
+                      "Stable policy must treat Cantonese as dialect, not merely script choice.")
     }
 
     // MARK: - Quick action opening override

@@ -85,7 +85,11 @@ enum VisibleResponseLanguageTarget: String, Equatable, Codable, Sendable {
         case .english:
             return "Answer in English unless the user explicitly asks otherwise."
         case .cantonese:
-            return "Answer naturally in Cantonese unless the user explicitly asks otherwise."
+            return [
+                "Answer naturally in Cantonese unless the user explicitly asks otherwise.",
+                "Treat Cantonese as dialect, not just Chinese script: prefer Cantonese vocabulary and particles (嘅, 咗, 哋, 咩, 点, 攰, 睇, 讲) over Mandarin substitutions (的, 了, 们, 什么, 怎么, 累, 看, 说) when those are the intended words.",
+                "Do not flatten Cantonese into Mandarin prose with Cantonese endings."
+            ].joined(separator: " ")
         case .mandarin:
             return "Answer naturally in Mandarin unless the user explicitly asks otherwise."
         case .mixed:

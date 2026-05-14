@@ -134,7 +134,8 @@ final class QuickActionOpeningRunner {
             nextQuickActionModeIfCompleted: mode,
             committed: committed,
             assistantContent: executionResult.assistantContent,
-            stableSystem: plan.turnSlice.stable
+            stableSystem: plan.turnSlice.stable,
+            latencyTier: plan.latencyTier
         )
         await sink.emit(.completed(completion))
         return completion
