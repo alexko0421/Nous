@@ -41,6 +41,7 @@ enum TurnSupervisorLane: String, Codable, Equatable {
     case analytics
     case reflection
     case pattern
+    case meaning
 }
 
 enum ChallengeStance: String, Codable, Equatable {
@@ -166,6 +167,17 @@ struct InTurnPatternSignal: Codable, Equatable {
     let reasonCode: String
 }
 
+enum ReflectiveMeaningSurfacePolicy: String, Codable, Equatable {
+    case compact
+    case layered
+}
+
+struct ReflectiveMeaningSignal: Codable, Equatable {
+    let confidence: Double
+    let surfacePolicy: ReflectiveMeaningSurfacePolicy
+    let reasonCode: String
+}
+
 struct SpeechActClassifierOutput: Codable, Equatable {
     let stance: ResponseStance
     let confidence: Double
@@ -253,6 +265,7 @@ struct TurnStewardTrace: Codable, Equatable {
     let fallbackUsed: Bool?
     let routerReason: String?
     let inTurnPatternSignal: InTurnPatternSignal?
+    let reflectiveMeaningSignal: ReflectiveMeaningSignal?
     let supervisorLanes: [TurnSupervisorLane]
 
     init(
@@ -273,6 +286,7 @@ struct TurnStewardTrace: Codable, Equatable {
         fallbackUsed: Bool? = nil,
         routerReason: String? = nil,
         inTurnPatternSignal: InTurnPatternSignal? = nil,
+        reflectiveMeaningSignal: ReflectiveMeaningSignal? = nil,
         supervisorLanes: [TurnSupervisorLane] = []
     ) {
         self.route = route
@@ -292,10 +306,15 @@ struct TurnStewardTrace: Codable, Equatable {
         self.fallbackUsed = fallbackUsed
         self.routerReason = routerReason
         self.inTurnPatternSignal = inTurnPatternSignal
+        self.reflectiveMeaningSignal = reflectiveMeaningSignal
         var resolvedSupervisorLanes = supervisorLanes
         if inTurnPatternSignal != nil,
            !resolvedSupervisorLanes.contains(.pattern) {
             resolvedSupervisorLanes.append(.pattern)
+        }
+        if reflectiveMeaningSignal != nil,
+           !resolvedSupervisorLanes.contains(.meaning) {
+            resolvedSupervisorLanes.append(.meaning)
         }
         self.supervisorLanes = resolvedSupervisorLanes
     }
@@ -318,6 +337,7 @@ struct TurnStewardTrace: Codable, Equatable {
         case fallbackUsed
         case routerReason
         case inTurnPatternSignal
+        case reflectiveMeaningSignal
         case supervisorLanes
     }
 
@@ -344,6 +364,11 @@ struct TurnStewardTrace: Codable, Equatable {
             forKey: .inTurnPatternSignal
         )
         inTurnPatternSignal = decodedPatternSignal
+        let decodedMeaningSignal = try container.decodeIfPresent(
+            ReflectiveMeaningSignal.self,
+            forKey: .reflectiveMeaningSignal
+        )
+        reflectiveMeaningSignal = decodedMeaningSignal
         var decodedSupervisorLanes = try container.decodeIfPresent(
             [TurnSupervisorLane].self,
             forKey: .supervisorLanes
@@ -351,6 +376,10 @@ struct TurnStewardTrace: Codable, Equatable {
         if decodedPatternSignal != nil,
            !decodedSupervisorLanes.contains(.pattern) {
             decodedSupervisorLanes.append(.pattern)
+        }
+        if decodedMeaningSignal != nil,
+           !decodedSupervisorLanes.contains(.meaning) {
+            decodedSupervisorLanes.append(.meaning)
         }
         supervisorLanes = decodedSupervisorLanes
     }
@@ -365,6 +394,7 @@ struct TurnStewardDecision: Codable, Equatable {
     let responseShape: ResponseShape
     let projectSignal: ProjectSignal?
     let inTurnPatternSignal: InTurnPatternSignal?
+    let reflectiveMeaningSignal: ReflectiveMeaningSignal?
     let trace: TurnStewardTrace
     let supervisorLanes: [TurnSupervisorLane]
 
@@ -386,6 +416,7 @@ struct TurnStewardDecision: Codable, Equatable {
         fallbackUsed: Bool? = nil,
         routerReason: String? = nil,
         inTurnPatternSignal: InTurnPatternSignal? = nil,
+        reflectiveMeaningSignal: ReflectiveMeaningSignal? = nil,
         supervisorLanes: [TurnSupervisorLane]? = nil,
         latencyTier: TurnLatencyTier = .normal
     ) {
@@ -396,11 +427,16 @@ struct TurnStewardDecision: Codable, Equatable {
             challengeStance: challengeStance,
             judgePolicy: resolvedJudgePolicy,
             projectSignal: projectSignal,
-            inTurnPatternSignal: inTurnPatternSignal
+            inTurnPatternSignal: inTurnPatternSignal,
+            reflectiveMeaningSignal: reflectiveMeaningSignal
         )
         if inTurnPatternSignal != nil,
            !resolvedSupervisorLanes.contains(.pattern) {
             resolvedSupervisorLanes.append(.pattern)
+        }
+        if reflectiveMeaningSignal != nil,
+           !resolvedSupervisorLanes.contains(.meaning) {
+            resolvedSupervisorLanes.append(.meaning)
         }
         self.route = route
         self.memoryPolicy = memoryPolicy
@@ -410,6 +446,7 @@ struct TurnStewardDecision: Codable, Equatable {
         self.responseShape = responseShape
         self.projectSignal = projectSignal
         self.inTurnPatternSignal = inTurnPatternSignal
+        self.reflectiveMeaningSignal = reflectiveMeaningSignal
         self.supervisorLanes = resolvedSupervisorLanes
         self.trace = TurnStewardTrace(
             route: route,
@@ -429,6 +466,7 @@ struct TurnStewardDecision: Codable, Equatable {
             fallbackUsed: fallbackUsed,
             routerReason: routerReason,
             inTurnPatternSignal: inTurnPatternSignal,
+            reflectiveMeaningSignal: reflectiveMeaningSignal,
             supervisorLanes: resolvedSupervisorLanes
         )
     }
@@ -439,7 +477,8 @@ struct TurnStewardDecision: Codable, Equatable {
         challengeStance: ChallengeStance,
         judgePolicy: JudgePolicy,
         projectSignal: ProjectSignal?,
-        inTurnPatternSignal: InTurnPatternSignal? = nil
+        inTurnPatternSignal: InTurnPatternSignal? = nil,
+        reflectiveMeaningSignal: ReflectiveMeaningSignal? = nil
     ) -> [TurnSupervisorLane] {
         var lanes: [TurnSupervisorLane] = []
 
@@ -479,6 +518,10 @@ struct TurnStewardDecision: Codable, Equatable {
 
         if inTurnPatternSignal != nil {
             add(.pattern)
+        }
+
+        if reflectiveMeaningSignal != nil {
+            add(.meaning)
         }
 
         return lanes

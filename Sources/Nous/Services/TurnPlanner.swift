@@ -708,6 +708,7 @@ final class TurnPlanner {
         let guidance = [
             responseShapeInstruction(for: decision.responseShape).map { "Response shape: \($0)" },
             responseStanceInstruction(for: decision).map { "Response stance: \($0)" },
+            reflectiveMeaningInstruction(for: decision.reflectiveMeaningSignal).map { "Reflective meaning: \($0)" },
             patternNamingInstruction(for: decision.inTurnPatternSignal).map { "Pattern naming: \($0)" }
         ].compactMap { $0 }
 
@@ -762,6 +763,21 @@ final class TurnPlanner {
             instruction = "Alex explicitly invited challenge. You may name a real tension plainly, but stay useful and proportionate."
         }
         return instruction
+    }
+
+    private static func reflectiveMeaningInstruction(for signal: ReflectiveMeaningSignal?) -> String? {
+        guard let signal else { return nil }
+
+        let shapeInstruction = switch signal.surfacePolicy {
+        case .compact:
+            "Use the default compact shape: one sentence for the possible underlying pull, one sentence for one reusable action."
+        case .layered:
+            "Use compact three-layer form: surface event, possible underlying pull, reusable action."
+        }
+
+        return """
+        Use current turn plus available recalled context; do not invent beyond evidence. Name one possible underlying pull, using tentative language such as "可能真正牵住你嘅唔只係 X，而係 Y." Give one reusable action tied to the pull. \(shapeInstruction) If evidence is thin, ask one clarifying question instead of naming a pull. Never diagnose, say "you always", mention routing, or turn this into therapy/coaching theater. Continue Alex's original task.
+        """
     }
 
     private static func patternNamingInstruction(for signal: InTurnPatternSignal?) -> String? {

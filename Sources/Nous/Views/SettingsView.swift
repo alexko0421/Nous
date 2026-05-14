@@ -24,6 +24,7 @@ struct SettingsView: View {
     @Binding var selectedTab: SettingsSection
     let skillStore: SkillStore
     let failureSkillCandidateStore: FailureSkillCandidateStore
+    let failureSkillRepairRunStore: FailureSkillRepairRunStore
     let userMemoryService: UserMemoryService
     let telemetry: GovernanceTelemetryStore
     let galaxyRelationTelemetry: GalaxyRelationTelemetry
@@ -88,6 +89,7 @@ struct SettingsView: View {
                         nodeStore: vm.nodeStore,
                         skillStore: skillStore,
                         failureSkillCandidateStore: failureSkillCandidateStore,
+                        failureSkillRepairRunStore: failureSkillRepairRunStore,
                         userMemoryService: userMemoryService,
                         telemetry: telemetry,
                         galaxyRelationTelemetry: galaxyRelationTelemetry,

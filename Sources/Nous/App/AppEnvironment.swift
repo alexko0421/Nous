@@ -13,6 +13,7 @@ struct AppDependencies {
     let skillMatcher: SkillMatcher
     let skillTracker: SkillTracker
     let failureSkillCandidateStore: FailureSkillCandidateStore
+    let failureSkillRepairRunStore: FailureSkillRepairRunStore
     let seedSkillImporter: SeedSkillImporter
     let shadowLearningStore: ShadowLearningStore
     let shadowLearningSignalRecorder: ShadowLearningSignalRecorder
@@ -122,6 +123,7 @@ final class AppEnvironment {
         let skillMatcher = SkillMatcher()
         let skillTracker = SkillTracker(store: skillStore)
         let failureSkillCandidateStore = FailureSkillCandidateStore(nodeStore: nodeStore)
+        let failureSkillRepairRunStore = FailureSkillRepairRunStore(nodeStore: nodeStore)
         let skillDogfoodLogger = try? SkillDogfoodLogStore.defaultStore()
         let seedSkillImporter = SeedSkillImporter(store: skillStore)
         let shadowLearningStore = ShadowLearningStore(nodeStore: nodeStore)
@@ -339,6 +341,7 @@ final class AppEnvironment {
             skillMatcher: skillMatcher,
             skillTracker: skillTracker,
             failureSkillCandidateStore: failureSkillCandidateStore,
+            failureSkillRepairRunStore: failureSkillRepairRunStore,
             seedSkillImporter: seedSkillImporter,
             shadowLearningStore: shadowLearningStore,
             shadowLearningSignalRecorder: shadowLearningSignalRecorder,

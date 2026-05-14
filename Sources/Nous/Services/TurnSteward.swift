@@ -139,6 +139,14 @@ final class TurnSteward {
         }
 
         if !request.sourceMaterials.isEmpty {
+            let sourceMeaningSignal = reflectiveMeaningSignal(
+                for: normalized,
+                route: .sourceAnalysis,
+                request: request,
+                memoryOptOut: memoryOptOut,
+                distress: distress,
+                allowSourceAnalysis: true
+            )
             if distress {
                 return TurnStewardDecision(
                     route: .sourceAnalysis,
@@ -159,18 +167,28 @@ final class TurnSteward {
                 responseShape: .answerNow,
                 source: .deterministic,
                 reason: memoryOptOut ? "source material attached with memory opt-out" : "source material attached",
+                reflectiveMeaningSignal: sourceMeaningSignal,
                 latencyTier: .deep
             )
         }
 
         let route = route(for: normalized)
-        let patternSignal = inTurnPatternSignal(
+        let meaningSignal = reflectiveMeaningSignal(
             for: normalized,
             route: route,
             request: request,
             memoryOptOut: memoryOptOut,
             distress: distress
         )
+        let patternSignal = meaningSignal == nil
+            ? inTurnPatternSignal(
+                for: normalized,
+                route: route,
+                request: request,
+                memoryOptOut: memoryOptOut,
+                distress: distress
+            )
+            : nil
 
         if distress, route == .ordinaryChat {
             return TurnStewardDecision(
@@ -192,6 +210,7 @@ final class TurnSteward {
                 source: .deterministic,
                 reason: "analysis skill cue",
                 inTurnPatternSignal: patternSignal,
+                reflectiveMeaningSignal: meaningSignal,
                 latencyTier: .deep
             )
         }
@@ -216,6 +235,7 @@ final class TurnSteward {
                 source: .deterministic,
                 reason: "explicit plan cue",
                 inTurnPatternSignal: patternSignal,
+                reflectiveMeaningSignal: meaningSignal,
                 latencyTier: .deep
             )
         case .direction:
@@ -227,6 +247,7 @@ final class TurnSteward {
                 source: .deterministic,
                 reason: "explicit direction cue",
                 inTurnPatternSignal: patternSignal,
+                reflectiveMeaningSignal: meaningSignal,
                 latencyTier: .deep
             )
         case .sourceAnalysis:
@@ -237,6 +258,7 @@ final class TurnSteward {
                 responseShape: .answerNow,
                 source: .deterministic,
                 reason: "source material attached",
+                reflectiveMeaningSignal: meaningSignal,
                 latencyTier: .deep
             )
         case .ordinaryChat:
@@ -256,6 +278,7 @@ final class TurnSteward {
                 source: .deterministic,
                 reason: memoryOptOut ? "memory opt-out cue" : "ordinary chat default",
                 inTurnPatternSignal: patternSignal,
+                reflectiveMeaningSignal: meaningSignal,
                 latencyTier: latencyTier
             )
         }
@@ -478,6 +501,7 @@ final class TurnSteward {
                 fallbackUsed: routing.fallbackUsed,
                 routerReason: routing.reason,
                 inTurnPatternSignal: nil,
+                reflectiveMeaningSignal: nil,
                 latencyTier: preserveDistressRoute ? legacy.latencyTier : .normal
             )
         case .companion, .reflective:
@@ -497,6 +521,7 @@ final class TurnSteward {
                 fallbackUsed: routing.fallbackUsed,
                 routerReason: routing.reason,
                 inTurnPatternSignal: legacy.inTurnPatternSignal,
+                reflectiveMeaningSignal: legacy.reflectiveMeaningSignal,
                 latencyTier: legacy.latencyTier
             )
         case .softAnalysis:
@@ -518,6 +543,7 @@ final class TurnSteward {
                 fallbackUsed: routing.fallbackUsed,
                 routerReason: routing.reason,
                 inTurnPatternSignal: legacy.inTurnPatternSignal,
+                reflectiveMeaningSignal: legacy.reflectiveMeaningSignal,
                 latencyTier: .deep
             )
         case .hardJudge:
@@ -539,6 +565,7 @@ final class TurnSteward {
                 fallbackUsed: routing.fallbackUsed,
                 routerReason: routing.reason,
                 inTurnPatternSignal: legacy.inTurnPatternSignal,
+                reflectiveMeaningSignal: legacy.reflectiveMeaningSignal,
                 latencyTier: .deep
             )
         }
@@ -604,13 +631,22 @@ final class TurnSteward {
 
         switch mode {
         case .direction:
-            let patternSignal = inTurnPatternSignal(
+            let meaningSignal = reflectiveMeaningSignal(
                 for: normalizedText,
                 route: .direction,
                 request: request,
                 memoryOptOut: memoryOptOut,
                 distress: distress
             )
+            let patternSignal = meaningSignal == nil
+                ? inTurnPatternSignal(
+                    for: normalizedText,
+                    route: .direction,
+                    request: request,
+                    memoryOptOut: memoryOptOut,
+                    distress: distress
+                )
+                : nil
             return TurnStewardDecision(
                 route: .direction,
                 memoryPolicy: memoryOptOut ? .lean : .full,
@@ -619,6 +655,7 @@ final class TurnSteward {
                 source: .deterministic,
                 reason: memoryOptOut ? "active quick action mode with memory opt-out" : "active quick action mode",
                 inTurnPatternSignal: patternSignal,
+                reflectiveMeaningSignal: meaningSignal,
                 latencyTier: .deep
             )
         case .brainstorm:
@@ -632,13 +669,22 @@ final class TurnSteward {
                 latencyTier: hasSourceContext || hasExplicitDeepLatencyCue(normalizedText) ? .deep : .normal
             )
         case .plan:
-            let patternSignal = inTurnPatternSignal(
+            let meaningSignal = reflectiveMeaningSignal(
                 for: normalizedText,
                 route: .plan,
                 request: request,
                 memoryOptOut: memoryOptOut,
                 distress: distress
             )
+            let patternSignal = meaningSignal == nil
+                ? inTurnPatternSignal(
+                    for: normalizedText,
+                    route: .plan,
+                    request: request,
+                    memoryOptOut: memoryOptOut,
+                    distress: distress
+                )
+                : nil
             return TurnStewardDecision(
                 route: .plan,
                 memoryPolicy: memoryOptOut ? .lean : .full,
@@ -647,9 +693,18 @@ final class TurnSteward {
                 source: .deterministic,
                 reason: memoryOptOut ? "active quick action mode with memory opt-out" : "active quick action mode",
                 inTurnPatternSignal: patternSignal,
+                reflectiveMeaningSignal: meaningSignal,
                 latencyTier: .deep
             )
         case .study:
+            let meaningSignal = reflectiveMeaningSignal(
+                for: normalizedText,
+                route: .sourceAnalysis,
+                request: request,
+                memoryOptOut: memoryOptOut,
+                distress: distress,
+                allowSourceAnalysis: true
+            )
             return TurnStewardDecision(
                 route: .sourceAnalysis,
                 memoryPolicy: memoryOptOut ? .lean : .full,
@@ -658,6 +713,7 @@ final class TurnSteward {
                 source: .deterministic,
                 reason: memoryOptOut ? "active quick action mode with memory opt-out" : "active quick action mode",
                 judgePolicy: .off,
+                reflectiveMeaningSignal: meaningSignal,
                 latencyTier: .deep
             )
         }
@@ -762,6 +818,78 @@ final class TurnSteward {
             surfacePolicy: candidate.confidence >= Self.directPatternConfidenceThreshold ? .directName : .softName,
             reasonCode: candidate.reasonCode
         )
+    }
+
+    private func reflectiveMeaningSignal(
+        for normalized: String,
+        route: TurnRoute,
+        request: TurnRequest,
+        memoryOptOut: Bool,
+        distress: Bool,
+        allowSourceAnalysis: Bool = false
+    ) -> ReflectiveMeaningSignal? {
+        let sourceEligible = route == .sourceAnalysis
+            && allowSourceAnalysis
+            && !request.sourceMaterials.isEmpty
+        let ordinaryEligible = route == .ordinaryChat || route == .direction || route == .plan
+        guard sourceEligible || ordinaryEligible else {
+            return nil
+        }
+        guard request.attachments.isEmpty,
+              !memoryOptOut,
+              !distress,
+              !Self.isTextTransformRequest(normalized),
+              !containsAny(normalized, in: Self.patternSafetyBypassCues)
+        else {
+            return nil
+        }
+        if ordinaryEligible,
+           !request.sourceMaterials.isEmpty {
+            return nil
+        }
+        guard hasSelfReference(normalized) else {
+            return nil
+        }
+
+        let hasMeaningIntent = hasReflectiveMeaningIntent(normalized)
+        let hasRegretIntent = hasRegretMeaningAnalysis(normalized)
+        guard hasMeaningIntent || hasRegretIntent else {
+            return nil
+        }
+
+        let surfacePolicy: ReflectiveMeaningSurfacePolicy = containsAny(
+            normalized,
+            in: Self.reflectiveMeaningLayeredCues
+        ) ? .layered : .compact
+        let reasonCode: String
+        if sourceEligible {
+            reasonCode = "source_personal_meaning_request"
+        } else if hasRegretIntent {
+            reasonCode = "regret_meaning_request"
+        } else if surfacePolicy == .layered {
+            reasonCode = "reflective_meaning_layered_request"
+        } else {
+            reasonCode = "reflective_meaning_request"
+        }
+
+        return ReflectiveMeaningSignal(
+            confidence: Self.reflectiveMeaningConfidence,
+            surfacePolicy: surfacePolicy,
+            reasonCode: reasonCode
+        )
+    }
+
+    private func hasReflectiveMeaningIntent(_ text: String) -> Bool {
+        containsAny(text, in: Self.reflectiveMeaningIntentCues)
+            || (
+                containsAny(text, in: Self.reflectiveMeaningClarityCues)
+                    && containsAny(text, in: Self.reflectiveMeaningQuestionCues)
+            )
+    }
+
+    private func hasRegretMeaningAnalysis(_ text: String) -> Bool {
+        containsAny(text, in: Self.reflectiveMeaningRegretCues)
+            && containsAny(text, in: Self.reflectiveMeaningAnalysisCues)
     }
 
     private func comparisonLoopCandidate(_ text: String) -> PatternCandidate? {
@@ -1193,6 +1321,105 @@ final class TurnSteward {
 
     private static let patternConfidenceThreshold = 0.75
     private static let directPatternConfidenceThreshold = 0.85
+    private static let reflectiveMeaningConfidence = 0.86
+
+    private static let reflectiveMeaningIntentCues = [
+        "点解我咁在意",
+        "點解我咁在意",
+        "点解我会咁在意",
+        "點解我會咁在意",
+        "为什么我这么在意",
+        "為什麼我這麼在意",
+        "真正牵住",
+        "真正牽住",
+        "真正牵动",
+        "真正牽動",
+        "真正代表",
+        "真正係咩",
+        "真正系咩",
+        "咁有感觉",
+        "咁有感覺",
+        "这么有感觉",
+        "這麼有感覺",
+        "会让我这么在意",
+        "會讓我這麼在意",
+        "why did this matter",
+        "why did it matter",
+        "why do i care",
+        "why did missing",
+        "matter so much to me",
+        "what did this mean to me",
+        "meaning behind this for me"
+    ]
+
+    private static let reflectiveMeaningClarityCues = [
+        "帮我睇清楚",
+        "幫我睇清楚",
+        "帮我看清楚",
+        "幫我看清楚",
+        "复盘",
+        "復盤"
+    ]
+
+    private static let reflectiveMeaningQuestionCues = [
+        "点解",
+        "點解",
+        "为什么",
+        "為什麼",
+        "在意",
+        "真正",
+        "牵住",
+        "牽住",
+        "牵动",
+        "牽動",
+        "代表",
+        "感觉",
+        "感覺",
+        "matter",
+        "mean to me",
+        "why"
+    ]
+
+    private static let reflectiveMeaningRegretCues = [
+        "后悔",
+        "後悔",
+        "错过",
+        "錯過",
+        "missed",
+        "missing",
+        "regret",
+        "missed opportunity"
+    ]
+
+    private static let reflectiveMeaningAnalysisCues = [
+        "分析",
+        "睇清楚",
+        "看清楚",
+        "复盘",
+        "復盤",
+        "点解",
+        "點解",
+        "为什么",
+        "為什麼",
+        "why",
+        "真正",
+        "understand"
+    ]
+
+    private static let reflectiveMeaningLayeredCues = [
+        "分析清楚啲",
+        "分析清楚d",
+        "分析清楚",
+        "分析得再清楚",
+        "分析再清楚",
+        "睇清楚啲",
+        "睇清楚d",
+        "看清楚一点",
+        "看清楚一點",
+        "更清楚",
+        "deeper",
+        "break down"
+    ]
 
     private static let patternSafetyBypassCues = [
         "self-harm",
@@ -1438,6 +1665,7 @@ private extension TurnStewardDecision {
             fallbackUsed: routing.fallbackUsed,
             routerReason: routing.reason,
             inTurnPatternSignal: inTurnPatternSignal,
+            reflectiveMeaningSignal: reflectiveMeaningSignal,
             latencyTier: latencyTier
         )
     }

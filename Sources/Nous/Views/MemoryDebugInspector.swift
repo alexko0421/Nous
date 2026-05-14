@@ -226,6 +226,7 @@ struct MemoryDebugInspector: View {
     let nodeStore: NodeStore
     let skillStore: SkillStore
     let failureSkillCandidateStore: FailureSkillCandidateStore
+    let failureSkillRepairRunStore: FailureSkillRepairRunStore
     let userMemoryService: UserMemoryService
     let telemetry: GovernanceTelemetryStore
     let galaxyRelationTelemetry: GalaxyRelationTelemetry
@@ -280,6 +281,7 @@ struct MemoryDebugInspector: View {
     @State private var reviewPlan = MemoryCuratorReviewPlan(generatedAt: .distantPast, items: [])
     @State private var skills: [Skill] = []
     @State private var failureSkillCandidates: [FailureSkillCandidate] = []
+    @State private var failureSkillRepairRuns: [UUID: FailureSkillRepairRun] = [:]
     @State private var failureSkillPatterns: [FailureSkillTriagePattern] = []
     @State private var shadowPatterns: [ShadowLearningPattern] = []
     @State private var learningEvents: [LearningEvent] = []
@@ -297,6 +299,8 @@ struct MemoryDebugInspector: View {
     @State private var showAdvancedTools = false
     @State private var pendingDeleteEntry: MemoryEntry?
     @State private var pendingDeleteFact: MemoryFactEntry?
+    @State private var creatingRepairCandidateIds: Set<UUID> = []
+    @AppStorage("nous.failureSkillAutoActivationEnabled") private var failureSkillAutoActivationEnabled = false
 
     var body: some View {
         ScrollView {
@@ -572,6 +576,11 @@ struct MemoryDebugInspector: View {
                         .foregroundColor(AppColor.secondaryText)
                         .padding(.vertical, 8)
                 } else {
+                    Toggle("Auto-activate low-risk judge skills", isOn: $failureSkillAutoActivationEnabled)
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundColor(AppColor.colaDarkText)
+                        .toggleStyle(.switch)
+
                     LazyVStack(alignment: .leading, spacing: 10) {
                         ForEach(failureSkillCandidates) { candidate in
                             failureSkillCandidateRow(candidate)
@@ -597,6 +606,17 @@ struct MemoryDebugInspector: View {
     @ViewBuilder
     private func failureSkillCandidateRow(_ candidate: FailureSkillCandidate) -> some View {
         let evaluation = SkillifyChecklistEvaluator().evaluate(candidate)
+        let repairRun = failureSkillRepairRuns[candidate.id]
+        let isCreatingRepairDraft = creatingRepairCandidateIds.contains(candidate.id)
+        let canCreateRepairDraft = candidate.status == .approved
+            && candidate.repairKind != .observeOnly
+            && FailureAutoRepairDraftService.checklistAllowsRepairDraft(
+                evaluation,
+                repairKind: candidate.repairKind
+            )
+            && isCreatingRepairDraft == false
+            && repairRun?.status.isActive != true
+            && repairRun?.status != .draftPROpened
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 8) {
                 VStack(alignment: .leading, spacing: 5) {
@@ -645,6 +665,56 @@ struct MemoryDebugInspector: View {
                     .lineLimit(2)
             }
 
+            if candidate.status == .activated,
+               candidate.sourceKind == .judgeFeedback,
+               candidate.signature.isLowRiskJudgeFeedbackPostureSkill,
+               let skillId = candidate.activatedSkillId {
+                HStack(spacing: 8) {
+                    badge(
+                        text: "Activated",
+                        tint: AppColor.colaOrange.opacity(0.14),
+                        textColor: AppColor.colaDarkText
+                    )
+                    Text("Skill \(skillId.uuidString.prefix(8))")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(AppColor.secondaryText)
+                    Spacer(minLength: 0)
+                }
+            }
+
+            if let repairRun {
+                HStack(spacing: 8) {
+                    badge(
+                        text: "Repair \(repairRun.status.displayName)",
+                        tint: AppColor.surfacePrimary,
+                        textColor: AppColor.secondaryText
+                    )
+                    if let prURL = repairRun.prURL,
+                       let url = URL(string: prURL) {
+                        Link("Repair PR", destination: url)
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundColor(AppColor.colaOrange)
+                    }
+                    if let error = repairRun.error,
+                       !error.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text(error)
+                            .font(.system(size: 11, design: .rounded))
+                            .foregroundColor(AppColor.secondaryText)
+                            .lineLimit(2)
+                    }
+                    Spacer(minLength: 0)
+                }
+            } else if isCreatingRepairDraft {
+                HStack(spacing: 8) {
+                    badge(
+                        text: "Repair starting",
+                        tint: AppColor.surfacePrimary,
+                        textColor: AppColor.secondaryText
+                    )
+                    Spacer(minLength: 0)
+                }
+            }
+
             HStack(spacing: 8) {
                 if candidate.status == .proposed {
                     smallActionButton(
@@ -663,6 +733,26 @@ struct MemoryDebugInspector: View {
                         textColor: AppColor.secondaryText
                     ) {
                         updateFailureCandidate(candidate, status: .dismissed)
+                    }
+                }
+
+                if canCreateRepairDraft {
+                    smallActionButton(
+                        title: repairRun?.status == .failed ? "Retry Repair PR" : "Create Repair PR",
+                        tint: AppColor.colaOrange.opacity(0.14),
+                        textColor: AppColor.colaDarkText
+                    ) {
+                        createRepairDraft(for: candidate)
+                    }
+                }
+
+                if let repairRun, repairRun.status.isActive {
+                    smallActionButton(
+                        title: "Mark Cancelled",
+                        tint: AppColor.surfacePrimary,
+                        textColor: AppColor.secondaryText
+                    ) {
+                        cancelRepairRun(repairRun)
                     }
                 }
 
@@ -1723,6 +1813,12 @@ struct MemoryDebugInspector: View {
             #if DEBUG
             skills = try skillStore.fetchAllSkills(userId: "alex")
             failureSkillCandidates = try failureSkillCandidateStore.fetchRecentCandidates(userId: "alex", limit: 20)
+            failureSkillRepairRuns = Dictionary(uniqueKeysWithValues: try failureSkillCandidates.compactMap { candidate in
+                guard let run = try failureSkillRepairRunStore.fetchLatestRun(candidateId: candidate.id) else {
+                    return nil
+                }
+                return (candidate.id, run)
+            })
             failureSkillPatterns = FailureSkillTriageService().patterns(from: failureSkillCandidates)
             if let shadowLearningStore {
                 shadowPatterns = try shadowLearningStore.fetchPatterns(userId: "alex")
@@ -1817,7 +1913,16 @@ struct MemoryDebugInspector: View {
     #if DEBUG
     private func updateFailureCandidate(_ candidate: FailureSkillCandidate, status: FailureSkillStatus) {
         do {
-            try failureSkillCandidateStore.setStatus(id: candidate.id, status: status)
+            if status == .approved {
+                _ = try failureSkillCandidateStore.approveCandidate(
+                    id: candidate.id,
+                    skillStore: skillStore,
+                    repairRunStore: failureSkillRepairRunStore,
+                    autoActivationEnabled: failureSkillAutoActivationEnabled
+                )
+            } else {
+                try failureSkillCandidateStore.setStatus(id: candidate.id, status: status)
+            }
             loadError = nil
             reload()
         } catch {
@@ -1832,6 +1937,48 @@ struct MemoryDebugInspector: View {
             reload()
         } catch {
             loadError = "Failed to activate failure candidate: \(error.localizedDescription)"
+        }
+    }
+
+    private func createRepairDraft(for candidate: FailureSkillCandidate) {
+        guard creatingRepairCandidateIds.contains(candidate.id) == false else { return }
+        creatingRepairCandidateIds.insert(candidate.id)
+        loadError = nil
+
+        let runStore = failureSkillRepairRunStore
+        let candidateStore = failureSkillCandidateStore
+        let candidateId = candidate.id
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = Result {
+                try FailureAutoRepairDraftService().createDraftPR(
+                    for: candidate,
+                    runStore: runStore,
+                    candidateStore: candidateStore
+                )
+            }
+
+            DispatchQueue.main.async {
+                creatingRepairCandidateIds.remove(candidateId)
+                switch result {
+                case .success:
+                    loadError = nil
+                    reload()
+                case .failure(let error):
+                    let message = "Failed to create repair PR: \(error.localizedDescription)"
+                    reload()
+                    loadError = message
+                }
+            }
+        }
+    }
+
+    private func cancelRepairRun(_ run: FailureSkillRepairRun) {
+        do {
+            try failureSkillRepairRunStore.cancelActiveRun(id: run.id)
+            loadError = nil
+            reload()
+        } catch {
+            loadError = "Failed to cancel repair run: \(error.localizedDescription)"
         }
     }
     #endif

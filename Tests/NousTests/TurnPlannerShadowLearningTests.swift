@@ -683,6 +683,108 @@ final class TurnPlannerShadowLearningTests: XCTestCase {
         XCTAssertFalse(plan.turnSlice.volatile.contains("comparison loop"))
     }
 
+    func testTurnGuidanceRendersReflectiveMeaningWhenSignalExists() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "Meaning")
+        let message = Message(
+            nodeId: node.id,
+            role: .user,
+            content: "我想复盘下演唱会嗰个女仔，点解我会咁在意？"
+        )
+        let prepared = PreparedConversationTurn(node: node, userMessage: message, messagesAfterUserAppend: [message])
+        let request = self.request(input: message.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "ordinary chat default",
+            reflectiveMeaningSignal: ReflectiveMeaningSignal(
+                confidence: 0.86,
+                surfacePolicy: .compact,
+                reasonCode: "reflective_meaning_request"
+            )
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertEqual(plan.turnSlice.volatile.components(separatedBy: "TURN GUIDANCE:").count - 1, 1)
+        XCTAssertTrue(plan.turnSlice.volatile.contains("Reflective meaning:"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("Name one possible underlying pull"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("one reusable action"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("tentative language"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("If evidence is thin, ask one clarifying question"))
+        XCTAssertFalse(plan.turnSlice.volatile.contains("演唱会"))
+        XCTAssertFalse(plan.turnSlice.volatile.lowercased().contains("concert"))
+        XCTAssertFalse(plan.turnSlice.volatile.lowercased().contains("girl"))
+        XCTAssertFalse(plan.turnSlice.volatile.lowercased().contains("atmosphere"))
+    }
+
+    func testTurnGuidanceRendersLayeredReflectiveMeaningWhenAskedForClearerAnalysis() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "Layered meaning")
+        let message = Message(nodeId: node.id, role: .user, content: "分析清楚啲，点解我咁在意？")
+        let prepared = PreparedConversationTurn(node: node, userMessage: message, messagesAfterUserAppend: [message])
+        let request = self.request(input: message.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "ordinary chat default",
+            reflectiveMeaningSignal: ReflectiveMeaningSignal(
+                confidence: 0.86,
+                surfacePolicy: .layered,
+                reasonCode: "reflective_meaning_layered_request"
+            )
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertTrue(plan.turnSlice.volatile.contains("Use compact three-layer form"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("surface event"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("possible underlying pull"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("reusable action"))
+    }
+
+    func testTurnGuidanceDoesNotMentionReflectiveMeaningWithoutSignal() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "No meaning")
+        let message = Message(nodeId: node.id, role: .user, content: "What do you think about this UI?")
+        let prepared = PreparedConversationTurn(node: node, userMessage: message, messagesAfterUserAppend: [message])
+        let request = self.request(input: message.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "ordinary chat default"
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertFalse(plan.turnSlice.volatile.contains("Reflective meaning:"))
+        XCTAssertFalse(plan.turnSlice.volatile.contains("underlying pull"))
+    }
+
     func testSupportFirstTraceSuppressesConflictingShapeGuidance() async throws {
         let nodeStore = try NodeStore(path: ":memory:")
         let planner = makePlanner(

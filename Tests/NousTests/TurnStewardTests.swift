@@ -392,6 +392,136 @@ final class TurnStewardTests: XCTestCase {
         }
     }
 
+    func testReflectiveMeaningFixtureSet() {
+        let sourceNodeId = UUID()
+        let fixtures: [MeaningFixture] = [
+            MeaningFixture(
+                input: "我想复盘下演唱会嗰个女仔，点解我会咁在意？",
+                expected: true,
+                expectedPolicy: .compact
+            ),
+            MeaningFixture(
+                input: "帮我睇清楚呢件事真正牵住我嘅係咩。",
+                expected: true,
+                expectedPolicy: .compact
+            ),
+            MeaningFixture(
+                input: "我想分析清楚啲，点解我对呢个 product idea 咁有感觉？",
+                expected: true,
+                expectedPolicy: .layered
+            ),
+            MeaningFixture(
+                input: "复盘下我错过同嗰个 founder 合作嘅机会，真正代表咩？",
+                expected: true,
+                expectedPolicy: .compact
+            ),
+            MeaningFixture(
+                input: "帮我看清楚为什么那句评论会让我这么在意。",
+                expected: true,
+                expectedPolicy: .compact
+            ),
+            MeaningFixture(
+                input: "why did missing that window matter so much to me?",
+                expected: true,
+                expectedPolicy: .compact
+            ),
+            MeaningFixture(
+                input: "帮我睇清楚呢段 conversation 点解我咁在意",
+                expected: true,
+                expectedPolicy: .compact,
+                sourceNodeId: sourceNodeId
+            ),
+            MeaningFixture(input: "今日食咩好？", expected: false),
+            MeaningFixture(input: "What is TTFT?", expected: false),
+            MeaningFixture(input: "帮我总结这篇文章第一部分。", expected: false, sourceNodeId: sourceNodeId),
+            MeaningFixture(input: "帮我做一个 shipping plan。", expected: false),
+            MeaningFixture(input: "What do you think about this UI?", expected: false),
+            MeaningFixture(input: "下次遇到倾得开心嘅人，我应该点开口？", expected: false),
+            MeaningFixture(input: "我好焦虑，点解我咁在意自己会唔会失败？", expected: false),
+            MeaningFixture(input: "我同学校同龄人比较到想死，帮我睇清楚。", expected: false),
+            MeaningFixture(input: "don't use memory, 帮我睇清楚点解我咁在意。", expected: false),
+            MeaningFixture(input: "翻译成英文：点解我咁在意", expected: false)
+        ]
+
+        for fixture in fixtures {
+            let decision = steward.steer(
+                prepared: preparedTurn(userText: fixture.input),
+                request: request(
+                    input: fixture.input,
+                    sourceMaterials: fixture.sourceMaterials
+                )
+            )
+
+            if fixture.expected {
+                let signal = try? XCTUnwrap(decision.reflectiveMeaningSignal, fixture.input)
+                XCTAssertNotNil(signal, fixture.input)
+                XCTAssertGreaterThanOrEqual(signal?.confidence ?? 0, 0.75, fixture.input)
+                XCTAssertEqual(signal?.surfacePolicy, fixture.expectedPolicy, fixture.input)
+                XCTAssertTrue(decision.supervisorLanes.contains(.meaning), fixture.input)
+                XCTAssertTrue(decision.trace.supervisorLanes.contains(.meaning), fixture.input)
+            } else {
+                XCTAssertNil(decision.reflectiveMeaningSignal, fixture.input)
+            }
+        }
+    }
+
+    func testReflectiveMeaningSuppressesPatternNamingForExplicitReflection() {
+        let text = "帮我睇清楚，点解我同其他 founder 比较之后会咁在意自己进度？"
+
+        let decision = steward.steer(
+            prepared: preparedTurn(userText: text),
+            request: request(input: text)
+        )
+
+        XCTAssertNotNil(decision.reflectiveMeaningSignal)
+        XCTAssertNil(decision.inTurnPatternSignal)
+    }
+
+    func testDecisionCannotDropMeaningLaneWhenSignalIsPresent() {
+        let signal = ReflectiveMeaningSignal(
+            confidence: 0.86,
+            surfacePolicy: .compact,
+            reasonCode: "reflective_meaning_request"
+        )
+
+        let decision = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .lean,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "fixture",
+            reflectiveMeaningSignal: signal,
+            supervisorLanes: [.memory]
+        )
+
+        XCTAssertTrue(decision.supervisorLanes.contains(.meaning))
+        XCTAssertTrue(decision.trace.supervisorLanes.contains(.meaning))
+    }
+
+    func testTraceDecodeAddsMeaningLaneWhenSignalFieldExistsWithoutLanes() throws {
+        let json = """
+        {
+          "route": "ordinaryChat",
+          "memoryPolicy": "lean",
+          "challengeStance": "useSilently",
+          "responseShape": "answerNow",
+          "source": "deterministic",
+          "reason": "fixture",
+          "reflectiveMeaningSignal": {
+            "confidence": 0.86,
+            "surfacePolicy": "compact",
+            "reasonCode": "reflective_meaning_request"
+          }
+        }
+        """.data(using: .utf8)!
+
+        let decoded = try JSONDecoder().decode(TurnStewardTrace.self, from: json)
+
+        XCTAssertNotNil(decoded.reflectiveMeaningSignal)
+        XCTAssertTrue(decoded.supervisorLanes.contains(.meaning))
+    }
+
     func testSelfHarmLanguageBypassesPatternNamingAndRoutesSupportFirst() {
         let text = "我同学校同龄人比较到觉得自己想死"
 
@@ -1478,6 +1608,44 @@ final class TurnStewardTests: XCTestCase {
                                 sourceNodeId: sourceNodeId,
                                 ordinal: 0,
                                 text: "Fixture source text.",
+                                similarity: nil
+                            )
+                        ]
+                    )
+                ]
+            } else {
+                self.sourceMaterials = []
+            }
+        }
+    }
+
+    private struct MeaningFixture {
+        let input: String
+        let expected: Bool
+        let expectedPolicy: ReflectiveMeaningSurfacePolicy?
+        let sourceMaterials: [SourceMaterialContext]
+
+        init(
+            input: String,
+            expected: Bool,
+            expectedPolicy: ReflectiveMeaningSurfacePolicy? = nil,
+            sourceNodeId: UUID? = nil
+        ) {
+            self.input = input
+            self.expected = expected
+            self.expectedPolicy = expectedPolicy
+            if let sourceNodeId {
+                self.sourceMaterials = [
+                    SourceMaterialContext(
+                        sourceNodeId: sourceNodeId,
+                        title: "Conversation fixture",
+                        originalURL: nil,
+                        originalFilename: "conversation.txt",
+                        chunks: [
+                            SourceChunkContext(
+                                sourceNodeId: sourceNodeId,
+                                ordinal: 0,
+                                text: "Alex is reviewing a personal conversation.",
                                 similarity: nil
                             )
                         ]

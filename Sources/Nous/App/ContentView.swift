@@ -237,6 +237,7 @@ struct ContentView: View {
                     selectedTab: $selectedSettingsSection,
                     skillStore: dependencies.skillStore,
                     failureSkillCandidateStore: dependencies.failureSkillCandidateStore,
+                    failureSkillRepairRunStore: dependencies.failureSkillRepairRunStore,
                     userMemoryService: dependencies.userMemoryService,
                     telemetry: dependencies.governanceTelemetry,
                     galaxyRelationTelemetry: dependencies.galaxyRelationTelemetry,

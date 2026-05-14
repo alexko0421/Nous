@@ -1413,6 +1413,8 @@ User: "我中意又软又硬嘅人，反差先系 depth"
                 return "- reflection: separate evidence from inference and preserve source/memory boundaries."
             case .pattern:
                 return "- pattern: if a live pattern signal exists, surface at most one restrained name with its paired action."
+            case .meaning:
+                return "- meaning: if a reflective meaning signal exists, offer one tentative underlying pull and one reusable action."
             }
         }.joined(separator: "\n")
 

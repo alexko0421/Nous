@@ -142,7 +142,33 @@ final class PromptGovernanceTraceTests: XCTestCase {
         XCTAssertNil(decoded.softerFallback)
         XCTAssertNil(decoded.fallbackUsed)
         XCTAssertNil(decoded.inTurnPatternSignal)
+        XCTAssertNil(decoded.reflectiveMeaningSignal)
         XCTAssertEqual(decoded.supervisorLanes, [])
+    }
+
+    func testEncodesAndDecodesReflectiveMeaningSignalAndLane() throws {
+        let stewardTrace = TurnStewardTrace(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            projectSignalKind: nil,
+            source: .deterministic,
+            reason: "ordinary chat default",
+            reflectiveMeaningSignal: ReflectiveMeaningSignal(
+                confidence: 0.86,
+                surfacePolicy: .compact,
+                reasonCode: "reflective_meaning_request"
+            ),
+            supervisorLanes: [.memory]
+        )
+
+        let data = try JSONEncoder().encode(stewardTrace)
+        let decoded = try JSONDecoder().decode(TurnStewardTrace.self, from: data)
+
+        XCTAssertEqual(decoded.reflectiveMeaningSignal?.surfacePolicy, .compact)
+        XCTAssertEqual(decoded.reflectiveMeaningSignal?.reasonCode, "reflective_meaning_request")
+        XCTAssertEqual(decoded.supervisorLanes, [.memory, .meaning])
     }
 
     func testEncodesAndDecodesCitationTrace() throws {

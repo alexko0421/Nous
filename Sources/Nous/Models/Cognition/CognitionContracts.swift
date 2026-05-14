@@ -4,6 +4,7 @@ enum CognitionOrgan: String, Codable, Equatable, Sendable {
     case coordinator
     case singleTurnToolLoop = "single_turn_tool_loop"
     case patternAnalyst = "pattern_analyst"
+    case meaningAnalyst = "meaning_analyst"
     case behaviorLearner = "behavior_learner"
     case relationshipScout = "relationship_scout"
     case reviewer

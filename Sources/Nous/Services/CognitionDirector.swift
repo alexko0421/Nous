@@ -13,6 +13,7 @@ final class CognitionDirector {
             skillRecord(plan),
             judgeRecord(plan),
             patternNamingRecord(plan),
+            reflectiveMeaningRecord(plan),
             slowCognitionRecord(plan),
             agentLoopRecord(plan),
             reviewerRecord(reviewArtifact, reviewerFailed: reviewerFailed)
@@ -137,7 +138,7 @@ final class CognitionDirector {
         }
 
         let patternId = "pattern:\(signal.kind.rawValue)"
-        let reasonCode = sanitizedPatternReasonCode(signal.reasonCode)
+        let reasonCode = sanitizedMachineReasonCode(signal.reasonCode)
         return CognitionOrganRecord(
             organ: .patternAnalyst,
             label: "in_turn_pattern_naming",
@@ -147,7 +148,26 @@ final class CognitionDirector {
         )
     }
 
-    private func sanitizedPatternReasonCode(_ reasonCode: String) -> String {
+    private func reflectiveMeaningRecord(_ plan: TurnPlan) -> CognitionOrganRecord {
+        guard let signal = plan.promptTrace.turnSteward?.reflectiveMeaningSignal else {
+            return CognitionOrganRecord(
+                organ: .meaningAnalyst,
+                label: "reflective_meaning_signal",
+                status: .skipped,
+                reason: "no_reflective_meaning_signal"
+            )
+        }
+
+        let reasonCode = sanitizedMachineReasonCode(signal.reasonCode)
+        return CognitionOrganRecord(
+            organ: .meaningAnalyst,
+            label: "reflective_meaning_signal",
+            status: .used,
+            reason: "surface:\(signal.surfacePolicy.rawValue) reason:\(reasonCode)"
+        )
+    }
+
+    private func sanitizedMachineReasonCode(_ reasonCode: String) -> String {
         let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
         let isMachineCode = !reasonCode.isEmpty
             && reasonCode.count <= 80
