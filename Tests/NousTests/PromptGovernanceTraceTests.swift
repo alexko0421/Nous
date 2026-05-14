@@ -94,6 +94,12 @@ final class PromptGovernanceTraceTests: XCTestCase {
             confidence: nil,
             softerFallback: nil,
             fallbackUsed: false,
+            inTurnPatternSignal: InTurnPatternSignal(
+                kind: .comparisonLoop,
+                confidence: 0.88,
+                surfacePolicy: .directName,
+                reasonCode: "comparison_status_progress"
+            ),
             supervisorLanes: [.memory, .project]
         )
         let trace = PromptGovernanceTrace(
@@ -108,7 +114,8 @@ final class PromptGovernanceTraceTests: XCTestCase {
         let decoded = try JSONDecoder().decode(PromptGovernanceTrace.self, from: data)
 
         XCTAssertEqual(decoded.turnSteward, stewardTrace)
-        XCTAssertEqual(decoded.turnSteward?.supervisorLanes, [.memory, .project])
+        XCTAssertEqual(decoded.turnSteward?.inTurnPatternSignal?.kind, .comparisonLoop)
+        XCTAssertEqual(decoded.turnSteward?.supervisorLanes, [.memory, .project, .pattern])
     }
 
     func testDecodesLegacyTurnStewardTraceWithoutResponseStanceFields() throws {
@@ -134,6 +141,7 @@ final class PromptGovernanceTraceTests: XCTestCase {
         XCTAssertNil(decoded.confidence)
         XCTAssertNil(decoded.softerFallback)
         XCTAssertNil(decoded.fallbackUsed)
+        XCTAssertNil(decoded.inTurnPatternSignal)
         XCTAssertEqual(decoded.supervisorLanes, [])
     }
 
@@ -367,6 +375,30 @@ final class PromptGovernanceTraceTests: XCTestCase {
         XCTAssertTrue(withContext.hasMemorySignal)
         XCTAssertFalse(emptyContext.promptLayers.contains("operating_context"))
         XCTAssertFalse(emptyContext.hasMemorySignal)
+    }
+
+    func testGovernanceTraceCountsCorpusCardsAsMemorySignal() {
+        let entry = CitableEntry(
+            id: UUID().uuidString,
+            text: "Alex prefers momentum over polish for reversible product slices.",
+            scope: .global,
+            confidence: 0.91,
+            eventTime: Date(timeIntervalSince1970: 1_000),
+            atomType: .decision,
+            recordedAt: Date(timeIntervalSince1970: 1_000)
+        )
+        let trace = PromptContextAssembler.governanceTrace(
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil,
+            corpusContext: CitableContext(entries: [entry], manifest: .empty)
+        )
+
+        XCTAssertTrue(trace.promptLayers.contains("corpus_context"))
+        XCTAssertTrue(trace.hasMemorySignal)
     }
 
     func testGovernanceTraceAddsAgentCoordinationLayer() {

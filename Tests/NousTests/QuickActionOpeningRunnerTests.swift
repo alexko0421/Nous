@@ -48,6 +48,41 @@ final class QuickActionOpeningRunnerTests: XCTestCase {
         XCTAssertNil(completed.housekeepingPlan.emojiRefresh)
     }
 
+    @MainActor
+    func testOpeningRunnerDoesNotRecordMemorySuppressionTelemetry() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let conversationStore = ConversationSessionStore(nodeStore: nodeStore)
+        let node = try conversationStore.startConversation()
+        let runner = makeRunner(
+            nodeStore: nodeStore,
+            conversationStore: conversationStore,
+            llm: OpeningPromptCapturingLLM(output: "unused")
+        )
+        let maybeCompletion = await runner.run(
+            mode: .brainstorm,
+            node: node,
+            turnId: UUID(),
+            sink: TurnSequencedEventSink(turnId: UUID(), sink: OpeningTurnEventCapture()),
+            abortReason: { .unexpectedCancellation }
+        )
+        let completion = try XCTUnwrap(maybeCompletion)
+        let suiteName = "QuickActionOpeningRunnerTests.telemetry.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let telemetry = GovernanceTelemetryStore(defaults: defaults, nodeStore: nodeStore)
+        let scratchPadStore = ScratchPadStore(nodeStore: nodeStore, defaults: defaults)
+        let continuationService = ContextContinuationService(
+            scratchPadStore: scratchPadStore,
+            userMemoryScheduler: UserMemoryScheduler(service: OpeningNoopMemorySynthesizer()),
+            governanceTelemetry: telemetry
+        )
+
+        await continuationService.run(completion.continuationPlan)
+
+        XCTAssertEqual(telemetry.memoryStorageSuppressedCount(), 0)
+        XCTAssertEqual(telemetry.memoryStorageSuppressedCount(reason: .fastLatencyTier), 0)
+    }
+
     func testOpeningRunnerUsesDistinctMessageForEachMode() async throws {
         for mode in QuickActionMode.allCases {
             let nodeStore = try NodeStore(path: ":memory:")
@@ -171,5 +206,18 @@ private actor OpeningTurnEventCapture: TurnEventSink {
 
     func events() -> [TurnEventEnvelope] {
         capturedEvents
+    }
+}
+
+private final class OpeningNoopMemorySynthesizer: MemorySynthesizing, @unchecked Sendable {
+    func refreshConversation(nodeId: UUID, projectId: UUID?, messages: [Message]) async {}
+    func refreshProject(projectId: UUID) async {}
+    func shouldRefreshProject(projectId: UUID, threshold: Int) -> Bool { false }
+    func promoteToGlobal(
+        candidate: String,
+        sourceNodeIds: [UUID],
+        confirmation: UserMemoryCore.PersonalInferenceDisposition
+    ) async -> Bool {
+        false
     }
 }

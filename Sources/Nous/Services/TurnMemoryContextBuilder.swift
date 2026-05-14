@@ -169,16 +169,19 @@ final class TurnMemoryContextBuilder {
             citablePool: citablePool
         )
 
-        // Block 4a side-by-side: build the corpus context every turn so it's
-        // observable in tests + telemetry. Inject-half (next commit) wires it
-        // into PromptContextAssembler; for now this is dark code in the prompt.
-        let corpusContext = citableContextBuilder.build(
-            turnText: promptQuery,
-            conversationId: node.id,
-            projectId: node.projectId,
-            queryEmbedding: queryEmbedding,
-            now: now
-        )
+        let shouldBuildCorpusContext = policy.includeMemoryEvidence
+            || policy.includeCitations
+            || policy.includeContradictionRecall
+            || policy.includeJudgeFocus
+        let corpusContext = shouldBuildCorpusContext
+            ? citableContextBuilder.build(
+                turnText: promptQuery,
+                conversationId: node.id,
+                projectId: node.projectId,
+                queryEmbedding: queryEmbedding,
+                now: now
+            )
+            : .empty
 
         let resolvedCorpusEntries = Self.resolveCorpusEntries(
             corpusContext.entries,

@@ -12,6 +12,7 @@ final class CognitionDirector {
             memoryRecord(plan),
             skillRecord(plan),
             judgeRecord(plan),
+            patternNamingRecord(plan),
             slowCognitionRecord(plan),
             agentLoopRecord(plan),
             reviewerRecord(reviewArtifact, reviewerFailed: reviewerFailed)
@@ -123,6 +124,35 @@ final class CognitionDirector {
             resourceIds: ["artifact:\(trace.artifactId.uuidString)"] +
                 trace.evidenceRefIds.map { "evidence:\($0)" }
         )
+    }
+
+    private func patternNamingRecord(_ plan: TurnPlan) -> CognitionOrganRecord {
+        guard let signal = plan.promptTrace.turnSteward?.inTurnPatternSignal else {
+            return CognitionOrganRecord(
+                organ: .patternAnalyst,
+                label: "in_turn_pattern_naming",
+                status: .skipped,
+                reason: "no_pattern_signal"
+            )
+        }
+
+        let patternId = "pattern:\(signal.kind.rawValue)"
+        let reasonCode = sanitizedPatternReasonCode(signal.reasonCode)
+        return CognitionOrganRecord(
+            organ: .patternAnalyst,
+            label: "in_turn_pattern_naming",
+            status: .used,
+            reason: "\(patternId) reason:\(reasonCode)",
+            resourceIds: [patternId]
+        )
+    }
+
+    private func sanitizedPatternReasonCode(_ reasonCode: String) -> String {
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+        let isMachineCode = !reasonCode.isEmpty
+            && reasonCode.count <= 80
+            && reasonCode.unicodeScalars.allSatisfy { allowed.contains($0) }
+        return isMachineCode ? reasonCode : "invalid_reason_code"
     }
 
     private func agentLoopRecord(_ plan: TurnPlan) -> CognitionOrganRecord {

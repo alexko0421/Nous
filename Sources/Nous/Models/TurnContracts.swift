@@ -183,6 +183,7 @@ struct ContextContinuationPlan {
     let scratchpadIngest: ScratchpadIngestRequest?
     let memoryRefresh: EnqueueMemoryRefreshRequest?
     let memorySuppressionReason: MemorySuppressionReason?
+    let recordsMemorySuppressionTelemetry: Bool
     let sourceLearningDigest: SourceLearningDigestRequest?
 
     init(
@@ -192,6 +193,7 @@ struct ContextContinuationPlan {
         scratchpadIngest: ScratchpadIngestRequest?,
         memoryRefresh: EnqueueMemoryRefreshRequest?,
         memorySuppressionReason: MemorySuppressionReason? = nil,
+        recordsMemorySuppressionTelemetry: Bool = true,
         sourceLearningDigest: SourceLearningDigestRequest? = nil
     ) {
         self.turnId = turnId
@@ -200,6 +202,7 @@ struct ContextContinuationPlan {
         self.scratchpadIngest = scratchpadIngest
         self.memoryRefresh = memoryRefresh
         self.memorySuppressionReason = memorySuppressionReason
+        self.recordsMemorySuppressionTelemetry = recordsMemorySuppressionTelemetry
         self.sourceLearningDigest = sourceLearningDigest
     }
 }

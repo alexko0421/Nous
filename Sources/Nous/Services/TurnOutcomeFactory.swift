@@ -58,7 +58,8 @@ struct TurnOutcomeFactory: Sendable {
         stableSystem: String,
         userMessage: Message? = nil,
         sourceMaterials: [SourceMaterialContext] = [],
-        latencyTier: TurnLatencyTier = .normal
+        latencyTier: TurnLatencyTier = .normal,
+        recordsMemorySuppressionTelemetry: Bool = true
     ) -> TurnCompletion {
         let suppressHeavyPostTurnWork = latencyTier == .fast
         let memoryDecision: MemoryPersistenceDecision = suppressHeavyPostTurnWork
@@ -97,6 +98,7 @@ struct TurnOutcomeFactory: Sendable {
                 messages: committed.messagesAfterAssistantAppend
             ) : nil,
             memorySuppressionReason: memoryDecision.suppressionReason,
+            recordsMemorySuppressionTelemetry: recordsMemorySuppressionTelemetry,
             sourceLearningDigest: sourceLearningDigest
         )
         let housekeepingPlan = TurnHousekeepingPlan(

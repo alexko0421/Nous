@@ -62,7 +62,8 @@ final class QuickActionOpeningRunner {
             committed: committed,
             assistantContent: policyOpening,
             stableSystem: "",
-            latencyTier: .fast
+            latencyTier: .fast,
+            recordsMemorySuppressionTelemetry: false
         )
         await sink.emit(.completed(completion))
         return completion

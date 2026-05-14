@@ -72,6 +72,354 @@ final class TurnStewardTests: XCTestCase {
         XCTAssertEqual(decision.trace.latencyTier, .deep)
     }
 
+    func testActiveBrainstormDistressDropsToSupportFirstWithoutActiveRouter() {
+        let decision = steward.steer(
+            prepared: preparedTurn(userText: "我好焦虑，先陪我一下"),
+            request: request(input: "我好焦虑，先陪我一下", activeQuickActionMode: .brainstorm)
+        )
+
+        XCTAssertEqual(decision.route, .ordinaryChat)
+        XCTAssertEqual(decision.memoryPolicy, .conversationOnly)
+        XCTAssertEqual(decision.challengeStance, .supportFirst)
+        XCTAssertEqual(decision.responseShape, .answerNow)
+        XCTAssertEqual(decision.judgePolicy, .off)
+        XCTAssertEqual(decision.latencyTier, .normal)
+    }
+
+    func testActiveDirectionAndPlanDistressAnswerNowWithoutActiveRouter() {
+        let examples: [(QuickActionMode, TurnRoute)] = [
+            (.direction, .direction),
+            (.plan, .plan)
+        ]
+
+        for (mode, expectedRoute) in examples {
+            let decision = steward.steer(
+                prepared: preparedTurn(userText: "我好焦虑，帮我处理下一步"),
+                request: request(input: "我好焦虑，帮我处理下一步", activeQuickActionMode: mode)
+            )
+
+            XCTAssertEqual(decision.route, expectedRoute, "\(mode)")
+            XCTAssertEqual(decision.memoryPolicy, .full, "\(mode)")
+            XCTAssertEqual(decision.challengeStance, .supportFirst, "\(mode)")
+            XCTAssertEqual(decision.responseShape, .answerNow, "\(mode)")
+            XCTAssertEqual(decision.judgePolicy, .off, "\(mode)")
+            XCTAssertEqual(decision.latencyTier, .deep, "\(mode)")
+        }
+    }
+
+    func testActiveQuickActionMemoryOptOutKeepsLeanMemoryPolicy() {
+        for mode in QuickActionMode.allCases {
+            let decision = steward.steer(
+                prepared: preparedTurn(userText: "from scratch, don't use memory"),
+                request: request(input: "from scratch, don't use memory", activeQuickActionMode: mode)
+            )
+
+            XCTAssertEqual(decision.memoryPolicy, .lean, "\(mode) should respect explicit memory opt-out")
+        }
+    }
+
+    func testActiveBrainstormWithAttachmentOrSourceUsesDeepLatency() {
+        let sourceNodeId = UUID()
+        let attachedDecision = steward.steer(
+            prepared: preparedTurn(userText: "give me ideas from this"),
+            request: request(
+                input: "give me ideas from this",
+                activeQuickActionMode: .brainstorm,
+                attachments: [
+                    AttachedFileContext(name: "notes.txt", extractedText: "Product notes.")
+                ]
+            )
+        )
+        let sourceDecision = steward.steer(
+            prepared: preparedTurn(userText: "give me ideas from this"),
+            request: request(
+                input: "give me ideas from this",
+                activeQuickActionMode: .brainstorm,
+                sourceMaterials: [
+                    SourceMaterialContext(
+                        sourceNodeId: sourceNodeId,
+                        title: "Research note",
+                        originalURL: nil,
+                        originalFilename: "research.txt",
+                        chunks: [
+                            SourceChunkContext(
+                                sourceNodeId: sourceNodeId,
+                                ordinal: 0,
+                                text: "A source-backed product note.",
+                                similarity: nil
+                            )
+                        ]
+                    )
+                ]
+            )
+        )
+
+        XCTAssertEqual(attachedDecision.latencyTier, .deep)
+        XCTAssertEqual(sourceDecision.latencyTier, .deep)
+    }
+
+    func testExplicitBrainstormWithAttachmentUsesDeepLatency() {
+        let decision = steward.steer(
+            prepared: preparedTurn(userText: "brainstorm ideas from this file"),
+            request: request(
+                input: "brainstorm ideas from this file",
+                attachments: [
+                    AttachedFileContext(name: "notes.txt", extractedText: "Product notes.")
+                ]
+            )
+        )
+
+        XCTAssertEqual(decision.route, .brainstorm)
+        XCTAssertEqual(decision.latencyTier, .deep)
+        XCTAssertEqual(decision.trace.latencyTier, .deep)
+    }
+
+    func testInTurnPatternNamingFixtureSet() {
+        let sourceNodeId = UUID()
+        let fixtures: [PatternFixture] = [
+            PatternFixture(
+                input: "今日听到其他人讲 USC 同 Berkeley，我突然觉得同龄人已经 ahead，我好似慢好多。",
+                expected: .comparisonLoop
+            ),
+            PatternFixture(
+                input: "I keep comparing my progress with other 19 year old founders and it makes my next step feel fake.",
+                expected: .comparisonLoop
+            ),
+            PatternFixture(
+                input: "听完同学讲 transfer school，我又开始用学校名去量自己够唔够格。",
+                expected: .comparisonLoop
+            ),
+            PatternFixture(
+                input: "Everyone seems ahead because their credentials look cleaner than mine.",
+                expected: .comparisonLoop
+            ),
+            PatternFixture(
+                input: "我见到 peer shipping faster，就开始觉得自己整个 path 都落后。",
+                expected: .comparisonLoop
+            ),
+            PatternFixture(
+                input: "F-1 同 school 呢件事令我觉得自己唔似一个真正 founder。",
+                expected: .identityPressure
+            ),
+            PatternFixture(
+                input: "I am 19 and still at SMC, so I keep asking whether I am legitimate enough to build this.",
+                expected: .identityPressure
+            ),
+            PatternFixture(
+                input: "我唔系担心一个具体限制，我系觉得 visa status 好似证明我唔够格。",
+                expected: .identityPressure
+            ),
+            PatternFixture(
+                input: "Maybe before shipping this small slice I should redesign the whole architecture and write a full framework.",
+                expected: .planningAsAvoidance
+            ),
+            PatternFixture(
+                input: "我明明可以今日做一个小 demo，但我又想先排完整 roadmap 同 system design。",
+                expected: .planningAsAvoidance
+            ),
+            PatternFixture(
+                input: "Let's create the whole operating system first before doing the exposed next step.",
+                expected: .planningAsAvoidance
+            ),
+            PatternFixture(
+                input: "我可能应该先再研究 realtime docs，之后先决定 voice 要点做。",
+                expected: .learningInsteadOfShipping
+            ),
+            PatternFixture(
+                input: "Before shipping the prototype, I want to read a few more PDFs and model docs.",
+                expected: .learningInsteadOfShipping
+            ),
+            PatternFixture(
+                input: "呢个 slice 已经清楚，但我仲想继续 research provider comparison 先。",
+                expected: .learningInsteadOfShipping
+            ),
+            PatternFixture(
+                input: "你直接帮我决定吧，虽然我已经见到用户反应同我自己 product taste 都指向 A。",
+                expected: .overTrustingSystem
+            ),
+            PatternFixture(
+                input: "Codex, tell me the product decision. I have live evidence, but I want you to choose for me.",
+                expected: .overTrustingSystem
+            ),
+            PatternFixture(
+                input: "我其实已经知道呢个 UI 唔 work，但我想 Nous 替我定案。",
+                expected: .overTrustingSystem
+            ),
+            PatternFixture(input: "ping", expected: nil),
+            PatternFixture(input: "翻译成英文：我今日好攰", expected: nil),
+            PatternFixture(input: "帮我总结这篇文章第一部分", expected: nil, activeQuickActionMode: .study),
+            PatternFixture(input: "summarize this source", expected: nil, sourceNodeId: sourceNodeId),
+            PatternFixture(input: "from scratch, don't use memory, should I ship this?", expected: nil),
+            PatternFixture(input: "我好焦虑，先陪我一下", expected: nil),
+            PatternFixture(input: "最近听返首旧歌，突然觉得好有味道", expected: nil),
+            PatternFixture(input: "帮我 plan this week", expected: nil),
+            PatternFixture(input: "what does TTFT mean?", expected: nil),
+            PatternFixture(input: "我想做一个更完整的系统", expected: nil),
+            PatternFixture(input: "我想伤害自己，应该点算", expected: nil),
+            PatternFixture(input: "我 panic 到唔知自己安唔安全", expected: nil),
+            PatternFixture(input: "你可以诊断我系咪 depression 同要唔要食药吗？", expected: nil)
+        ]
+
+        XCTAssertEqual(fixtures.count, 30)
+
+        for fixture in fixtures {
+            let decision = steward.steer(
+                prepared: preparedTurn(userText: fixture.input),
+                request: request(
+                    input: fixture.input,
+                    activeQuickActionMode: fixture.activeQuickActionMode,
+                    sourceMaterials: fixture.sourceMaterials
+                )
+            )
+
+            if let expected = fixture.expected {
+                let signal = try? XCTUnwrap(decision.inTurnPatternSignal, fixture.input)
+                XCTAssertEqual(signal?.kind, expected, fixture.input)
+                XCTAssertGreaterThanOrEqual(signal?.confidence ?? 0, 0.75, fixture.input)
+                XCTAssertEqual(decision.trace.inTurnPatternSignal, signal, fixture.input)
+                XCTAssertTrue(decision.supervisorLanes.contains(.pattern), fixture.input)
+            } else {
+                XCTAssertNil(decision.inTurnPatternSignal, fixture.input)
+                XCTAssertNil(decision.trace.inTurnPatternSignal, fixture.input)
+                XCTAssertFalse(decision.supervisorLanes.contains(.pattern), fixture.input)
+            }
+        }
+    }
+
+    func testComparisonPatternWinsWhenIdentityPressureAlsoMatches() {
+        let text = "I keep comparing myself to other 19 year old founders, and then I use school and F-1 status to ask if I am legitimate enough."
+
+        let decision = steward.steer(
+            prepared: preparedTurn(userText: text),
+            request: request(input: text)
+        )
+
+        XCTAssertEqual(decision.inTurnPatternSignal?.kind, .comparisonLoop)
+    }
+
+    func testDecisionCannotDropPatternLaneWhenSignalIsPresent() {
+        let signal = InTurnPatternSignal(
+            kind: .comparisonLoop,
+            confidence: 0.9,
+            surfacePolicy: .directName,
+            reasonCode: "comparison_status_progress"
+        )
+
+        let decision = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .lean,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "fixture",
+            inTurnPatternSignal: signal,
+            supervisorLanes: [.memory]
+        )
+
+        XCTAssertTrue(decision.supervisorLanes.contains(.pattern))
+        XCTAssertTrue(decision.trace.supervisorLanes.contains(.pattern))
+    }
+
+    func testTraceCannotDropPatternLaneWhenSignalIsPresent() throws {
+        let signal = InTurnPatternSignal(
+            kind: .identityPressure,
+            confidence: 0.88,
+            surfacePolicy: .directName,
+            reasonCode: "identity_constraint_judgment"
+        )
+        let trace = TurnStewardTrace(
+            route: .ordinaryChat,
+            memoryPolicy: .lean,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            projectSignalKind: nil,
+            source: .deterministic,
+            reason: "fixture",
+            inTurnPatternSignal: signal,
+            supervisorLanes: []
+        )
+
+        XCTAssertTrue(trace.supervisorLanes.contains(.pattern))
+
+        let data = try JSONEncoder().encode(trace)
+        let decoded = try JSONDecoder().decode(TurnStewardTrace.self, from: data)
+
+        XCTAssertTrue(decoded.supervisorLanes.contains(.pattern))
+    }
+
+    func testTraceDecodeAddsPatternLaneWhenSignalFieldExistsWithoutLanes() throws {
+        let json = """
+        {
+          "route": "ordinaryChat",
+          "memoryPolicy": "lean",
+          "challengeStance": "useSilently",
+          "responseShape": "answerNow",
+          "source": "deterministic",
+          "reason": "fixture",
+          "inTurnPatternSignal": {
+            "kind": "identityPressure",
+            "confidence": 0.88,
+            "surfacePolicy": "directName",
+            "reasonCode": "identity_constraint_judgment"
+          }
+        }
+        """.data(using: .utf8)!
+
+        let decoded = try JSONDecoder().decode(TurnStewardTrace.self, from: json)
+
+        XCTAssertTrue(decoded.supervisorLanes.contains(.pattern))
+    }
+
+    func testPatternNamingDoesNotTriggerOnLiteralKeywordCollisions() {
+        let controls = [
+            "We should plan ahead for progress on the school onboarding page.",
+            "What is the legitimate HTTP status for this route?",
+            "Please research docs for the unit test failure before changing code.",
+            "Nous has live evidence in the cognition trace; explain it, don't decide.",
+            "Can you demo the framework architecture?",
+            "I am researching relationship dynamics for product onboarding.",
+            "Is this package legitimate enough for the build tool?",
+            "The peer dependency affects founder docs in the progress screen."
+        ]
+
+        for text in controls {
+            let decision = steward.steer(
+                prepared: preparedTurn(userText: text),
+                request: request(input: text)
+            )
+
+            XCTAssertNil(decision.inTurnPatternSignal, text)
+        }
+    }
+
+    func testSelfHarmLanguageBypassesPatternNamingAndRoutesSupportFirst() {
+        let text = "我同学校同龄人比较到觉得自己想死"
+
+        let decision = steward.steer(
+            prepared: preparedTurn(userText: text),
+            request: request(input: text)
+        )
+
+        XCTAssertNil(decision.inTurnPatternSignal)
+        XCTAssertEqual(decision.challengeStance, .supportFirst)
+        XCTAssertEqual(decision.responseShape, .answerNow)
+        XCTAssertEqual(decision.judgePolicy, .off)
+    }
+
+    func testOrdinaryDistressMemoryOptOutKeepsLeanPolicy() {
+        let text = "don't use memory, 我好焦虑，先陪我一下"
+
+        let decision = steward.steer(
+            prepared: preparedTurn(userText: text),
+            request: request(input: text)
+        )
+
+        XCTAssertEqual(decision.route, .ordinaryChat)
+        XCTAssertEqual(decision.memoryPolicy, .lean)
+        XCTAssertEqual(decision.challengeStance, .supportFirst)
+        XCTAssertEqual(decision.judgePolicy, .off)
+    }
+
     func testSimpleSelfContainedOrdinaryTurnsUseFastLatencyTier() {
         let examples = [
             "ping",
@@ -290,6 +638,70 @@ final class TurnStewardTests: XCTestCase {
         XCTAssertEqual(decision.trace.supervisorLanes, decision.supervisorLanes)
     }
 
+    func testSourceMaterialMemoryOptOutKeepsLeanMemoryPolicy() {
+        let sourceNodeId = UUID()
+        let decision = steward.steer(
+            prepared: preparedTurn(userText: "don't use memory, just analyze this source"),
+            request: request(
+                input: "don't use memory, just analyze this source",
+                sourceMaterials: [
+                    SourceMaterialContext(
+                        sourceNodeId: sourceNodeId,
+                        title: "External essay",
+                        originalURL: "https://example.com/essay",
+                        originalFilename: nil,
+                        chunks: [
+                            SourceChunkContext(
+                                sourceNodeId: sourceNodeId,
+                                ordinal: 0,
+                                text: "External essay chunk about connecting ideas.",
+                                similarity: nil
+                            )
+                        ]
+                    )
+                ]
+            )
+        )
+
+        XCTAssertEqual(decision.route, .sourceAnalysis)
+        XCTAssertEqual(decision.memoryPolicy, .lean)
+        XCTAssertEqual(decision.latencyTier, .deep)
+    }
+
+    func testSourceMaterialDistressKeepsSourceButRoutesSupportFirst() {
+        let sourceNodeId = UUID()
+        let decision = steward.steer(
+            prepared: preparedTurn(userText: "我好焦虑，帮我 connect this source"),
+            request: request(
+                input: "我好焦虑，帮我 connect this source",
+                sourceMaterials: [
+                    SourceMaterialContext(
+                        sourceNodeId: sourceNodeId,
+                        title: "External essay",
+                        originalURL: "https://example.com/essay",
+                        originalFilename: nil,
+                        chunks: [
+                            SourceChunkContext(
+                                sourceNodeId: sourceNodeId,
+                                ordinal: 0,
+                                text: "External essay chunk about connecting ideas.",
+                                similarity: nil
+                            )
+                        ]
+                    )
+                ]
+            )
+        )
+
+        XCTAssertEqual(decision.route, .sourceAnalysis)
+        XCTAssertEqual(decision.challengeStance, .supportFirst)
+        XCTAssertEqual(decision.responseShape, .answerNow)
+        XCTAssertEqual(decision.judgePolicy, .off)
+        XCTAssertEqual(decision.latencyTier, .deep)
+        XCTAssertTrue(decision.supervisorLanes.contains(.source))
+        XCTAssertEqual(decision.trace.supervisorLanes, decision.supervisorLanes)
+    }
+
     func testSourceMaterialsKeepJudgeEngaged() {
         let sourceNodeId = UUID()
         let decision = steward.steer(
@@ -424,6 +836,26 @@ final class TurnStewardTests: XCTestCase {
         XCTAssertEqual(decision.route, .ordinaryChat)
         XCTAssertEqual(decision.memoryPolicy, .lean)
         XCTAssertEqual(decision.challengeStance, .useSilently)
+    }
+
+    func testMemoryOptOutFreshDoesNotMatchFreshmanSubstring() {
+        let decision = steward.steer(
+            prepared: preparedTurn(userText: "I am a freshman founder and need direction"),
+            request: request(input: "I am a freshman founder and need direction")
+        )
+
+        XCTAssertEqual(decision.route, .direction)
+        XCTAssertEqual(decision.memoryPolicy, .full)
+    }
+
+    func testMemoryOptOutFreshStillMatchesStandaloneWord() {
+        let decision = steward.steer(
+            prepared: preparedTurn(userText: "fresh, help me think from first principles"),
+            request: request(input: "fresh, help me think from first principles")
+        )
+
+        XCTAssertEqual(decision.route, .ordinaryChat)
+        XCTAssertEqual(decision.memoryPolicy, .lean)
     }
 
     func testMemoryOptOutDoesNotSuppressExplicitDeepLatency() {
@@ -799,6 +1231,35 @@ final class TurnStewardTests: XCTestCase {
         XCTAssertEqual(decision.judgePolicy, .off)
     }
 
+    func testClassifierSupportFirstRespectsMemoryOptOut() async {
+        let classifier = StubSpeechActClassifier(
+            output: SpeechActClassifierOutput(
+                stance: .supportFirst,
+                confidence: 0.93,
+                softerFallback: .companion,
+                reason: "classifier saw support need"
+            )
+        )
+        let steward = TurnSteward(
+            routerModeProvider: { .active },
+            currentProviderProvider: { .gemini },
+            classifier: classifier
+        )
+        let input = "from scratch, 你觉得我应该点样处理呢件事？"
+
+        let decision = await steward.steerForTurn(
+            prepared: preparedTurn(userText: input),
+            request: request(input: input)
+        )
+
+        XCTAssertEqual(classifier.callCount, 1)
+        XCTAssertEqual(decision.route, .ordinaryChat)
+        XCTAssertEqual(decision.memoryPolicy, .lean)
+        XCTAssertEqual(decision.trace.responseStance, .supportFirst)
+        XCTAssertEqual(decision.responseShape, .answerNow)
+        XCTAssertEqual(decision.judgePolicy, .off)
+    }
+
     func testMediumClassifierConfidenceUsesSofterFallback() async {
         let classifier = StubSpeechActClassifier(
             output: SpeechActClassifierOutput(
@@ -988,6 +1449,44 @@ final class TurnStewardTests: XCTestCase {
             sourceMaterials: sourceMaterials,
             now: Date()
         )
+    }
+
+    private struct PatternFixture {
+        let input: String
+        let expected: InTurnPatternKind?
+        let activeQuickActionMode: QuickActionMode?
+        let sourceMaterials: [SourceMaterialContext]
+
+        init(
+            input: String,
+            expected: InTurnPatternKind?,
+            activeQuickActionMode: QuickActionMode? = nil,
+            sourceNodeId: UUID? = nil
+        ) {
+            self.input = input
+            self.expected = expected
+            self.activeQuickActionMode = activeQuickActionMode
+            if let sourceNodeId {
+                self.sourceMaterials = [
+                    SourceMaterialContext(
+                        sourceNodeId: sourceNodeId,
+                        title: "Fixture source",
+                        originalURL: nil,
+                        originalFilename: "fixture.txt",
+                        chunks: [
+                            SourceChunkContext(
+                                sourceNodeId: sourceNodeId,
+                                ordinal: 0,
+                                text: "Fixture source text.",
+                                similarity: nil
+                            )
+                        ]
+                    )
+                ]
+            } else {
+                self.sourceMaterials = []
+            }
+        }
     }
 
     private func awaitDecision(

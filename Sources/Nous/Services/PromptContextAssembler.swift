@@ -1411,6 +1411,8 @@ User: "我中意又软又硬嘅人，反差先系 depth"
                 return "- analytics: notice useful patterns, gaps, and repeated structure without inventing metrics."
             case .reflection:
                 return "- reflection: separate evidence from inference and preserve source/memory boundaries."
+            case .pattern:
+                return "- pattern: if a live pattern signal exists, surface at most one restrained name with its paired action."
             }
         }.joined(separator: "\n")
 
@@ -1781,6 +1783,7 @@ User: "我中意又软又硬嘅人，反差先系 depth"
         quickActionExperiment: QuickActionExperimentTrace? = nil,
         shadowLearningHints: [String] = [],
         slowCognitionArtifacts: [CognitionArtifact] = [],
+        corpusContext: CitableContext = .empty,
         now: Date = Date()
     ) -> PromptGovernanceTrace {
         governanceTrace(
@@ -1809,6 +1812,7 @@ User: "我中意又软又硬嘅人，反差先系 depth"
             quickActionExperiment: quickActionExperiment,
             shadowLearningHints: shadowLearningHints,
             slowCognitionArtifacts: slowCognitionArtifacts,
+            corpusContext: corpusContext,
             now: now
         )
     }
@@ -1839,6 +1843,7 @@ User: "我中意又软又硬嘅人，反差先系 depth"
         quickActionExperiment: QuickActionExperimentTrace? = nil,
         shadowLearningHints: [String] = [],
         slowCognitionArtifacts: [CognitionArtifact] = [],
+        corpusContext: CitableContext = .empty,
         now: Date = Date()
     ) -> PromptGovernanceTrace {
         var layers = ["anchor", "memory_interpretation_policy", "core_safety_policy", "user_address_policy", "visible_response_language_policy", "epistemic_grounding_policy", "explanation_clarity_policy", "answer_closure_policy", "enumerable_list_format_policy", "stoic_grounding_policy", "real_world_decision_policy", "summary_output_policy", "conversation_title_output_policy", "chat_mode"]
@@ -1849,9 +1854,11 @@ User: "我中意又软又硬嘅人，反差先系 depth"
             }
             return visibleResponseLanguageDecision(for: currentUserInput)
         }()
+        let corpusBlock = CorpusCardFormatter.formatContext(corpusContext)
+        let effectiveGlobalMemory = corpusBlock != nil ? nil : globalMemory
         let memoryPacket = MemoryPromptPacket(
             operatingContext: operatingContext,
-            globalMemory: globalMemory,
+            globalMemory: effectiveGlobalMemory,
             essentialStory: essentialStory,
             userModel: userModel,
             memoryEvidence: memoryEvidence,
@@ -1865,7 +1872,8 @@ User: "我中意又软又硬嘅人，反差先系 depth"
         let promptRecentConversations = memoryPacket.promptRecentConversations
 
         if operatingContext?.promptBlock() != nil { layers.append("operating_context") }
-        if let globalMemory, !globalMemory.isEmpty { layers.append("global_memory") }
+        if let effectiveGlobalMemory, !effectiveGlobalMemory.isEmpty { layers.append("global_memory") }
+        if corpusBlock != nil { layers.append("corpus_context") }
         if let essentialStory, !essentialStory.isEmpty { layers.append("essential_story") }
         if let projectMemory, !projectMemory.isEmpty { layers.append("project_memory") }
         if let conversationMemory, !conversationMemory.isEmpty { layers.append("conversation_memory") }

@@ -87,8 +87,13 @@ final class TurnPlanner {
         }
         let retrievalQuery = ([promptQuery] + attachmentNames + sourceRetrievalText).joined(separator: "\n")
 
-        let explicitQuickActionMode = request.snapshot.activeQuickActionMode
+        let snapshotQuickActionMode = request.snapshot.activeQuickActionMode
+        let explicitQuickActionMode = Self.effectiveExplicitQuickActionMode(
+            snapshotQuickActionMode,
+            stewardship: stewardship
+        )
         let inferredQuickActionMode = explicitQuickActionMode == nil
+            && stewardship.challengeStance != .supportFirst
             ? stewardship.route.quickActionMode
             : nil
         let planningQuickActionMode = explicitQuickActionMode ?? inferredQuickActionMode
@@ -100,12 +105,19 @@ final class TurnPlanner {
         )) ?? []
         let planningAgent: (any QuickActionAgent)? = planningQuickActionMode?.agent()
         let isFastLatencyTurn = stewardship.latencyTier == .fast
+        let stewardPolicy = QuickActionMemoryPolicy.fromStewardPreset(stewardship.memoryPolicy)
+        let stewardPolicyOverridesExplicitMode = Self.shouldUseStewardPolicyOverExplicitMode(
+            stewardship: stewardship,
+            inputText: request.inputText
+        )
         let basePolicy: QuickActionMemoryPolicy = if isFastLatencyTurn {
             .lean
-        } else if let explicitQuickActionMode {
+        } else if let explicitQuickActionMode, !stewardPolicyOverridesExplicitMode {
             explicitQuickActionMode.agent().memoryPolicy()
+        } else if stewardship.memoryPolicy != .full {
+            stewardPolicy
         } else {
-            QuickActionMemoryPolicy.fromStewardPreset(stewardship.memoryPolicy)
+            stewardPolicy
         }
         let policy = basePolicy
             .applyingChallengeStance(stewardship.challengeStance)
@@ -360,6 +372,7 @@ final class TurnPlanner {
             quickActionExperiment: quickActionExperiment,
             shadowLearningHints: shadowLearningHints,
             slowCognitionArtifacts: slowCognitionArtifacts,
+            corpusContext: memoryContext.corpusContext,
             now: request.now
         )
 
@@ -651,6 +664,34 @@ final class TurnPlanner {
         }
     }
 
+    private static func effectiveExplicitQuickActionMode(
+        _ snapshotMode: QuickActionMode?,
+        stewardship: TurnStewardDecision
+    ) -> QuickActionMode? {
+        guard let snapshotMode else { return nil }
+        if stewardship.challengeStance == .supportFirst {
+            return nil
+        }
+        return snapshotMode
+    }
+
+    private static func shouldUseStewardPolicyOverExplicitMode(
+        stewardship: TurnStewardDecision,
+        inputText: String
+    ) -> Bool {
+        guard stewardship.memoryPolicy != .full else { return false }
+        let normalized = inputText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if TurnSteward.hasMemoryOptOutCue(normalized) {
+            return true
+        }
+        switch stewardship.memoryPolicy {
+        case .conversationOnly, .projectOnly:
+            return true
+        case .full, .lean:
+            return false
+        }
+    }
+
     private static func turnGuidanceBlock(for decision: TurnStewardDecision) -> String? {
         if isSupportFirstDwellTurn(decision) {
             return """
@@ -666,7 +707,8 @@ final class TurnPlanner {
 
         let guidance = [
             responseShapeInstruction(for: decision.responseShape).map { "Response shape: \($0)" },
-            responseStanceInstruction(for: decision).map { "Response stance: \($0)" }
+            responseStanceInstruction(for: decision).map { "Response stance: \($0)" },
+            patternNamingInstruction(for: decision.inTurnPatternSignal).map { "Pattern naming: \($0)" }
         ].compactMap { $0 }
 
         guard !guidance.isEmpty else { return nil }
@@ -720,6 +762,21 @@ final class TurnPlanner {
             instruction = "Alex explicitly invited challenge. You may name a real tension plainly, but stay useful and proportionate."
         }
         return instruction
+    }
+
+    private static func patternNamingInstruction(for signal: InTurnPatternSignal?) -> String? {
+        guard let signal else { return nil }
+
+        let surfaceInstruction = switch signal.surfacePolicy {
+        case .softName:
+            "Use soft hypothesis language; do not force the label."
+        case .directName:
+            "Name it directly but keep it proportionate."
+        }
+
+        return """
+        Name at most one live pattern. Pattern: \(signal.kind.displayLabel). Action: \(signal.kind.pairedAction). \(surfaceInstruction) Use one sentence of evidence from Alex's current words, then give the action. Continue helping with Alex's original task. Never use always-style identity claims, diagnosis language, routing language, or clinical worksheets.
+        """
     }
 
     private func makeJudgeEvent(
