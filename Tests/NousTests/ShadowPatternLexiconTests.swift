@@ -38,7 +38,7 @@ final class ShadowPatternLexiconTests: XCTestCase {
         XCTAssertFalse(lexicon.matchesObservation(label: "custom", text: "absence"))
         XCTAssertTrue(lexicon.matchesObservation(label: "custom", text: "具体例子"))
         XCTAssertTrue(lexicon.matchesObservation(label: "custom", text: "pain test"))
-        XCTAssertTrue(lexicon.matchesObservation(label: "custom", text: "inversion"))
+        XCTAssertFalse(lexicon.matchesObservation(label: "custom", text: "inversion"))
     }
 
     func testAliasMatchBonusIsBinary() {

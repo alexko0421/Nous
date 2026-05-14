@@ -60,7 +60,7 @@ struct ShadowPatternLexicon {
         }
 
         if cjkCount == 0 {
-            return words.count >= 2 || alias == "inversion"
+            return words.count >= 2
         }
 
         if asciiWords.isEmpty {
