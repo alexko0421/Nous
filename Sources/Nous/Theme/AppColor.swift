@@ -78,10 +78,10 @@ struct AppColor {
         dark: NSColor(red: 24/255, green: 24/255, blue: 26/255, alpha: 0.42)
     )
     static let sidebarGlassTint = dynamicNSColor(
-        light: NSColor(red: 17/255, green: 18/255, blue: 20/255, alpha: 0.72),
-        dark: NSColor(red: 17/255, green: 18/255, blue: 20/255, alpha: 0.72)
+        light: NSColor(red: 24/255, green: 24/255, blue: 26/255, alpha: 0.58),
+        dark: NSColor(red: 24/255, green: 24/255, blue: 26/255, alpha: 0.58)
     )
-    static let sidebarGlassStroke = Color.white.opacity(0.055)
+    static let sidebarGlassStroke = Color.white.opacity(0.07)
     static let sidebarText = Color(red: 244/255, green: 240/255, blue: 232/255)
     static let sidebarMutedText = Color.white.opacity(0.62)
     static let composerMatteOverlay = dynamicNSColor(
