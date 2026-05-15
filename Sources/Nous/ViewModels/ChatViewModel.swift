@@ -724,6 +724,9 @@ final class ChatViewModel {
     /// ChatViewModel is @MainActor.
     func ensureConversationForVoice() throws -> UUID {
         if let current = currentNode {
+            if scratchPadStore.activeConversationId != current.id {
+                scratchPadStore.activate(conversationId: current.id)
+            }
             return current.id
         }
         let node = try conversationSessionStore.startConversation(
@@ -732,6 +735,7 @@ final class ChatViewModel {
         )
         self.currentNode = node
         bindStreamingSession(for: node)
+        scratchPadStore.activate(conversationId: node.id)
         self.messages = []
         return node.id
     }

@@ -431,9 +431,36 @@ final class TurnStewardTests: XCTestCase {
                 expectedPolicy: .compact,
                 sourceNodeId: sourceNodeId
             ),
+            MeaningFixture(
+                input: "帮我睇清楚呢张截图入面段 conversation，点解我咁在意？",
+                expected: true,
+                expectedPolicy: .compact,
+                attachments: [
+                    AttachedFileContext(
+                        name: "conversation.png",
+                        extractedText: nil,
+                        kind: .image,
+                        imageData: Data([0x01]),
+                        imageMimeType: "image/png"
+                    )
+                ]
+            ),
             MeaningFixture(input: "今日食咩好？", expected: false),
             MeaningFixture(input: "What is TTFT?", expected: false),
             MeaningFixture(input: "帮我总结这篇文章第一部分。", expected: false, sourceNodeId: sourceNodeId),
+            MeaningFixture(
+                input: "帮我总结呢张截图。",
+                expected: false,
+                attachments: [
+                    AttachedFileContext(
+                        name: "conversation.png",
+                        extractedText: nil,
+                        kind: .image,
+                        imageData: Data([0x01]),
+                        imageMimeType: "image/png"
+                    )
+                ]
+            ),
             MeaningFixture(input: "帮我做一个 shipping plan。", expected: false),
             MeaningFixture(input: "What do you think about this UI?", expected: false),
             MeaningFixture(input: "下次遇到倾得开心嘅人，我应该点开口？", expected: false),
@@ -448,6 +475,7 @@ final class TurnStewardTests: XCTestCase {
                 prepared: preparedTurn(userText: fixture.input),
                 request: request(
                     input: fixture.input,
+                    attachments: fixture.attachments,
                     sourceMaterials: fixture.sourceMaterials
                 )
             )
@@ -1623,17 +1651,20 @@ final class TurnStewardTests: XCTestCase {
         let input: String
         let expected: Bool
         let expectedPolicy: ReflectiveMeaningSurfacePolicy?
+        let attachments: [AttachedFileContext]
         let sourceMaterials: [SourceMaterialContext]
 
         init(
             input: String,
             expected: Bool,
             expectedPolicy: ReflectiveMeaningSurfacePolicy? = nil,
+            attachments: [AttachedFileContext] = [],
             sourceNodeId: UUID? = nil
         ) {
             self.input = input
             self.expected = expected
             self.expectedPolicy = expectedPolicy
+            self.attachments = attachments
             if let sourceNodeId {
                 self.sourceMaterials = [
                     SourceMaterialContext(

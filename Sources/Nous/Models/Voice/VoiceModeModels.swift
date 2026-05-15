@@ -169,9 +169,9 @@ enum VoiceLanguage: String, CaseIterable, Identifiable {
     var realtimeInstruction: String {
         switch self {
         case .automatic:
-            return "Mirror the user's language and dialect. Speak naturally, like a present thinking partner. If Alex speaks Cantonese, respond in colloquial Cantonese, not Mandarin."
+            return "Mirror the user's language and dialect. Speak naturally, like a present thinking partner. If Alex speaks Cantonese, respond in colloquial Cantonese with Hong Kong rhythm, light particles, small pauses, and real energy shifts; do not flatten into Mandarin or formal narration."
         case .cantonese:
-            return "Use colloquial Cantonese by default. Preserve Cantonese wording and particles. Keep it warm and conversational; do not silently convert Cantonese into Mandarin."
+            return "Use colloquial Cantonese by default. Preserve Cantonese wording and particles. Keep it warm and conversational with Hong Kong rhythm, small pauses, and subtle emotional movement; do not silently convert Cantonese into Mandarin."
         case .mandarin:
             return "Use standard Mandarin Chinese by default, with Mainland 普通话 wording and phrasing. Keep it natural, warm, and conversational. Do not respond in Cantonese unless Alex switches language."
         case .english:
@@ -197,7 +197,7 @@ enum VoiceLanguage: String, CaseIterable, Identifiable {
         case .automatic:
             return "Sound warm, present, and conversational. Match the language of the text. Avoid announcer or assistant-script delivery."
         case .cantonese:
-            return "Speak natural Hong Kong Cantonese with a warm, present tone. Keep it conversational, not formal or over-polished."
+            return "Speak natural Hong Kong Cantonese with a warm, present tone, small pauses, and real energy shifts. Keep it conversational, not formal, flat, or over-polished."
         case .mandarin:
             return "Speak natural standard Mandarin Chinese with Mainland 普通话 pronunciation and wording. Keep it warm, present, and conversational."
         case .english:
@@ -399,6 +399,7 @@ struct VoiceActionHandlers {
     var navigate: (VoiceNavigationTarget) -> Void
     var setSidebarVisible: (Bool) -> Void
     var setScratchPadVisible: (Bool) -> Void
+    var openScratchPadForWriting: () -> Void
     var replaceScratchPadMarkdown: (String) -> Void
     var appendScratchPadMarkdown: (String) -> Void
     var setComposerText: (String) -> Void
@@ -416,6 +417,7 @@ struct VoiceActionHandlers {
         navigate: @escaping (VoiceNavigationTarget) -> Void,
         setSidebarVisible: @escaping (Bool) -> Void,
         setScratchPadVisible: @escaping (Bool) -> Void,
+        openScratchPadForWriting: @escaping () -> Void = {},
         replaceScratchPadMarkdown: @escaping (String) -> Void = { _ in },
         appendScratchPadMarkdown: @escaping (String) -> Void = { _ in },
         setComposerText: @escaping (String) -> Void,
@@ -432,6 +434,7 @@ struct VoiceActionHandlers {
         self.navigate = navigate
         self.setSidebarVisible = setSidebarVisible
         self.setScratchPadVisible = setScratchPadVisible
+        self.openScratchPadForWriting = openScratchPadForWriting
         self.replaceScratchPadMarkdown = replaceScratchPadMarkdown
         self.appendScratchPadMarkdown = appendScratchPadMarkdown
         self.setComposerText = setComposerText
@@ -450,6 +453,7 @@ struct VoiceActionHandlers {
         navigate: { _ in },
         setSidebarVisible: { _ in },
         setScratchPadVisible: { _ in },
+        openScratchPadForWriting: {},
         replaceScratchPadMarkdown: { _ in },
         appendScratchPadMarkdown: { _ in },
         setComposerText: { _ in },
@@ -500,8 +504,18 @@ enum VoiceCapsuleVisibilityPolicy {
         isVoiceActive: Bool,
         status: VoiceModeStatus,
         hasPendingAction: Bool,
-        hasSummaryPreview: Bool
+        hasSummaryPreview: Bool,
+        isChatSurface: Bool = false
     ) -> Bool {
-        isVoiceActive || status.shouldDisplayPill || hasPendingAction || hasSummaryPreview
+        if isChatSurface && !hasPendingAction && !hasSummaryPreview {
+            switch status {
+            case .error:
+                break
+            case .idle, .listening, .thinking, .action, .needsConfirmation:
+                return false
+            }
+        }
+
+        return isVoiceActive || status.shouldDisplayPill || hasPendingAction || hasSummaryPreview
     }
 }

@@ -4,11 +4,20 @@ import UniformTypeIdentifiers
 
 // MARK: - ScratchPadPanel
 
+enum ScratchPadPanelMode: Equatable {
+    case preview
+    case write
+}
+
 struct ScratchPadPanel: View {
     @Binding var isVisible: Bool
     @Bindable var store: ScratchPadStore
-    @State private var isPreviewMode = true
+    @Binding var mode: ScratchPadPanelMode
     @Namespace private var toggleAnimation
+
+    private var isPreviewMode: Bool {
+        mode == .preview
+    }
 
     var body: some View {
         NativeGlassPanel(cornerRadius: 32, tintColor: AppColor.surfaceGlassTint) {
@@ -86,10 +95,10 @@ struct ScratchPadPanel: View {
 
                 HStack(spacing: 2) {
                     modeButton(label: "Preview", icon: "eye", active: isPreviewMode, id: "preview") {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.75, blendDuration: 0)) { isPreviewMode = true }
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.75, blendDuration: 0)) { mode = .preview }
                     }
                     modeButton(label: "Write", icon: "pencil", active: !isPreviewMode, id: "write") {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.75, blendDuration: 0)) { isPreviewMode = false }
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.75, blendDuration: 0)) { mode = .write }
                     }
                 }
                 .padding(3)
@@ -151,7 +160,7 @@ struct ScratchPadPanel: View {
             } else {
                 TextEditor(text: editorBinding)
                     .font(.system(size: 14, design: .rounded))
-                    .foregroundColor(AppColor.colaDarkText)
+                    .foregroundColor(AppColor.paperText)
                     .scrollContentBackground(.hidden)
                     .background(Color.clear)
                     .lineSpacing(6)
@@ -167,12 +176,14 @@ struct ScratchPadPanel: View {
             .padding(.horizontal, 32)
             .padding(.vertical, 40)
             .background(
-                NativeGlassPanel(cornerRadius: 12, tintColor: AppColor.surfaceGlassTint) { EmptyView() }
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(AppColor.paperSurface)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(AppColor.panelStroke, lineWidth: 1)
+                    .stroke(AppColor.paperStroke, lineWidth: 1)
             )
+            .shadow(color: .black.opacity(0.16), radius: 18, x: 0, y: 10)
     }
 
     @ViewBuilder
@@ -180,15 +191,15 @@ struct ScratchPadPanel: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("想开始？")
                 .font(.system(size: 16, weight: .semibold, design: .rounded))
-                .foregroundColor(AppColor.colaDarkText)
-            Text("喺左边同 Nous 倾一阵，叫佢「总结一下」。生成嘅 summary 会自动出喺呢度，之后你仲可以手动改同下载。")
+                .foregroundColor(AppColor.paperText)
+            Text("同 Nous 讲你想写乜，佢会将倾出嚟嘅重点整理成 draft 放喺呢度；你亦可以直接喺白纸上面改。")
                 .font(.system(size: 13, design: .rounded))
-                .foregroundColor(AppColor.secondaryText)
+                .foregroundColor(AppColor.paperSecondaryText)
                 .lineSpacing(6)
 
             TextEditor(text: editorBinding)
                 .font(.system(size: 13, design: .rounded))
-                .foregroundColor(AppColor.colaDarkText)
+                .foregroundColor(AppColor.paperText)
                 .scrollContentBackground(.hidden)
                 .background(Color.clear)
                 .frame(minHeight: 120)
@@ -334,7 +345,7 @@ private enum MarkdownBlock {
         case .heading(let level, let text):
             Text(text)
                 .font(headingFont(level: level))
-                .foregroundColor(AppColor.colaDarkText)
+                .foregroundColor(AppColor.paperText)
                 .padding(.top, level == 1 ? 16 : 10)
                 .padding(.bottom, 4)
 
@@ -345,14 +356,14 @@ private enum MarkdownBlock {
                     .foregroundColor(AppColor.colaOrange)
                 inlineText(text)
                     .font(.system(size: 14, weight: .regular, design: .rounded))
-                    .foregroundColor(AppColor.colaDarkText)
+                    .foregroundColor(AppColor.paperText)
             }
             .padding(.vertical, 2)
 
         case .paragraph(let text):
             inlineText(text)
                 .font(.system(size: 14, weight: .regular, design: .rounded))
-                .foregroundColor(AppColor.colaDarkText)
+                .foregroundColor(AppColor.paperText)
                 .lineSpacing(6)
                 .padding(.vertical, 1)
 

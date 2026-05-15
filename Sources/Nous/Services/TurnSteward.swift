@@ -835,8 +835,7 @@ final class TurnSteward {
         guard sourceEligible || ordinaryEligible else {
             return nil
         }
-        guard request.attachments.isEmpty,
-              !memoryOptOut,
+        guard !memoryOptOut,
               !distress,
               !Self.isTextTransformRequest(normalized),
               !containsAny(normalized, in: Self.patternSafetyBypassCues)

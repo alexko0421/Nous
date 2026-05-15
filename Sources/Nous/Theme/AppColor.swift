@@ -102,6 +102,14 @@ struct AppColor {
         dark: NSColor(red: 34/255, green: 34/255, blue: 37/255, alpha: 0.20)
     )
 
+    // Actual paper surface used inside the dark markdown panel. This stays
+    // warm and light in dark mode so the "white paper" reads as paper, not as
+    // another layer of glass.
+    static let paperSurface = Color(red: 253/255, green: 251/255, blue: 247/255)
+    static let paperText = Color(red: 51/255, green: 51/255, blue: 51/255)
+    static let paperSecondaryText = Color(red: 92/255, green: 86/255, blue: 78/255)
+    static let paperStroke = Color.black.opacity(0.08)
+
     // 专门为茶色玻璃效果设计嘅 Tint Color (Tea/Brown Glass)
     static let teaGlassTint = dynamicNSColor(
         light: NSColor(red: 210/255, green: 160/255, blue: 110/255, alpha: 0.15), // 浅色模式：淡茶色/琥珀色透光

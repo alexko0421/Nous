@@ -374,7 +374,8 @@ struct ChatArea: View {
                                 isVoiceActive: voiceController.isActive,
                                 status: voiceController.status,
                                 hasPendingAction: voiceController.pendingAction != nil,
-                                hasSummaryPreview: voiceController.summaryPreview != nil
+                                hasSummaryPreview: voiceController.summaryPreview != nil,
+                                isChatSurface: true
                             ) {
                             VoiceCapsuleView(
                                 status: voiceController.status,

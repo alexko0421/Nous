@@ -57,6 +57,7 @@ struct ContentView: View {
 
     @State private var isSidebarVisible = true
     @State private var rightPanelMode: RightPanelMode?
+    @State private var scratchPadPanelMode: ScratchPadPanelMode = .preview
     @State private var selectedTab: MainTab = .chat
     @State private var selectedSettingsSection: SettingsSection = .profile
     @State private var selectedProjectId: UUID?
@@ -262,7 +263,8 @@ struct ContentView: View {
         case .markdown:
             ScratchPadPanel(
                 isVisible: scratchPadVisibilityBinding,
-                store: dependencies.scratchPadStore
+                store: dependencies.scratchPadStore,
+                mode: $scratchPadPanelMode
             )
             .transition(.move(edge: .trailing).combined(with: .opacity))
 
@@ -367,6 +369,13 @@ struct ContentView: View {
                         }
                     }
                 },
+                openScratchPadForWriting: {
+                    withAnimation(AppMotion.markdownPanelSpring.animation) {
+                        rightPanelMode = .markdown
+                        scratchPadPanelMode = .write
+                        selectedTab = .chat
+                    }
+                },
                 replaceScratchPadMarkdown: { markdown in
                     writeVoiceScratchPadDraft(markdown, mode: .replace, dependencies: dependencies)
                 },
@@ -437,6 +446,7 @@ struct ContentView: View {
 
         withAnimation(AppMotion.markdownPanelSpring.animation) {
             rightPanelMode = .markdown
+            scratchPadPanelMode = .write
             selectedTab = .chat
         }
 

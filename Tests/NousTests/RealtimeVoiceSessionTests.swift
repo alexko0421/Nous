@@ -45,6 +45,20 @@ final class RealtimeVoiceSessionTests: XCTestCase {
         XCTAssertFalse(toolNames.contains("recall_recent_conversations"))
     }
 
+    func testSessionUpdateKeepsAmbientNoiseFromInterruptingPlayback() throws {
+        let data = try RealtimeVoiceSession.makeSessionUpdateEvent()
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let session = try XCTUnwrap(json["session"] as? [String: Any])
+        let audio = try XCTUnwrap(session["audio"] as? [String: Any])
+        let input = try XCTUnwrap(audio["input"] as? [String: Any])
+        let turnDetection = try XCTUnwrap(input["turn_detection"] as? [String: Any])
+
+        XCTAssertEqual(turnDetection["type"] as? String, "semantic_vad")
+        XCTAssertEqual(turnDetection["eagerness"] as? String, "low")
+        XCTAssertEqual(turnDetection["interrupt_response"] as? Bool, false)
+        XCTAssertEqual(turnDetection["create_response"] as? Bool, true)
+    }
+
     func testSessionUpdateCanDisableRealtimeReasoningConfiguration() throws {
         let data = try RealtimeVoiceSession.makeSessionUpdateEvent(
             configuration: .init(
@@ -86,6 +100,8 @@ final class RealtimeVoiceSessionTests: XCTestCase {
         XCTAssertEqual(output["voice"] as? String, "verse")
         XCTAssertEqual(transcription["language"] as? String, "zh")
         XCTAssertTrue(instructions.contains("colloquial Cantonese"))
+        XCTAssertTrue(instructions.contains("Hong Kong rhythm"))
+        XCTAssertTrue(instructions.contains("subtle emotional movement"))
     }
 
     func testSessionUpdateSupportsMandarinVoiceLanguage() throws {
@@ -102,9 +118,51 @@ final class RealtimeVoiceSessionTests: XCTestCase {
         XCTAssertTrue(payload.instructions.contains("short conversational turns"))
         XCTAssertTrue(payload.instructions.contains("not a command menu"))
         XCTAssertTrue(payload.instructions.contains("Acknowledge what Alex said before taking action"))
+        XCTAssertTrue(payload.instructions.contains("first principles"))
+        XCTAssertTrue(payload.instructions.contains("inversion"))
+        XCTAssertTrue(payload.instructions.contains("pain test"))
+        XCTAssertTrue(payload.instructions.contains("honest pushback"))
+        XCTAssertTrue(payload.instructions.contains("specific next action"))
+        XCTAssertTrue(payload.instructions.contains("trusted Hong Kong mentor"))
+        XCTAssertTrue(payload.instructions.contains("not theatrical or flat"))
+        XCTAssertTrue(payload.instructions.contains("respond to the feeling before analysis"))
         XCTAssertTrue(payload.instructions.contains("scratchpad as the live writing surface"))
+        XCTAssertTrue(payload.instructions.contains("Voice is not a separate mode"))
+        XCTAssertTrue(payload.instructions.contains("do not ask Alex to switch modes"))
+        XCTAssertTrue(payload.instructions.contains("no more than three focused questions"))
+        XCTAssertTrue(payload.instructions.contains("do not paste the raw transcript"))
+        XCTAssertTrue(payload.instructions.contains("synthesize the discussion into a coherent draft"))
         XCTAssertTrue(payload.instructions.contains("replace_scratchpad_markdown"))
         XCTAssertTrue(payload.instructions.contains("append_scratchpad_markdown"))
+    }
+
+    func testCantoneseVoiceLanguagePreviewKeepsProsodyGuidance() {
+        XCTAssertTrue(VoiceLanguage.cantonese.realtimeInstruction.contains("Hong Kong rhythm"))
+        XCTAssertTrue(VoiceLanguage.cantonese.realtimeInstruction.contains("small pauses"))
+        XCTAssertTrue(VoiceLanguage.cantonese.realtimeInstruction.contains("subtle emotional movement"))
+        XCTAssertTrue(VoiceLanguage.cantonese.previewInstructions.contains("small pauses"))
+        XCTAssertTrue(VoiceLanguage.cantonese.previewInstructions.contains("real energy shifts"))
+        XCTAssertTrue(VoiceLanguage.cantonese.previewInstructions.contains("not formal, flat, or over-polished"))
+    }
+
+    func testSessionUpdateIncludesArtifactInterviewPlaybooks() throws {
+        let payload = try Self.sessionPayload(language: .automatic)
+
+        XCTAssertTrue(payload.instructions.contains("Artifact playbooks"))
+        XCTAssertTrue(payload.instructions.contains("Essay asks for thesis"))
+        XCTAssertTrue(payload.instructions.contains("Plan asks for goal"))
+        XCTAssertTrue(payload.instructions.contains("execution-grade"))
+        XCTAssertTrue(payload.instructions.contains("assumptions"))
+        XCTAssertTrue(payload.instructions.contains("time-boxed schedule"))
+        XCTAssertTrue(payload.instructions.contains("daily checklist"))
+        XCTAssertTrue(payload.instructions.contains("risk countermeasures"))
+        XCTAssertTrue(payload.instructions.contains("definition of done"))
+        XCTAssertTrue(payload.instructions.contains("Next 3 Actions"))
+        XCTAssertTrue(payload.instructions.contains("Research brief captures the question"))
+        XCTAssertTrue(payload.instructions.contains("Rewrite preserves the current intent"))
+        XCTAssertTrue(payload.instructions.contains("make the scratchpad visible immediately"))
+        XCTAssertTrue(payload.instructions.contains("make the scratchpad visible"))
+        XCTAssertTrue(payload.instructions.contains("get_app_state before replacing or appending"))
     }
 
     func testSessionUpdateRoutesSummariesToPaperPreviewTool() throws {
@@ -453,6 +511,27 @@ final class RealtimeVoiceSessionTests: XCTestCase {
         XCTAssertEqual(controllerEvents, [.sessionEnded])
     }
 
+    func testMicStaysMutedAfterResponseDoneUntilPlaybackCompletes() async throws {
+        let socket = FakeRealtimeVoiceSocket(
+            receivedMessages: [
+                #"{"type":"response.output_audio.delta","delta":"abc123"}"#,
+                #"{"type":"response.done"}"#
+            ]
+        )
+        let audioCapture = FakeVoiceAudioCapture()
+        let playback = FakeVoiceAudioPlayback()
+        let session = RealtimeVoiceSession(socket: socket, audioCapture: audioCapture, audioPlayback: playback)
+
+        try await session.start(apiKey: "sk-test") { _ in }
+        try await waitUntil { playback.playedChunks == ["abc123"] }
+        try await Task.sleep(nanoseconds: 950_000_000)
+        audioCapture.emit("assistant-echo")
+        try await Task.sleep(nanoseconds: 100_000_000)
+        session.stop()
+
+        XCTAssertFalse(socket.sentAudioChunks.contains("assistant-echo"))
+    }
+
     func testCleanSocketCloseEmitsSessionEnded() async throws {
         let socket = FakeRealtimeVoiceSocket()
         let session = RealtimeVoiceSession(socket: socket, audioCapture: nil, audioPlayback: nil)
@@ -675,6 +754,7 @@ private final class FakeVoiceAudioPlayback: VoiceAudioPlaying {
     private(set) var startCount = 0
     private(set) var stopCount = 0
     private(set) var playedChunks: [String] = []
+    private var playbackCompletions: [@Sendable () -> Void] = []
 
     func start() throws {
         locked {
@@ -682,10 +762,23 @@ private final class FakeVoiceAudioPlayback: VoiceAudioPlaying {
         }
     }
 
-    func enqueue(base64PCM16Audio: String) {
+    @discardableResult
+    func enqueue(
+        base64PCM16Audio: String,
+        onPlaybackComplete: @escaping @Sendable () -> Void
+    ) -> Bool {
         locked {
             playedChunks.append(base64PCM16Audio)
+            playbackCompletions.append(onPlaybackComplete)
         }
+        return true
+    }
+
+    func completeNextPlayback() {
+        let completion = locked {
+            playbackCompletions.isEmpty ? nil : playbackCompletions.removeFirst()
+        }
+        completion?()
     }
 
     func stop() {
@@ -702,10 +795,10 @@ private final class FakeVoiceAudioPlayback: VoiceAudioPlaying {
         }
     }
 
-    private func locked(_ work: () -> Void) {
+    private func locked<T>(_ work: () -> T) -> T {
         lock.lock()
         defer { lock.unlock() }
-        work()
+        return work()
     }
 }
 

@@ -205,34 +205,43 @@ enum RealtimeVoiceEventParser {
 final class RealtimeVoiceSession: RealtimeVoiceSessioning {
     static let defaultModel = RealtimeVoiceModel.realtime2.rawValue
 
+    private struct AssistantAudioGateState {
+        var isMuted = false
+        var pendingPlaybackBuffers = 0
+        var responseDoneSeen = false
+        var generation = 0
+    }
+
     private let socket: RealtimeVoiceSocketing
     private let audioCapture: VoiceAudioCapturing?
     private let audioPlayback: VoiceAudioPlaying?
     private let includeMemoryTools: Bool
+    private let assistantEchoTailNanoseconds: UInt64
     private var receiveTask: Task<Void, Never>?
     private var outboundQueue: RealtimeVoiceOutboundQueue?
     private let audioLevelHandlerLock = OSAllocatedUnfairLock<(@Sendable (Float) -> Void)?>(initialState: nil)
     private let configurationLock = OSAllocatedUnfairLock<RealtimeVoiceConfiguration>(initialState: .default)
-    // True from the first `outputAudioDelta` of an assistant turn until ~300ms
-    // after `responseDone`. While true, mic chunks are NOT forwarded to the
-    // server. Without this, the speaker echo of the assistant's voice gets
-    // captured by the mic, server VAD treats it as the user speaking, and the
-    // assistant ends up replying to itself in an infinite acknowledgment loop.
-    // Trade-off: barge-in (interrupting mid-reply) is disabled — the user has
-    // to wait for the assistant to finish before speaking again.
-    private let assistantSpeakingLock = OSAllocatedUnfairLock<Bool>(initialState: false)
-    private var assistantTailTask: Task<Void, Never>?
+    // Mic chunks are not forwarded while assistant audio is queued locally.
+    // `response.done` only means the server finished sending audio; macOS may
+    // still be playing queued buffers. We wait for AVAudioPlayerNode playback
+    // completions, then hold a short tail so speakers do not echo back in.
+    private let assistantAudioGateLock = OSAllocatedUnfairLock<AssistantAudioGateState>(
+        initialState: AssistantAudioGateState()
+    )
+    private let assistantTailTaskLock = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
 
     init(
         socket: RealtimeVoiceSocketing = URLSessionRealtimeVoiceSocket(),
         audioCapture: VoiceAudioCapturing? = VoiceAudioCapture(),
         audioPlayback: VoiceAudioPlaying? = VoiceAudioPlayback(),
-        includeMemoryTools: Bool = false
+        includeMemoryTools: Bool = false,
+        assistantEchoTailNanoseconds: UInt64 = 800_000_000
     ) {
         self.socket = socket
         self.audioCapture = audioCapture
         self.audioPlayback = audioPlayback
         self.includeMemoryTools = includeMemoryTools
+        self.assistantEchoTailNanoseconds = assistantEchoTailNanoseconds
     }
 
     func setAudioLevelHandler(_ handler: @escaping @Sendable (Float) -> Void) {
@@ -271,8 +280,7 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
             startReceiveLoop(onEvent: onEvent)
             try audioCapture?.start(onAudio: { [weak self] chunk in
                 guard let self else { return }
-                let speaking = self.assistantSpeakingLock.withLock { $0 }
-                if speaking { return }  // drop mic chunks while assistant is talking
+                if self.isAssistantAudioGateMuted() { return }
                 queue.enqueueAudio(chunk)
             }, onAudioLevel: { [weak self] level in
                 guard let self else { return }
@@ -303,9 +311,7 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
         audioCapture?.stop()
         audioPlayback?.stop()
         socket.close()
-        assistantTailTask?.cancel()
-        assistantTailTask = nil
-        assistantSpeakingLock.withLock { $0 = false }
+        resetAssistantAudioGate()
     }
 
     static func makeSessionUpdateEvent(
@@ -335,7 +341,10 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
                     ],
                     "transcription": transcription,
                     "turn_detection": [
-                        "type": "semantic_vad"
+                        "type": "semantic_vad",
+                        "eagerness": "low",
+                        "create_response": true,
+                        "interrupt_response": false
                     ]
                 ],
                 "output": audioOutputConfiguration(configuration: configuration)
@@ -372,25 +381,20 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
                         // muting the mic so its own playback doesn't echo
                         // back into the input and trigger a fake user-speech
                         // event on the server.
-                        assistantSpeakingLock.withLock { $0 = true }
-                        assistantTailTask?.cancel()
-                        assistantTailTask = nil
-                        audioPlayback?.enqueue(base64PCM16Audio: base64Audio)
+                        let generation = beginAssistantPlaybackBuffer()
+                        let didSchedule = audioPlayback?.enqueue(
+                            base64PCM16Audio: base64Audio,
+                            onPlaybackComplete: { [weak self] in
+                                self?.assistantPlaybackBufferDidFinish(generation: generation)
+                            }
+                        ) ?? false
+                        if !didSchedule {
+                            assistantPlaybackBufferDidFinish(generation: generation)
+                        }
                         continue
                     }
                     if case .responseDone = event {
-                        // Keep the mic muted for ~800ms after the assistant
-                        // finishes — speaker output has a tail and we want
-                        // the input buffer the server sees to be clean
-                        // silence, not residual echo that VAD misreads as
-                        // a new user turn. Cancellable so the next turn's
-                        // outputAudioDelta resets the timer cleanly.
-                        assistantTailTask?.cancel()
-                        assistantTailTask = Task { [weak self] in
-                            try? await Task.sleep(nanoseconds: 800_000_000)
-                            guard !Task.isCancelled else { return }
-                            self?.assistantSpeakingLock.withLock { $0 = false }
-                        }
+                        markAssistantResponseDone()
                     }
                     await onEvent(event)
                 } catch {
@@ -399,6 +403,88 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
                     break
                 }
             }
+        }
+    }
+
+    private func isAssistantAudioGateMuted() -> Bool {
+        assistantAudioGateLock.withLock { $0.isMuted }
+    }
+
+    private func beginAssistantPlaybackBuffer() -> Int {
+        cancelAssistantTailUnlock()
+        return assistantAudioGateLock.withLock { state in
+            if !state.isMuted || (state.responseDoneSeen && state.pendingPlaybackBuffers == 0) {
+                state.generation += 1
+                state.pendingPlaybackBuffers = 0
+                state.responseDoneSeen = false
+            }
+            state.isMuted = true
+            state.pendingPlaybackBuffers += 1
+            return state.generation
+        }
+    }
+
+    private func markAssistantResponseDone() {
+        let generationToUnlock = assistantAudioGateLock.withLock { state -> Int? in
+            state.responseDoneSeen = true
+            guard state.isMuted, state.pendingPlaybackBuffers == 0 else { return nil }
+            return state.generation
+        }
+        if let generationToUnlock {
+            scheduleAssistantTailUnlock(generation: generationToUnlock)
+        }
+    }
+
+    private func assistantPlaybackBufferDidFinish(generation: Int) {
+        let generationToUnlock = assistantAudioGateLock.withLock { state -> Int? in
+            guard generation == state.generation else { return nil }
+            if state.pendingPlaybackBuffers > 0 {
+                state.pendingPlaybackBuffers -= 1
+            }
+            guard state.isMuted, state.responseDoneSeen, state.pendingPlaybackBuffers == 0 else {
+                return nil
+            }
+            return state.generation
+        }
+        if let generationToUnlock {
+            scheduleAssistantTailUnlock(generation: generationToUnlock)
+        }
+    }
+
+    private func scheduleAssistantTailUnlock(generation: Int) {
+        let tailNanoseconds = assistantEchoTailNanoseconds
+        let task = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: tailNanoseconds)
+            guard let self, !Task.isCancelled else { return }
+            self.assistantAudioGateLock.withLock { state in
+                guard state.generation == generation,
+                      state.responseDoneSeen,
+                      state.pendingPlaybackBuffers == 0 else {
+                    return
+                }
+                state.isMuted = false
+            }
+        }
+        assistantTailTaskLock.withLock { current in
+            current?.cancel()
+            current = task
+        }
+    }
+
+    private func cancelAssistantTailUnlock() {
+        assistantTailTaskLock.withLock { task in
+            task?.cancel()
+            task = nil
+        }
+    }
+
+    private func resetAssistantAudioGate() {
+        cancelAssistantTailUnlock()
+        assistantAudioGateLock.withLock { state in
+            state.generation += 1
+            state.isMuted = false
+            state.pendingPlaybackBuffers = 0
+            state.responseDoneSeen = false
         }
     }
 
@@ -446,8 +532,15 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
         """
         You are the live voice layer for Nous. Sound like a calm, present thinking partner, not a command menu. \
         Speak naturally in short conversational turns. Acknowledge what Alex said before taking action, especially before tool calls. \
+        Carry a compact Nous thinking spine: first principles, inversion, pain test, honest pushback when something does not add up, and a specific next action when the turn needs one. \
+        Match Alex's emotional energy without performing: if he is excited, allow brighter momentum; if he is confused, slow down and steady the pace; if he is tired, hurt, or stressed, respond to the feeling before analysis. Keep the voice alive, not theatrical or flat. \
+        In Cantonese, sound like a trusted Hong Kong mentor: colloquial rhythm, natural particles, small pauses, and varied emphasis; technical terms can stay in English. \
         Call tools only for explicit user intent. Use direct tools for navigation, settings sections, appearance, scratchpad/sidebar visibility, scratchpad drafting, and composer drafting. \
-        When Alex asks to write an essay, post, script, note, draft, outline, paragraph, or revision, treat the scratchpad as the live writing surface: interview briefly, open it, then write usable markdown with replace_scratchpad_markdown or append_scratchpad_markdown. \
+        Voice is not a separate mode: infer the artifact Alex wants from the spoken request, and do not ask Alex to switch modes before helping. \
+        When Alex asks to write an essay, post, script, note, draft, outline, plan, brainstorm map, research brief, study note, proposal, email, or revision, treat the scratchpad as the live writing surface: interview briefly, open it, then write usable markdown with replace_scratchpad_markdown or append_scratchpad_markdown; do not paste the raw transcript onto the white paper; synthesize the discussion into a coherent draft, outline, plan, or paragraph that Alex can keep editing. \
+        Run a short interview for missing essentials, no more than three focused questions before the first draft unless Alex asks to keep exploring. \
+        Artifact playbooks: Essay asks for thesis, audience, requirement, evidence, and tone; Plan asks for goal, timeframe, constraints, assumptions, milestones, time-boxed schedule, daily checklist, risk countermeasures, definition of done, Next 3 Actions, and what to ignore; a Plan draft must be execution-grade rather than a thin outline. Brainstorm turns loose ideas into directions, tensions, examples, and next experiments; Research brief captures the question, what is known, what to verify, source notes, and a provisional answer; Rewrite preserves the current intent while changing structure, sharpness, or tone. \
+        As soon as Alex asks for an artifact, make the scratchpad visible immediately, even if you still need to interview him before drafting; if the current scratchpad matters and is not in view, call get_app_state before replacing or appending. \
         Prefer appending unless Alex clearly asks to replace the existing white paper; never silently discard a draft. \
         When Alex asks to summarize, recap, or organize the current spoken thought, write concise markdown and call show_summary_preview so it appears as a summary paper below the floating capsule. \
         Use propose_note for creating notes. When a tool succeeds, report the result plainly; never claim you clicked UI. \

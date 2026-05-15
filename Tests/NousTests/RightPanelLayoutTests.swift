@@ -84,6 +84,29 @@ final class RightPanelLayoutTests: XCTestCase {
         }
     }
 
+    func testScratchpadInnerSurfaceUsesVisiblePaperStyling() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let panelSource = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Views/ScratchPadPanel.swift"),
+            encoding: .utf8
+        )
+        let themeSource = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Theme/AppColor.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(themeSource.contains("paperSurface"))
+        XCTAssertTrue(themeSource.contains("paperText"))
+        XCTAssertTrue(themeSource.contains("paperSecondaryText"))
+        XCTAssertTrue(panelSource.contains(".fill(AppColor.paperSurface)"))
+        XCTAssertTrue(panelSource.contains(".foregroundColor(AppColor.paperText)"))
+        XCTAssertTrue(panelSource.contains(".foregroundColor(AppColor.paperSecondaryText)"))
+        XCTAssertFalse(panelSource.contains("NativeGlassPanel(cornerRadius: 12, tintColor: AppColor.surfaceGlassTint)"))
+    }
+
     func testLeftSidebarClipsGlassToItsRoundedShapeBeforeShadow() throws {
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

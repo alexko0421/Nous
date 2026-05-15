@@ -149,7 +149,11 @@ private final class SmootherBox: @unchecked Sendable {
 
 protocol VoiceAudioPlaying: AnyObject {
     func start() throws
-    func enqueue(base64PCM16Audio: String)
+    @discardableResult
+    func enqueue(
+        base64PCM16Audio: String,
+        onPlaybackComplete: @escaping @Sendable () -> Void
+    ) -> Bool
     func stop()
     /// Cancel all queued playback buffers immediately. Engine stays running
     /// so the next enqueue plays without re-warmup. Used for barge-in:
@@ -193,16 +197,23 @@ final class VoiceAudioPlayback: VoiceAudioPlaying {
         }
     }
 
-    func enqueue(base64PCM16Audio: String) {
+    @discardableResult
+    func enqueue(
+        base64PCM16Audio: String,
+        onPlaybackComplete: @escaping @Sendable () -> Void
+    ) -> Bool {
         guard let data = Data(base64Encoded: base64PCM16Audio),
               let buffer = Self.makeBuffer(fromPCM16LEData: data, format: format) else {
-            return
+            return false
         }
 
         if !engine.isRunning {
             try? start()
         }
-        player.scheduleBuffer(buffer, completionHandler: nil)
+        player.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { _ in
+            onPlaybackComplete()
+        }
+        return true
     }
 
     func stop() {

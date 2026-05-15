@@ -773,13 +773,13 @@ final class TurnPlanner {
 
         let shapeInstruction = switch signal.surfacePolicy {
         case .compact:
-            "Use the default compact shape: one sentence for the possible underlying pull, one sentence for one reusable action."
+            "Default to a natural compact weave: use plain conversational paragraphs, at most two short paragraphs; no Markdown, headings, labels, bullets, bold text, or divider lines unless Alex explicitly asks for layers; land one short grounded next move Alex can actually use, not just a rhetorical closing question."
         case .layered:
-            "Use compact three-layer form: surface event, possible underlying pull, reusable action."
+            "Only use a compact three-layer form when Alex asks for clearer analysis: surface event, possible underlying pull, reusable action. Keep the layers conversational and proportionate. Do not make the layers feel like a worksheet."
         }
 
         return """
-        Use current turn plus available recalled context; do not invent beyond evidence. Name one possible underlying pull, using tentative language such as "可能真正牵住你嘅唔只係 X，而係 Y." Give one reusable action tied to the pull. \(shapeInstruction) If evidence is thin, ask one clarifying question instead of naming a pull. Never diagnose, say "you always", mention routing, or turn this into therapy/coaching theater. Continue Alex's original task.
+        Use current turn plus available recalled context; do not invent beyond evidence. Offer one possible underlying pull with tentative language such as "可能真正牵住你嘅唔只係 X，而係 Y." Tie it to one reusable action, but write it like a natural next step, not a coaching label. \(shapeInstruction) If Alex gives a concrete event plus an explicit request to understand what is pulling him, do not default to a clarifying question; offer the tentative hypothesis and action. If the event, self-reference, or felt pull is missing, ask one clarifying question instead of naming a pull. Never diagnose, say "you always", mention routing, or turn this into therapy/coaching theater. Continue Alex's original task.
         """
     }
 

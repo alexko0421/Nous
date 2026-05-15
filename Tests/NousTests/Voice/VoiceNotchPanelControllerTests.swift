@@ -122,6 +122,40 @@ final class VoiceNotchPanelControllerTests: XCTestCase {
         )
     }
 
+    func testChatSurfaceSuppressesPlainVoiceCapsuleWhenTranscriptIsInChat() {
+        XCTAssertFalse(
+            VoiceCapsuleVisibilityPolicy.shouldShowCapsule(
+                isVoiceActive: true,
+                status: .listening,
+                hasPendingAction: false,
+                hasSummaryPreview: false,
+                isChatSurface: true
+            )
+        )
+    }
+
+    func testChatSurfaceKeepsInteractiveVoiceCapsuleVisible() {
+        XCTAssertTrue(
+            VoiceCapsuleVisibilityPolicy.shouldShowCapsule(
+                isVoiceActive: true,
+                status: .needsConfirmation("Create note?"),
+                hasPendingAction: true,
+                hasSummaryPreview: false,
+                isChatSurface: true
+            )
+        )
+
+        XCTAssertTrue(
+            VoiceCapsuleVisibilityPolicy.shouldShowCapsule(
+                isVoiceActive: true,
+                status: .listening,
+                hasPendingAction: false,
+                hasSummaryPreview: true,
+                isChatSurface: true
+            )
+        )
+    }
+
     func testNotchPanelStaysVisibleWhenAppDeactivates() {
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 360, height: 110),
