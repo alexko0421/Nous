@@ -47,7 +47,12 @@ Before spawning any subagent, write the boundary in the prompt:
 - **Task objective:** the exact question or change the subagent owns.
 - **Context needed:** the files, docs, logs, or concepts it should inspect.
 - **Context excluded:** what it should ignore so it does not duplicate the lead.
-- **Expected output:** the format the lead needs for synthesis or integration.
+- **Output schema:** the exact structure the lead expects back: bullets, JSON,
+  table, patch summary, changed files, or pass/fail findings.
+- **Failure behavior:** what the subagent should do when blocked, uncertain,
+  or unable to verify. It should report the gap and stop rather than inventing.
+- **Acceptance rubric:** the concrete criteria the lead will use to decide
+  whether the returned work is usable.
 - **Stop condition:** when it should stop exploring or editing.
 - **Verification evidence:** commands, file references, or checks required before
   claiming the subtask is ready.
@@ -98,6 +103,29 @@ one-off notes out of durable memory. It must never edit `anchor.md`.
 These roles do not mean "always spawn more agents." The lead agent may perform
 the role locally for small tasks. Use a fresh thread/subagent only when
 independent attention materially reduces risk.
+
+## Dream Review
+
+Dream Review is for speculative product and workflow imagination before a task
+turns into implementation. It is not Beads state, not a verifier, and not an
+execution plan by itself.
+
+Use it only to explore possibilities, pressure-test taste, and name what would
+hurt if missing. Keep every output labeled as a hypothesis until the lead agent
+translates it into a normal Context Boundary Card, bead, or implementation plan.
+
+Dream Review must not:
+
+- Modify `anchor.md` or reinterpret it as living memory.
+- Write `bd remember`, create Beads issues, or change task state directly.
+- Override the latest user instruction, current Bead scope, or verification
+  requirements.
+- Become product/semantic/personal memory unless Alex explicitly asks to capture
+  it in Nous.
+
+Before building from a Dream Review, reduce it to the same engineering contract
+as any other task: objective, context in/out, output schema, failure behavior,
+acceptance rubric, and verification evidence.
 
 ## Context Hygiene
 
@@ -242,7 +270,9 @@ Context Boundary Card:
 - Task objective: Explore <area/question>.
 - Context needed: Inspect only <files/modules/logs>.
 - Context excluded: Do not inspect or propose changes outside <excluded area>.
-- Expected output: Concise findings with file references and open questions.
+- Output schema: Return bullets under Findings, Evidence, Open Questions, and Remaining Risk.
+- Failure behavior: If blocked, return the blocker, evidence inspected, and the next smallest unblock.
+- Acceptance rubric: The result is usable only if every claim has a file, command, or source reference.
 - Stop condition: Stop after mapping entry points, data flow, and likely files.
 - Verification evidence: Cite the exact files/lines or commands inspected.
 
@@ -254,8 +284,9 @@ Parallel explorer split:
 ```text
 Spawn one read-only explorer per area: <area A>, <area B>, <area C>. Each
 explorer must include a Context Boundary Card, inspect only its assigned area,
-avoid proposing fixes unless necessary to explain a risk, and return a short
-summary with file references. Wait for all results before synthesizing.
+avoid proposing fixes unless necessary to explain a risk, and return bullets
+under Findings, Evidence, Open Questions, and Remaining Risk. If blocked, it
+must report the blocker and stop. Wait for all results before synthesizing.
 ```
 
 Worker implementation:
@@ -265,7 +296,9 @@ You are responsible only for <files/modules>. Other agents may be editing
 elsewhere. Do not revert or overwrite changes you did not make. Implement the
 requested behavior, write or update the focused tests for your change, run the
 specified verification, and report changed files, commands run, evidence seen,
-and remaining risks.
+and remaining risks. If blocked, stop and return the blocker, files inspected,
+and the next smallest unblock. The work is acceptable only when the requested
+files changed, focused verification ran, and every residual risk is named.
 ```
 
 Fresh review:
@@ -283,8 +316,9 @@ Act as Verifier / Gatekeeper for this task. Do not edit files. Check whether
 the claimed scope, Bead, changed files, verification commands, and acceptance
 evidence prove the task is ready to finish. Look for false OK/PASS paths,
 dirty-worktree leakage, missing commands, and residual risks. Name the concrete
-commands, files, diffs, or outputs you inspected. Return only findings, required
-fixes, or "ready to finish" with the evidence you relied on.
+commands, files, diffs, or outputs you inspected. Return only Findings,
+Evidence, Required Fixes, and Remaining Risk, or "ready to finish" with the
+evidence you relied on. If evidence is missing, say what is missing and stop.
 ```
 
 Memory Steward:
@@ -293,8 +327,9 @@ Memory Steward:
 Act as Memory Steward for this task. Do not edit files. Decide what belongs in
 Beads, what belongs in Nous product/semantic/personal memory, what belongs in
 docs, and what should remain ephemeral. Protect `anchor.md`: it is frozen.
-Return the recommended memory action, boundary risks, and any wording that
-should or should not be stored.
+Return Recommendation, Boundary Risks, and Store / Do Not Store wording. If the
+boundary cannot be decided from the provided context, say what evidence is
+missing and do not recommend durable storage.
 ```
 
 Handoff:
@@ -302,5 +337,6 @@ Handoff:
 ```text
 Summarize the current state for the next agent: goal, files changed, important
 decisions, commands run, verification results, unresolved risks, and the next
-small action.
+small action. The handoff is acceptable only if the next agent can continue
+without re-reading unrelated logs or guessing what remains.
 ```

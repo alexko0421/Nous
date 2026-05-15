@@ -46,4 +46,19 @@ final class SettingsUILayoutTests: XCTestCase {
         XCTAssertFalse(source.contains(".fill(Color.white.opacity(0.36))"))
         XCTAssertFalse(source.contains(".fill(Color.white.opacity(0.34))"))
     }
+
+    func testAgentWorkShowsOutcomeContractReadiness() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Views/AgentWorkView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("Contract ready"))
+        XCTAssertTrue(source.contains("Missing"))
+        XCTAssertTrue(source.contains("outcomeContract"))
+    }
 }

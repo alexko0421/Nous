@@ -200,6 +200,37 @@ final class HarnessHealthTests: XCTestCase {
         XCTAssertEqual(snapshot.statusText, "Full gate passed")
     }
 
+    func testOutcomeContractHealthSummarizesMissingFields() {
+        let ready = AgentOutcomeContractSummary(
+            hasObjective: true,
+            hasContextIncluded: true,
+            hasContextExcluded: true,
+            hasOutputSchema: true,
+            hasFailureBehavior: true,
+            hasAcceptanceRubric: true,
+            hasVerificationEvidence: true
+        )
+        let missing = AgentOutcomeContractSummary(
+            hasObjective: true,
+            hasContextIncluded: false,
+            hasContextExcluded: true,
+            hasOutputSchema: false,
+            hasFailureBehavior: true,
+            hasAcceptanceRubric: true,
+            hasVerificationEvidence: true
+        )
+
+        let summary = AgentOutcomeContractHealthSummary.summarize([ready, missing])
+
+        XCTAssertFalse(summary.isComplete)
+        XCTAssertEqual(summary.totalIssueCount, 2)
+        XCTAssertEqual(summary.completeIssueCount, 1)
+        XCTAssertEqual(summary.incompleteIssueCount, 1)
+        XCTAssertEqual(summary.missingFieldCounts["context-in"], 1)
+        XCTAssertEqual(summary.missingFieldCounts["output"], 1)
+        XCTAssertTrue(summary.summaryText.contains("Outcome contracts 1/2 ready"))
+    }
+
     func testLegacyFullGateWithoutSignatureDoesNotCoverCurrentRiskyChanges() {
         let legacyFullRun = HarnessRunRecord(
             mode: .full,

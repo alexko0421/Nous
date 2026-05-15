@@ -297,6 +297,7 @@ struct AgentWorkView: View {
             snapshot.contextManifest.summaryText,
             snapshot.delegationMetrics.summaryText,
             snapshot.modelHarnessProfiles.summaryText,
+            snapshot.outcomeContracts.summaryText,
             snapshot.sycophancyFixtureTrend
         ].joined(separator: " · ")
     }
@@ -335,6 +336,9 @@ struct AgentWorkView: View {
         if !snapshot.modelHarnessProfiles.isComplete {
             return AppColor.colaOrange
         }
+        if snapshot.outcomeContracts.hasIncompleteContracts {
+            return AppColor.colaOrange
+        }
         if snapshot.agentToolReliability.unknownErrorCount > 0 {
             return AppColor.colaOrange
         }
@@ -349,6 +353,9 @@ struct AgentWorkView: View {
 
     private func runtimeIcon(_ snapshot: RuntimeHarnessSnapshot) -> String {
         if !snapshot.modelHarnessProfiles.isComplete {
+            return "exclamationmark.bubble"
+        }
+        if snapshot.outcomeContracts.hasIncompleteContracts {
             return "exclamationmark.bubble"
         }
         if snapshot.agentToolReliability.unknownErrorCount > 0 {
@@ -596,6 +603,8 @@ private struct BeadsIssueRow: View {
                                 .foregroundStyle(AppColor.colaDarkText)
                                 .lineLimit(2)
                                 .fixedSize(horizontal: false, vertical: true)
+
+                            contractReadinessPill
                         }
 
                         Spacer(minLength: 8)
@@ -667,6 +676,37 @@ private struct BeadsIssueRow: View {
                 Capsule()
                     .fill(AppColor.colaDarkText.opacity(0.06))
             )
+    }
+
+    private var contractReadinessPill: some View {
+        HStack(spacing: 5) {
+            Image(systemName: issue.outcomeContract.isComplete ? "checkmark.seal.fill" : "exclamationmark.triangle")
+                .font(.system(size: 10, weight: .bold))
+
+            Text(contractReadinessText)
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .foregroundStyle(contractReadinessColor)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(
+            Capsule()
+                .fill(contractReadinessColor.opacity(issue.outcomeContract.isComplete ? 0.12 : 0.08))
+        )
+        .help(contractReadinessText)
+    }
+
+    private var contractReadinessText: String {
+        if issue.outcomeContract.isComplete {
+            return "Contract ready"
+        }
+        return "Missing \(issue.outcomeContract.missingLabels.joined(separator: "/"))"
+    }
+
+    private var contractReadinessColor: Color {
+        issue.outcomeContract.isComplete ? Color(red: 0.16, green: 0.54, blue: 0.36) : AppColor.colaOrange
     }
 
     private var details: some View {

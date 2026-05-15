@@ -10,6 +10,7 @@ enum BehaviorEvalAxis: String, Codable, CaseIterable, Equatable, Sendable {
     case toolLoop = "tool_loop"
     case currentIntent = "current_intent"
     case liveGeneration = "live_generation"
+    case delegationContract = "delegation_contract"
 }
 
 enum BehaviorEvalSeverity: String, Codable, Equatable, Sendable {

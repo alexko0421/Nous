@@ -18,7 +18,8 @@ final class BehaviorEvalRunner {
             provocationResult(),
             currentFactHonestyResult(),
             toolLoopResult(agentToolReliability),
-            currentIntentResult()
+            currentIntentResult(),
+            delegationContractResult()
         ])
     }
 
@@ -385,6 +386,41 @@ final class BehaviorEvalRunner {
         return BehaviorEvalResult(
             id: "current_intent_latest_turn",
             axis: .currentIntent,
+            verdict: .pass,
+            findings: []
+        )
+    }
+
+    private func delegationContractResult() -> BehaviorEvalResult {
+        let contracted = AgentOutcomeContractParser.parse("""
+        Task objective: inspect the failing gate.
+        Context included: build log and changed files only.
+        Context excluded: unrelated voice UI files.
+        Output schema: findings first, then verification evidence.
+        Failure behavior: stop and report blocker if the gate cannot run.
+        Acceptance rubric: each finding needs file evidence.
+        Verification evidence: command output summary.
+        """)
+        let loose = AgentOutcomeContractParser.parse("Ask another agent to take a look and report back.")
+
+        guard contracted.isComplete, !loose.isComplete else {
+            return BehaviorEvalResult(
+                id: "delegation_contract_boundary",
+                axis: .delegationContract,
+                verdict: .failure,
+                findings: [
+                    BehaviorEvalFinding(
+                        code: "delegation_contract_adapter_miss",
+                        severity: .failure,
+                        message: "The delegation contract adapter failed to separate bounded agent work from loose handoff text."
+                    )
+                ]
+            )
+        }
+
+        return BehaviorEvalResult(
+            id: "delegation_contract_boundary",
+            axis: .delegationContract,
             verdict: .pass,
             findings: []
         )

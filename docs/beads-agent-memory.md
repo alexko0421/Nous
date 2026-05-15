@@ -111,6 +111,7 @@ Do not store:
 - product strategy
 - design taste
 - one-off discussion notes
+- Dream Review brainstorms, hypotheses, or speculative product directions
 - temporary implementation details
 
 ## Session End
@@ -150,6 +151,12 @@ The memory boundary is part of the architecture:
 
 Do not merge those layers unless a future design explicitly changes this
 protocol.
+
+Dream Review outputs are brainstorming artifacts. They may inspire a later
+Beads issue or implementation plan, but only after they are rewritten as a
+concrete engineering task with objective, context boundaries, output schema,
+failure behavior, acceptance rubric, and verification evidence. Do not put raw
+Dream Review text into `bd remember`.
 
 Native Nous integration has been evaluated and rejected for this phase. Beads
 may be shown as a read-only Settings surface, but Beads issues must not become

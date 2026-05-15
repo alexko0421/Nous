@@ -126,6 +126,10 @@ final class BeadsAgentWorkService: @unchecked Sendable {
         .sorted { left, right in
             (left.closedAt ?? left.updatedAt ?? "") > (right.closedAt ?? right.updatedAt ?? "")
         }
+        var runtimeHarness = runtimeHarnessLoader.loadSnapshot()
+        runtimeHarness.outcomeContracts = AgentOutcomeContractHealthSummary.summarize(
+            (ready + inProgress).map(\.outcomeContract)
+        )
 
         return BeadsAgentWorkSnapshot(
             beadsPath: beadsPath,
@@ -133,7 +137,7 @@ final class BeadsAgentWorkService: @unchecked Sendable {
             inProgress: inProgress,
             recentClosed: Array(closed.prefix(recentClosedLimit)),
             harness: harnessLoader.loadSnapshot(),
-            runtimeHarness: runtimeHarnessLoader.loadSnapshot(),
+            runtimeHarness: runtimeHarness,
             loadedAt: Date()
         )
     }

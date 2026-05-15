@@ -147,7 +147,7 @@ fi
 
 print_section "Agentic workflow"
 echo "Default: one lead agent. Use explorers for noisy read-heavy work."
-echo "Use the Context Boundary Card before delegating."
+echo "Use the Context Boundary Card with output schema, failure behavior, and acceptance rubric before delegating."
 echo "Do not split planner / implementer / tester roles when context overlaps."
 echo "Workers need explicit ownership and disjoint write sets."
 echo "Agent teams remain deferred unless explicitly requested."
