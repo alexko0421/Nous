@@ -125,6 +125,7 @@
 		3B0C4ADB2DE8F304261A454E /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEA896134861BEAADF98E800 /* SettingsView.swift */; };
 		3B8520D737C88BE3E903A9B0 /* KeychainSecretStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CAB09563BB19499C57795F0 /* KeychainSecretStore.swift */; };
 		3C1E038EE44E540DD69431C5 /* WindowAppearanceBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2A2DFB4585DEEF1182CF8C2 /* WindowAppearanceBridgeTests.swift */; };
+		3C7D9C950A7C904F67A294A9 /* InTurnPatternProposalService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7616DE3C5FCA1840CD3520A /* InTurnPatternProposalService.swift */; };
 		3C7E4010F10A43BEC4086ED5 /* ThumbFeedbackView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C170EC5D1E2DEA724DCEF93 /* ThumbFeedbackView.swift */; };
 		3D09DD924BC3D75D131E42E0 /* TemporaryBranchOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34EF9BC44EFF5D79765460BF /* TemporaryBranchOverlay.swift */; };
 		3E6FF46E8E6E947CF7B7AADF /* NousApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84AC99FE1331146CEC54C75D /* NousApp.swift */; };
@@ -205,6 +206,7 @@
 		60FD6D61A194F0D71BCEF236 /* PerConversationReflectionPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 210E7076BBBE730DB1312151 /* PerConversationReflectionPrompt.swift */; };
 		6146D9C1D7258FD6FCF32DDB /* VoiceCommandController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02AC12449EDE4D32637B0A15 /* VoiceCommandController.swift */; };
 		61F1354157F1EFF4427FA253 /* GalaxyRelationRefinementQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71F36681132B59215BCA2DB0 /* GalaxyRelationRefinementQueue.swift */; };
+		627B6B1889A6B53E59B82B9B /* InTurnPatternProposalServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33C7AC9B781798EE6D23FD4D /* InTurnPatternProposalServiceTests.swift */; };
 		63AEE97E980861283A2BC3A4 /* GalaxyRelationTelemetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D5DFF872F7F3975B774CC9F /* GalaxyRelationTelemetry.swift */; };
 		656F474F5F06CCB507EE1ED6 /* QuickActionAgent.swift in Sources */ = {isa = PBXBuildFile; fileRef = D18F7D1D077A23BDBBD2B77A /* QuickActionAgent.swift */; };
 		65CE58098B73E1EE13F106B9 /* MemoryCuratorReviewPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBB5DB637E9ACC7ECC684DED /* MemoryCuratorReviewPlanner.swift */; };
@@ -574,6 +576,7 @@
 		30E4A1FDE001FAC7C22C918F /* PlanAgent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlanAgent.swift; sourceTree = "<group>"; };
 		330317E3F30AFE1EDF6E47EC /* LexicalIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LexicalIndex.swift; sourceTree = "<group>"; };
 		33517506770185EFCDC58402 /* MemoryCuratorReviewDebugFormattingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryCuratorReviewDebugFormattingTests.swift; sourceTree = "<group>"; };
+		33C7AC9B781798EE6D23FD4D /* InTurnPatternProposalServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InTurnPatternProposalServiceTests.swift; sourceTree = "<group>"; };
 		33FA2C8AEFB994F087E4B701 /* ReflectionFixtureRunner */ = {isa = PBXFileReference; includeInIndex = 0; path = ReflectionFixtureRunner; sourceTree = BUILT_PRODUCTS_DIR; };
 		3421524A042E95AC4D01374E /* EdgeFeedbackStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EdgeFeedbackStoreTests.swift; sourceTree = "<group>"; };
 		34332DAC1DB987EEF307E380 /* WeeklyReflectionServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WeeklyReflectionServiceTests.swift; sourceTree = "<group>"; };
@@ -823,6 +826,7 @@
 		B31DE2BE69DAC0B0613D4BB4 /* MemoryGraphMessageBackfillService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryGraphMessageBackfillService.swift; sourceTree = "<group>"; };
 		B357963D017ED46D343B3076 /* ProvocationKindDerivationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProvocationKindDerivationTests.swift; sourceTree = "<group>"; };
 		B55A879E5777E331AD245D81 /* SourceConnectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceConnectionTests.swift; sourceTree = "<group>"; };
+		B7616DE3C5FCA1840CD3520A /* InTurnPatternProposalService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InTurnPatternProposalService.swift; sourceTree = "<group>"; };
 		B7C6033AA40BC1D6DD27C0CD /* CorpusCardFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CorpusCardFormatter.swift; sourceTree = "<group>"; };
 		B91719A985E5D6FD01833706 /* VoiceNotchPanelControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceNotchPanelControllerTests.swift; sourceTree = "<group>"; };
 		B9B93C7E0F2DEB4BF39D9854 /* BehaviorEvalRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BehaviorEvalRunner.swift; sourceTree = "<group>"; };
@@ -1330,6 +1334,7 @@
 				A83922509F1BB3EA3476B0D9 /* GraphLayoutEngine.swift */,
 				B058942CF00B6F34B7BDC2F0 /* HarnessHealthService.swift */,
 				ECC59DC757F085BD2CA1B5A1 /* HeartbeatCoordinator.swift */,
+				B7616DE3C5FCA1840CD3520A /* InTurnPatternProposalService.swift */,
 				3CAB09563BB19499C57795F0 /* KeychainSecretStore.swift */,
 				330317E3F30AFE1EDF6E47EC /* LexicalIndex.swift */,
 				6BE26177D1A406E35BBA5483 /* LinkUnfurlService.swift */,
@@ -1501,6 +1506,7 @@
 				ABFA60716BE28FDBDC5D4B01 /* GraphEngineTests.swift */,
 				F60779BC541120DC8D22B352 /* HarnessHealthTests.swift */,
 				F56E6B669157712EB19B1E75 /* HeartbeatCoordinatorTests.swift */,
+				33C7AC9B781798EE6D23FD4D /* InTurnPatternProposalServiceTests.swift */,
 				A2E4B68EB530BA04A2849001 /* JudgeEventsStoreTests.swift */,
 				C8F6220FBD068D395863141E /* JudgeVerdictProvocationKindTests.swift */,
 				852BFAC3906357D2665F700A /* JudgeVerdictTests.swift */,
@@ -1947,6 +1953,7 @@
 				1730F95B2A419A2ABDC8EC42 /* HarnessHealth.swift in Sources */,
 				C941350D8EF121403FE7FC10 /* HarnessHealthService.swift in Sources */,
 				BE708E4323D55286FEF8C0A3 /* HeartbeatCoordinator.swift in Sources */,
+				3C7D9C950A7C904F67A294A9 /* InTurnPatternProposalService.swift in Sources */,
 				D790EA45A4CCE0C0C3038462 /* JudgeEvent.swift in Sources */,
 				9A2C526409C14357AFB82080 /* JudgeVerdict.swift in Sources */,
 				3B8520D737C88BE3E903A9B0 /* KeychainSecretStore.swift in Sources */,
@@ -2186,6 +2193,7 @@
 				4D4E88E3F6E50302A15F3D83 /* GraphEngineTests.swift in Sources */,
 				2FEDDA9A476B8BDFE89EDAFD /* HarnessHealthTests.swift in Sources */,
 				FED16432C6F91DC51C0015F6 /* HeartbeatCoordinatorTests.swift in Sources */,
+				627B6B1889A6B53E59B82B9B /* InTurnPatternProposalServiceTests.swift in Sources */,
 				BCF9612112E4F9670527753A /* JudgeEventsStoreTests.swift in Sources */,
 				410AF7748A165D45FB5BCFCB /* JudgeVerdictProvocationKindTests.swift in Sources */,
 				D7283C4FCA9F4CA028C5E1C0 /* JudgeVerdictTests.swift in Sources */,

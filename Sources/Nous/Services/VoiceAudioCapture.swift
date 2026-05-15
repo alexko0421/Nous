@@ -68,6 +68,7 @@ final class VoiceAudioCapture: VoiceAudioCapturing {
         stop()
 
         let inputNode = engine.inputNode
+        try? inputNode.setVoiceProcessingEnabled(true)
         let inputFormat = inputNode.inputFormat(forBus: 0)
         guard let outputFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,

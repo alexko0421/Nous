@@ -210,6 +210,7 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
         var pendingPlaybackBuffers = 0
         var responseDoneSeen = false
         var generation = 0
+        var suppressAssistantAudioUntilResponseDone = false
     }
 
     private let socket: RealtimeVoiceSocketing
@@ -221,10 +222,9 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
     private var outboundQueue: RealtimeVoiceOutboundQueue?
     private let audioLevelHandlerLock = OSAllocatedUnfairLock<(@Sendable (Float) -> Void)?>(initialState: nil)
     private let configurationLock = OSAllocatedUnfairLock<RealtimeVoiceConfiguration>(initialState: .default)
-    // Mic chunks are not forwarded while assistant audio is queued locally.
-    // `response.done` only means the server finished sending audio; macOS may
-    // still be playing queued buffers. We wait for AVAudioPlayerNode playback
-    // completions, then hold a short tail so speakers do not echo back in.
+    // Assistant playback is tracked separately from microphone forwarding.
+    // Mic audio keeps flowing so server-side semantic VAD can barge in; when
+    // the server reports user speech, local playback is flushed immediately.
     private let assistantAudioGateLock = OSAllocatedUnfairLock<AssistantAudioGateState>(
         initialState: AssistantAudioGateState()
     )
@@ -278,9 +278,7 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
                 configuration: configuration
             ))
             startReceiveLoop(onEvent: onEvent)
-            try audioCapture?.start(onAudio: { [weak self] chunk in
-                guard let self else { return }
-                if self.isAssistantAudioGateMuted() { return }
+            try audioCapture?.start(onAudio: { chunk in
                 queue.enqueueAudio(chunk)
             }, onAudioLevel: { [weak self] level in
                 guard let self else { return }
@@ -344,7 +342,7 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
                         "type": "semantic_vad",
                         "eagerness": "low",
                         "create_response": true,
-                        "interrupt_response": false
+                        "interrupt_response": true
                     ]
                 ],
                 "output": audioOutputConfiguration(configuration: configuration)
@@ -377,10 +375,12 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
                     }
                     guard let event = RealtimeVoiceEventParser.parse(raw) else { continue }
                     if case .outputAudioDelta(let base64Audio) = event {
-                        // First audio chunk of the assistant turn — start
-                        // muting the mic so its own playback doesn't echo
-                        // back into the input and trigger a fake user-speech
-                        // event on the server.
+                        if isSuppressingAssistantAudioUntilResponseDone() {
+                            continue
+                        }
+                        // Track queued playback so a later user-speech start
+                        // can cancel stale assistant audio without waiting for
+                        // every scheduled AVAudioPlayerNode buffer to finish.
                         let generation = beginAssistantPlaybackBuffer()
                         let didSchedule = audioPlayback?.enqueue(
                             base64PCM16Audio: base64Audio,
@@ -396,6 +396,11 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
                     if case .responseDone = event {
                         markAssistantResponseDone()
                     }
+                    if case .userSpeechStarted = event {
+                        if suppressAssistantAudioForBargeIn() {
+                            audioPlayback?.flushPendingBuffers()
+                        }
+                    }
                     await onEvent(event)
                 } catch {
                     if Task.isCancelled { break }
@@ -410,6 +415,10 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
         assistantAudioGateLock.withLock { $0.isMuted }
     }
 
+    private func isSuppressingAssistantAudioUntilResponseDone() -> Bool {
+        assistantAudioGateLock.withLock { $0.suppressAssistantAudioUntilResponseDone }
+    }
+
     private func beginAssistantPlaybackBuffer() -> Int {
         cancelAssistantTailUnlock()
         return assistantAudioGateLock.withLock { state in
@@ -417,6 +426,7 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
                 state.generation += 1
                 state.pendingPlaybackBuffers = 0
                 state.responseDoneSeen = false
+                state.suppressAssistantAudioUntilResponseDone = false
             }
             state.isMuted = true
             state.pendingPlaybackBuffers += 1
@@ -427,11 +437,25 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
     private func markAssistantResponseDone() {
         let generationToUnlock = assistantAudioGateLock.withLock { state -> Int? in
             state.responseDoneSeen = true
+            state.suppressAssistantAudioUntilResponseDone = false
             guard state.isMuted, state.pendingPlaybackBuffers == 0 else { return nil }
             return state.generation
         }
         if let generationToUnlock {
             scheduleAssistantTailUnlock(generation: generationToUnlock)
+        }
+    }
+
+    private func suppressAssistantAudioForBargeIn() -> Bool {
+        cancelAssistantTailUnlock()
+        return assistantAudioGateLock.withLock { state in
+            guard state.isMuted || state.pendingPlaybackBuffers > 0 else { return false }
+            state.generation += 1
+            state.isMuted = false
+            state.pendingPlaybackBuffers = 0
+            state.responseDoneSeen = false
+            state.suppressAssistantAudioUntilResponseDone = true
+            return true
         }
     }
 
@@ -485,6 +509,7 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
             state.isMuted = false
             state.pendingPlaybackBuffers = 0
             state.responseDoneSeen = false
+            state.suppressAssistantAudioUntilResponseDone = false
         }
     }
 
@@ -539,6 +564,7 @@ final class RealtimeVoiceSession: RealtimeVoiceSessioning {
         Voice is not a separate mode: infer the artifact Alex wants from the spoken request, and do not ask Alex to switch modes before helping. \
         When Alex asks to write an essay, post, script, note, draft, outline, plan, brainstorm map, research brief, study note, proposal, email, or revision, treat the scratchpad as the live writing surface: interview briefly, open it, then write usable markdown with replace_scratchpad_markdown or append_scratchpad_markdown; do not paste the raw transcript onto the white paper; synthesize the discussion into a coherent draft, outline, plan, or paragraph that Alex can keep editing. \
         Run a short interview for missing essentials, no more than three focused questions before the first draft unless Alex asks to keep exploring. \
+        Artifact quality gate: before any scratchpad write, internally build a hidden brief, turn it into a first draft, run a critic pass for specificity, missing requirements, weak thesis or logic, and generic phrasing, then call the scratchpad tool with only the revised markdown. Do not call scratchpad tools with raw transcript text or cleaned-up dictation; if missing information blocks quality, ask the one question that most improves the artifact, and if you proceed under uncertainty, state the assumption in the markdown. \
         Artifact playbooks: Essay asks for thesis, audience, requirement, evidence, and tone; Plan asks for goal, timeframe, constraints, assumptions, milestones, time-boxed schedule, daily checklist, risk countermeasures, definition of done, Next 3 Actions, and what to ignore; a Plan draft must be execution-grade rather than a thin outline. Brainstorm turns loose ideas into directions, tensions, examples, and next experiments; Research brief captures the question, what is known, what to verify, source notes, and a provisional answer; Rewrite preserves the current intent while changing structure, sharpness, or tone. \
         As soon as Alex asks for an artifact, make the scratchpad visible immediately, even if you still need to interview him before drafting; if the current scratchpad matters and is not in view, call get_app_state before replacing or appending. \
         Prefer appending unless Alex clearly asks to replace the existing white paper; never silently discard a draft. \

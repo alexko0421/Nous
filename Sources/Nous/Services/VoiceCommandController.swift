@@ -202,10 +202,9 @@ final class VoiceCommandController {
             stop()
 
         case .userSpeechStarted:
-            // VAD saw a possible user-speech start. Playback interruption is
-            // disabled at the session level so ambient noise cannot cancel a
-            // response, but the capsule should still show that capture is
-            // active when the server reports speech.
+            // VAD saw a user-speech start. The realtime session handles
+            // playback barge-in directly; the controller only reflects that
+            // capture is active again.
             outputTranscriptBuffer = ""
             outputTranscriptIsFinal = false
             if pendingAction == nil {

@@ -198,6 +198,7 @@ final class ChatViewModel {
             },
             outcomeFactory: turnOutcomeFactory,
             shadowLearningSignalRecorder: shadowLearningSignalRecorder,
+            inTurnPatternProposalService: InTurnPatternProposalService(nodeStore: nodeStore),
             cognitionReviewer: CognitionReviewer(),
             failureSkillCandidateStore: failureSkillCandidateStore,
             shouldSurfaceThinkingTraces: shouldPersistAssistantThinking,

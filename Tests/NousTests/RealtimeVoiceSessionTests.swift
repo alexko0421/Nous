@@ -45,7 +45,7 @@ final class RealtimeVoiceSessionTests: XCTestCase {
         XCTAssertFalse(toolNames.contains("recall_recent_conversations"))
     }
 
-    func testSessionUpdateKeepsAmbientNoiseFromInterruptingPlayback() throws {
+    func testSessionUpdateAllowsConservativeBargeInDuringPlayback() throws {
         let data = try RealtimeVoiceSession.makeSessionUpdateEvent()
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let session = try XCTUnwrap(json["session"] as? [String: Any])
@@ -55,7 +55,7 @@ final class RealtimeVoiceSessionTests: XCTestCase {
 
         XCTAssertEqual(turnDetection["type"] as? String, "semantic_vad")
         XCTAssertEqual(turnDetection["eagerness"] as? String, "low")
-        XCTAssertEqual(turnDetection["interrupt_response"] as? Bool, false)
+        XCTAssertEqual(turnDetection["interrupt_response"] as? Bool, true)
         XCTAssertEqual(turnDetection["create_response"] as? Bool, true)
     }
 
@@ -163,6 +163,19 @@ final class RealtimeVoiceSessionTests: XCTestCase {
         XCTAssertTrue(payload.instructions.contains("make the scratchpad visible immediately"))
         XCTAssertTrue(payload.instructions.contains("make the scratchpad visible"))
         XCTAssertTrue(payload.instructions.contains("get_app_state before replacing or appending"))
+    }
+
+    func testSessionUpdateRequiresArtifactQualityGateBeforeWriting() throws {
+        let payload = try Self.sessionPayload(language: .automatic)
+
+        XCTAssertTrue(payload.instructions.contains("Artifact quality gate"))
+        XCTAssertTrue(payload.instructions.contains("hidden brief"))
+        XCTAssertTrue(payload.instructions.contains("first draft"))
+        XCTAssertTrue(payload.instructions.contains("critic pass"))
+        XCTAssertTrue(payload.instructions.contains("revised markdown"))
+        XCTAssertTrue(payload.instructions.contains("cleaned-up dictation"))
+        XCTAssertTrue(payload.instructions.contains("one question that most improves the artifact"))
+        XCTAssertTrue(payload.instructions.contains("state the assumption"))
     }
 
     func testSessionUpdateRoutesSummariesToPaperPreviewTool() throws {
@@ -511,11 +524,10 @@ final class RealtimeVoiceSessionTests: XCTestCase {
         XCTAssertEqual(controllerEvents, [.sessionEnded])
     }
 
-    func testMicStaysMutedAfterResponseDoneUntilPlaybackCompletes() async throws {
+    func testCapturedAudioIsForwardedDuringAssistantPlaybackForBargeIn() async throws {
         let socket = FakeRealtimeVoiceSocket(
             receivedMessages: [
-                #"{"type":"response.output_audio.delta","delta":"abc123"}"#,
-                #"{"type":"response.done"}"#
+                #"{"type":"response.output_audio.delta","delta":"abc123"}"#
             ]
         )
         let audioCapture = FakeVoiceAudioCapture()
@@ -524,12 +536,51 @@ final class RealtimeVoiceSessionTests: XCTestCase {
 
         try await session.start(apiKey: "sk-test") { _ in }
         try await waitUntil { playback.playedChunks == ["abc123"] }
-        try await Task.sleep(nanoseconds: 950_000_000)
-        audioCapture.emit("assistant-echo")
-        try await Task.sleep(nanoseconds: 100_000_000)
+        audioCapture.emit("user-barge-in")
+        try await waitUntil { socket.sentAudioChunks.contains("user-barge-in") }
         session.stop()
 
-        XCTAssertFalse(socket.sentAudioChunks.contains("assistant-echo"))
+        XCTAssertTrue(socket.sentAudioChunks.contains("user-barge-in"))
+    }
+
+    func testUserSpeechStartedFlushesQueuedAssistantPlayback() async throws {
+        let socket = FakeRealtimeVoiceSocket(
+            receivedMessages: [
+                #"{"type":"response.output_audio.delta","delta":"abc123"}"#,
+                #"{"type":"input_audio_buffer.speech_started"}"#
+            ]
+        )
+        let playback = FakeVoiceAudioPlayback()
+        let session = RealtimeVoiceSession(socket: socket, audioCapture: nil, audioPlayback: playback)
+        var controllerEvents: [RealtimeVoiceEvent] = []
+
+        try await session.start(apiKey: "sk-test") { event in
+            controllerEvents.append(event)
+        }
+        try await waitUntil { controllerEvents.contains(.userSpeechStarted) }
+        session.stop()
+
+        XCTAssertEqual(playback.flushCount, 1)
+    }
+
+    func testUserSpeechStartedSuppressesLateAssistantAudioUntilResponseDone() async throws {
+        let socket = FakeRealtimeVoiceSocket(
+            receivedMessages: [
+                #"{"type":"response.output_audio.delta","delta":"first"}"#,
+                #"{"type":"input_audio_buffer.speech_started"}"#,
+                #"{"type":"response.output_audio.delta","delta":"late-old-audio"}"#,
+                #"{"type":"response.done"}"#,
+                #"{"type":"response.output_audio.delta","delta":"next-response"}"#
+            ]
+        )
+        let playback = FakeVoiceAudioPlayback()
+        let session = RealtimeVoiceSession(socket: socket, audioCapture: nil, audioPlayback: playback)
+
+        try await session.start(apiKey: "sk-test") { _ in }
+        try await waitUntil { playback.playedChunks.contains("next-response") }
+        session.stop()
+
+        XCTAssertEqual(playback.playedChunks, ["first", "next-response"])
     }
 
     func testCleanSocketCloseEmitsSessionEnded() async throws {

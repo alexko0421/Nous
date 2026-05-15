@@ -72,14 +72,14 @@ enum VoiceActionRegistry {
         ),
         Tool(
             name: "replace_scratchpad_markdown",
-            description: "Replace the scratchpad white paper with a complete markdown artifact. Use when Alex explicitly asks for a fresh draft, rewrite, essay, plan, post, note, outline, or full replacement; synthesize the discussion into usable artifact prose, not raw transcript text.",
+            description: "Replace the scratchpad white paper with a complete markdown artifact after the voice artifact quality gate. Use when Alex explicitly asks for a fresh draft, rewrite, essay, plan, post, note, outline, or full replacement; synthesize the discussion into usable revised artifact prose, not raw transcript text and not cleaned-up dictation.",
             properties: ["markdown": ["type": "string"]],
             required: ["markdown"],
             risk: .direct
         ),
         Tool(
             name: "append_scratchpad_markdown",
-            description: "Append synthesized markdown to the scratchpad white paper without discarding existing content. This is the default for adding plan sections, examples, interview notes, research notes, outline pieces, or incremental artifact work.",
+            description: "Append synthesized markdown to the scratchpad white paper without discarding existing content after the voice artifact quality gate. This is the default for adding plan sections, examples, interview notes, research notes, outline pieces, or incremental artifact work that contributes to a revised artifact.",
             properties: ["markdown": ["type": "string"]],
             required: ["markdown"],
             risk: .direct

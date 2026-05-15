@@ -71,6 +71,16 @@ final class WeeklyReflectionService {
     something he would NOT have said about himself before reading it —
     AND must stay inside the corpus.
 
+    IN-TURN PATTERN EVIDENCE:
+
+    The fixture may include `pattern_evidence`: repeated in-turn pattern names
+    that Nous surfaced during live turns. Treat this as audit context, not as
+    a trait claim about Alex. The useful question is: Which repeated in-turn patterns changed Alex's next action, and which names were false positives?
+
+    Do not promote pending pattern evidence by itself. If you use a pattern
+    evidence item, cite the underlying message ids and keep the claim scoped to
+    this week's conversations.
+
     Rules:
     - claims array has length 0, 1, or 2. Never more.
     - Length 0 is a VALID answer. If nothing clears the "non-obvious" AND "corpus-scoped" bars, return {"claims": []}. Do not invent patterns.
@@ -142,17 +152,26 @@ final class WeeklyReflectionService {
     private let llm: StructuredLLMClient
     private let now: () -> Date
     private let backgroundTelemetry: (any BackgroundAIJobTelemetryRecording)?
+    private let patternEvidenceProvider: (UUID?, Date, Date) throws -> [InTurnPatternEvidenceDigest]
 
     init(
         nodeStore: NodeStore,
         llm: StructuredLLMClient,
         now: @escaping () -> Date = Date.init,
-        backgroundTelemetry: (any BackgroundAIJobTelemetryRecording)? = nil
+        backgroundTelemetry: (any BackgroundAIJobTelemetryRecording)? = nil,
+        patternEvidenceProvider: ((UUID?, Date, Date) throws -> [InTurnPatternEvidenceDigest])? = nil
     ) {
         self.nodeStore = nodeStore
         self.llm = llm
         self.now = now
         self.backgroundTelemetry = backgroundTelemetry
+        self.patternEvidenceProvider = patternEvidenceProvider ?? { projectId, weekStart, weekEnd in
+            try InTurnPatternProposalService(nodeStore: nodeStore).patternEvidenceContext(
+                projectId: projectId,
+                weekStart: weekStart,
+                weekEnd: weekEnd
+            )
+        }
     }
 
     /// Convenience init matching the production call site: a concrete
@@ -161,13 +180,15 @@ final class WeeklyReflectionService {
         nodeStore: NodeStore,
         llm: GeminiLLMService,
         now: @escaping () -> Date = Date.init,
-        backgroundTelemetry: (any BackgroundAIJobTelemetryRecording)? = nil
+        backgroundTelemetry: (any BackgroundAIJobTelemetryRecording)? = nil,
+        patternEvidenceProvider: ((UUID?, Date, Date) throws -> [InTurnPatternEvidenceDigest])? = nil
     ) {
         self.init(
             nodeStore: nodeStore,
             llm: GeminiStructuredLLMAdapter(service: llm),
             now: now,
-            backgroundTelemetry: backgroundTelemetry
+            backgroundTelemetry: backgroundTelemetry,
+            patternEvidenceProvider: patternEvidenceProvider
         )
     }
 
@@ -226,12 +247,14 @@ final class WeeklyReflectionService {
             return RunResult(run: rejected, claims: [], evidence: [])
         }
 
+        let patternEvidence = try patternEvidenceProvider(projectId, weekStart, weekEnd)
         let fixtureJSON = try encodeFixture(
             projectId: projectId,
             weekStart: weekStart,
             weekEnd: weekEnd,
             rows: fixture,
-            messageCount: messageCount
+            messageCount: messageCount,
+            patternEvidence: patternEvidence
         )
 
         let validMessageIds: Set<String> = Set(
@@ -420,7 +443,8 @@ final class WeeklyReflectionService {
         weekStart: Date,
         weekEnd: Date,
         rows: [NodeStore.ReflectionFixtureRow],
-        messageCount: Int
+        messageCount: Int,
+        patternEvidence: [InTurnPatternEvidenceDigest]
     ) throws -> String {
         struct ExportMessage: Encodable {
             let id: String
@@ -433,12 +457,26 @@ final class WeeklyReflectionService {
             let node_title: String
             let messages: [ExportMessage]
         }
+        struct ExportPatternEvidence: Encodable {
+            let pattern: String
+            let pattern_label: String
+            let statement: String
+            let suggested_action: String
+            let proposal_atom_id: String?
+            let proposal_status: String?
+            let message_ids: [String]
+            let evidence_count: Int
+            let average_confidence: Double
+            let first_seen: String
+            let last_seen: String
+        }
         struct ExportFixture: Encodable {
             let project_id: String?
             let week_start: String
             let week_end: String
             let message_count: Int
             let conversation_count: Int
+            let pattern_evidence: [ExportPatternEvidence]
             let conversations: [ExportConversation]
         }
 
@@ -461,6 +499,21 @@ final class WeeklyReflectionService {
                 }
             )
         }
+        let exportedPatternEvidence = patternEvidence.map { evidence in
+            ExportPatternEvidence(
+                pattern: evidence.kind.rawValue,
+                pattern_label: evidence.kind.displayLabel,
+                statement: evidence.statement,
+                suggested_action: evidence.suggestedAction,
+                proposal_atom_id: evidence.proposalAtomId?.uuidString,
+                proposal_status: evidence.proposalStatus?.rawValue,
+                message_ids: evidence.messageIds.map(\.uuidString),
+                evidence_count: evidence.evidenceCount,
+                average_confidence: evidence.averageConfidence,
+                first_seen: isoFull.string(from: evidence.firstSeen),
+                last_seen: isoFull.string(from: evidence.lastSeen)
+            )
+        }
 
         let fixture = ExportFixture(
             project_id: projectId?.uuidString,
@@ -468,6 +521,7 @@ final class WeeklyReflectionService {
             week_end: isoDate.string(from: weekEnd),
             message_count: messageCount,
             conversation_count: conversations.count,
+            pattern_evidence: exportedPatternEvidence,
             conversations: conversations
         )
 
