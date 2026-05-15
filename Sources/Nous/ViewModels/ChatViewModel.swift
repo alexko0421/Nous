@@ -70,6 +70,7 @@ final class ChatViewModel {
     private let userMemoryService: UserMemoryService
     private let userMemoryScheduler: UserMemoryScheduler
     private let sourceLearningMemoryScheduler: SourceLearningMemoryScheduler?
+    private let automaticMemoryScheduler: AutomaticMemoryPipelineScheduler?
     private let conversationSessionStore: ConversationSessionStore
     @ObservationIgnored private let explicitTurnRunner: ChatTurnRunner?
     @ObservationIgnored private let explicitTurnPlanner: TurnPlanner?
@@ -343,7 +344,8 @@ final class ChatViewModel {
             userMemoryScheduler: userMemoryScheduler,
             governanceTelemetry: governanceTelemetry,
             perConversationReflectionAutoTrigger: autoTrigger,
-            sourceLearningScheduler: sourceLearningMemoryScheduler
+            sourceLearningScheduler: sourceLearningMemoryScheduler,
+            automaticMemoryScheduler: automaticMemoryScheduler
         )
         cachedContextContinuationService = service
         return service
@@ -409,6 +411,7 @@ final class ChatViewModel {
         userMemoryService: UserMemoryService,
         userMemoryScheduler: UserMemoryScheduler,
         sourceLearningMemoryScheduler: SourceLearningMemoryScheduler? = nil,
+        automaticMemoryScheduler: AutomaticMemoryPipelineScheduler? = nil,
         conversationSessionStore: ConversationSessionStore? = nil,
         turnRunner: ChatTurnRunner? = nil,
         turnPlanner: TurnPlanner? = nil,
@@ -446,6 +449,7 @@ final class ChatViewModel {
         self.userMemoryService = userMemoryService
         self.userMemoryScheduler = userMemoryScheduler
         self.sourceLearningMemoryScheduler = sourceLearningMemoryScheduler
+        self.automaticMemoryScheduler = automaticMemoryScheduler
         self.conversationSessionStore = conversationSessionStore ?? ConversationSessionStore(
             nodeStore: nodeStore,
             telemetry: governanceTelemetry

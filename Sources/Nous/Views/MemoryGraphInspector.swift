@@ -32,6 +32,7 @@ struct MemoryGraphInspector: View {
     @State private var atoms: [MemoryAtom] = []
     @State private var edges: [MemoryEdge] = []
     @State private var observations: [MemoryObservation] = []
+    @State private var tensions: [MemoryTension] = []
     @State private var recallEvents: [MemoryRecallEvent] = []
     @State private var atomReviewPlan = MemoryAtomCuratorReviewPlan(generatedAt: .distantPast, items: [])
     @State private var nodeTitles: [UUID: String] = [:]
@@ -41,6 +42,7 @@ struct MemoryGraphInspector: View {
     @State private var selectedFocus: GraphFocus = .active
     @State private var loadError: String?
     @State private var actingAtomId: UUID?
+    @State private var actingTensionId: UUID?
 
     var body: some View {
         graphContainer {
@@ -49,6 +51,7 @@ struct MemoryGraphInspector: View {
                 metrics
                 controls
                 content
+                openTensionsSection
                 unverifiedSection
                 recallEventsSection
             }
@@ -101,6 +104,12 @@ struct MemoryGraphInspector: View {
             )
             metric(title: "Edges", value: "\(edges.count)", subtitle: "relationships")
             metric(title: "Chains", value: "\(decisionChains.count)", subtitle: "rejection paths")
+            metric(
+                title: "Tensions",
+                value: "\(openTensions.count)",
+                subtitle: "open conflicts",
+                accent: openTensions.isEmpty ? AppColor.surfacePrimary : Color.red.opacity(0.08)
+            )
             metric(
                 title: "Unverified",
                 value: "\(unverifiedObservations.count)",
@@ -206,6 +215,7 @@ struct MemoryGraphInspector: View {
             VStack(alignment: .leading, spacing: 14) {
                 atomSummary(atom)
                 provenanceGrid(atom)
+                tensionDetail(for: atom)
                 decisionChainDetail(for: atom)
                 sourceQuoteBlock(for: atom)
                 edgeList(title: "Outgoing Edges", edges: outgoingEdges(for: atom), direction: .outgoing)
@@ -263,6 +273,9 @@ struct MemoryGraphInspector: View {
                     if atom.status != .active {
                         badge(text: atom.status.rawValue, tint: statusTint(atom.status))
                     }
+                    if !tensions(for: atom).isEmpty {
+                        badge(text: "tension", tint: Color.red.opacity(0.12))
+                    }
                     Spacer(minLength: 0)
                 }
 
@@ -297,6 +310,7 @@ struct MemoryGraphInspector: View {
                     badge(text: "review", tint: Color.red.opacity(0.12))
                 }
                 badge(text: atom.status.rawValue, tint: statusTint(atom.status))
+                badge(text: atom.authority.rawValue, tint: atom.authority == .durable ? Color.green.opacity(0.12) : Color.blue.opacity(0.12))
                 badge(text: "\(Int((atom.confidence * 100).rounded()))% confidence", tint: AppColor.surfacePrimary)
             }
 
@@ -338,6 +352,37 @@ struct MemoryGraphInspector: View {
                     atomActionButton(title: "Forget", tint: Color.red.opacity(0.12), textColor: .red) {
                         mutateAtom(atom.id) {
                             _ = try MemoryLifecycleEngine(nodeStore: nodeStore).forget(atom.id)
+                        }
+                    }
+                    if actingAtomId == atom.id {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                }
+            } else if atom.status == .active {
+                HStack(spacing: 8) {
+                    if atom.authority == .tentative {
+                        atomActionButton(title: "Promote", tint: AppColor.colaOrange, textColor: .white) {
+                            mutateAtom(atom.id) {
+                                _ = try MemoryLifecycleEngine(nodeStore: nodeStore).approve(atom.id)
+                            }
+                        }
+                    } else {
+                        atomActionButton(title: "Demote", tint: AppColor.surfaceSecondary, textColor: AppColor.colaDarkText) {
+                            mutateAtom(atom.id) {
+                                var demoted = atom
+                                demoted.authority = .tentative
+                                demoted.updatedAt = Date()
+                                try nodeStore.updateMemoryAtom(demoted)
+                            }
+                        }
+                    }
+                    atomActionButton(title: "Archive", tint: Color.red.opacity(0.12), textColor: .red) {
+                        mutateAtom(atom.id) {
+                            var archived = atom
+                            archived.status = .archived
+                            archived.updatedAt = Date()
+                            try nodeStore.updateMemoryAtom(archived)
                         }
                     }
                     if actingAtomId == atom.id {
@@ -400,6 +445,22 @@ struct MemoryGraphInspector: View {
         }
     }
 
+    @ViewBuilder
+    private func tensionDetail(for atom: MemoryAtom) -> some View {
+        let relatedTensions = tensions(for: atom)
+        if !relatedTensions.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                sectionLabel("Memory Tension")
+                ForEach(relatedTensions) { tension in
+                    tensionRow(tension)
+                }
+            }
+            .padding(14)
+            .background(Color.red.opacity(0.07))
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+    }
+
     private enum EdgeDirection {
         case outgoing
         case incoming
@@ -445,6 +506,78 @@ struct MemoryGraphInspector: View {
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundColor(AppColor.secondaryText)
                 .lineLimit(1)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppColor.surfaceSecondary)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    @ViewBuilder
+    private var openTensionsSection: some View {
+        if !openTensions.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                sectionLabel("Open Tensions")
+                Text("These are conflicts between automatic memory and durable or anchor-backed memory. Resolve only after the source evidence has been inspected.")
+                    .font(.system(size: 12, design: .rounded))
+                    .foregroundColor(AppColor.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(openTensions.prefix(5))) { tension in
+                        tensionRow(tension)
+                    }
+                }
+            }
+            .padding(14)
+            .background(AppColor.surfacePrimary)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+    }
+
+    private func tensionRow(_ tension: MemoryTension) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                badge(text: tension.kind.rawValue.replacingOccurrences(of: "_", with: " "), tint: tensionTint(tension))
+                badge(text: tension.status.rawValue, tint: tension.status == .open ? Color.red.opacity(0.12) : AppColor.surfacePrimary)
+                Text(timeLabel(tension.createdAt))
+                    .font(.system(size: 11, design: .rounded))
+                    .foregroundColor(AppColor.secondaryText)
+                Spacer(minLength: 0)
+            }
+
+            Text(tension.summary)
+                .font(.system(size: 12, design: .rounded))
+                .foregroundColor(AppColor.colaDarkText)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+
+            chainField("Existing", tensionAtomLabel(tension.existingAtomId))
+            chainField("Challenger", tensionAtomLabel(tension.challengerAtomId))
+
+            HStack(spacing: 8) {
+                if let existingAtomId = tension.existingAtomId, atomById[existingAtomId] != nil {
+                    atomActionButton(title: "Show Existing", tint: AppColor.surfaceSecondary, textColor: AppColor.colaDarkText) {
+                        selectedAtomId = existingAtomId
+                    }
+                }
+                if let challengerAtomId = tension.challengerAtomId, atomById[challengerAtomId] != nil {
+                    atomActionButton(title: "Show Challenger", tint: AppColor.surfaceSecondary, textColor: AppColor.colaDarkText) {
+                        selectedAtomId = challengerAtomId
+                    }
+                }
+                if tension.status == .open {
+                    atomActionButton(title: "Resolve", tint: AppColor.colaOrange, textColor: .white) {
+                        mutateTension(tension.id) {
+                            _ = try MemoryLifecycleEngine(nodeStore: nodeStore).resolveTension(tension.id)
+                        }
+                    }
+                }
+                if actingTensionId == tension.id {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -592,6 +725,10 @@ struct MemoryGraphInspector: View {
         atoms.filter { $0.status == .pending }
     }
 
+    private var openTensions: [MemoryTension] {
+        tensions.filter { $0.status == .open }
+    }
+
     private var decisionAtoms: [MemoryAtom] {
         atoms.filter { [.proposal, .rejection, .reason, .currentPosition, .decision].contains($0.type) }
     }
@@ -655,6 +792,10 @@ struct MemoryGraphInspector: View {
 
     private var unverifiedObservations: [MemoryObservation] {
         observations.filter { $0.rawText.hasPrefix("unverified_decision_chain|") }
+    }
+
+    private func tensions(for atom: MemoryAtom) -> [MemoryTension] {
+        tensions.filter { $0.existingAtomId == atom.id || $0.challengerAtomId == atom.id }
     }
 
     private var decisionChains: [GraphDecisionChain] {
@@ -723,6 +864,7 @@ struct MemoryGraphInspector: View {
             atoms = try nodeStore.fetchMemoryAtoms()
             edges = try nodeStore.fetchMemoryEdges()
             observations = try nodeStore.fetchMemoryObservations()
+            tensions = try nodeStore.fetchMemoryTensions()
             recallEvents = try nodeStore.fetchMemoryRecallEvents(limit: 20)
             atomReviewPlan = try MemoryCuratorReviewService(nodeStore: nodeStore).makeAtomPlan()
             nodeTitles = try nodeStore.fetchAllNodeTitles()
@@ -745,6 +887,18 @@ struct MemoryGraphInspector: View {
             loadError = "Failed to update memory atom: \(error.localizedDescription)"
         }
         actingAtomId = nil
+    }
+
+    private func mutateTension(_ tensionId: UUID, action: () throws -> Void) {
+        actingTensionId = tensionId
+        do {
+            try action()
+            loadError = nil
+            reload()
+        } catch {
+            loadError = "Failed to update memory tension: \(error.localizedDescription)"
+        }
+        actingTensionId = nil
     }
 
     private func mutateAtomAsync(_ atomId: UUID, action: @escaping () async throws -> Void) {
@@ -787,6 +941,12 @@ struct MemoryGraphInspector: View {
             return nil
         }
         return preview(message.content, maxChars: 220)
+    }
+
+    private func tensionAtomLabel(_ atomId: UUID?) -> String {
+        guard let atomId else { return "missing" }
+        guard let atom = atomById[atomId] else { return atomId.uuidString }
+        return "\(atom.type.rawValue.replacingOccurrences(of: "_", with: " ")): \(preview(atom.statement, maxChars: 140))"
     }
 
     private func chainField(_ title: String, _ value: String) -> some View {
@@ -906,6 +1066,15 @@ struct MemoryGraphInspector: View {
             return Color.yellow.opacity(0.16)
         case .archived, .superseded:
             return AppColor.subtleFill
+        }
+    }
+
+    private func tensionTint(_ tension: MemoryTension) -> Color {
+        switch tension.kind {
+        case .anchorConflict:
+            return Color.purple.opacity(0.12)
+        case .durableConflict:
+            return Color.red.opacity(0.12)
         }
     }
 

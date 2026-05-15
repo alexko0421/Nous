@@ -10,6 +10,7 @@ struct MemoryPromptPacket {
     var conversationMemory: String?
     var recentConversations: [(title: String, memory: String)]
     var projectGoal: String?
+    var derivedMemoryContext: DerivedMemoryPromptContext = .empty
 
     var coveredSourceNodeIds: Set<UUID> {
         Set(memoryEvidence.map(\.sourceNodeId))
@@ -84,6 +85,10 @@ struct MemoryPromptPacket {
 
         if let promptBlock = promptUserModelBlock {
             blocks.append("---\n\nDERIVED USER MODEL:\n\(promptBlock)")
+        }
+
+        if let derivedBlock = derivedMemoryContext.promptBlock {
+            blocks.append("---\n\n\(derivedBlock)")
         }
 
         if let projectGoal, !projectGoal.isEmpty {
@@ -216,6 +221,14 @@ enum PromptContextAssembler {
     Do not present diagnoses or identity labels as certainty.
     """
 
+    private static let memoryAuthorityPolicy = """
+    ---
+
+    MEMORY AUTHORITY POLICY:
+    Durable memory is current long-term memory. Tentative memory is useful provisional signal: you may use it, but speak with uncertainty and preserve source wording.
+    Conflicted memory is tension evidence, not current truth. Derived scenes and inferred self-models summarize patterns; they never replace anchor.md or Alex's explicit corrections.
+    """
+
     private static let coreSafetyPolicy = """
     ---
 
@@ -313,6 +326,7 @@ enum PromptContextAssembler {
         return [
             anchor,
             memoryInterpretationPolicy,
+            memoryAuthorityPolicy,
             coreSafetyPolicy,
             userAddressPolicy,
             visibleResponseLanguagePolicy,
@@ -989,6 +1003,7 @@ enum PromptContextAssembler {
         shadowLearningHints: [String] = [],
         slowCognitionArtifacts: [CognitionArtifact] = [],
         corpusContext: CitableContext = .empty,
+        derivedMemoryContext: DerivedMemoryPromptContext = .empty,
         now: Date = Date()
     ) -> TurnSystemSlice {
         var anchorAndPolicies: [String] = []
@@ -1008,6 +1023,7 @@ enum PromptContextAssembler {
         anchorAndPolicies.append(anchor)
         #endif
         anchorAndPolicies.append(memoryInterpretationPolicy)
+        anchorAndPolicies.append(memoryAuthorityPolicy)
         anchorAndPolicies.append(coreSafetyPolicy)
         anchorAndPolicies.append(userAddressPolicy)
         anchorAndPolicies.append(visibleResponseLanguagePolicy)
@@ -1039,7 +1055,8 @@ enum PromptContextAssembler {
             projectMemory: projectMemory,
             conversationMemory: conversationMemory,
             recentConversations: recentConversations,
-            projectGoal: projectGoal
+            projectGoal: projectGoal,
+            derivedMemoryContext: derivedMemoryContext
         )
         let promptCitations = memoryPacket.filteredCitations(citations)
         slowMemory.append(contentsOf: memoryPacket.stableBlocks)
@@ -1572,6 +1589,7 @@ User: "我中意又软又硬嘅人，反差先系 depth"
         projectGoal: String?,
         currentUserInput: String? = nil,
         slowCognitionArtifacts: [CognitionArtifact] = [],
+        derivedMemoryContext: DerivedMemoryPromptContext = .empty,
         memoryProvenance: [String: ContextManifestMemoryProvenance] = [:]
     ) -> PromptContextResourceIds {
         let memoryPacket = MemoryPromptPacket(
@@ -1583,7 +1601,8 @@ User: "我中意又软又硬嘅人，反差先系 depth"
             projectMemory: projectMemory,
             conversationMemory: conversationMemory,
             recentConversations: recentConversations,
-            projectGoal: projectGoal
+            projectGoal: projectGoal,
+            derivedMemoryContext: derivedMemoryContext
         )
 
         return PromptContextResourceIds(
@@ -1786,6 +1805,7 @@ User: "我中意又软又硬嘅人，反差先系 depth"
         shadowLearningHints: [String] = [],
         slowCognitionArtifacts: [CognitionArtifact] = [],
         corpusContext: CitableContext = .empty,
+        derivedMemoryContext: DerivedMemoryPromptContext = .empty,
         now: Date = Date()
     ) -> PromptGovernanceTrace {
         governanceTrace(
@@ -1815,6 +1835,7 @@ User: "我中意又软又硬嘅人，反差先系 depth"
             shadowLearningHints: shadowLearningHints,
             slowCognitionArtifacts: slowCognitionArtifacts,
             corpusContext: corpusContext,
+            derivedMemoryContext: derivedMemoryContext,
             now: now
         )
     }
@@ -1846,9 +1867,10 @@ User: "我中意又软又硬嘅人，反差先系 depth"
         shadowLearningHints: [String] = [],
         slowCognitionArtifacts: [CognitionArtifact] = [],
         corpusContext: CitableContext = .empty,
+        derivedMemoryContext: DerivedMemoryPromptContext = .empty,
         now: Date = Date()
     ) -> PromptGovernanceTrace {
-        var layers = ["anchor", "memory_interpretation_policy", "core_safety_policy", "user_address_policy", "visible_response_language_policy", "epistemic_grounding_policy", "explanation_clarity_policy", "answer_closure_policy", "enumerable_list_format_policy", "stoic_grounding_policy", "real_world_decision_policy", "summary_output_policy", "conversation_title_output_policy", "chat_mode"]
+        var layers = ["anchor", "memory_interpretation_policy", "memory_authority_policy", "core_safety_policy", "user_address_policy", "visible_response_language_policy", "epistemic_grounding_policy", "explanation_clarity_policy", "answer_closure_policy", "enumerable_list_format_policy", "stoic_grounding_policy", "real_world_decision_policy", "summary_output_policy", "conversation_title_output_policy", "chat_mode"]
         let highRiskQueryDetected = SafetyGuardrails.isHighRiskQuery(currentUserInput)
         let visibleLanguageDecision: VisibleResponseLanguageDecision = {
             if let override = visibleLanguageTargetOverride {
@@ -1867,7 +1889,8 @@ User: "我中意又软又硬嘅人，反差先系 depth"
             projectMemory: projectMemory,
             conversationMemory: conversationMemory,
             recentConversations: recentConversations,
-            projectGoal: projectGoal
+            projectGoal: projectGoal,
+            derivedMemoryContext: derivedMemoryContext
         )
         let promptCitations = memoryPacket.filteredCitations(citations)
         let promptMemoryEvidence = memoryPacket.promptMemoryEvidence
@@ -1882,6 +1905,7 @@ User: "我中意又软又硬嘅人，反差先系 depth"
         if !promptMemoryEvidence.isEmpty { layers.append("memory_evidence") }
         if !memoryGraphRecall.isEmpty, activeQuickActionMode != nil { layers.append("memory_graph_recall") }
         if memoryPacket.promptUserModelBlock != nil { layers.append("user_model") }
+        if !derivedMemoryContext.isEmpty { layers.append("derived_memory_context") }
         if let projectGoal, !projectGoal.isEmpty { layers.append("project_goal") }
         if !promptRecentConversations.isEmpty { layers.append("recent_conversations") }
         if !sourceMaterials.isEmpty { layers.append("source_material") }

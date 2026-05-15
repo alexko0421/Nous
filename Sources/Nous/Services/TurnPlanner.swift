@@ -329,6 +329,7 @@ final class TurnPlanner {
             shadowLearningHints: shadowLearningHints,
             slowCognitionArtifacts: slowCognitionArtifacts,
             corpusContext: memoryContext.corpusContext,
+            derivedMemoryContext: memoryContext.derivedMemoryContext,
             now: request.now
         )
         let promptResourceIds = PromptContextAssembler.promptResourceIds(
@@ -345,6 +346,7 @@ final class TurnPlanner {
             projectGoal: projectGoal,
             currentUserInput: promptQuery,
             slowCognitionArtifacts: slowCognitionArtifacts,
+            derivedMemoryContext: memoryContext.derivedMemoryContext,
             memoryProvenance: memoryContext.memoryProvenance
         )
             let promptTrace = PromptContextAssembler.governanceTrace(
@@ -373,6 +375,7 @@ final class TurnPlanner {
             shadowLearningHints: shadowLearningHints,
             slowCognitionArtifacts: slowCognitionArtifacts,
             corpusContext: memoryContext.corpusContext,
+            derivedMemoryContext: memoryContext.derivedMemoryContext,
             now: request.now
         )
 

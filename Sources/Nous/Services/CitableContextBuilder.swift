@@ -203,7 +203,8 @@ final class CitableContextBuilder {
             eventTime: atom.eventTime,
             sourceNodeId: atom.sourceNodeId,
             atomType: atom.type,
-            recordedAt: atom.updatedAt
+            recordedAt: atom.updatedAt,
+            authority: atom.authority
         )
     }
 
@@ -231,6 +232,7 @@ final class CitableContextBuilder {
         let referenceTime = atom.eventTime ?? atom.updatedAt
         return atom.confidence
             * atomTypeWeight(atom.type)
+            * authorityWeight(atom.authority)
             * recencyFactor(referenceTime, now: now)
     }
 
@@ -255,6 +257,15 @@ final class CitableContextBuilder {
         case .currentPosition: return 0.8
         case .reason, .rejection: return 0.75
         case .identity, .entity: return 0.7
+        }
+    }
+
+    private static func authorityWeight(_ authority: MemoryAuthority) -> Double {
+        switch authority {
+        case .durable:
+            return 1.0
+        case .tentative:
+            return 0.72
         }
     }
 

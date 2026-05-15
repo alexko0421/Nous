@@ -16,6 +16,7 @@ struct TurnMemoryContext {
     let contradictionCandidateIds: Set<String>
     let citablePool: [CitableEntry]
     let memoryProvenance: [String: ContextManifestMemoryProvenance]
+    let derivedMemoryContext: DerivedMemoryPromptContext
     /// Block 4a side-by-side: built every turn but NOT yet injected into the
     /// prompt. Available for tests and telemetry. Block 4a inject-half wires
     /// it into PromptContextAssembler; Block 4b makes cards primary.
@@ -168,6 +169,9 @@ final class TurnMemoryContextBuilder {
             memoryGraphRecall: memoryGraphRecall,
             citablePool: citablePool
         )
+        let derivedMemoryContext = policy.includeSlowCognition
+            ? try buildDerivedMemoryContext(for: node)
+            : .empty
 
         let shouldBuildCorpusContext = policy.includeMemoryEvidence
             || policy.includeCitations
@@ -204,6 +208,7 @@ final class TurnMemoryContextBuilder {
             contradictionCandidateIds: contradictionCandidateIds,
             citablePool: citablePool,
             memoryProvenance: memoryProvenance,
+            derivedMemoryContext: derivedMemoryContext,
             corpusContext: corpusContext,
             resolvedCorpusEntries: resolvedCorpusEntries
         )
@@ -235,6 +240,41 @@ final class TurnMemoryContextBuilder {
                 node: entry.sourceNodeId.flatMap { lookup[$0] }
             )
         }
+    }
+
+    private func buildDerivedMemoryContext(for node: NousNode) throws -> DerivedMemoryPromptContext {
+        var sceneItems: [DerivedMemorySceneContext] = []
+
+        let globalScenes = try nodeStore.fetchMemoryScenes(scope: .global, scopeRefId: nil).prefix(2)
+        for scene in globalScenes {
+            sceneItems.append(DerivedMemorySceneContext(
+                scene: scene,
+                sourceAtomIds: try nodeStore.fetchAtomIdsForMemoryScene(scene.id)
+            ))
+        }
+
+        if let projectId = node.projectId {
+            let projectScenes = try nodeStore.fetchMemoryScenes(scope: .project, scopeRefId: projectId).prefix(2)
+            for scene in projectScenes {
+                sceneItems.append(DerivedMemorySceneContext(
+                    scene: scene,
+                    sourceAtomIds: try nodeStore.fetchAtomIdsForMemoryScene(scene.id)
+                ))
+            }
+        }
+
+        let selfModel: LivingSelfModel?
+        if let projectId = node.projectId {
+            selfModel = try nodeStore.fetchCurrentLivingSelfModel(scope: .project, scopeRefId: projectId)
+                ?? nodeStore.fetchCurrentLivingSelfModel(scope: .global, scopeRefId: nil)
+        } else {
+            selfModel = try nodeStore.fetchCurrentLivingSelfModel(scope: .global, scopeRefId: nil)
+        }
+
+        return DerivedMemoryPromptContext(
+            scenes: Array(sceneItems.prefix(3)),
+            selfModel: selfModel
+        )
     }
 
     static func citationExclusionIds(

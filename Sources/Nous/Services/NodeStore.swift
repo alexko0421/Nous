@@ -417,6 +417,7 @@ final class NodeStore {
                 scope             TEXT NOT NULL,
                 scope_ref_id      TEXT,
                 status            TEXT NOT NULL DEFAULT 'active',
+                authority         TEXT NOT NULL DEFAULT 'durable',
                 confidence        REAL NOT NULL DEFAULT 0.7,
                 event_time        REAL,
                 valid_from        REAL,
@@ -435,6 +436,11 @@ final class NodeStore {
             table: "memory_atoms",
             column: "corrects_target",
             alterSQL: "ALTER TABLE memory_atoms ADD COLUMN corrects_target TEXT;"
+        )
+        try ensureColumnExists(
+            table: "memory_atoms",
+            column: "authority",
+            alterSQL: "ALTER TABLE memory_atoms ADD COLUMN authority TEXT NOT NULL DEFAULT 'durable';"
         )
 
         try db.exec("""
@@ -471,6 +477,54 @@ final class NodeStore {
                 retrieved_atom_ids TEXT NOT NULL DEFAULT '[]',
                 answer_summary     TEXT,
                 created_at         REAL NOT NULL
+            );
+        """)
+
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS memory_tensions (
+                id                  TEXT PRIMARY KEY,
+                kind                TEXT NOT NULL,
+                status              TEXT NOT NULL DEFAULT 'open',
+                existing_atom_id    TEXT REFERENCES memory_atoms(id) ON DELETE SET NULL,
+                challenger_atom_id  TEXT REFERENCES memory_atoms(id) ON DELETE SET NULL,
+                summary             TEXT NOT NULL,
+                created_at          REAL NOT NULL,
+                resolved_at         REAL
+            );
+        """)
+
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS memory_scenes (
+                id             TEXT PRIMARY KEY,
+                scope          TEXT NOT NULL,
+                scope_ref_id   TEXT,
+                title          TEXT NOT NULL,
+                summary        TEXT NOT NULL,
+                status         TEXT NOT NULL DEFAULT 'active',
+                authority      TEXT NOT NULL DEFAULT 'tentative',
+                created_at     REAL NOT NULL,
+                updated_at     REAL NOT NULL
+            );
+        """)
+
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS memory_scene_atoms (
+                scene_id TEXT NOT NULL REFERENCES memory_scenes(id) ON DELETE CASCADE,
+                atom_id  TEXT NOT NULL REFERENCES memory_atoms(id) ON DELETE CASCADE,
+                PRIMARY KEY (scene_id, atom_id)
+            );
+        """)
+
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS memory_self_models (
+                id               TEXT PRIMARY KEY,
+                scope            TEXT NOT NULL,
+                scope_ref_id     TEXT,
+                summary          TEXT NOT NULL,
+                authority        TEXT NOT NULL DEFAULT 'tentative',
+                source_scene_ids TEXT NOT NULL DEFAULT '[]',
+                created_at       REAL NOT NULL,
+                updated_at       REAL NOT NULL
             );
         """)
 
@@ -725,10 +779,14 @@ final class NodeStore {
         try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_atoms_scope_key ON memory_atoms(scope, scope_ref_id, normalized_key);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_atoms_source_node ON memory_atoms(source_node_id);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_atoms_source_message ON memory_atoms(source_message_id);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_atoms_authority ON memory_atoms(authority);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_edges_from_type ON memory_edges(from_atom_id, type);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_edges_to_type ON memory_edges(to_atom_id, type);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_observations_source_message ON memory_observations(source_message_id);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_recall_events_created_at ON memory_recall_events(created_at);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_tensions_status ON memory_tensions(status);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_scenes_scope ON memory_scenes(scope, scope_ref_id, status);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_self_models_scope ON memory_self_models(scope, scope_ref_id, updated_at);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_judge_events_ts ON judge_events(ts);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_judge_events_fallback ON judge_events(fallbackReason);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_reflection_runs_project_week ON reflection_runs(project_id, week_end);")
@@ -2292,10 +2350,10 @@ final class NodeStore {
         let stmt = try db.prepare("""
             INSERT INTO memory_atoms
               (id, type, statement, normalized_key, scope, scope_ref_id, status,
-               confidence, event_time, valid_from, valid_until, created_at,
+               authority, confidence, event_time, valid_from, valid_until, created_at,
                updated_at, last_seen_at, source_node_id, source_message_id,
                corrects_target, embedding)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """)
         try stmt.bind(atom.id.uuidString, at: 1)
         try stmt.bind(atom.type.rawValue, at: 2)
@@ -2304,18 +2362,19 @@ final class NodeStore {
         try stmt.bind(atom.scope.rawValue, at: 5)
         try stmt.bind(atom.scopeRefId?.uuidString, at: 6)
         try stmt.bind(atom.status.rawValue, at: 7)
-        try stmt.bind(atom.confidence, at: 8)
-        try stmt.bind(atom.eventTime?.timeIntervalSince1970, at: 9)
-        try stmt.bind(atom.validFrom?.timeIntervalSince1970, at: 10)
-        try stmt.bind(atom.validUntil?.timeIntervalSince1970, at: 11)
-        try stmt.bind(atom.createdAt.timeIntervalSince1970, at: 12)
-        try stmt.bind(atom.updatedAt.timeIntervalSince1970, at: 13)
-        try stmt.bind(atom.lastSeenAt?.timeIntervalSince1970, at: 14)
-        try stmt.bind(atom.sourceNodeId?.uuidString, at: 15)
-        try stmt.bind(atom.sourceMessageId?.uuidString, at: 16)
-        try stmt.bind(atom.correctsTarget, at: 17)
+        try stmt.bind(atom.authority.rawValue, at: 8)
+        try stmt.bind(atom.confidence, at: 9)
+        try stmt.bind(atom.eventTime?.timeIntervalSince1970, at: 10)
+        try stmt.bind(atom.validFrom?.timeIntervalSince1970, at: 11)
+        try stmt.bind(atom.validUntil?.timeIntervalSince1970, at: 12)
+        try stmt.bind(atom.createdAt.timeIntervalSince1970, at: 13)
+        try stmt.bind(atom.updatedAt.timeIntervalSince1970, at: 14)
+        try stmt.bind(atom.lastSeenAt?.timeIntervalSince1970, at: 15)
+        try stmt.bind(atom.sourceNodeId?.uuidString, at: 16)
+        try stmt.bind(atom.sourceMessageId?.uuidString, at: 17)
+        try stmt.bind(atom.correctsTarget, at: 18)
         let embeddingData = atom.embedding.map { encodeFloats($0) }
-        try stmt.bind(embeddingData, at: 18)
+        try stmt.bind(embeddingData, at: 19)
         try stmt.step()
     }
 
@@ -2328,7 +2387,7 @@ final class NodeStore {
         let stmt = try db.prepare("""
             UPDATE memory_atoms
             SET type = ?, statement = ?, normalized_key = ?, scope = ?, scope_ref_id = ?,
-                status = ?, confidence = ?, event_time = ?, valid_from = ?,
+                status = ?, authority = ?, confidence = ?, event_time = ?, valid_from = ?,
                 valid_until = ?, updated_at = ?, last_seen_at = ?, source_node_id = ?,
                 source_message_id = ?, corrects_target = ?, embedding = ?
             WHERE id = ?;
@@ -2339,25 +2398,26 @@ final class NodeStore {
         try stmt.bind(atom.scope.rawValue, at: 4)
         try stmt.bind(atom.scopeRefId?.uuidString, at: 5)
         try stmt.bind(atom.status.rawValue, at: 6)
-        try stmt.bind(atom.confidence, at: 7)
-        try stmt.bind(atom.eventTime?.timeIntervalSince1970, at: 8)
-        try stmt.bind(atom.validFrom?.timeIntervalSince1970, at: 9)
-        try stmt.bind(atom.validUntil?.timeIntervalSince1970, at: 10)
-        try stmt.bind(atom.updatedAt.timeIntervalSince1970, at: 11)
-        try stmt.bind(atom.lastSeenAt?.timeIntervalSince1970, at: 12)
-        try stmt.bind(atom.sourceNodeId?.uuidString, at: 13)
-        try stmt.bind(atom.sourceMessageId?.uuidString, at: 14)
-        try stmt.bind(atom.correctsTarget, at: 15)
+        try stmt.bind(atom.authority.rawValue, at: 7)
+        try stmt.bind(atom.confidence, at: 8)
+        try stmt.bind(atom.eventTime?.timeIntervalSince1970, at: 9)
+        try stmt.bind(atom.validFrom?.timeIntervalSince1970, at: 10)
+        try stmt.bind(atom.validUntil?.timeIntervalSince1970, at: 11)
+        try stmt.bind(atom.updatedAt.timeIntervalSince1970, at: 12)
+        try stmt.bind(atom.lastSeenAt?.timeIntervalSince1970, at: 13)
+        try stmt.bind(atom.sourceNodeId?.uuidString, at: 14)
+        try stmt.bind(atom.sourceMessageId?.uuidString, at: 15)
+        try stmt.bind(atom.correctsTarget, at: 16)
         let embeddingData = atom.embedding.map { encodeFloats($0) }
-        try stmt.bind(embeddingData, at: 16)
-        try stmt.bind(atom.id.uuidString, at: 17)
+        try stmt.bind(embeddingData, at: 17)
+        try stmt.bind(atom.id.uuidString, at: 18)
         try stmt.step()
     }
 
     func fetchMemoryAtom(id: UUID) throws -> MemoryAtom? {
         let stmt = try db.prepare("""
             SELECT id, type, statement, normalized_key, scope, scope_ref_id, status,
-                   confidence, event_time, valid_from, valid_until, created_at,
+                   authority, confidence, event_time, valid_from, valid_until, created_at,
                    updated_at, last_seen_at, source_node_id, source_message_id,
                    corrects_target, embedding
             FROM memory_atoms
@@ -2372,7 +2432,7 @@ final class NodeStore {
     func fetchMemoryAtoms() throws -> [MemoryAtom] {
         let stmt = try db.prepare("""
             SELECT id, type, statement, normalized_key, scope, scope_ref_id, status,
-                   confidence, event_time, valid_from, valid_until, created_at,
+                   authority, confidence, event_time, valid_from, valid_until, created_at,
                    updated_at, last_seen_at, source_node_id, source_message_id,
                    corrects_target, embedding
             FROM memory_atoms
@@ -2440,7 +2500,7 @@ final class NodeStore {
         let limitSQL = limit.map { "LIMIT \($0)\n" } ?? ""
         let sql = """
             SELECT id, type, statement, normalized_key, scope, scope_ref_id, status,
-                   confidence, event_time, valid_from, valid_until, created_at,
+                   authority, confidence, event_time, valid_from, valid_until, created_at,
                    updated_at, last_seen_at, source_node_id, source_message_id,
                    corrects_target, embedding
             FROM memory_atoms
@@ -2495,7 +2555,7 @@ final class NodeStore {
 
         let stmt = try db.prepare("""
             SELECT id, type, statement, normalized_key, scope, scope_ref_id, status,
-                   confidence, event_time, valid_from, valid_until, created_at,
+                   authority, confidence, event_time, valid_from, valid_until, created_at,
                    updated_at, last_seen_at, source_node_id, source_message_id,
                    corrects_target, embedding
             FROM memory_atoms
@@ -2546,7 +2606,7 @@ final class NodeStore {
         let placeholders = Array(repeating: "?", count: uniqueIds.count).joined(separator: ", ")
         let stmt = try db.prepare("""
             SELECT id, type, statement, normalized_key, scope, scope_ref_id, status,
-                   confidence, event_time, valid_from, valid_until, created_at,
+                   authority, confidence, event_time, valid_from, valid_until, created_at,
                    updated_at, last_seen_at, source_node_id, source_message_id,
                    corrects_target, embedding
             FROM memory_atoms
@@ -2711,6 +2771,261 @@ final class NodeStore {
         return results
     }
 
+    func insertMemoryTension(_ tension: MemoryTension) throws {
+        let stmt = try db.prepare("""
+            INSERT INTO memory_tensions
+              (id, kind, status, existing_atom_id, challenger_atom_id, summary, created_at, resolved_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+        """)
+        try stmt.bind(tension.id.uuidString, at: 1)
+        try stmt.bind(tension.kind.rawValue, at: 2)
+        try stmt.bind(tension.status.rawValue, at: 3)
+        try stmt.bind(tension.existingAtomId?.uuidString, at: 4)
+        try stmt.bind(tension.challengerAtomId?.uuidString, at: 5)
+        try stmt.bind(tension.summary, at: 6)
+        try stmt.bind(tension.createdAt.timeIntervalSince1970, at: 7)
+        try stmt.bind(tension.resolvedAt?.timeIntervalSince1970, at: 8)
+        try stmt.step()
+    }
+
+    func fetchMemoryTensions(statuses: Set<MemoryTensionStatus> = []) throws -> [MemoryTension] {
+        let whereSQL: String
+        if statuses.isEmpty {
+            whereSQL = ""
+        } else {
+            whereSQL = "WHERE status IN (\(Array(repeating: "?", count: statuses.count).joined(separator: ", ")))"
+        }
+        let stmt = try db.prepare("""
+            SELECT id, kind, status, existing_atom_id, challenger_atom_id, summary, created_at, resolved_at
+            FROM memory_tensions
+            \(whereSQL)
+            ORDER BY created_at DESC;
+        """)
+        var index: Int32 = 1
+        for status in statuses {
+            try stmt.bind(status.rawValue, at: index)
+            index += 1
+        }
+        var results: [MemoryTension] = []
+        while try stmt.step() {
+            if let tension = memoryTensionFrom(stmt) { results.append(tension) }
+        }
+        return results
+    }
+
+    func updateMemoryTension(_ tension: MemoryTension) throws {
+        let stmt = try db.prepare("""
+            UPDATE memory_tensions
+            SET kind = ?, status = ?, existing_atom_id = ?, challenger_atom_id = ?,
+                summary = ?, created_at = ?, resolved_at = ?
+            WHERE id = ?;
+        """)
+        try stmt.bind(tension.kind.rawValue, at: 1)
+        try stmt.bind(tension.status.rawValue, at: 2)
+        try stmt.bind(tension.existingAtomId?.uuidString, at: 3)
+        try stmt.bind(tension.challengerAtomId?.uuidString, at: 4)
+        try stmt.bind(tension.summary, at: 5)
+        try stmt.bind(tension.createdAt.timeIntervalSince1970, at: 6)
+        try stmt.bind(tension.resolvedAt?.timeIntervalSince1970, at: 7)
+        try stmt.bind(tension.id.uuidString, at: 8)
+        try stmt.step()
+    }
+
+    func upsertMemoryScene(_ scene: MemoryScene, sourceAtomIds: [UUID]) throws {
+        let stmt = try db.prepare("""
+            INSERT INTO memory_scenes
+              (id, scope, scope_ref_id, title, summary, status, authority, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              title = excluded.title,
+              summary = excluded.summary,
+              status = excluded.status,
+              authority = excluded.authority,
+              updated_at = excluded.updated_at;
+        """)
+        try stmt.bind(scene.id.uuidString, at: 1)
+        try stmt.bind(scene.scope.rawValue, at: 2)
+        try stmt.bind(scene.scopeRefId?.uuidString, at: 3)
+        try stmt.bind(scene.title, at: 4)
+        try stmt.bind(scene.summary, at: 5)
+        try stmt.bind(scene.status.rawValue, at: 6)
+        try stmt.bind(scene.authority.rawValue, at: 7)
+        try stmt.bind(scene.createdAt.timeIntervalSince1970, at: 8)
+        try stmt.bind(scene.updatedAt.timeIntervalSince1970, at: 9)
+        try stmt.step()
+
+        let delete = try db.prepare("DELETE FROM memory_scene_atoms WHERE scene_id = ?;")
+        try delete.bind(scene.id.uuidString, at: 1)
+        try delete.step()
+
+        for atomId in sourceAtomIds {
+            let link = try db.prepare("""
+                INSERT OR IGNORE INTO memory_scene_atoms (scene_id, atom_id)
+                VALUES (?, ?);
+            """)
+            try link.bind(scene.id.uuidString, at: 1)
+            try link.bind(atomId.uuidString, at: 2)
+            try link.step()
+        }
+    }
+
+    func fetchMemoryScenes(scope: MemoryScope, scopeRefId: UUID?) throws -> [MemoryScene] {
+        let stmt: Statement
+        if let scopeRefId {
+            stmt = try db.prepare("""
+                SELECT id, scope, scope_ref_id, title, summary, status, authority, created_at, updated_at
+                FROM memory_scenes
+                WHERE scope = ? AND scope_ref_id = ? AND status = 'active'
+                ORDER BY updated_at DESC;
+            """)
+            try stmt.bind(scope.rawValue, at: 1)
+            try stmt.bind(scopeRefId.uuidString, at: 2)
+        } else {
+            stmt = try db.prepare("""
+                SELECT id, scope, scope_ref_id, title, summary, status, authority, created_at, updated_at
+                FROM memory_scenes
+                WHERE scope = ? AND scope_ref_id IS NULL AND status = 'active'
+                ORDER BY updated_at DESC;
+            """)
+            try stmt.bind(scope.rawValue, at: 1)
+        }
+        var results: [MemoryScene] = []
+        while try stmt.step() {
+            if let scene = memorySceneFrom(stmt) { results.append(scene) }
+        }
+        return results
+    }
+
+    func fetchAtomIdsForMemoryScene(_ sceneId: UUID) throws -> [UUID] {
+        let stmt = try db.prepare("""
+            SELECT atom_id
+            FROM memory_scene_atoms
+            WHERE scene_id = ?
+            ORDER BY atom_id;
+        """)
+        try stmt.bind(sceneId.uuidString, at: 1)
+        var ids: [UUID] = []
+        while try stmt.step() {
+            if let id = stmt.text(at: 0).flatMap({ UUID(uuidString: $0) }) {
+                ids.append(id)
+            }
+        }
+        return ids
+    }
+
+    func upsertLivingSelfModel(_ model: LivingSelfModel) throws {
+        let stmt = try db.prepare("""
+            INSERT INTO memory_self_models
+              (id, scope, scope_ref_id, summary, authority, source_scene_ids, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              summary = excluded.summary,
+              authority = excluded.authority,
+              source_scene_ids = excluded.source_scene_ids,
+              updated_at = excluded.updated_at;
+        """)
+        try stmt.bind(model.id.uuidString, at: 1)
+        try stmt.bind(model.scope.rawValue, at: 2)
+        try stmt.bind(model.scopeRefId?.uuidString, at: 3)
+        try stmt.bind(model.summary, at: 4)
+        try stmt.bind(model.authority.rawValue, at: 5)
+        try stmt.bind(encodeSourceNodeIds(model.sourceSceneIds), at: 6)
+        try stmt.bind(model.createdAt.timeIntervalSince1970, at: 7)
+        try stmt.bind(model.updatedAt.timeIntervalSince1970, at: 8)
+        try stmt.step()
+    }
+
+    func fetchCurrentLivingSelfModel(scope: MemoryScope, scopeRefId: UUID?) throws -> LivingSelfModel? {
+        let stmt: Statement
+        if let scopeRefId {
+            stmt = try db.prepare("""
+                SELECT id, scope, scope_ref_id, summary, authority, source_scene_ids, created_at, updated_at
+                FROM memory_self_models
+                WHERE scope = ? AND scope_ref_id = ?
+                ORDER BY updated_at DESC
+                LIMIT 1;
+            """)
+            try stmt.bind(scope.rawValue, at: 1)
+            try stmt.bind(scopeRefId.uuidString, at: 2)
+        } else {
+            stmt = try db.prepare("""
+                SELECT id, scope, scope_ref_id, summary, authority, source_scene_ids, created_at, updated_at
+                FROM memory_self_models
+                WHERE scope = ? AND scope_ref_id IS NULL
+                ORDER BY updated_at DESC
+                LIMIT 1;
+            """)
+            try stmt.bind(scope.rawValue, at: 1)
+        }
+        guard try stmt.step() else { return nil }
+        return livingSelfModelFrom(stmt)
+    }
+
+    private func memoryTensionFrom(_ stmt: Statement) -> MemoryTension? {
+        guard let idText = stmt.text(at: 0), let id = UUID(uuidString: idText) else { return nil }
+        guard let kindText = stmt.text(at: 1), let kind = MemoryTensionKind(rawValue: kindText) else { return nil }
+        guard let statusText = stmt.text(at: 2), let status = MemoryTensionStatus(rawValue: statusText) else { return nil }
+        let existingAtomId = stmt.text(at: 3).flatMap { UUID(uuidString: $0) }
+        let challengerAtomId = stmt.text(at: 4).flatMap { UUID(uuidString: $0) }
+        let summary = stmt.text(at: 5) ?? ""
+        let createdAt = Date(timeIntervalSince1970: stmt.double(at: 6))
+        let resolvedAt = stmt.isNull(at: 7) ? nil : Date(timeIntervalSince1970: stmt.double(at: 7))
+        return MemoryTension(
+            id: id,
+            kind: kind,
+            status: status,
+            existingAtomId: existingAtomId,
+            challengerAtomId: challengerAtomId,
+            summary: summary,
+            createdAt: createdAt,
+            resolvedAt: resolvedAt
+        )
+    }
+
+    private func memorySceneFrom(_ stmt: Statement) -> MemoryScene? {
+        guard let idText = stmt.text(at: 0), let id = UUID(uuidString: idText) else { return nil }
+        guard let scopeText = stmt.text(at: 1), let scope = MemoryScope(rawValue: scopeText) else { return nil }
+        let scopeRefId = stmt.text(at: 2).flatMap { UUID(uuidString: $0) }
+        let title = stmt.text(at: 3) ?? ""
+        let summary = stmt.text(at: 4) ?? ""
+        guard let statusText = stmt.text(at: 5), let status = MemoryStatus(rawValue: statusText) else { return nil }
+        let authority = stmt.text(at: 6).flatMap { MemoryAuthority(rawValue: $0) } ?? .tentative
+        let createdAt = Date(timeIntervalSince1970: stmt.double(at: 7))
+        let updatedAt = Date(timeIntervalSince1970: stmt.double(at: 8))
+        return MemoryScene(
+            id: id,
+            scope: scope,
+            scopeRefId: scopeRefId,
+            title: title,
+            summary: summary,
+            status: status,
+            authority: authority,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+    }
+
+    private func livingSelfModelFrom(_ stmt: Statement) -> LivingSelfModel? {
+        guard let idText = stmt.text(at: 0), let id = UUID(uuidString: idText) else { return nil }
+        guard let scopeText = stmt.text(at: 1), let scope = MemoryScope(rawValue: scopeText) else { return nil }
+        let scopeRefId = stmt.text(at: 2).flatMap { UUID(uuidString: $0) }
+        let summary = stmt.text(at: 3) ?? ""
+        let authority = stmt.text(at: 4).flatMap { MemoryAuthority(rawValue: $0) } ?? .tentative
+        let sourceSceneIds = decodeSourceNodeIds(stmt.text(at: 5) ?? "[]")
+        let createdAt = Date(timeIntervalSince1970: stmt.double(at: 6))
+        let updatedAt = Date(timeIntervalSince1970: stmt.double(at: 7))
+        return LivingSelfModel(
+            id: id,
+            scope: scope,
+            scopeRefId: scopeRefId,
+            summary: summary,
+            authority: authority,
+            sourceSceneIds: sourceSceneIds,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+    }
+
     private func memoryAtomFrom(_ stmt: Statement) -> MemoryAtom? {
         guard let idText = stmt.text(at: 0), let id = UUID(uuidString: idText) else { return nil }
         guard let typeText = stmt.text(at: 1), let type = MemoryAtomType(rawValue: typeText) else { return nil }
@@ -2719,17 +3034,18 @@ final class NodeStore {
         guard let scopeText = stmt.text(at: 4), let scope = MemoryScope(rawValue: scopeText) else { return nil }
         let scopeRefId = stmt.text(at: 5).flatMap { UUID(uuidString: $0) }
         guard let statusText = stmt.text(at: 6), let status = MemoryStatus(rawValue: statusText) else { return nil }
-        let confidence = stmt.double(at: 7)
-        let eventTime = stmt.isNull(at: 8) ? nil : Date(timeIntervalSince1970: stmt.double(at: 8))
-        let validFrom = stmt.isNull(at: 9) ? nil : Date(timeIntervalSince1970: stmt.double(at: 9))
-        let validUntil = stmt.isNull(at: 10) ? nil : Date(timeIntervalSince1970: stmt.double(at: 10))
-        let createdAt = Date(timeIntervalSince1970: stmt.double(at: 11))
-        let updatedAt = Date(timeIntervalSince1970: stmt.double(at: 12))
-        let lastSeenAt = stmt.isNull(at: 13) ? nil : Date(timeIntervalSince1970: stmt.double(at: 13))
-        let sourceNodeId = stmt.text(at: 14).flatMap { UUID(uuidString: $0) }
-        let sourceMessageId = stmt.text(at: 15).flatMap { UUID(uuidString: $0) }
-        let correctsTarget = stmt.text(at: 16)
-        let embedding = stmt.blob(at: 17).map { decodeFloats($0) }
+        let authority = stmt.text(at: 7).flatMap { MemoryAuthority(rawValue: $0) } ?? .durable
+        let confidence = stmt.double(at: 8)
+        let eventTime = stmt.isNull(at: 9) ? nil : Date(timeIntervalSince1970: stmt.double(at: 9))
+        let validFrom = stmt.isNull(at: 10) ? nil : Date(timeIntervalSince1970: stmt.double(at: 10))
+        let validUntil = stmt.isNull(at: 11) ? nil : Date(timeIntervalSince1970: stmt.double(at: 11))
+        let createdAt = Date(timeIntervalSince1970: stmt.double(at: 12))
+        let updatedAt = Date(timeIntervalSince1970: stmt.double(at: 13))
+        let lastSeenAt = stmt.isNull(at: 14) ? nil : Date(timeIntervalSince1970: stmt.double(at: 14))
+        let sourceNodeId = stmt.text(at: 15).flatMap { UUID(uuidString: $0) }
+        let sourceMessageId = stmt.text(at: 16).flatMap { UUID(uuidString: $0) }
+        let correctsTarget = stmt.text(at: 17)
+        let embedding = stmt.blob(at: 18).map { decodeFloats($0) }
         return MemoryAtom(
             id: id,
             type: type,
@@ -2738,6 +3054,7 @@ final class NodeStore {
             scope: scope,
             scopeRefId: scopeRefId,
             status: status,
+            authority: authority,
             confidence: confidence,
             eventTime: eventTime,
             validFrom: validFrom,

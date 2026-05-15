@@ -65,9 +65,11 @@ enum CorpusCardFormatter {
         let typeLabel = headerTypeLabel(entry)
         let dateLabel = headerDateLabel(entry)
         let confLabel = headerConfidenceLabel(entry)
+        let authorityLabel = headerAuthorityLabel(entry)
 
         var parts: [String] = []
         if let typeLabel { parts.append(typeLabel) }
+        if let authorityLabel { parts.append(authorityLabel) }
         if let dateLabel { parts.append(dateLabel) }
         if let confLabel { parts.append(confLabel) }
 
@@ -92,6 +94,11 @@ enum CorpusCardFormatter {
         let date = entry.eventTime ?? entry.recordedAt
         guard let date else { return nil }
         return Self.dateFormatter.string(from: date)
+    }
+
+    private static func headerAuthorityLabel(_ entry: CitableEntry) -> String? {
+        guard entry.authority == .tentative else { return nil }
+        return "tentative"
     }
 
     /// Confidence is suffix-only: dropped when ≥ 0.9 (treated as authoritative
