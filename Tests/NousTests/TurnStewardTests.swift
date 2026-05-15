@@ -210,6 +210,14 @@ final class TurnStewardTests: XCTestCase {
                 expected: .identityPressure
             ),
             PatternFixture(
+                input: "我英文又唔好，技术又唔识，去 Codex event 会觉得自己好蚀底同唔配。",
+                expected: .identityPressure
+            ),
+            PatternFixture(
+                input: "听到人哋去好学校，我就觉得自己系个差学生，好失败。",
+                expected: .identityPressure
+            ),
+            PatternFixture(
                 input: "Maybe before shipping this small slice I should redesign the whole architecture and write a full framework.",
                 expected: .planningAsAvoidance
             ),
@@ -219,7 +227,7 @@ final class TurnStewardTests: XCTestCase {
             ),
             PatternFixture(
                 input: "Let's create the whole operating system first before doing the exposed next step.",
-                expected: .planningAsAvoidance
+                expected: .bigSystemEscape
             ),
             PatternFixture(
                 input: "我可能应该先再研究 realtime docs，之后先决定 voice 要点做。",
@@ -232,6 +240,40 @@ final class TurnStewardTests: XCTestCase {
             PatternFixture(
                 input: "呢个 slice 已经清楚，但我仲想继续 research provider comparison 先。",
                 expected: .learningInsteadOfShipping
+            ),
+            PatternFixture(
+                input: "我其实见到用户反应唔错，但而家主要惊别人觉得呢个产品唔够高级。",
+                expected: .externalJudgmentSensitivity,
+                expectedReasonCode: "external_judgment_over_product_truth"
+            ),
+            PatternFixture(
+                input: "I know the user pain is real, but I am steering the decision around what people on Twitter will think.",
+                expected: .externalJudgmentSensitivity
+            ),
+            PatternFixture(
+                input: "我主要目标唔系大学，但我会惊人哋觉得我一日无所事事。",
+                expected: .externalJudgmentSensitivity,
+                expectedReasonCode: "external_judgment_self_presentation"
+            ),
+            PatternFixture(
+                input: "我明明知道自己喺 build，但都惊别人觉得我不务正业。",
+                expected: .externalJudgmentSensitivity
+            ),
+            PatternFixture(
+                input: "我知道最小版本可以发出去，但我一直话自己未准备好，想等到 ready 先 ship。",
+                expected: .notReadyRationalization
+            ),
+            PatternFixture(
+                input: "The prototype is enough to test, but I keep saying I am not ready before launching it.",
+                expected: .notReadyRationalization
+            ),
+            PatternFixture(
+                input: "我明明有一个 small slice 可以今日测试，但我想先做完整 memory operating system。",
+                expected: .bigSystemEscape
+            ),
+            PatternFixture(
+                input: "Before the exposed next step, I want to build the whole system so I don't have to show the rough slice.",
+                expected: .bigSystemEscape
             ),
             PatternFixture(
                 input: "你直接帮我决定吧，虽然我已经见到用户反应同我自己 product taste 都指向 A。",
@@ -251,6 +293,7 @@ final class TurnStewardTests: XCTestCase {
             PatternFixture(input: "summarize this source", expected: nil, sourceNodeId: sourceNodeId),
             PatternFixture(input: "from scratch, don't use memory, should I ship this?", expected: nil),
             PatternFixture(input: "我好焦虑，先陪我一下", expected: nil),
+            PatternFixture(input: "我好焦虑，惊人哋觉得我无所事事，先陪我一下", expected: nil),
             PatternFixture(input: "最近听返首旧歌，突然觉得好有味道", expected: nil),
             PatternFixture(input: "帮我 plan this week", expected: nil),
             PatternFixture(input: "what does TTFT mean?", expected: nil),
@@ -260,7 +303,7 @@ final class TurnStewardTests: XCTestCase {
             PatternFixture(input: "你可以诊断我系咪 depression 同要唔要食药吗？", expected: nil)
         ]
 
-        XCTAssertEqual(fixtures.count, 30)
+        XCTAssertEqual(fixtures.count, 41)
 
         for fixture in fixtures {
             let decision = steward.steer(
@@ -276,6 +319,9 @@ final class TurnStewardTests: XCTestCase {
                 let signal = try? XCTUnwrap(decision.inTurnPatternSignal, fixture.input)
                 XCTAssertEqual(signal?.kind, expected, fixture.input)
                 XCTAssertGreaterThanOrEqual(signal?.confidence ?? 0, 0.75, fixture.input)
+                if let expectedReasonCode = fixture.expectedReasonCode {
+                    XCTAssertEqual(signal?.reasonCode, expectedReasonCode, fixture.input)
+                }
                 XCTAssertEqual(decision.trace.inTurnPatternSignal, signal, fixture.input)
                 XCTAssertTrue(decision.supervisorLanes.contains(.pattern), fixture.input)
             } else {
@@ -379,7 +425,10 @@ final class TurnStewardTests: XCTestCase {
             "Can you demo the framework architecture?",
             "I am researching relationship dynamics for product onboarding.",
             "Is this package legitimate enough for the build tool?",
-            "The peer dependency affects founder docs in the progress screen."
+            "The peer dependency affects founder docs in the progress screen.",
+            "I am not ready to launch because the release build is failing.",
+            "I need to explain the user pain to people on Twitter without letting that change the product decision.",
+            "I want a complete system, but the next step is only to document the architecture."
         ]
 
         for text in controls {
@@ -1612,17 +1661,20 @@ final class TurnStewardTests: XCTestCase {
     private struct PatternFixture {
         let input: String
         let expected: InTurnPatternKind?
+        let expectedReasonCode: String?
         let activeQuickActionMode: QuickActionMode?
         let sourceMaterials: [SourceMaterialContext]
 
         init(
             input: String,
             expected: InTurnPatternKind?,
+            expectedReasonCode: String? = nil,
             activeQuickActionMode: QuickActionMode? = nil,
             sourceNodeId: UUID? = nil
         ) {
             self.input = input
             self.expected = expected
+            self.expectedReasonCode = expectedReasonCode
             self.activeQuickActionMode = activeQuickActionMode
             if let sourceNodeId {
                 self.sourceMaterials = [

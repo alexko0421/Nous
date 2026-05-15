@@ -122,6 +122,9 @@ enum InTurnPatternKind: String, Codable, Equatable {
     case identityPressure
     case planningAsAvoidance
     case learningInsteadOfShipping
+    case externalJudgmentSensitivity
+    case notReadyRationalization
+    case bigSystemEscape
     case overTrustingSystem
 
     var displayLabel: String {
@@ -134,6 +137,12 @@ enum InTurnPatternKind: String, Codable, Equatable {
             return "planning as avoidance"
         case .learningInsteadOfShipping:
             return "learning instead of shipping"
+        case .externalJudgmentSensitivity:
+            return "external judgment sensitivity"
+        case .notReadyRationalization:
+            return "not ready rationalization"
+        case .bigSystemEscape:
+            return "big system escape"
         case .overTrustingSystem:
             return "over-trusting the system"
         }
@@ -149,6 +158,12 @@ enum InTurnPatternKind: String, Codable, Equatable {
             return "reduce the plan to one 30-minute action"
         case .learningInsteadOfShipping:
             return "turn one insight into behavior or a test before consuming more"
+        case .externalJudgmentSensitivity:
+            return "name the actual audience, then replace imagined judgment with one observable signal"
+        case .notReadyRationalization:
+            return "define the minimum readiness threshold, then ship the smallest imperfect version"
+        case .bigSystemEscape:
+            return "find the smallest next step that tests the system's core claim"
         case .overTrustingSystem:
             return "ask what real-world evidence would change Alex's own judgment"
         }
