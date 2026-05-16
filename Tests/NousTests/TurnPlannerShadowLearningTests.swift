@@ -411,6 +411,696 @@ final class TurnPlannerShadowLearningTests: XCTestCase {
         XCTAssertTrue(plan.promptTrace.promptLayers.contains("global_memory"))
     }
 
+    func testImmediateFollowUpKeepsPreviousMemoryAnswerInVolatileContext() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "Food recall")
+        let firstUser = Message(nodeId: node.id, role: .user, content: "你記得我尋晚食咗咩嗎？")
+        let memoryAnswer = Message(
+            nodeId: node.id,
+            role: .assistant,
+            content: "你尋晚食咗壽司同味噌湯。"
+        )
+        let followUp = Message(nodeId: node.id, role: .user, content: "咁今晚食咩好？")
+        let prepared = PreparedConversationTurn(
+            node: node,
+            userMessage: followUp,
+            messagesAfterUserAppend: [firstUser, memoryAnswer, followUp]
+        )
+        let request = self.request(input: followUp.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "ordinary chat default",
+            latencyTier: .normal
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertTrue(plan.turnSlice.volatile.contains("RECENT TURN CONTINUITY:"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("Use the previous assistant answer only as immediate conversational context"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("Do not treat it as verified memory"))
+        XCTAssertFalse(plan.turnSlice.volatile.contains("Treat it as active context"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("你尋晚食咗壽司同味噌湯。"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("咁今晚食咩好？"))
+        XCTAssertTrue(plan.promptTrace.promptLayers.contains("recent_turn_continuity"))
+    }
+
+    func testRecentTurnContinuityDoesNotAttachForUnrelatedShortTurn() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "Unrelated follow-up")
+        let firstUser = Message(nodeId: node.id, role: .user, content: "你記得我尋晚食咗咩嗎？")
+        let memoryAnswer = Message(
+            nodeId: node.id,
+            role: .assistant,
+            content: "你尋晚食咗壽司同味噌湯。"
+        )
+        let unrelated = Message(nodeId: node.id, role: .user, content: "呢個 UI 好靚")
+        let prepared = PreparedConversationTurn(
+            node: node,
+            userMessage: unrelated,
+            messagesAfterUserAppend: [firstUser, memoryAnswer, unrelated]
+        )
+        let request = self.request(input: unrelated.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "ordinary chat default",
+            latencyTier: .normal
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertFalse(plan.turnSlice.volatile.contains("RECENT TURN CONTINUITY:"))
+        XCTAssertFalse(plan.promptTrace.promptLayers.contains("recent_turn_continuity"))
+    }
+
+    func testRecentTurnContinuityABOnlyTreatmentKeepsPreviousMemoryAnswer() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "Food recall A/B")
+        let firstUser = Message(nodeId: node.id, role: .user, content: "你記得我尋晚食咗咩嗎？")
+        let memoryAnswer = Message(
+            nodeId: node.id,
+            role: .assistant,
+            content: "你尋晚食咗壽司同味噌湯。"
+        )
+        let followUp = Message(nodeId: node.id, role: .user, content: "咁今晚食咩好？")
+        let request = self.request(input: followUp.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "ordinary chat default",
+            latencyTier: .normal
+        )
+        let variants: [(name: String, messages: [Message], expectsContinuity: Bool)] = [
+            ("A_control_without_previous_memory_answer", [firstUser, followUp], false),
+            ("B_treatment_with_previous_memory_answer", [firstUser, memoryAnswer, followUp], true)
+        ]
+
+        for variant in variants {
+            let prepared = PreparedConversationTurn(
+                node: node,
+                userMessage: followUp,
+                messagesAfterUserAppend: variant.messages
+            )
+            let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+            XCTAssertEqual(
+                plan.turnSlice.volatile.contains("RECENT TURN CONTINUITY:"),
+                variant.expectsContinuity,
+                variant.name
+            )
+            XCTAssertEqual(
+                plan.promptTrace.promptLayers.contains("recent_turn_continuity"),
+                variant.expectsContinuity,
+                variant.name
+            )
+        }
+    }
+
+    func testRecentTurnContinuityDoesNotAttachForTimeStatementWithoutQuestionIntent() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "Tonight statement")
+        let firstUser = Message(nodeId: node.id, role: .user, content: "你記得我尋晚食咗咩嗎？")
+        let memoryAnswer = Message(
+            nodeId: node.id,
+            role: .assistant,
+            content: "你尋晚食咗壽司同味噌湯。"
+        )
+        let statement = Message(nodeId: node.id, role: .user, content: "今晚我會繼續改 UI")
+        let prepared = PreparedConversationTurn(
+            node: node,
+            userMessage: statement,
+            messagesAfterUserAppend: [firstUser, memoryAnswer, statement]
+        )
+        let request = self.request(input: statement.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "ordinary chat default",
+            latencyTier: .normal
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertFalse(plan.turnSlice.volatile.contains("RECENT TURN CONTINUITY:"))
+        XCTAssertFalse(plan.promptTrace.promptLayers.contains("recent_turn_continuity"))
+    }
+
+    func testRecentTurnContinuityDoesNotAttachWhenMemoryPolicyIsLean() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "Memory opt-out")
+        let firstUser = Message(nodeId: node.id, role: .user, content: "你記得我尋晚食咗咩嗎？")
+        let memoryAnswer = Message(
+            nodeId: node.id,
+            role: .assistant,
+            content: "你尋晚食咗壽司同味噌湯。"
+        )
+        let followUp = Message(nodeId: node.id, role: .user, content: "from scratch, 咁今晚食咩好？")
+        let prepared = PreparedConversationTurn(
+            node: node,
+            userMessage: followUp,
+            messagesAfterUserAppend: [firstUser, memoryAnswer, followUp]
+        )
+        let request = self.request(input: followUp.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .lean,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "memory opt-out cue",
+            latencyTier: .normal
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertFalse(plan.turnSlice.volatile.contains("RECENT TURN CONTINUITY:"))
+        XCTAssertFalse(plan.turnSlice.volatile.contains("你尋晚食咗壽司同味噌湯。"))
+        XCTAssertFalse(plan.promptTrace.promptLayers.contains("recent_turn_continuity"))
+    }
+
+    func testRecentTurnContinuityRequiresAdjacentAssistantTurn() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "Non-adjacent follow-up")
+        let firstUser = Message(nodeId: node.id, role: .user, content: "你記得我尋晚食咗咩嗎？")
+        let memoryAnswer = Message(
+            nodeId: node.id,
+            role: .assistant,
+            content: "你尋晚食咗壽司同味噌湯。"
+        )
+        let interveningUser = Message(nodeId: node.id, role: .user, content: "先幫我改 UI")
+        let followUp = Message(nodeId: node.id, role: .user, content: "咁今晚食咩好？")
+        let prepared = PreparedConversationTurn(
+            node: node,
+            userMessage: followUp,
+            messagesAfterUserAppend: [firstUser, memoryAnswer, interveningUser, followUp]
+        )
+        let request = self.request(input: followUp.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "ordinary chat default",
+            latencyTier: .normal
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertFalse(plan.turnSlice.volatile.contains("RECENT TURN CONTINUITY:"))
+        XCTAssertFalse(plan.promptTrace.promptLayers.contains("recent_turn_continuity"))
+    }
+
+    func testRecentTurnContinuityDoesNotAttachForBroadPlanningQuestion() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "Topic shift")
+        let firstUser = Message(nodeId: node.id, role: .user, content: "你記得我尋晚食咗咩嗎？")
+        let memoryAnswer = Message(
+            nodeId: node.id,
+            role: .assistant,
+            content: "你尋晚食咗壽司同味噌湯。"
+        )
+        let topicShift = Message(nodeId: node.id, role: .user, content: "what should the landing page say?")
+        let prepared = PreparedConversationTurn(
+            node: node,
+            userMessage: topicShift,
+            messagesAfterUserAppend: [firstUser, memoryAnswer, topicShift]
+        )
+        let request = self.request(input: topicShift.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "ordinary chat default",
+            latencyTier: .normal
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertFalse(plan.turnSlice.volatile.contains("RECENT TURN CONTINUITY:"))
+        XCTAssertFalse(plan.promptTrace.promptLayers.contains("recent_turn_continuity"))
+    }
+
+    func testRecentTurnContinuityDoesNotAttachForFastLatencyLeanTurn() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "Fast follow-up")
+        let firstUser = Message(nodeId: node.id, role: .user, content: "你記得我尋晚食咗咩嗎？")
+        let memoryAnswer = Message(
+            nodeId: node.id,
+            role: .assistant,
+            content: "你尋晚食咗壽司同味噌湯。"
+        )
+        let followUp = Message(nodeId: node.id, role: .user, content: "咁今晚食咩好？")
+        let prepared = PreparedConversationTurn(
+            node: node,
+            userMessage: followUp,
+            messagesAfterUserAppend: [firstUser, memoryAnswer, followUp]
+        )
+        let request = self.request(input: followUp.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "fast ordinary companion default",
+            latencyTier: .fast
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertEqual(plan.transcriptMessages.map(\.content), [followUp.content])
+        XCTAssertFalse(plan.turnSlice.volatile.contains("RECENT TURN CONTINUITY:"))
+        XCTAssertFalse(plan.turnSlice.volatile.contains("你尋晚食咗壽司同味噌湯。"))
+        XCTAssertFalse(plan.promptTrace.promptLayers.contains("recent_turn_continuity"))
+    }
+
+    func testRecentTurnContinuityDoesNotAttachForWhatAboutTopicShift() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "What about topic shift")
+        let firstUser = Message(nodeId: node.id, role: .user, content: "你記得我尋晚食咗咩嗎？")
+        let memoryAnswer = Message(
+            nodeId: node.id,
+            role: .assistant,
+            content: "你尋晚食咗壽司同味噌湯。"
+        )
+        let topicShift = Message(nodeId: node.id, role: .user, content: "what about the landing page?")
+        let prepared = PreparedConversationTurn(
+            node: node,
+            userMessage: topicShift,
+            messagesAfterUserAppend: [firstUser, memoryAnswer, topicShift]
+        )
+        let request = self.request(input: topicShift.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "ordinary chat default",
+            latencyTier: .normal
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertFalse(plan.turnSlice.volatile.contains("RECENT TURN CONTINUITY:"))
+        XCTAssertFalse(plan.promptTrace.promptLayers.contains("recent_turn_continuity"))
+    }
+
+    func testRecentTurnContinuityDoesNotAttachForShouldHaveProductTopicShift() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "Should have topic shift")
+        let firstUser = Message(nodeId: node.id, role: .user, content: "你記得我尋晚食咗咩嗎？")
+        let memoryAnswer = Message(
+            nodeId: node.id,
+            role: .assistant,
+            content: "你尋晚食咗壽司同味噌湯。"
+        )
+        let topicShift = Message(nodeId: node.id, role: .user, content: "should we have a web version?")
+        let prepared = PreparedConversationTurn(
+            node: node,
+            userMessage: topicShift,
+            messagesAfterUserAppend: [firstUser, memoryAnswer, topicShift]
+        )
+        let request = self.request(input: topicShift.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "ordinary chat default",
+            latencyTier: .normal
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertFalse(plan.turnSlice.volatile.contains("RECENT TURN CONTINUITY:"))
+        XCTAssertFalse(plan.promptTrace.promptLayers.contains("recent_turn_continuity"))
+    }
+
+    func testRecentTurnContinuityDoesNotAttachForShouldHaveCreatedTopicShiftAfterFoodMemory() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "Created substring topic shift")
+        let firstUser = Message(nodeId: node.id, role: .user, content: "你記得我尋晚食咗咩嗎？")
+        let memoryAnswer = Message(
+            nodeId: node.id,
+            role: .assistant,
+            content: "你尋晚食咗壽司同味噌湯。"
+        )
+        let topicShift = Message(nodeId: node.id, role: .user, content: "should we have created a web version?")
+        let prepared = PreparedConversationTurn(
+            node: node,
+            userMessage: topicShift,
+            messagesAfterUserAppend: [firstUser, memoryAnswer, topicShift]
+        )
+        let request = self.request(input: topicShift.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "ordinary chat default",
+            latencyTier: .normal
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertFalse(plan.turnSlice.volatile.contains("RECENT TURN CONTINUITY:"))
+        XCTAssertFalse(plan.promptTrace.promptLayers.contains("recent_turn_continuity"))
+    }
+
+    func testRecentTurnContinuityDoesNotAttachForFeatureSubstringTopicShiftAfterFoodMemory() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "Feature substring topic shift")
+        let firstUser = Message(nodeId: node.id, role: .user, content: "你記得我尋晚食咗咩嗎？")
+        let memoryAnswer = Message(
+            nodeId: node.id,
+            role: .assistant,
+            content: "你尋晚食咗壽司同味噌湯。"
+        )
+        let topicShift = Message(nodeId: node.id, role: .user, content: "so what should the feature say?")
+        let prepared = PreparedConversationTurn(
+            node: node,
+            userMessage: topicShift,
+            messagesAfterUserAppend: [firstUser, memoryAnswer, topicShift]
+        )
+        let request = self.request(input: topicShift.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "ordinary chat default",
+            latencyTier: .normal
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertFalse(plan.turnSlice.volatile.contains("RECENT TURN CONTINUITY:"))
+        XCTAssertFalse(plan.promptTrace.promptLayers.contains("recent_turn_continuity"))
+    }
+
+    func testRecentTurnContinuityDoesNotAttachForShowTodaySubstringAfterFoodMemory() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "Show substring topic shift")
+        let firstUser = Message(nodeId: node.id, role: .user, content: "你記得我尋晚食咗咩嗎？")
+        let memoryAnswer = Message(
+            nodeId: node.id,
+            role: .assistant,
+            content: "你尋晚食咗壽司同味噌湯。"
+        )
+        let topicShift = Message(nodeId: node.id, role: .user, content: "show me today's prototype plan")
+        let prepared = PreparedConversationTurn(
+            node: node,
+            userMessage: topicShift,
+            messagesAfterUserAppend: [firstUser, memoryAnswer, topicShift]
+        )
+        let request = self.request(input: topicShift.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "ordinary chat default",
+            latencyTier: .normal
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertFalse(plan.turnSlice.volatile.contains("RECENT TURN CONTINUITY:"))
+        XCTAssertFalse(plan.promptTrace.promptLayers.contains("recent_turn_continuity"))
+    }
+
+    func testRecentTurnContinuityDoesNotAttachForCantoneseProductTopicShiftAfterFoodMemory() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "Cantonese product topic shift")
+        let firstUser = Message(nodeId: node.id, role: .user, content: "你記得我尋晚食咗咩嗎？")
+        let memoryAnswer = Message(
+            nodeId: node.id,
+            role: .assistant,
+            content: "你尋晚食咗壽司同味噌湯。"
+        )
+        let topicShift = Message(nodeId: node.id, role: .user, content: "咁個 app 點做？")
+        let prepared = PreparedConversationTurn(
+            node: node,
+            userMessage: topicShift,
+            messagesAfterUserAppend: [firstUser, memoryAnswer, topicShift]
+        )
+        let request = self.request(input: topicShift.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "ordinary chat default",
+            latencyTier: .normal
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertFalse(plan.turnSlice.volatile.contains("RECENT TURN CONTINUITY:"))
+        XCTAssertFalse(plan.promptTrace.promptLayers.contains("recent_turn_continuity"))
+    }
+
+    func testRecentTurnContinuityKeepsProductFollowUpAfterCreatedPrototypeMemory() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "Created prototype follow-up")
+        let firstUser = Message(nodeId: node.id, role: .user, content: "你記得我之前做過咩嗎？")
+        let memoryAnswer = Message(
+            nodeId: node.id,
+            role: .assistant,
+            content: "You mentioned you created a web prototype last week."
+        )
+        let followUp = Message(nodeId: node.id, role: .user, content: "咁個 app 點做？")
+        let prepared = PreparedConversationTurn(
+            node: node,
+            userMessage: followUp,
+            messagesAfterUserAppend: [firstUser, memoryAnswer, followUp]
+        )
+        let request = self.request(input: followUp.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "ordinary chat default",
+            latencyTier: .normal
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertTrue(plan.turnSlice.volatile.contains("RECENT TURN CONTINUITY:"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("You mentioned you created a web prototype last week."))
+        XCTAssertTrue(plan.promptTrace.promptLayers.contains("recent_turn_continuity"))
+    }
+
+    func testRecentTurnContinuityDoesNotAttachForCantoneseProductTopicAfterVisaMemory() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "Visa topic shift")
+        let firstUser = Message(nodeId: node.id, role: .user, content: "你記得我之前講過咩嗎？")
+        let memoryAnswer = Message(
+            nodeId: node.id,
+            role: .assistant,
+            content: "你之前講過 F-1 visa status 要保持穩定。"
+        )
+        let topicShift = Message(nodeId: node.id, role: .user, content: "咁個 app 點做？")
+        let prepared = PreparedConversationTurn(
+            node: node,
+            userMessage: topicShift,
+            messagesAfterUserAppend: [firstUser, memoryAnswer, topicShift]
+        )
+        let request = self.request(input: topicShift.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "ordinary chat default",
+            latencyTier: .normal
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertFalse(plan.turnSlice.volatile.contains("RECENT TURN CONTINUITY:"))
+        XCTAssertFalse(plan.promptTrace.promptLayers.contains("recent_turn_continuity"))
+    }
+
+    func testRecentTurnContinuityDoesNotAttachForNoSpaceAppTopicAfterVisaMemory() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "No-space app topic shift")
+        let firstUser = Message(nodeId: node.id, role: .user, content: "你記得我之前講過咩嗎？")
+        let memoryAnswer = Message(
+            nodeId: node.id,
+            role: .assistant,
+            content: "你之前講過 F-1 visa status 要保持穩定。"
+        )
+        let topicShift = Message(nodeId: node.id, role: .user, content: "咁個app點做？")
+        let prepared = PreparedConversationTurn(
+            node: node,
+            userMessage: topicShift,
+            messagesAfterUserAppend: [firstUser, memoryAnswer, topicShift]
+        )
+        let request = self.request(input: topicShift.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "ordinary chat default",
+            latencyTier: .normal
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertFalse(plan.turnSlice.volatile.contains("RECENT TURN CONTINUITY:"))
+        XCTAssertFalse(plan.promptTrace.promptLayers.contains("recent_turn_continuity"))
+    }
+
+    func testRecentTurnContinuityDoesNotAttachForConnectiveTopicShift() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "Connective topic shift")
+        let firstUser = Message(nodeId: node.id, role: .user, content: "你記得我尋晚食咗咩嗎？")
+        let memoryAnswer = Message(
+            nodeId: node.id,
+            role: .assistant,
+            content: "你尋晚食咗壽司同味噌湯。"
+        )
+        let topicShift = Message(nodeId: node.id, role: .user, content: "so what should the landing page say?")
+        let prepared = PreparedConversationTurn(
+            node: node,
+            userMessage: topicShift,
+            messagesAfterUserAppend: [firstUser, memoryAnswer, topicShift]
+        )
+        let request = self.request(input: topicShift.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "ordinary chat default",
+            latencyTier: .normal
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertFalse(plan.turnSlice.volatile.contains("RECENT TURN CONTINUITY:"))
+        XCTAssertFalse(plan.promptTrace.promptLayers.contains("recent_turn_continuity"))
+    }
+
     func testSoftAnalysisRunsJudgeSilentlyWithoutVisibleThinkingOrFocusBlock() async throws {
         let nodeStore = try NodeStore(path: ":memory:")
         let judgeLLM = TrackingThinkingLLMService()
