@@ -721,6 +721,7 @@ final class SourceIngestionService {
                 originalURL: material.originalURL,
                 originalFilename: material.originalFilename,
                 chunks: rankedChunks,
+                summaryMap: material.summaryMap,
                 evidenceLevel: material.evidenceLevel
             )
         }
@@ -814,6 +815,12 @@ final class SourceIngestionService {
             originalURL: originalURL,
             originalFilename: originalFilename,
             chunks: [],
+            summaryMap: SourceSummaryMapBuilder.build(
+                kind: kind,
+                originalFilename: originalFilename,
+                text: normalizedText,
+                chunks: chunks
+            ),
             evidenceLevel: evidenceLevel
         )
     }
@@ -823,7 +830,8 @@ final class SourceIngestionService {
               let metadata = try nodeStore.fetchSourceMetadata(nodeId: nodeId) else {
             return nil
         }
-        let chunks = try nodeStore.fetchSourceChunks(nodeId: nodeId)
+        let storedChunks = try nodeStore.fetchSourceChunks(nodeId: nodeId)
+        let chunks = storedChunks
             .prefix(3)
             .map {
                 SourceChunkContext(
@@ -839,6 +847,12 @@ final class SourceIngestionService {
             originalURL: metadata.originalURL,
             originalFilename: metadata.originalFilename,
             chunks: Array(chunks),
+            summaryMap: SourceSummaryMapBuilder.build(
+                kind: metadata.kind,
+                originalFilename: metadata.originalFilename,
+                text: node.content,
+                chunks: Array(storedChunks)
+            ),
             evidenceLevel: metadata.evidenceLevel
         )
     }

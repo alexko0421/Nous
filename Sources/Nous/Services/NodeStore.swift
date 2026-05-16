@@ -1380,7 +1380,8 @@ final class NodeStore {
               let metadata = try fetchSourceMetadata(nodeId: nodeId) else {
             return nil
         }
-        let chunks = try fetchSourceChunks(nodeId: nodeId)
+        let storedChunks = try fetchSourceChunks(nodeId: nodeId)
+        let chunks = storedChunks
             .prefix(3)
             .map {
                 SourceChunkContext(
@@ -1396,6 +1397,12 @@ final class NodeStore {
             originalURL: metadata.originalURL,
             originalFilename: metadata.originalFilename,
             chunks: Array(chunks),
+            summaryMap: SourceSummaryMapBuilder.build(
+                kind: metadata.kind,
+                originalFilename: metadata.originalFilename,
+                text: node.content,
+                chunks: Array(storedChunks)
+            ),
             evidenceLevel: metadata.evidenceLevel
         )
     }
@@ -1561,7 +1568,7 @@ final class NodeStore {
 
     func replaceSourceBriefing(_ briefing: SourceBriefing, for messageId: UUID) throws {
         try inTransaction {
-            if briefing.items.isEmpty {
+            if briefing.isEmpty {
                 let delete = try db.prepare("DELETE FROM source_briefings WHERE messageId = ?;")
                 try delete.bind(messageId.uuidString, at: 1)
                 try delete.step()

@@ -636,7 +636,18 @@ struct ChatArea: View {
                 }
             }
         }
-        .onChange(of: vm.currentNode?.id) { _, _ in
+        .onChange(of: vm.currentNode?.id) { oldValue, newValue in
+            let nextMode = RightPanelSurfaceScope.modeAfterConversationChange(
+                currentMode: rightPanelMode,
+                oldConversationId: oldValue,
+                newConversationId: newValue,
+                isDraftBootstrap: vm.consumeRightPanelBlankConversationBootstrapPreservation()
+            )
+            if nextMode != rightPanelMode {
+                withAnimation(AppMotion.markdownPanelSpring.animation) {
+                    rightPanelMode = nextMode
+                }
+            }
             attachments = []
             reloadTemporaryBranchRecords()
             closeDownvotePopover()

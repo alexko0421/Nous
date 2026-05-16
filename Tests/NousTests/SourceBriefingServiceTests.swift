@@ -71,6 +71,408 @@ final class SourceBriefingServiceTests: XCTestCase {
         XCTAssertTrue(prompt.contains("Return strict JSON only"))
     }
 
+    func testGenerateBriefingRendersFullSummaryMapAndParsesSourceGuide() async throws {
+        let sourceId = UUID()
+        let llm = PromptCapturingSourceBriefingLLM(output: """
+        {
+          "title": "Guide brief",
+          "guide": {
+            "overview": "The memo moves from setup to the fourth decision frame.",
+            "key_points": [
+              {
+                "source_node_id": "\(sourceId.uuidString)",
+                "title": "Fourth section",
+                "summary": "Fourth section survives the chunk cap through the source summary map.",
+                "locator_label": "## Four",
+                "evidence": "Fourth evidence that lives in the summary map"
+              }
+            ],
+            "suggested_questions": [
+              "What does part 4 change about the earlier setup?"
+            ],
+            "caveats": [
+              "This is generated orientation, not a source quote."
+            ]
+          },
+          "items": []
+        }
+        """)
+        let service = SourceBriefingService(llmServiceProvider: { llm })
+
+        let briefing = try await service.generateBriefing(
+            SourceBriefingRequest(
+                currentFocus: "part 4",
+                projectContext: nil,
+                rememberedTheses: [],
+                sourceMaterials: [
+                    SourceMaterialContext(
+                        sourceNodeId: sourceId,
+                        title: "Long markdown memo",
+                        originalURL: nil,
+                        originalFilename: "memo.md",
+                        chunks: [
+                            SourceChunkContext(sourceNodeId: sourceId, ordinal: 0, text: "chunk 1 visible", similarity: nil),
+                            SourceChunkContext(sourceNodeId: sourceId, ordinal: 1, text: "chunk 2 visible", similarity: nil),
+                            SourceChunkContext(sourceNodeId: sourceId, ordinal: 2, text: "chunk 3 visible", similarity: nil),
+                            SourceChunkContext(sourceNodeId: sourceId, ordinal: 3, text: "chunk 4 hidden from capped chunks", similarity: nil)
+                        ],
+                        summaryMap: SourceSummaryMap(sections: [
+                            SourceSummaryMapSection(partNumber: 1, title: "One", summary: "First section.", locatorLabel: "# One", evidenceExcerpt: "First evidence."),
+                            SourceSummaryMapSection(partNumber: 2, title: "Two", summary: "Second section.", locatorLabel: "## Two", evidenceExcerpt: "Second evidence."),
+                            SourceSummaryMapSection(partNumber: 3, title: "Three", summary: "Third section.", locatorLabel: "## Three", evidenceExcerpt: "Third evidence."),
+                            SourceSummaryMapSection(
+                                partNumber: 4,
+                                title: "Four",
+                                summary: "Fourth section survives even beyond chunk cap.",
+                                locatorLabel: "## Four",
+                                evidenceExcerpt: "Fourth evidence that lives in the summary map"
+                            )
+                        ])
+                    )
+                ]
+            )
+        )
+
+        let guide = try XCTUnwrap(briefing.guide)
+        XCTAssertEqual(guide.overview, "The memo moves from setup to the fourth decision frame.")
+        XCTAssertEqual(guide.keyPoints.count, 1)
+        XCTAssertEqual(guide.keyPoints.first?.sourceNodeId, sourceId)
+        XCTAssertEqual(guide.keyPoints.first?.locatorLabel, "## Four")
+        XCTAssertEqual(guide.keyPoints.first?.evidence, "Fourth evidence that lives in the summary map")
+        XCTAssertEqual(guide.suggestedQuestions, ["What does part 4 change about the earlier setup?"])
+        XCTAssertEqual(guide.caveats, ["This is generated orientation, not a source quote."])
+
+        let prompt = try XCTUnwrap(llm.capturedMessages.first?.content)
+        XCTAssertTrue(prompt.contains("SOURCE SUMMARY MAP [S1]"))
+        XCTAssertTrue(prompt.contains("Part 4: Four"))
+        XCTAssertTrue(prompt.contains("Fourth section survives even beyond chunk cap."))
+        XCTAssertTrue(prompt.contains("Fourth evidence that lives in the summary map"))
+        XCTAssertTrue(prompt.contains("\"guide\""))
+        XCTAssertFalse(prompt.contains("chunk 4 hidden from capped chunks"))
+    }
+
+    func testGenerateBriefingFiltersUngroundedGuideKeyPoints() async throws {
+        let sourceId = UUID()
+        let service = SourceBriefingService(llmServiceProvider: {
+            StaticSourceBriefingLLM(output: """
+            {
+              "title": "Guide brief",
+              "guide": {
+                "overview": "The source has one grounded guide point.",
+                "key_points": [
+                  {
+                    "source_node_id": "\(sourceId.uuidString)",
+                    "title": "Grounded point",
+                    "summary": "The guide point copies source-map evidence.",
+                    "locator_label": "## Decision",
+                    "evidence": "Decision evidence copied from the map"
+                  },
+                  {
+                    "source_node_id": "\(sourceId.uuidString)",
+                    "title": "Invented point",
+                    "summary": "The model invented this point.",
+                    "locator_label": "## Decision",
+                    "evidence": "CEO secretly promised a new product line"
+                  },
+                  {
+                    "source_node_id": "\(sourceId.uuidString)",
+                    "title": "Wrong locator",
+                    "summary": "A valid phrase still needs the matching map locator.",
+                    "locator_label": "## Wrong",
+                    "evidence": "Decision evidence copied from the map"
+                  }
+                ],
+                "suggested_questions": [],
+                "caveats": []
+              },
+              "items": []
+            }
+            """)
+        })
+
+        let briefing = try await service.generateBriefing(
+            SourceBriefingRequest(
+                currentFocus: nil,
+                projectContext: nil,
+                rememberedTheses: [],
+                sourceMaterials: [
+                    SourceMaterialContext(
+                        sourceNodeId: sourceId,
+                        title: "Decision memo",
+                        originalURL: nil,
+                        originalFilename: "decision.md",
+                        chunks: [
+                            SourceChunkContext(sourceNodeId: sourceId, ordinal: 0, text: "Visible setup chunk.", similarity: nil)
+                        ],
+                        summaryMap: SourceSummaryMap(sections: [
+                            SourceSummaryMapSection(
+                                partNumber: 1,
+                                title: "Decision",
+                                summary: "Decision section.",
+                                locatorLabel: "## Decision",
+                                evidenceExcerpt: "Decision evidence copied from the map"
+                            )
+                        ])
+                    )
+                ]
+            )
+        )
+
+        let guide = try XCTUnwrap(briefing.guide)
+        XCTAssertEqual(guide.keyPoints.map(\.title), ["Grounded point"])
+    }
+
+    func testGenerateBriefingRejectsGuideEvidenceFromWrongMapSection() async throws {
+        let sourceId = UUID()
+        let service = SourceBriefingService(llmServiceProvider: {
+            StaticSourceBriefingLLM(output: """
+            {
+              "title": "Guide brief",
+              "guide": {
+                "overview": "The model mixes the pinned chunk with another map section.",
+                "key_points": [
+                  {
+                    "source_node_id": "\(sourceId.uuidString)",
+                    "title": "Wrong section evidence",
+                    "summary": "The guide point labels part 5 but cites text from the pinned part 4 chunk.",
+                    "locator_label": "## Part 5",
+                    "evidence": "Part four pinned chunk evidence"
+                  }
+                ],
+                "suggested_questions": [],
+                "caveats": []
+              },
+              "items": []
+            }
+            """)
+        })
+
+        let briefing = try await service.generateBriefing(
+            SourceBriefingRequest(
+                currentFocus: "part 4",
+                projectContext: nil,
+                rememberedTheses: [],
+                sourceMaterials: [
+                    SourceMaterialContext(
+                        sourceNodeId: sourceId,
+                        title: "Sectioned memo",
+                        originalURL: nil,
+                        originalFilename: "memo.md",
+                        chunks: [
+                            SourceChunkContext(
+                                sourceNodeId: sourceId,
+                                ordinal: 0,
+                                text: "YouTube section: Part 4\nPart four pinned chunk evidence",
+                                similarity: nil
+                            )
+                        ],
+                        summaryMap: SourceSummaryMap(sections: [
+                            SourceSummaryMapSection(
+                                partNumber: 4,
+                                title: "Part 4",
+                                summary: "Pinned part.",
+                                locatorLabel: "## Part 4",
+                                evidenceExcerpt: "Part four pinned chunk evidence"
+                            ),
+                            SourceSummaryMapSection(
+                                partNumber: 5,
+                                title: "Part 5",
+                                summary: "Requested part.",
+                                locatorLabel: "## Part 5",
+                                evidenceExcerpt: "Part five map evidence"
+                            )
+                        ])
+                    )
+                ]
+            )
+        )
+
+        XCTAssertNil(briefing.guide)
+    }
+
+    func testGenerateBriefingAllowsLocatorBoundAnalysisEvidenceWhenMapSectionHasNoEvidence() async throws {
+        let sourceId = UUID()
+        let service = SourceBriefingService(llmServiceProvider: {
+            StaticSourceBriefingLLM(output: """
+            {
+              "title": "Guide brief",
+              "guide": {
+                "overview": "The Gemini-only section still has analysis-backed orientation.",
+                "key_points": [
+                  {
+                    "source_node_id": "\(sourceId.uuidString)",
+                    "title": "Analysis-backed section",
+                    "summary": "The guide point uses the selected analysis chunk for the same locator.",
+                    "locator_label": "00:04-00:05",
+                    "evidence": "Gemini analysis describes the fifth section"
+                  }
+                ],
+                "suggested_questions": [],
+                "caveats": [
+                  "Gemini analysis only; no transcript quote is available."
+                ]
+              },
+              "items": []
+            }
+            """)
+        })
+
+        let briefing = try await service.generateBriefing(
+            SourceBriefingRequest(
+                currentFocus: "part 5",
+                projectContext: nil,
+                rememberedTheses: [],
+                sourceMaterials: [
+                    SourceMaterialContext(
+                        sourceNodeId: sourceId,
+                        title: "Gemini-only video",
+                        originalURL: "https://youtu.be/example",
+                        originalFilename: nil,
+                        chunks: [
+                            SourceChunkContext(
+                                sourceNodeId: sourceId,
+                                ordinal: 0,
+                                text: """
+                                YouTube section: Part 5 (00:04-00:05)
+                                Evidence: Gemini video analysis
+                                Analysis excerpt:
+                                Gemini analysis describes the fifth section
+                                """,
+                                similarity: nil
+                            )
+                        ],
+                        summaryMap: SourceSummaryMap(sections: [
+                            SourceSummaryMapSection(
+                                partNumber: 5,
+                                title: "Part 5",
+                                summary: "Fifth section.",
+                                locatorLabel: "00:04-00:05",
+                                evidenceExcerpt: nil
+                            )
+                        ]),
+                        evidenceLevel: .geminiVideoAnalysis
+                    )
+                ]
+            )
+        )
+
+        let guide = try XCTUnwrap(briefing.guide)
+        XCTAssertEqual(guide.keyPoints.map(\.title), ["Analysis-backed section"])
+        XCTAssertEqual(guide.caveats, ["Gemini analysis only; no transcript quote is available."])
+    }
+
+    func testGenerateBriefingDropsGuideWhenNoGroundedKeyPointsSurvive() async throws {
+        let sourceId = UUID()
+        let service = SourceBriefingService(llmServiceProvider: {
+            StaticSourceBriefingLLM(output: """
+            {
+              "title": "Guide brief",
+              "guide": {
+                "overview": "The model claims the source proves a secret launch plan.",
+                "key_points": [
+                  {
+                    "source_node_id": "\(sourceId.uuidString)",
+                    "title": "Invented launch",
+                    "summary": "The source supposedly confirms a launch plan.",
+                    "locator_label": "## Decision",
+                    "evidence": "secret launch plan starts next month"
+                  }
+                ],
+                "suggested_questions": [
+                  "How should Alex act on the launch plan?"
+                ],
+                "caveats": [
+                  "This guide caveat is still unanchored if every key point is filtered."
+                ]
+              },
+              "items": []
+            }
+            """)
+        })
+
+        let briefing = try await service.generateBriefing(
+            SourceBriefingRequest(
+                currentFocus: nil,
+                projectContext: nil,
+                rememberedTheses: [],
+                sourceMaterials: [
+                    SourceMaterialContext(
+                        sourceNodeId: sourceId,
+                        title: "Decision memo",
+                        originalURL: nil,
+                        originalFilename: "decision.md",
+                        chunks: [
+                            SourceChunkContext(sourceNodeId: sourceId, ordinal: 0, text: "Visible setup chunk.", similarity: nil)
+                        ],
+                        summaryMap: SourceSummaryMap(sections: [
+                            SourceSummaryMapSection(
+                                partNumber: 1,
+                                title: "Decision",
+                                summary: "Decision section.",
+                                locatorLabel: "## Decision",
+                                evidenceExcerpt: "Decision evidence copied from the map"
+                            )
+                        ])
+                    )
+                ]
+            )
+        )
+
+        XCTAssertNil(briefing.guide)
+    }
+
+    func testGenerateBriefingDropsMalformedGuideWithoutDroppingGroundedItems() async throws {
+        let sourceId = UUID()
+        let service = SourceBriefingService(llmServiceProvider: {
+            StaticSourceBriefingLLM(output: """
+            {
+              "title": "Brief",
+              "guide": "not an object",
+              "items": [
+                {
+                  "source_node_id": "\(sourceId.uuidString)",
+                  "headline": "Revenue retention improved",
+                  "what_changed": "The source says revenue retention improved.",
+                  "why_it_matters": "This changes the quality bar.",
+                  "alex_relevance": "It matters to Alex's SaaS quality filter.",
+                  "tension_or_risk": "Could be a one-quarter anomaly.",
+                  "suggested_next_action": "Check the next filing.",
+                  "evidence": "net revenue retention improved to 124%",
+                  "confidence": 0.7
+                }
+              ]
+            }
+            """)
+        })
+
+        let briefing = try await service.generateBriefing(
+            SourceBriefingRequest(
+                currentFocus: nil,
+                projectContext: nil,
+                rememberedTheses: [],
+                sourceMaterials: [
+                    SourceMaterialContext(
+                        sourceNodeId: sourceId,
+                        title: "SaaS Metrics",
+                        originalURL: nil,
+                        originalFilename: "metrics.md",
+                        chunks: [
+                            SourceChunkContext(
+                                sourceNodeId: sourceId,
+                                ordinal: 0,
+                                text: "The quarter showed net revenue retention improved to 124% while gross margin held steady.",
+                                similarity: nil
+                            )
+                        ]
+                    )
+                ]
+            )
+        )
+
+        XCTAssertNil(briefing.guide)
+        XCTAssertEqual(briefing.items.map(\.headline), ["Revenue retention improved"])
+    }
+
     func testGenerateBriefingFiltersUngroundedOrUnallowlistedItems() async throws {
         let sourceId = UUID()
         let unallowlistedSourceId = UUID()

@@ -59,6 +59,7 @@ final class ChatViewModel {
     @ObservationIgnored private var pendingSourceDiscussionContextByTurnId: [UUID: SourceDiscussionContext] = [:]
     @ObservationIgnored private var sourceMaterialsByUserMessageId: [UUID: [SourceMaterialContext]] = [:]
     @ObservationIgnored private var sourceBriefingsByUserMessageId: [UUID: SourceBriefing] = [:]
+    @ObservationIgnored private var shouldPreserveRightPanelForBlankConversationBootstrap = false
 
     // MARK: - Dependencies
 
@@ -492,6 +493,7 @@ final class ChatViewModel {
             cancelInFlightResponse(clearDraft: true, reason: .supersededByNewTurn)
             cancelInFlightJudge()
         }
+        shouldPreserveRightPanelForBlankConversationBootstrap = false
         currentNode = nil
         activeSourceDiscussionContext = nil
         scratchPadStore.activate(conversationId: nil)
@@ -554,6 +556,7 @@ final class ChatViewModel {
             cancelInFlightResponse(clearDraft: true, reason: .conversationSwitched)
         }
         cancelInFlightJudge()  // judges are conversation-scoped; always invalidate on switch
+        shouldPreserveRightPanelForBlankConversationBootstrap = false
         currentNode = node
         bindStreamingSession(for: node)
         if let surfacedError = currentStreamingSession?.markViewed() {
@@ -583,6 +586,12 @@ final class ChatViewModel {
         activeSourceDiscussionContext = nil
     }
 
+    func consumeRightPanelBlankConversationBootstrapPreservation() -> Bool {
+        let shouldPreserve = shouldPreserveRightPanelForBlankConversationBootstrap
+        shouldPreserveRightPanelForBlankConversationBootstrap = false
+        return shouldPreserve
+    }
+
     func sourceMaterials(for message: Message) -> [SourceMaterialContext] {
         guard message.role == .user else { return [] }
         if let materials = sourceMaterialsByUserMessageId[message.id] {
@@ -596,11 +605,11 @@ final class ChatViewModel {
     func sourceBriefing(for message: Message) -> SourceBriefing? {
         guard message.role == .user else { return nil }
         if let briefing = sourceBriefingsByUserMessageId[message.id] {
-            return briefing.items.isEmpty ? nil : briefing
+            return briefing.isEmpty ? nil : briefing
         }
         let briefing = (try? nodeStore.fetchSourceBriefing(messageId: message.id)) ?? .empty
         sourceBriefingsByUserMessageId[message.id] = briefing
-        return briefing.items.isEmpty ? nil : briefing
+        return briefing.isEmpty ? nil : briefing
     }
 
     /// Bind the streaming session that backs the forwarded streaming
@@ -848,7 +857,11 @@ final class ChatViewModel {
         // create the conversation twice.
         let sourceDiscussionContextBeforeBootstrap = activeSourceDiscussionContext
         if currentNode == nil {
+            shouldPreserveRightPanelForBlankConversationBootstrap = true
             startNewConversation(projectId: defaultProjectId, cancelInFlightWork: false)
+            if currentNode == nil {
+                shouldPreserveRightPanelForBlankConversationBootstrap = false
+            }
             if let sourceDiscussionContextBeforeBootstrap {
                 activeSourceDiscussionContext = sourceDiscussionContextBeforeBootstrap
             }
@@ -1225,7 +1238,7 @@ final class ChatViewModel {
     ) -> Bool {
         do {
             try nodeStore.replaceSourceBriefing(briefing, for: userMessageId)
-            if briefing.items.isEmpty {
+            if briefing.isEmpty {
                 sourceBriefingsByUserMessageId[userMessageId] = .empty
             } else {
                 sourceBriefingsByUserMessageId[userMessageId] = briefing

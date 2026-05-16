@@ -292,6 +292,60 @@ final class SourceIngestionServiceTests: XCTestCase {
         })
     }
 
+    func testMarkdownAttachmentBuildsHeadingSummaryMap() throws {
+        let store = try NodeStore(path: ":memory:")
+        let service = SourceIngestionService(
+            nodeStore: store,
+            vectorStore: VectorStore(nodeStore: store),
+            embeddingProvider: StubSourceEmbeddingProvider()
+        )
+        let markdown = """
+        # Product Memory
+
+        Product memory keeps decisions tied to source evidence.
+
+        ## YouTube Flow
+
+        Clicking a video branch should focus the section without hiding the rest of the map.
+
+        ### Markdown Flow
+
+        Markdown headings should become grounded branches in the same source map.
+        """
+
+        let materials = try service.ingestDocumentAttachments(
+            [AttachedFileContext(name: "source-map.md", extractedText: markdown)],
+            projectId: nil
+        )
+
+        let map = try XCTUnwrap(materials.first?.summaryMap)
+        XCTAssertEqual(map.sections.map(\.partNumber), [1, 2, 3])
+        XCTAssertEqual(map.sections.map(\.title), ["Product Memory", "YouTube Flow", "Markdown Flow"])
+        XCTAssertEqual(map.sections.map(\.locatorLabel), ["# Product Memory", "## YouTube Flow", "### Markdown Flow"])
+        XCTAssertEqual(map.sections.first?.summary, "Product memory keeps decisions tied to source evidence.")
+        XCTAssertEqual(map.sections.last?.evidenceExcerpt, "Markdown headings should become grounded branches in the same source map.")
+    }
+
+    func testPlainDocumentAttachmentFallsBackToChunkSummaryMap() throws {
+        let store = try NodeStore(path: ":memory:")
+        let service = SourceIngestionService(
+            nodeStore: store,
+            vectorStore: VectorStore(nodeStore: store),
+            embeddingProvider: StubSourceEmbeddingProvider()
+        )
+
+        let materials = try service.ingestDocumentAttachments(
+            [AttachedFileContext(name: "plain.txt", extractedText: "First plain section.\n\nSecond plain section.")],
+            projectId: nil
+        )
+
+        let map = try XCTUnwrap(materials.first?.summaryMap)
+        XCTAssertEqual(map.sections.first?.partNumber, 1)
+        XCTAssertEqual(map.sections.first?.title, "Part 1")
+        XCTAssertEqual(map.sections.first?.locatorLabel, "chunk 1")
+        XCTAssertEqual(map.sections.first?.summary, "First plain section.")
+    }
+
     func testSourceIngestionCallbackReceivesEmbeddedSourceNodeForGalaxyRegeneration() async throws {
         let store = try NodeStore(path: ":memory:")
         var ingestedNodes: [NousNode] = []

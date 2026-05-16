@@ -165,6 +165,16 @@ struct ContentView: View {
             .onChange(of: selectedProjectId) { _, newValue in
                 dependencies.chatVM.defaultProjectId = newValue
             }
+            .onChange(of: selectedTab) { _, newValue in
+                let nextMode = RightPanelSurfaceScope.modeAfterTabChange(
+                    currentMode: rightPanelMode,
+                    selectedTabIsChat: newValue == .chat
+                )
+                guard nextMode != rightPanelMode else { return }
+                withAnimation(AppMotion.markdownPanelSpring.animation) {
+                    rightPanelMode = nextMode
+                }
+            }
     }
 
     @ViewBuilder
@@ -195,6 +205,12 @@ struct ContentView: View {
             onNodeSelected: { node in navigateToNode(node, dependencies: dependencies) },
             onNewChat: {
                 dependencies.chatVM.startBlankConversation()
+                let nextMode = RightPanelSurfaceScope.modeAfterNewBlankConversation(currentMode: rightPanelMode)
+                if nextMode != rightPanelMode {
+                    withAnimation(AppMotion.markdownPanelSpring.animation) {
+                        rightPanelMode = nextMode
+                    }
+                }
                 selectedTab = .chat
             }
         )
@@ -399,8 +415,9 @@ struct ContentView: View {
                 },
                 startNewChat: {
                     dependencies.chatVM.startBlankConversation()
+                    let nextMode = RightPanelSurfaceScope.modeAfterNewBlankConversation(currentMode: rightPanelMode)
                     withAnimation(AppMotion.markdownPanelSpring.animation) {
-                        rightPanelMode = nil
+                        rightPanelMode = nextMode
                     }
                     selectedTab = .chat
                     voiceAttachmentResetToken = UUID()
