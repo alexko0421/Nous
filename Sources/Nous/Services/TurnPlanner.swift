@@ -301,6 +301,11 @@ final class TurnPlanner {
             citations: citations,
             sourceMaterials: request.sourceMaterials
         )
+        let recentTurnContinuityBlock = Self.recentTurnContinuityBlock(
+            messagesAfterUserAppend: prepared.messagesAfterUserAppend,
+            currentInput: promptQuery,
+            allowsMemoryContinuity: policy != .lean
+        )
 
         let turnSlice = PromptContextAssembler.assembleContext(
             chatMode: effectiveMode,
@@ -349,7 +354,7 @@ final class TurnPlanner {
             derivedMemoryContext: memoryContext.derivedMemoryContext,
             memoryProvenance: memoryContext.memoryProvenance
         )
-            let promptTrace = PromptContextAssembler.governanceTrace(
+        let basePromptTrace = PromptContextAssembler.governanceTrace(
             chatMode: effectiveMode,
             currentUserInput: promptQuery,
             operatingContext: memoryContext.operatingContext,
@@ -378,8 +383,14 @@ final class TurnPlanner {
             derivedMemoryContext: memoryContext.derivedMemoryContext,
             now: request.now
         )
+        let promptTrace = recentTurnContinuityBlock == nil
+            ? basePromptTrace
+            : Self.promptTrace(basePromptTrace, addingLayer: "recent_turn_continuity")
 
         var volatilePartsForTurn: [String] = [turnSlice.volatile]
+        if let recentTurnContinuityBlock {
+            volatilePartsForTurn.append(recentTurnContinuityBlock)
+        }
         if policy.includeBehaviorProfile {
             // BehaviorProfile.contextBlock contains memory-related instructions
             // ("Use retrieved memory silently" etc) that contradict a no-memory turn.
@@ -844,6 +855,372 @@ final class TurnPlanner {
                 documentAttachments: documents
             )
         }
+    }
+
+    private static func recentTurnContinuityBlock(
+        messagesAfterUserAppend: [Message],
+        currentInput: String,
+        allowsMemoryContinuity: Bool
+    ) -> String? {
+        guard allowsMemoryContinuity else { return nil }
+        let trimmedInput = currentInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let previousAssistant = messagesAfterUserAppend.dropLast().last,
+              previousAssistant.role == .assistant
+        else {
+            return nil
+        }
+
+        let previousContent = previousAssistant.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard looksLikeMemoryBackedAssistantAnswer(previousContent) else { return nil }
+        guard isImmediateFollowUp(trimmedInput, after: previousContent) else { return nil }
+
+        return """
+        RECENT TURN CONTINUITY:
+        Use the previous assistant answer only as immediate conversational context for this follow-up. Do not treat it as verified memory unless the same claim is also present in loaded memory evidence.
+        Previous assistant: \(snippet(previousContent, limit: 420))
+        Current follow-up: \(snippet(trimmedInput, limit: 180))
+        """
+    }
+
+    private static func isImmediateFollowUp(_ input: String, after previousAssistantContent: String) -> Bool {
+        guard (1...160).contains(input.count) else { return false }
+        let normalized = input.lowercased()
+        if hasExplicitProductTopic(normalized),
+           !isProductRelatedMemoryAnswer(previousAssistantContent) {
+            return false
+        }
+        if isMealRelatedMemoryAnswer(previousAssistantContent),
+           !hasMealFollowUpAnchor(normalized) {
+            return false
+        }
+
+        let directFollowUpCues = [
+            "what should i eat",
+            "what should we eat",
+            "should i eat",
+            "should we eat",
+            "食咩",
+            "做咩",
+            "點做",
+            "点做",
+            "點算",
+            "点算",
+            "點揀",
+            "点拣",
+            "而家應該",
+            "而家应该",
+            "now what",
+            "what now"
+        ]
+        if directFollowUpCues.contains(where: { normalized.contains($0) }) {
+            return true
+        }
+
+        let mealFollowUpCues = [
+            "what should i have",
+            "what should we have",
+            "should i have",
+            "should we have"
+        ]
+        if mealFollowUpCues.contains(where: { normalized.contains($0) }),
+           hasMealOrTimeAnchor(normalized) {
+            return true
+        }
+
+        let timeAnchors = ["今晚", "today", "tonight", "而家", "now"]
+        if timeAnchors.contains(where: { normalized.contains($0) }),
+           hasFollowUpQuestionIntent(normalized) {
+            return true
+        }
+
+        let startsWithConnective = normalized.hasPrefix("咁")
+            || normalized.hasPrefix("甘")
+            || normalized.hasPrefix("then ")
+            || normalized.hasPrefix("then,")
+            || normalized.hasPrefix("then.")
+            || normalized.hasPrefix("then?")
+            || normalized.hasPrefix("so ")
+            || normalized.hasPrefix("so,")
+            || normalized.hasPrefix("so.")
+            || normalized.hasPrefix("so?")
+        return startsWithConnective
+            && hasFollowUpQuestionIntent(normalized)
+            && hasContinuityAnchor(normalized)
+    }
+
+    private static func hasMealOrTimeAnchor(_ normalizedInput: String) -> Bool {
+        let cjkAnchors = [
+            "今晚",
+            "食"
+        ]
+        if cjkAnchors.contains(where: { normalizedInput.contains($0) }) {
+            return true
+        }
+
+        let anchors: Set<String> = [
+            "today",
+            "tonight",
+            "breakfast",
+            "lunch",
+            "dinner",
+            "meal",
+            "food",
+            "eat"
+        ]
+        return !englishTokens(in: normalizedInput).isDisjoint(with: anchors)
+    }
+
+    private static func hasMealFollowUpAnchor(_ normalizedInput: String) -> Bool {
+        let cjkMealTerms = [
+            "食",
+            "吃",
+            "飯",
+            "饭"
+        ]
+        if cjkMealTerms.contains(where: { normalizedInput.contains($0) }) {
+            return true
+        }
+
+        let tokens = englishTokens(in: normalizedInput)
+        let directMealTerms: Set<String> = [
+            "breakfast",
+            "lunch",
+            "dinner",
+            "meal",
+            "food",
+            "eat"
+        ]
+        if !tokens.isDisjoint(with: directMealTerms) {
+            return true
+        }
+
+        let timeTerms: Set<String> = ["today", "tonight"]
+        return tokens.contains("have")
+            && (normalizedInput.contains("今晚") || !tokens.isDisjoint(with: timeTerms))
+    }
+
+    private static func hasContinuityAnchor(_ normalizedInput: String) -> Bool {
+        let cjkAnchors = [
+            "今晚",
+            "食",
+            "做",
+            "點",
+            "点",
+            "算",
+            "揀",
+            "拣"
+        ]
+        if cjkAnchors.contains(where: { normalizedInput.contains($0) }) {
+            return true
+        }
+
+        let continuityAnchors: Set<String> = [
+            "today",
+            "tonight",
+            "而家",
+            "now",
+            "eat",
+            "food",
+            "dinner",
+            "meal"
+        ]
+        return !englishTokens(in: normalizedInput).isDisjoint(with: continuityAnchors)
+    }
+
+    private static func hasFollowUpQuestionIntent(_ normalizedInput: String) -> Bool {
+        let directQuestionCues = [
+            "?",
+            "？",
+            "咩",
+            "乜",
+            "點",
+            "点",
+            "邊",
+            "边",
+            "算",
+            "揀",
+            "拣"
+        ]
+        if directQuestionCues.contains(where: { normalizedInput.contains($0) }) {
+            return true
+        }
+
+        let englishQuestionCues: Set<String> = [
+            "what",
+            "how",
+            "should",
+            "where",
+            "recommend",
+            "suggest"
+        ]
+        return !englishTokens(in: normalizedInput).isDisjoint(with: englishQuestionCues)
+    }
+
+    private static func looksLikeMemoryBackedAssistantAnswer(_ content: String) -> Bool {
+        guard content.count >= 8 else { return false }
+        let normalized = content.lowercased()
+        let memoryCues = [
+            "你尋晚",
+            "你寻晚",
+            "尋晚",
+            "寻晚",
+            "昨晚",
+            "你之前",
+            "你上次",
+            "你講過",
+            "你讲过",
+            "你說",
+            "你说",
+            "你提到",
+            "you said",
+            "you mentioned",
+            "you told me",
+            "you ate",
+            "last night",
+            "previously",
+            "remember"
+        ]
+        return memoryCues.contains { normalized.contains($0) }
+    }
+
+    private static func isMealRelatedMemoryAnswer(_ content: String) -> Bool {
+        let normalized = content.lowercased()
+        let cjkMealCues = [
+            "食",
+            "吃",
+            "飯",
+            "饭",
+            "壽司",
+            "寿司",
+            "味噌",
+            "湯",
+            "汤"
+        ]
+        if cjkMealCues.contains(where: { normalized.contains($0) }) {
+            return true
+        }
+
+        let englishMealTokens: Set<String> = [
+            "ate",
+            "eat",
+            "food",
+            "meal",
+            "dinner",
+            "lunch",
+            "breakfast",
+            "sushi"
+        ]
+        let tokens = englishTokens(in: normalized)
+        return tokens.contains { englishMealTokens.contains($0) }
+    }
+
+    private static func hasExplicitProductTopic(_ normalizedInput: String) -> Bool {
+        let cjkProductCues = [
+            "產品",
+            "产品",
+            "功能",
+            "介面",
+            "網頁",
+            "网页"
+        ]
+        if cjkProductCues.contains(where: { normalizedInput.contains($0) }) {
+            return true
+        }
+
+        let productTokens: Set<String> = [
+            "app",
+            "product",
+            "prototype",
+            "feature",
+            "ui",
+            "ux",
+            "website",
+            "web",
+            "platform",
+            "macos",
+            "windows",
+            "nous"
+        ]
+        return !englishTokens(in: normalizedInput).isDisjoint(with: productTokens)
+    }
+
+    private static func isProductRelatedMemoryAnswer(_ content: String) -> Bool {
+        let normalized = content.lowercased()
+        let cjkProductCues = [
+            "產品",
+            "产品",
+            "功能",
+            "介面",
+            "網頁",
+            "网页"
+        ]
+        if cjkProductCues.contains(where: { normalized.contains($0) }) {
+            return true
+        }
+
+        let productTokens: Set<String> = [
+            "app",
+            "product",
+            "prototype",
+            "feature",
+            "ui",
+            "ux",
+            "website",
+            "web",
+            "platform",
+            "macos",
+            "windows",
+            "nous"
+        ]
+        return !englishTokens(in: normalized).isDisjoint(with: productTokens)
+    }
+
+    private static func englishTokens(in normalizedInput: String) -> Set<String> {
+        var tokens: Set<String> = []
+        var currentToken = ""
+
+        for scalar in normalizedInput.lowercased().unicodeScalars {
+            let value = scalar.value
+            if (48...57).contains(value) || (97...122).contains(value) {
+                currentToken.unicodeScalars.append(scalar)
+            } else if !currentToken.isEmpty {
+                tokens.insert(currentToken)
+                currentToken.removeAll(keepingCapacity: true)
+            }
+        }
+
+        if !currentToken.isEmpty {
+            tokens.insert(currentToken)
+        }
+
+        return tokens
+    }
+
+    private static func snippet(_ text: String, limit: Int) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > limit else { return trimmed }
+        let endIndex = trimmed.index(trimmed.startIndex, offsetBy: limit)
+        return "\(trimmed[..<endIndex])..."
+    }
+
+    private static func promptTrace(
+        _ trace: PromptGovernanceTrace,
+        addingLayer layer: String
+    ) -> PromptGovernanceTrace {
+        guard !trace.promptLayers.contains(layer) else { return trace }
+        return PromptGovernanceTrace(
+            promptLayers: trace.promptLayers + [layer],
+            evidenceAttached: trace.evidenceAttached,
+            safetyPolicyInvoked: trace.safetyPolicyInvoked,
+            highRiskQueryDetected: trace.highRiskQueryDetected,
+            turnSteward: trace.turnSteward,
+            agentCoordination: trace.agentCoordination,
+            citationTrace: trace.citationTrace,
+            slowCognitionTrace: trace.slowCognitionTrace,
+            quickActionExperiment: trace.quickActionExperiment,
+            visibleResponseLanguageTarget: trace.visibleResponseLanguageTarget,
+            visibleResponseLanguageSource: trace.visibleResponseLanguageSource
+        )
     }
 
     static func imageAttachments(from attachments: [AttachedFileContext]) -> [LLMImageAttachment] {
