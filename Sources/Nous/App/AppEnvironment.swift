@@ -216,6 +216,11 @@ final class AppEnvironment {
             llmServiceProvider: { settingsVM.makeLLMService(openRouterWebSearchEnabled: false) }
         )
         let sourceLearningMemoryScheduler = SourceLearningMemoryScheduler(service: sourceLearningMemoryService)
+        let automaticMemoryService = AutomaticMemoryPipelineService(
+            nodeStore: nodeStore,
+            llmServiceProvider: { settingsVM.makeLLMService(openRouterWebSearchEnabled: false) }
+        )
+        let automaticMemoryScheduler = AutomaticMemoryPipelineScheduler(service: automaticMemoryService)
         let sourceBriefingService = SourceBriefingService(
             llmServiceProvider: { settingsVM.makeLLMService(openRouterWebSearchEnabled: false) }
         )
@@ -243,6 +248,7 @@ final class AppEnvironment {
             userMemoryService: userMemoryService,
             userMemoryScheduler: scheduler,
             sourceLearningMemoryScheduler: sourceLearningMemoryScheduler,
+            automaticMemoryScheduler: automaticMemoryScheduler,
             conversationSessionStore: conversationSessionStore,
             sourceIngestionService: sourceIngestionService,
             sourceBriefingService: sourceBriefingService,

@@ -583,6 +583,76 @@ enum ModelHarnessProfileCatalog {
     }
 }
 
+struct AgentOutcomeContractHealthSummary: Equatable {
+    var totalIssueCount: Int
+    var completeIssueCount: Int
+    var missingFieldCounts: [String: Int]
+
+    init(
+        totalIssueCount: Int = 0,
+        completeIssueCount: Int = 0,
+        missingFieldCounts: [String: Int] = [:]
+    ) {
+        self.totalIssueCount = totalIssueCount
+        self.completeIssueCount = completeIssueCount
+        self.missingFieldCounts = missingFieldCounts
+    }
+
+    static let empty = AgentOutcomeContractHealthSummary()
+
+    var incompleteIssueCount: Int {
+        max(0, totalIssueCount - completeIssueCount)
+    }
+
+    var isComplete: Bool {
+        totalIssueCount > 0 && incompleteIssueCount == 0
+    }
+
+    var hasIncompleteContracts: Bool {
+        incompleteIssueCount > 0
+    }
+
+    var summaryText: String {
+        guard totalIssueCount > 0 else {
+            return "No active Beads outcome contracts loaded."
+        }
+
+        let base = "Outcome contracts \(completeIssueCount)/\(totalIssueCount) ready"
+        guard hasIncompleteContracts else {
+            return base
+        }
+
+        let missing = missingFieldCounts
+            .sorted { left, right in
+                if left.value == right.value {
+                    return left.key < right.key
+                }
+                return left.value > right.value
+            }
+            .prefix(3)
+            .map { "\($0.key) \($0.value)" }
+            .joined(separator: " · ")
+
+        guard !missing.isEmpty else { return base }
+        return "\(base) · missing \(missing)"
+    }
+
+    static func summarize(_ contracts: [AgentOutcomeContractSummary]) -> AgentOutcomeContractHealthSummary {
+        var missingFieldCounts: [String: Int] = [:]
+        for contract in contracts {
+            for label in contract.missingLabels {
+                missingFieldCounts[label, default: 0] += 1
+            }
+        }
+
+        return AgentOutcomeContractHealthSummary(
+            totalIssueCount: contracts.count,
+            completeIssueCount: contracts.filter(\.isComplete).count,
+            missingFieldCounts: missingFieldCounts
+        )
+    }
+}
+
 struct RuntimeHarnessSnapshot: Equatable {
     var totalTurnCount: Int
     var reviewedTurnCount: Int
@@ -595,6 +665,7 @@ struct RuntimeHarnessSnapshot: Equatable {
     var contextManifest: ContextManifestTelemetrySummary
     var delegationMetrics: DelegationMetricSummary
     var modelHarnessProfiles: ModelHarnessProfileCoverageSummary
+    var outcomeContracts: AgentOutcomeContractHealthSummary
     var visibleResponseLanguageTarget: VisibleResponseLanguageTarget
     var visibleResponseLanguageSource: VisibleResponseLanguageSource
 
@@ -610,6 +681,7 @@ struct RuntimeHarnessSnapshot: Equatable {
         contextManifest: ContextManifestTelemetrySummary = .empty,
         delegationMetrics: DelegationMetricSummary = .empty,
         modelHarnessProfiles: ModelHarnessProfileCoverageSummary = ModelHarnessProfileCatalog.coverageSummary,
+        outcomeContracts: AgentOutcomeContractHealthSummary = .empty,
         visibleResponseLanguageTarget: VisibleResponseLanguageTarget = .unspecified,
         visibleResponseLanguageSource: VisibleResponseLanguageSource = .none
     ) {
@@ -624,6 +696,7 @@ struct RuntimeHarnessSnapshot: Equatable {
         self.contextManifest = contextManifest
         self.delegationMetrics = delegationMetrics
         self.modelHarnessProfiles = modelHarnessProfiles
+        self.outcomeContracts = outcomeContracts
         self.visibleResponseLanguageTarget = visibleResponseLanguageTarget
         self.visibleResponseLanguageSource = visibleResponseLanguageSource
     }
@@ -636,6 +709,9 @@ struct RuntimeHarnessSnapshot: Equatable {
         }
         if agentToolReliability.unknownErrorCount > 0 {
             return "Agent harness unknown error recorded"
+        }
+        if outcomeContracts.hasIncompleteContracts {
+            return "Outcome contract missing"
         }
         if totalTurnCount == 0 {
             return "No runtime turns recorded"

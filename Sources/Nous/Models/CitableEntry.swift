@@ -22,6 +22,7 @@ struct CitableEntry: Equatable {
     let sourceNodeId: UUID?
     let atomType: MemoryAtomType?
     let recordedAt: Date?
+    let authority: MemoryAuthority?
 
     init(
         id: String,
@@ -33,7 +34,8 @@ struct CitableEntry: Equatable {
         eventTime: Date? = nil,
         sourceNodeId: UUID? = nil,
         atomType: MemoryAtomType? = nil,
-        recordedAt: Date? = nil
+        recordedAt: Date? = nil,
+        authority: MemoryAuthority? = nil
     ) {
         self.id = id
         self.text = text
@@ -45,5 +47,6 @@ struct CitableEntry: Equatable {
         self.sourceNodeId = sourceNodeId
         self.atomType = atomType
         self.recordedAt = recordedAt
+        self.authority = authority
     }
 }

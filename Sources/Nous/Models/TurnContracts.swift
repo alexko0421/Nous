@@ -185,6 +185,7 @@ struct ContextContinuationPlan {
     let memorySuppressionReason: MemorySuppressionReason?
     let recordsMemorySuppressionTelemetry: Bool
     let sourceLearningDigest: SourceLearningDigestRequest?
+    let automaticMemoryDigest: AutomaticMemoryDigestRequest?
 
     init(
         turnId: UUID,
@@ -194,7 +195,8 @@ struct ContextContinuationPlan {
         memoryRefresh: EnqueueMemoryRefreshRequest?,
         memorySuppressionReason: MemorySuppressionReason? = nil,
         recordsMemorySuppressionTelemetry: Bool = true,
-        sourceLearningDigest: SourceLearningDigestRequest? = nil
+        sourceLearningDigest: SourceLearningDigestRequest? = nil,
+        automaticMemoryDigest: AutomaticMemoryDigestRequest? = nil
     ) {
         self.turnId = turnId
         self.conversationId = conversationId
@@ -204,6 +206,7 @@ struct ContextContinuationPlan {
         self.memorySuppressionReason = memorySuppressionReason
         self.recordsMemorySuppressionTelemetry = recordsMemorySuppressionTelemetry
         self.sourceLearningDigest = sourceLearningDigest
+        self.automaticMemoryDigest = automaticMemoryDigest
     }
 }
 

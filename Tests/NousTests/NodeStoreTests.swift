@@ -618,6 +618,59 @@ final class NodeStoreTests: XCTestCase {
         XCTAssertFalse(fetched.first?.chunks.first?.text.contains("Unselected opening transcript") == true)
     }
 
+    func testMessageSourceMaterialsPreserveSummaryMapSnapshot() throws {
+        let conversation = makeNode(type: .conversation)
+        let source = makeNode(
+            title: "Source Map",
+            type: .source,
+            content: "Full source text"
+        )
+        try store.insertNode(conversation)
+        try store.insertNode(source)
+
+        let message = Message(nodeId: conversation.id, role: .user, content: "part 2 呢?")
+        try store.insertMessage(message)
+
+        let material = SourceMaterialContext(
+            sourceNodeId: source.id,
+            title: source.title,
+            originalURL: nil,
+            originalFilename: "source-map.md",
+            chunks: [
+                SourceChunkContext(
+                    sourceNodeId: source.id,
+                    ordinal: 0,
+                    text: "Selected chunk snapshot.",
+                    similarity: nil
+                )
+            ],
+            summaryMap: SourceSummaryMap(sections: [
+                SourceSummaryMapSection(
+                    partNumber: 1,
+                    title: "Opening",
+                    summary: "Opening section.",
+                    locatorLabel: "# Opening",
+                    evidenceExcerpt: "Opening evidence."
+                ),
+                SourceSummaryMapSection(
+                    partNumber: 2,
+                    title: "Decision",
+                    summary: "Decision section should survive JSON persistence.",
+                    locatorLabel: "## Decision",
+                    evidenceExcerpt: "Decision evidence."
+                )
+            ])
+        )
+
+        try store.replaceMessageSourceMaterials([material], for: message.id)
+
+        let fetched = try store.fetchMessageSourceMaterials(messageId: message.id)
+        XCTAssertEqual(fetched.first?.summaryMap?.sections.count, 2)
+        XCTAssertEqual(fetched.first?.summaryMap?.sections.last?.title, "Decision")
+        XCTAssertEqual(fetched.first?.summaryMap?.sections.last?.summary, "Decision section should survive JSON persistence.")
+        XCTAssertEqual(fetched.first?.summaryMap?.sections.last?.evidenceExcerpt, "Decision evidence.")
+    }
+
     func testSourceBriefingPersistsAndFetchesByMessage() throws {
         let conversation = makeNode(type: .conversation)
         let source = makeNode(title: "10-K", type: .source, content: "gross margin improved after supplier terms changed")
@@ -631,6 +684,49 @@ final class NodeStoreTests: XCTestCase {
 
         let fetched = try store.fetchSourceBriefing(messageId: message.id)
         XCTAssertEqual(fetched, briefing)
+    }
+
+    func testSourceBriefingGuidePersistsAndOldJSONDecodes() throws {
+        let conversation = makeNode(type: .conversation)
+        let source = makeNode(title: "Source guide memo", type: .source, content: "guide evidence copied from source map")
+        try store.insertNode(conversation)
+        try store.insertNode(source)
+        let message = Message(nodeId: conversation.id, role: .user, content: "Guide this source")
+        try store.insertMessage(message)
+
+        let briefing = SourceBriefing(
+            title: "Guide brief",
+            items: [],
+            guide: SourceGuide(
+                overview: "The guide organizes the source into grounded decisions.",
+                keyPoints: [
+                    SourceGuidePoint(
+                        sourceNodeId: source.id,
+                        title: "Grounded decision",
+                        summary: "The decision is backed by copied source-map evidence.",
+                        locatorLabel: "## Decision",
+                        evidence: "guide evidence copied from source map"
+                    )
+                ],
+                suggestedQuestions: [
+                    "What changes if the decision evidence fails?"
+                ],
+                caveats: [
+                    "Guide output is generated orientation."
+                ]
+            )
+        )
+
+        try store.replaceSourceBriefing(briefing, for: message.id)
+
+        let fetched = try store.fetchSourceBriefing(messageId: message.id)
+        XCTAssertEqual(fetched, briefing)
+
+        let oldJSON = #"{"title":"Old briefing","items":[]}"#.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(SourceBriefing.self, from: oldJSON)
+        XCTAssertEqual(decoded.title, "Old briefing")
+        XCTAssertTrue(decoded.items.isEmpty)
+        XCTAssertNil(decoded.guide)
     }
 
     func testReplacingSourceBriefingWithEmptyDeletesRow() throws {

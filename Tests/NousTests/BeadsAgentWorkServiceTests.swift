@@ -26,6 +26,110 @@ final class BeadsAgentWorkServiceTests: XCTestCase {
         XCTAssertTrue(hint.contains("scripts/setup_beads_agent_memory.sh --install"))
     }
 
+    func testBeadsIssueDetectsCompleteOutcomeContract() throws {
+        let json = """
+        [{
+          "id": "new-york-contract",
+          "title": "Contracted task",
+          "description": "Task objective: map logs.\\nContext included: build logs only.\\nContext excluded: source code changes.\\nOutput schema: findings table.\\nFailure behavior: stop if blocked.\\nAcceptance rubric: file refs and concrete risks.\\nVerification evidence: commands inspected.",
+          "status": "open",
+          "priority": 2,
+          "issue_type": "task",
+          "dependency_count": 0,
+          "dependent_count": 0,
+          "comment_count": 0
+        }]
+        """
+
+        let issues = try JSONDecoder().decode([BeadsIssue].self, from: Data(json.utf8))
+
+        XCTAssertTrue(issues[0].outcomeContract.isComplete)
+        XCTAssertEqual(issues[0].outcomeContract.missingLabels, [])
+    }
+
+    func testBeadsIssueReportsMissingOutcomeContractFields() throws {
+        let json = """
+        [{
+          "id": "new-york-loose",
+          "title": "Loose task",
+          "description": "Please investigate the issue and tell me what you find.",
+          "status": "open",
+          "priority": 2,
+          "issue_type": "task",
+          "dependency_count": 0,
+          "dependent_count": 0,
+          "comment_count": 0
+        }]
+        """
+
+        let issues = try JSONDecoder().decode([BeadsIssue].self, from: Data(json.utf8))
+
+        XCTAssertFalse(issues[0].outcomeContract.isComplete)
+        XCTAssertEqual(
+            issues[0].outcomeContract.missingLabels,
+            ["objective", "context-in", "context-out", "output", "failure", "rubric", "verification"]
+        )
+    }
+
+    func testBeadsIssueDoesNotTreatIgnoredTextAsContextOut() throws {
+        let json = """
+        [{
+          "id": "new-york-almost-contract",
+          "title": "Almost contracted task",
+          "description": "Task objective: map logs.\\nContext included: build logs only.\\nIgnored an old warning after checking it was stale.\\nOutput schema: findings table.\\nFailure behavior: stop if blocked.\\nAcceptance rubric: file refs and concrete risks.\\nVerification evidence: commands inspected.",
+          "status": "open",
+          "priority": 2,
+          "issue_type": "task",
+          "dependency_count": 0,
+          "dependent_count": 0,
+          "comment_count": 0
+        }]
+        """
+
+        let issues = try JSONDecoder().decode([BeadsIssue].self, from: Data(json.utf8))
+
+        XCTAssertFalse(issues[0].outcomeContract.isComplete)
+        XCTAssertEqual(issues[0].outcomeContract.missingLabels, ["context-out"])
+    }
+
+    func testOutcomeContractABFixtureSeparatesLooseAndContractedBeads() throws {
+        let json = """
+        [
+          {
+            "id": "new-york-a",
+            "title": "A loose handoff",
+            "description": "Ask another agent to inspect this and report back.",
+            "status": "open",
+            "priority": 2,
+            "issue_type": "task",
+            "dependency_count": 0,
+            "dependent_count": 0,
+            "comment_count": 0
+          },
+          {
+            "id": "new-york-b",
+            "title": "B contracted handoff",
+            "description": "Task objective: inspect this gate.\\nContext included: changed workflow docs and tests.\\nContext excluded: unrelated voice UI files.\\nOutput schema: findings first, then evidence.\\nFailure behavior: stop and report blocker.\\nAcceptance rubric: every finding has file evidence.\\nVerification evidence: commands inspected.",
+            "status": "open",
+            "priority": 2,
+            "issue_type": "task",
+            "dependency_count": 0,
+            "dependent_count": 0,
+            "comment_count": 0
+          }
+        ]
+        """
+
+        let issues = try JSONDecoder().decode([BeadsIssue].self, from: Data(json.utf8))
+
+        XCTAssertFalse(issues[0].outcomeContract.isComplete)
+        XCTAssertTrue(issues[1].outcomeContract.isComplete)
+        XCTAssertGreaterThan(
+            issues[0].outcomeContract.missingLabels.count,
+            issues[1].outcomeContract.missingLabels.count
+        )
+    }
+
     func testLoadSnapshotDecodesReadOnlyAgentWorkLists() throws {
         let runner = FakeBeadsCommandRunner(outputs: [
             "where": "/Users/alex/.local/share/nous/beads\n",
@@ -139,6 +243,56 @@ final class BeadsAgentWorkServiceTests: XCTestCase {
         XCTAssertTrue(snapshot.ready.isEmpty)
         XCTAssertTrue(snapshot.inProgress.isEmpty)
         XCTAssertTrue(snapshot.recentClosed.isEmpty)
+    }
+
+    func testLoadSnapshotAddsOutcomeContractHealthToRuntimeHarness() throws {
+        let runner = FakeBeadsCommandRunner(outputs: [
+            "where": "/Users/alex/.local/share/nous/beads\n",
+            "ready --json": """
+            [
+              {
+                "id": "new-york-ready-contract",
+                "title": "Ready contracted task",
+                "description": "Task objective: map logs.\\nContext included: build logs only.\\nContext excluded: source code changes.\\nOutput schema: findings table.\\nFailure behavior: stop if blocked.\\nAcceptance rubric: file refs and concrete risks.\\nVerification evidence: commands inspected.",
+                "status": "open",
+                "priority": 2,
+                "issue_type": "task",
+                "dependency_count": 0,
+                "dependent_count": 0,
+                "comment_count": 0
+              }
+            ]
+            """,
+            "list --status=in_progress --json": """
+            [
+              {
+                "id": "new-york-loose-contract",
+                "title": "Loose active task",
+                "description": "Please investigate the issue.",
+                "status": "in_progress",
+                "priority": 2,
+                "issue_type": "task",
+                "dependency_count": 0,
+                "dependent_count": 0,
+                "comment_count": 0
+              }
+            ]
+            """,
+            "list --status=closed --json": "[]"
+        ])
+        let runtime = RuntimeHarnessSnapshot(totalTurnCount: 1)
+        let service = BeadsAgentWorkService(
+            commandRunner: runner,
+            runtimeHarnessLoader: FakeRuntimeHarnessLoader(snapshot: runtime)
+        )
+
+        let snapshot = try service.loadSnapshot()
+
+        XCTAssertEqual(snapshot.runtimeHarness.outcomeContracts.totalIssueCount, 2)
+        XCTAssertEqual(snapshot.runtimeHarness.outcomeContracts.completeIssueCount, 1)
+        XCTAssertEqual(snapshot.runtimeHarness.outcomeContracts.incompleteIssueCount, 1)
+        XCTAssertEqual(snapshot.runtimeHarness.outcomeContracts.missingFieldCounts["objective"], 1)
+        XCTAssertTrue(snapshot.runtimeHarness.outcomeContracts.summaryText.contains("Outcome contracts 1/2 ready"))
     }
 
     func testHarnessOnlySnapshotLoadsQualityStateWithoutBeadsCommands() {

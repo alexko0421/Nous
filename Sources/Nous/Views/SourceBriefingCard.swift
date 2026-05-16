@@ -1,5 +1,20 @@
 import SwiftUI
 
+enum SourceBriefingCardExpansionPolicy {
+    private static let collapsedOverviewCharacterLimit = 180
+
+    static func hasExpandableContent(_ briefing: SourceBriefing) -> Bool {
+        let hasAnalystItemDetails = !briefing.items.isEmpty
+        let hasExtraItems = briefing.items.count > 2
+        let hasExtraGuidePoints = (briefing.guide?.keyPoints.count ?? 0) > 2
+        let hasGuideDetail = !(briefing.guide?.suggestedQuestions.isEmpty ?? true) ||
+            !(briefing.guide?.caveats.isEmpty ?? true)
+        let overview = SourceBriefingText.body(briefing.guide?.overview ?? "") ?? ""
+        let hasLongGuideOverview = overview.count > collapsedOverviewCharacterLimit
+        return hasAnalystItemDetails || hasExtraItems || hasExtraGuidePoints || hasGuideDetail || hasLongGuideOverview
+    }
+}
+
 struct SourceBriefingCard: View {
     let briefing: SourceBriefing
 
@@ -7,6 +22,15 @@ struct SourceBriefingCard: View {
 
     private var visibleItems: [SourceBriefingItem] {
         isExpanded ? briefing.items : Array(briefing.items.prefix(2))
+    }
+
+    private var visibleGuidePoints: [SourceGuidePoint] {
+        guard let guide = briefing.guide else { return [] }
+        return isExpanded ? guide.keyPoints : Array(guide.keyPoints.prefix(2))
+    }
+
+    private var hasExpandableContent: Bool {
+        SourceBriefingCardExpansionPolicy.hasExpandableContent(briefing)
     }
 
     private var titleText: String {
@@ -27,7 +51,7 @@ struct SourceBriefingCard: View {
 
                 Spacer(minLength: 8)
 
-                if !briefing.items.isEmpty {
+                if hasExpandableContent {
                     Button {
                         withAnimation(.easeInOut(duration: 0.18)) {
                             isExpanded.toggle()
@@ -44,6 +68,14 @@ struct SourceBriefingCard: View {
             }
 
             VStack(alignment: .leading, spacing: isExpanded ? 12 : 8) {
+                if let guide = briefing.guide, !guide.isEmpty {
+                    SourceGuideView(
+                        guide: guide,
+                        visiblePoints: visibleGuidePoints,
+                        isExpanded: isExpanded
+                    )
+                }
+
                 ForEach(Array(visibleItems.enumerated()), id: \.offset) { _, item in
                     SourceBriefingItemView(item: item, isExpanded: isExpanded)
                 }
@@ -56,6 +88,74 @@ struct SourceBriefingCard: View {
                 .stroke(AppColor.panelStroke, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+private struct SourceGuideView: View {
+    let guide: SourceGuide
+    let visiblePoints: [SourceGuidePoint]
+    let isExpanded: Bool
+
+    private var overviewText: String {
+        SourceBriefingText.body(guide.overview) ?? ""
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if !overviewText.isEmpty {
+                Text(overviewText)
+                    .font(.system(size: 11))
+                    .foregroundColor(AppColor.secondaryText)
+                    .lineLimit(isExpanded ? nil : 3)
+            }
+
+            ForEach(Array(visiblePoints.enumerated()), id: \.offset) { _, point in
+                SourceGuidePointView(point: point, isExpanded: isExpanded)
+            }
+
+            if isExpanded {
+                let questions = guide.suggestedQuestions.compactMap(SourceBriefingText.body)
+                if !questions.isEmpty {
+                    SourceBriefingField(label: "Questions", text: questions.prefix(3).joined(separator: "  "))
+                }
+                let caveats = guide.caveats.compactMap(SourceBriefingText.body)
+                if !caveats.isEmpty {
+                    SourceBriefingField(label: "Caveats", text: caveats.prefix(3).joined(separator: "  "))
+                }
+            }
+        }
+    }
+}
+
+private struct SourceGuidePointView: View {
+    let point: SourceGuidePoint
+    let isExpanded: Bool
+
+    private var titleText: String {
+        SourceBriefingText.headline(point.title) ?? "Guide point"
+    }
+
+    private var summaryText: String {
+        SourceBriefingText.body(point.summary) ?? ""
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(titleText)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(AppColor.colaDarkText)
+                .lineLimit(isExpanded ? nil : 2)
+
+            Text(summaryText)
+                .font(.system(size: 11))
+                .foregroundColor(AppColor.secondaryText)
+                .lineLimit(isExpanded ? nil : 2)
+
+            if isExpanded {
+                SourceBriefingField(label: "Locator", text: SourceBriefingText.body(point.locatorLabel) ?? "")
+                SourceBriefingField(label: "Evidence", text: SourceBriefingText.evidence(point.evidence) ?? "")
+            }
+        }
     }
 }
 

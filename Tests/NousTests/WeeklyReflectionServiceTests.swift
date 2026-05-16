@@ -269,6 +269,50 @@ final class WeeklyReflectionServiceTests: XCTestCase {
         )
     }
 
+    func testFixtureIncludesPatternEvidenceAsAuditContext() async throws {
+        let weekStart = makeDate(2026, 4, 13)
+        let weekEnd = makeDate(2026, 4, 20)
+        let messageIds = (0..<12).map { _ in UUID() }
+        let node = try seedConversation(
+            projectId: nil,
+            timestamps: messageIds.enumerated().map { i, _ in
+                weekStart.addingTimeInterval(TimeInterval(i) * 3_600)
+            },
+            messageIds: messageIds
+        )
+        let service = InTurnPatternProposalService(nodeStore: store)
+        for index in [0, 4, 8] {
+            _ = try service.record(
+                signal: InTurnPatternSignal(
+                    kind: .learningInsteadOfShipping,
+                    confidence: 0.88,
+                    surfacePolicy: .directName,
+                    reasonCode: "test"
+                ),
+                sourceNodeId: node.id,
+                sourceMessageId: messageIds[index],
+                projectId: nil,
+                now: weekStart.addingTimeInterval(TimeInterval(index) * 3_600),
+                userConfirmed: index == 8
+            )
+        }
+        llm.nextOutcome = .success(text: #"{"claims":[]}"#, usage: nil)
+
+        let weekly = WeeklyReflectionService(nodeStore: store, llm: llm, now: { self.now })
+        _ = try await weekly.runForWeek(projectId: nil, weekStart: weekStart, weekEnd: weekEnd)
+
+        let system = try XCTUnwrap(llm.lastSystem)
+        XCTAssertTrue(system.contains("Which repeated in-turn patterns changed Alex's next action"))
+        XCTAssertTrue(system.contains("Do not promote pending pattern evidence by itself"))
+
+        let userContent = try XCTUnwrap(llm.lastUserContent)
+        XCTAssertTrue(userContent.contains("pattern_evidence"))
+        XCTAssertTrue(userContent.contains("learning instead of shipping"))
+        XCTAssertTrue(userContent.contains(messageIds[0].uuidString))
+        XCTAssertTrue(userContent.contains(messageIds[4].uuidString))
+        XCTAssertTrue(userContent.contains(messageIds[8].uuidString))
+    }
+
     // MARK: Guard #2 — LLM failure
 
     func testLLMFailurePersistsFailedApiErrorAndRethrows() async throws {
@@ -378,11 +422,12 @@ final class WeeklyReflectionServiceTests: XCTestCase {
         return cal.date(from: comps)!
     }
 
+    @discardableResult
     private func seedConversation(
         projectId: UUID?,
         timestamps: [Date],
         messageIds: [UUID]? = nil
-    ) throws {
+    ) throws -> NousNode {
         let node = NousNode(
             type: .conversation,
             title: "Fixture chat",
@@ -403,5 +448,6 @@ final class WeeklyReflectionServiceTests: XCTestCase {
             )
             try store.insertMessage(msg)
         }
+        return node
     }
 }

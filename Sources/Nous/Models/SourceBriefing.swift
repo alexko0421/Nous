@@ -25,8 +25,23 @@ struct SourceBriefingRequest: Equatable {
 struct SourceBriefing: Codable, Equatable {
     let title: String?
     let items: [SourceBriefingItem]
+    let guide: SourceGuide?
 
-    static let empty = SourceBriefing(title: nil, items: [])
+    init(
+        title: String?,
+        items: [SourceBriefingItem],
+        guide: SourceGuide? = nil
+    ) {
+        self.title = title
+        self.items = items
+        self.guide = guide
+    }
+
+    static let empty = SourceBriefing(title: nil, items: [], guide: nil)
+
+    var isEmpty: Bool {
+        items.isEmpty && (guide?.isEmpty ?? true)
+    }
 }
 
 struct SourceBriefingItem: Codable, Equatable {
@@ -39,6 +54,40 @@ struct SourceBriefingItem: Codable, Equatable {
     let suggestedNextAction: String
     let evidence: String
     let confidence: Double
+}
+
+struct SourceGuide: Codable, Equatable {
+    let overview: String
+    let keyPoints: [SourceGuidePoint]
+    let suggestedQuestions: [String]
+    let caveats: [String]
+
+    init(
+        overview: String,
+        keyPoints: [SourceGuidePoint],
+        suggestedQuestions: [String],
+        caveats: [String]
+    ) {
+        self.overview = overview
+        self.keyPoints = keyPoints
+        self.suggestedQuestions = suggestedQuestions
+        self.caveats = caveats
+    }
+
+    var isEmpty: Bool {
+        overview.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            keyPoints.isEmpty &&
+            suggestedQuestions.allSatisfy { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } &&
+            caveats.allSatisfy { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+}
+
+struct SourceGuidePoint: Codable, Equatable {
+    let sourceNodeId: UUID
+    let title: String
+    let summary: String
+    let locatorLabel: String
+    let evidence: String
 }
 
 enum SourcePromptLimits {

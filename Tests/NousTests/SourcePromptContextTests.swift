@@ -108,6 +108,103 @@ final class SourcePromptContextTests: XCTestCase {
         XCTAssertTrue(context.combinedString.contains("Evidence: supplier renegotiation improved gross margin"))
     }
 
+    func testSourceGuideRendersBetweenSummaryMapAndAnalystBrief() {
+        let sourceNodeId = UUID()
+        let briefing = SourceBriefing(
+            title: "Filing brief",
+            items: [
+                SourceBriefingItem(
+                    sourceNodeId: sourceNodeId,
+                    headline: "Margin pressure eased",
+                    whatChanged: "The filing says supplier renegotiation improved gross margin.",
+                    whyItMatters: "It changes whether the business is still margin-constrained.",
+                    alexRelevance: "Relevant to Alex's quality filter.",
+                    tensionOrRisk: "This could be a one-quarter timing effect.",
+                    suggestedNextAction: "Check whether the next quarter keeps the same margin level.",
+                    evidence: "supplier renegotiation improved gross margin",
+                    confidence: 0.78
+                )
+            ],
+            guide: SourceGuide(
+                overview: "The filing guide orients around margin and supplier terms.",
+                keyPoints: [
+                    SourceGuidePoint(
+                        sourceNodeId: sourceNodeId,
+                        title: "Supplier terms",
+                        summary: "Supplier terms are the map-backed reason margin pressure eased.",
+                        locatorLabel: "## Margin",
+                        evidence: "supplier renegotiation improved gross margin"
+                    )
+                ],
+                suggestedQuestions: [
+                    "Does this margin improvement persist next quarter?"
+                ],
+                caveats: [
+                    "Guide language is generated orientation, not source text."
+                ]
+            )
+        )
+
+        let context = PromptContextAssembler.assembleContext(
+            currentUserInput: "第 2 part 讲咩?",
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil,
+            sourceMaterials: [
+                SourceMaterialContext(
+                    sourceNodeId: sourceNodeId,
+                    title: "Company filing",
+                    originalURL: "https://example.com/filing",
+                    originalFilename: nil,
+                    chunks: [
+                        SourceChunkContext(
+                            sourceNodeId: sourceNodeId,
+                            ordinal: 0,
+                            text: "The filing says supplier renegotiation improved gross margin.",
+                            similarity: nil
+                        )
+                    ],
+                    summaryMap: SourceSummaryMap(sections: [
+                        SourceSummaryMapSection(
+                            partNumber: 1,
+                            title: "Setup",
+                            summary: "The setup section.",
+                            locatorLabel: "# Setup",
+                            evidenceExcerpt: "The setup section evidence."
+                        ),
+                        SourceSummaryMapSection(
+                            partNumber: 2,
+                            title: "Margin",
+                            summary: "Supplier terms eased margin pressure.",
+                            locatorLabel: "## Margin",
+                            evidenceExcerpt: "supplier renegotiation improved gross margin"
+                        )
+                    ])
+                )
+            ],
+            sourceBriefing: briefing
+        )
+
+        let combined = context.combinedString
+        let mapIndex = try! XCTUnwrap(combined.range(of: "SOURCE SUMMARY MAP")?.lowerBound)
+        let guideIndex = try! XCTUnwrap(combined.range(of: "SOURCE GUIDE")?.lowerBound)
+        let analystIndex = try! XCTUnwrap(combined.range(of: "SOURCE ANALYST BRIEF")?.lowerBound)
+
+        XCTAssertLessThan(mapIndex, guideIndex)
+        XCTAssertLessThan(guideIndex, analystIndex)
+        XCTAssertTrue(combined.contains("SOURCE GUIDE"))
+        XCTAssertTrue(combined.contains("generated orientation, not source text or Alex memory"))
+        XCTAssertTrue(combined.contains("ground final factual claims in SOURCE SUMMARY MAP, SOURCE MATERIAL chunks, or copied evidence"))
+        XCTAssertTrue(combined.contains("[S1] Supplier terms"))
+        XCTAssertTrue(combined.contains("Locator: ## Margin"))
+        XCTAssertTrue(combined.contains("Suggested questions"))
+        XCTAssertTrue(combined.contains("Guide language is generated orientation"))
+        XCTAssertTrue(combined.contains("Explicit requests for another part"))
+    }
+
     func testAttachedYouTubeSourceScopesVaguePromptAndRendersEvidenceContract() {
         let transcriptNodeId = UUID()
         let geminiNodeId = UUID()
@@ -164,6 +261,96 @@ final class SourcePromptContextTests: XCTestCase {
         // assembler must lift that into a one-liner the model cannot miss.
         XCTAssertTrue(context.combinedString.contains("Alex pinned this specific section"))
         XCTAssertTrue(context.combinedString.contains("Leader role"))
+    }
+
+    func testPinnedYouTubeSectionCueAllowsExplicitOtherPartRequests() {
+        let nodeId = UUID()
+        let context = PromptContextAssembler.assembleContext(
+            currentUserInput: "咁 part 5 呢?",
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil,
+            sourceMaterials: [
+                SourceMaterialContext(
+                    sourceNodeId: nodeId,
+                    title: "Six part YouTube video",
+                    originalURL: "https://youtu.be/sixparts",
+                    originalFilename: nil,
+                    chunks: [
+                        SourceChunkContext(
+                            sourceNodeId: nodeId,
+                            ordinal: 0,
+                            text: "YouTube section: Part 4\nEvidence: Transcript-backed\nSummary: Fourth frame.",
+                            similarity: nil
+                        )
+                    ],
+                    summaryMap: SourceSummaryMap(sections: [
+                        SourceSummaryMapSection(
+                            partNumber: 4,
+                            title: "Part 4",
+                            summary: "Fourth frame.",
+                            locatorLabel: "00:03-00:04",
+                            evidenceExcerpt: "Fourth transcript excerpt."
+                        ),
+                        SourceSummaryMapSection(
+                            partNumber: 5,
+                            title: "Part 5",
+                            summary: "Fifth frame that should remain visible in chat.",
+                            locatorLabel: "00:04-00:05",
+                            evidenceExcerpt: "Fifth transcript excerpt."
+                        )
+                    ]),
+                    evidenceLevel: .transcriptBacked
+                )
+            ]
+        )
+
+        XCTAssertTrue(context.combinedString.contains("Alex pinned this specific section"))
+        XCTAssertTrue(context.combinedString.contains("SOURCE SUMMARY MAP"))
+        XCTAssertTrue(context.combinedString.contains("Part 5: Part 5"))
+        XCTAssertTrue(context.combinedString.contains("Fifth frame that should remain visible in chat."))
+        XCTAssertTrue(context.combinedString.contains("Explicit requests for another part"))
+    }
+
+    func testSourceSummaryMapRendersBeyondChunkCap() {
+        let nodeId = UUID()
+        let context = PromptContextAssembler.assembleContext(
+            currentUserInput: "第 4 part 讲咩?",
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil,
+            sourceMaterials: [
+                SourceMaterialContext(
+                    sourceNodeId: nodeId,
+                    title: "Long markdown memo",
+                    originalURL: nil,
+                    originalFilename: "memo.md",
+                    chunks: [
+                        SourceChunkContext(sourceNodeId: nodeId, ordinal: 0, text: "chunk 1", similarity: nil),
+                        SourceChunkContext(sourceNodeId: nodeId, ordinal: 1, text: "chunk 2", similarity: nil),
+                        SourceChunkContext(sourceNodeId: nodeId, ordinal: 2, text: "chunk 3", similarity: nil),
+                        SourceChunkContext(sourceNodeId: nodeId, ordinal: 3, text: "chunk 4 should stay out of capped chunks", similarity: nil)
+                    ],
+                    summaryMap: SourceSummaryMap(sections: [
+                        SourceSummaryMapSection(partNumber: 1, title: "One", summary: "First section.", locatorLabel: "# One", evidenceExcerpt: nil),
+                        SourceSummaryMapSection(partNumber: 2, title: "Two", summary: "Second section.", locatorLabel: "## Two", evidenceExcerpt: nil),
+                        SourceSummaryMapSection(partNumber: 3, title: "Three", summary: "Third section.", locatorLabel: "## Three", evidenceExcerpt: nil),
+                        SourceSummaryMapSection(partNumber: 4, title: "Four", summary: "Fourth section survives even beyond chunk cap.", locatorLabel: "## Four", evidenceExcerpt: "Fourth evidence.")
+                    ])
+                )
+            ]
+        )
+
+        XCTAssertTrue(context.combinedString.contains("Part 4: Four"))
+        XCTAssertTrue(context.combinedString.contains("Fourth section survives even beyond chunk cap."))
+        XCTAssertTrue(context.combinedString.contains("chunk 3"))
+        XCTAssertFalse(context.combinedString.contains("chunk 4 should stay out of capped chunks"))
     }
 
     func testSourceMaterialKeepsMultilineUntrustedTextInsideSourceMarkers() {

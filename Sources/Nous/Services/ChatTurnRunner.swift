@@ -14,6 +14,7 @@ final class ChatTurnRunner {
     private let agentLoopExecutorFactory: AgentLoopExecutorFactory?
     private let outcomeFactory: TurnOutcomeFactory
     private let shadowLearningSignalRecorder: ShadowLearningSignalRecorder?
+    private let inTurnPatternProposalService: InTurnPatternProposalService?
     private let cognitionReviewer: (any CognitionReviewing)?
     private let failureSkillCandidateStore: FailureSkillCandidateStore?
     private let failureToSkillDetector: FailureToSkillDetector
@@ -32,6 +33,7 @@ final class ChatTurnRunner {
         agentLoopExecutorFactory: AgentLoopExecutorFactory? = nil,
         outcomeFactory: TurnOutcomeFactory,
         shadowLearningSignalRecorder: ShadowLearningSignalRecorder? = nil,
+        inTurnPatternProposalService: InTurnPatternProposalService? = nil,
         cognitionReviewer: (any CognitionReviewing)? = nil,
         failureSkillCandidateStore: FailureSkillCandidateStore? = nil,
         failureToSkillDetector: FailureToSkillDetector = FailureToSkillDetector(),
@@ -49,6 +51,7 @@ final class ChatTurnRunner {
         self.agentLoopExecutorFactory = agentLoopExecutorFactory
         self.outcomeFactory = outcomeFactory
         self.shadowLearningSignalRecorder = shadowLearningSignalRecorder
+        self.inTurnPatternProposalService = inTurnPatternProposalService
         self.cognitionReviewer = cognitionReviewer
         self.failureSkillCandidateStore = failureSkillCandidateStore
         self.failureToSkillDetector = failureToSkillDetector
@@ -277,6 +280,11 @@ final class ChatTurnRunner {
             )
             return nil
         }
+        recordInTurnPatternProposalIfNeeded(
+            stewardship: stewardship,
+            prepared: prepared,
+            request: request
+        )
 
         let reviewRun = runSilentReviewIfNeeded(plan: plan, executionResult: executionResult)
         onTurnCognitionSnapshot(TurnCognitionSnapshotFactory.make(
@@ -347,6 +355,28 @@ final class ChatTurnRunner {
             } catch {
                 Self.debugLog("failure-to-skill candidate write failed turn=\(corpusFidelity.turnId) error=\(error.localizedDescription)")
             }
+        }
+    }
+
+    private func recordInTurnPatternProposalIfNeeded(
+        stewardship: TurnStewardDecision,
+        prepared: PreparedTurnSession,
+        request: TurnRequest
+    ) {
+        guard let signal = stewardship.inTurnPatternSignal,
+              let inTurnPatternProposalService else {
+            return
+        }
+        do {
+            _ = try inTurnPatternProposalService.record(
+                signal: signal,
+                sourceNodeId: prepared.node.id,
+                sourceMessageId: prepared.userMessage.id,
+                projectId: prepared.node.projectId,
+                now: request.now
+            )
+        } catch {
+            Self.debugLog("pattern proposal write failed turn=\(request.turnId) error=\(error.localizedDescription)")
         }
     }
 

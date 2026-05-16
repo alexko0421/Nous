@@ -202,11 +202,9 @@ final class VoiceCommandController {
             stop()
 
         case .userSpeechStarted:
-            // User started speaking mid-reply. Server has been told to cancel
-            // its response (turn_detection.interrupt_response = true) and the
-            // realtime session has already flushed queued playback. Surface
-            // the listening state so the capsule reflects that we're back to
-            // capturing the user's voice.
+            // VAD saw a user-speech start. The realtime session handles
+            // playback barge-in directly; the controller only reflects that
+            // capture is active again.
             outputTranscriptBuffer = ""
             outputTranscriptIsFinal = false
             if pendingAction == nil {
@@ -263,11 +261,13 @@ final class VoiceCommandController {
             status = .action(visible ? "Opening Scratchpad" : "Closing Scratchpad")
 
         case "replace_scratchpad_markdown":
+            handlers.openScratchPadForWriting()
             handlers.replaceScratchPadMarkdown(try requiredString("markdown", in: args))
             markAppStateChanged()
             status = .action("Draft updated")
 
         case "append_scratchpad_markdown":
+            handlers.openScratchPadForWriting()
             handlers.appendScratchPadMarkdown(try requiredString("markdown", in: args))
             markAppStateChanged()
             status = .action("Draft expanded")
@@ -575,6 +575,7 @@ final class VoiceCommandController {
         outputTranscriptBuffer = ""
         outputTranscriptIsFinal = false
         subtitleText = text
+        openScratchpadForWritingIntentIfNeeded(text)
         if pendingAction == nil {
             status = .thinking
         }
@@ -598,6 +599,32 @@ final class VoiceCommandController {
         subtitleText = text
         let line = VoiceTranscriptLine.finalize(text: text, role: .assistant, into: &transcript)
         onAssistantUtteranceFinalized?(line)
+    }
+
+    private func openScratchpadForWritingIntentIfNeeded(_ text: String) {
+        guard Self.isWritingArtifactIntent(text) else { return }
+        handlers.openScratchPadForWriting()
+    }
+
+    private static func isWritingArtifactIntent(_ text: String) -> Bool {
+        let normalized = text.lowercased()
+        let compact = normalized.filter { !$0.isWhitespace && !$0.isPunctuation }
+        let chineseWritingFragments = [
+            "寫作文", "写作文", "寫篇", "写篇", "寫文章", "写文章",
+            "寫plan", "写plan", "寫計劃", "写计划", "做計劃", "做计划",
+            "寫proposal", "写proposal", "寫email", "写email"
+        ]
+        if chineseWritingFragments.contains(where: compact.contains) {
+            return true
+        }
+
+        let englishArtifactTerms = [
+            "essay", "plan", "proposal", "research brief", "study note",
+            "outline", "draft", "email"
+        ]
+        let englishWritingVerbs = ["write", "draft", "compose", "make", "create"]
+        return englishWritingVerbs.contains { normalized.contains($0) } &&
+            englishArtifactTerms.contains { normalized.contains($0) }
     }
 
     private func resetTranscript() {

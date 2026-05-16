@@ -471,7 +471,7 @@ final class YouTubeLearningTests: XCTestCase {
         XCTAssertEqual(segments[1].colorIndex, 1)
     }
 
-    func testYouTubeLearningPanelListsAllSectionSummaries() throws {
+    func testYouTubeLearningPanelUsesSummaryBranchesWithoutTranscriptTimeline() throws {
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -481,13 +481,15 @@ final class YouTubeLearningTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(panelSource.contains("private var summaryTimeline"))
-        XCTAssertTrue(panelSource.contains("summaryDetail(for:"))
-        XCTAssertTrue(panelSource.contains("viewModel.selectSectionForPlayback(segment.section)"))
+        XCTAssertTrue(panelSource.contains("summaryBranch(for:"))
         XCTAssertTrue(panelSource.contains("viewModel.selectSectionForDiscussionAndPlayback(section)"))
         // Every section's title + summary is rendered as its own card so Alex
-        // can scan the whole topic list without clicking through the timeline.
+        // can scan and open the branch directly without a transcript-style timeline.
         XCTAssertTrue(panelSource.contains("ForEach(viewModel.summarySections) { section in"))
+        XCTAssertFalse(panelSource.contains("summaryTimeline"))
+        XCTAssertFalse(panelSource.contains("transcriptList"))
+        XCTAssertFalse(panelSource.contains("Text(\"Transcript\")"))
+        XCTAssertFalse(panelSource.contains("YouTubeTranscriptSegment.timestamp"))
     }
 
     func testYouTubePrecisionLabelsRenderInPanelAndComposerChip() throws {
@@ -694,6 +696,49 @@ final class YouTubeLearningTests: XCTestCase {
         XCTAssertEqual(embed.startSeconds, 2)
         XCTAssertTrue(embed.autoplay)
         XCTAssertEqual(embed.playbackRequestID, 1)
+    }
+
+    @MainActor
+    func testSelectedSummaryDiscussionContextIncludesFullPartMap() async throws {
+        let store = try NodeStore(path: ":memory:")
+        let viewModel = YouTubeLearningViewModel(
+            transcriptService: transcriptServiceReturningSixSegments(),
+            summaryService: YouTubeLearningSummaryService(
+                llmServiceProvider: {
+                    StaticYouTubeSummaryLLM(output: """
+                    [
+                      {"title":"Part 1","summary":"Opening frame.","startTime":0,"endTime":1},
+                      {"title":"Part 2","summary":"Second frame.","startTime":1,"endTime":2},
+                      {"title":"Part 3","summary":"Third frame.","startTime":2,"endTime":3},
+                      {"title":"Part 4","summary":"Fourth frame.","startTime":3,"endTime":4},
+                      {"title":"Part 5","summary":"Fifth frame that should remain visible in chat.","startTime":4,"endTime":5},
+                      {"title":"Part 6","summary":"Closing frame.","startTime":5,"endTime":6}
+                    ]
+                    """)
+                }
+            ),
+            sourceIngestionService: makeSourceIngestionService(nodeStore: store)
+        )
+
+        viewModel.urlText = "https://youtu.be/dQw4w9WgXcQ"
+        await viewModel.load(projectId: nil)
+        let selectedPart = try XCTUnwrap(viewModel.summarySections.first { $0.title == "Part 4" })
+
+        let context = try XCTUnwrap(viewModel.selectSectionForDiscussionAndPlayback(selectedPart))
+        let material = context.sourceMaterialContext()
+
+        XCTAssertEqual(material.chunks.first?.ordinal, 0)
+        XCTAssertTrue(material.chunks.first?.text.contains("YouTube section: Part 4") == true)
+        XCTAssertFalse(material.chunks.contains { $0.text.contains("YouTube summary map") })
+        XCTAssertEqual(material.summaryMap?.sections.count, 6)
+        XCTAssertEqual(material.summaryMap?.sections.first?.partNumber, 1)
+        XCTAssertTrue(material.summaryMap?.sections.contains { section in
+            section.partNumber == 5 &&
+                section.title == "Part 5" &&
+                section.summary == "Fifth frame that should remain visible in chat." &&
+                section.locatorLabel == "00:04-00:05" &&
+                section.evidenceExcerpt == "00:04 Part five transcript evidence"
+        } == true)
     }
 
     @MainActor
@@ -914,6 +959,10 @@ final class YouTubeLearningTests: XCTestCase {
         XCTAssertEqual(context.evidenceLevel, .geminiVideoAnalysis)
         XCTAssertFalse(context.isQuoteLevelReliable)
         XCTAssertTrue(context.promptText.contains("Evidence: Gemini video analysis"))
+
+        let material = context.sourceMaterialContext()
+        XCTAssertEqual(material.summaryMap?.sections.count, 2)
+        XCTAssertTrue(material.summaryMap?.sections.allSatisfy { $0.evidenceExcerpt == nil } == true)
     }
 
     @MainActor
@@ -1030,6 +1079,53 @@ private func transcriptServiceReturningTwoSegments() -> YouTubeTranscriptService
     <transcript>
       <text start="0.0" dur="2.4">First &amp; line</text>
       <text start="2.4" dur="3.0">Second line</text>
+    </transcript>
+    """
+
+    return YouTubeTranscriptService(
+        httpClient: StubYouTubeHTTPClient { request in
+            let url = try XCTUnwrap(request.url?.absoluteString)
+            if url.contains("/watch") {
+                return html
+            }
+            if url.contains("/api/timedtext") {
+                return transcriptXML
+            }
+            XCTFail("Unexpected URL \(url)")
+            return ""
+        }
+    )
+}
+
+private func transcriptServiceReturningSixSegments() -> YouTubeTranscriptService {
+    let html = """
+    <html>
+    <script>
+    var ytInitialPlayerResponse = {
+      "videoDetails": {"title": "Swift Concurrency Lesson"},
+      "captions": {
+        "playerCaptionsTracklistRenderer": {
+          "captionTracks": [
+            {
+              "baseUrl": "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ\\u0026lang=en",
+              "languageCode": "en",
+              "name": {"simpleText": "English"}
+            }
+          ]
+        }
+      }
+    };
+    </script>
+    </html>
+    """
+    let transcriptXML = """
+    <transcript>
+      <text start="0.0" dur="1.0">Part one transcript evidence</text>
+      <text start="1.0" dur="1.0">Part two transcript evidence</text>
+      <text start="2.0" dur="1.0">Part three transcript evidence</text>
+      <text start="3.0" dur="1.0">Part four transcript evidence</text>
+      <text start="4.0" dur="1.0">Part five transcript evidence</text>
+      <text start="5.0" dur="1.0">Part six transcript evidence</text>
     </transcript>
     """
 

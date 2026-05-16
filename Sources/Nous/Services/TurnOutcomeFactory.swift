@@ -69,6 +69,7 @@ struct TurnOutcomeFactory: Sendable {
                 committed.node.projectId
             )
         let sourceLearningDigest: SourceLearningDigestRequest?
+        let automaticMemoryDigest: AutomaticMemoryDigestRequest?
         if !suppressHeavyPostTurnWork,
            memoryDecision.shouldPersist,
            let userMessage,
@@ -82,6 +83,20 @@ struct TurnOutcomeFactory: Sendable {
             )
         } else {
             sourceLearningDigest = nil
+        }
+        if !suppressHeavyPostTurnWork,
+           memoryDecision.shouldPersist,
+           let userMessage {
+            automaticMemoryDigest = AutomaticMemoryDigestRequest(
+                turnId: turnId,
+                conversationId: committed.node.id,
+                projectId: committed.node.projectId,
+                userMessage: userMessage,
+                assistantMessage: committed.assistantMessage,
+                sourceMaterials: sourceMaterials
+            )
+        } else {
+            automaticMemoryDigest = nil
         }
         let continuationPlan = ContextContinuationPlan(
             turnId: turnId,
@@ -99,7 +114,8 @@ struct TurnOutcomeFactory: Sendable {
             ) : nil,
             memorySuppressionReason: memoryDecision.suppressionReason,
             recordsMemorySuppressionTelemetry: recordsMemorySuppressionTelemetry,
-            sourceLearningDigest: sourceLearningDigest
+            sourceLearningDigest: sourceLearningDigest,
+            automaticMemoryDigest: automaticMemoryDigest
         )
         let housekeepingPlan = TurnHousekeepingPlan(
             turnId: turnId,

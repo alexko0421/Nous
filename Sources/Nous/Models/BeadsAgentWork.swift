@@ -95,6 +95,8 @@ struct BeadsIssue: Identifiable, Decodable, Equatable {
     let id: String
     let title: String
     let description: String
+    let notes: String?
+    let design: String?
     let status: String
     let priority: Int
     let issueType: String?
@@ -109,11 +111,14 @@ struct BeadsIssue: Identifiable, Decodable, Equatable {
     let dependentCount: Int
     let commentCount: Int
     let dependencies: [BeadsDependency]
+    let outcomeContract: AgentOutcomeContractSummary
 
     enum CodingKeys: String, CodingKey {
         case id
         case title
         case description
+        case notes
+        case design
         case status
         case priority
         case issueType = "issue_type"
@@ -135,6 +140,8 @@ struct BeadsIssue: Identifiable, Decodable, Equatable {
         id = try container.decode(String.self, forKey: .id)
         title = try container.decodeIfPresent(String.self, forKey: .title) ?? id
         description = try container.decodeIfPresent(String.self, forKey: .description) ?? ""
+        notes = try container.decodeIfPresent(String.self, forKey: .notes)
+        design = try container.decodeIfPresent(String.self, forKey: .design)
         status = try container.decodeIfPresent(String.self, forKey: .status) ?? ""
         priority = try container.decodeIfPresent(Int.self, forKey: .priority) ?? 0
         issueType = try container.decodeIfPresent(String.self, forKey: .issueType)
@@ -149,6 +156,64 @@ struct BeadsIssue: Identifiable, Decodable, Equatable {
         dependentCount = try container.decodeIfPresent(Int.self, forKey: .dependentCount) ?? 0
         commentCount = try container.decodeIfPresent(Int.self, forKey: .commentCount) ?? 0
         dependencies = try container.decodeIfPresent([BeadsDependency].self, forKey: .dependencies) ?? []
+        outcomeContract = AgentOutcomeContractParser.parse(
+            [description, notes ?? "", design ?? ""].joined(separator: "\n\n")
+        )
+    }
+}
+
+struct AgentOutcomeContractSummary: Equatable {
+    let hasObjective: Bool
+    let hasContextIncluded: Bool
+    let hasContextExcluded: Bool
+    let hasOutputSchema: Bool
+    let hasFailureBehavior: Bool
+    let hasAcceptanceRubric: Bool
+    let hasVerificationEvidence: Bool
+
+    var isComplete: Bool {
+        hasObjective &&
+            hasContextIncluded &&
+            hasContextExcluded &&
+            hasOutputSchema &&
+            hasFailureBehavior &&
+            hasAcceptanceRubric &&
+            hasVerificationEvidence
+    }
+
+    var missingLabels: [String] {
+        var labels: [String] = []
+        if !hasObjective { labels.append("objective") }
+        if !hasContextIncluded { labels.append("context-in") }
+        if !hasContextExcluded { labels.append("context-out") }
+        if !hasOutputSchema { labels.append("output") }
+        if !hasFailureBehavior { labels.append("failure") }
+        if !hasAcceptanceRubric { labels.append("rubric") }
+        if !hasVerificationEvidence { labels.append("verification") }
+        return labels
+    }
+}
+
+enum AgentOutcomeContractParser {
+    static func parse(_ text: String) -> AgentOutcomeContractSummary {
+        let normalized = text
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+
+        return AgentOutcomeContractSummary(
+            hasObjective: containsAny(normalized, ["task objective", "objective:", "goal:"]),
+            hasContextIncluded: containsAny(normalized, ["context included", "context needed", "context in"]),
+            hasContextExcluded: containsAny(normalized, ["context excluded", "context out", "ignore:", "ignore these", "do not inspect"]),
+            hasOutputSchema: containsAny(normalized, ["output schema", "expected output", "return format"]),
+            hasFailureBehavior: containsAny(normalized, ["failure behavior", "if blocked", "when blocked"]),
+            hasAcceptanceRubric: containsAny(normalized, ["acceptance rubric", "acceptance criteria", "rubric"]),
+            hasVerificationEvidence: containsAny(normalized, ["verification evidence", "verification", "commands run"])
+        )
+    }
+
+    private static func containsAny(_ text: String, _ needles: [String]) -> Bool {
+        needles.contains { text.contains($0) }
     }
 }
 

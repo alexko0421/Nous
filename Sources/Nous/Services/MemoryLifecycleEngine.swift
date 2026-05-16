@@ -209,10 +209,16 @@ final class MemoryLifecycleEngine {
         try nodeStore.inTransaction {
             guard var atom = try nodeStore.fetchMemoryAtom(id: atomId) else { return }
             guard atom.status == .pending else {
+                if atom.authority == .tentative {
+                    atom.authority = .durable
+                    atom.updatedAt = now
+                    try nodeStore.updateMemoryAtom(atom)
+                }
                 approved = atom
                 return
             }
             atom.status = .active
+            atom.authority = .durable
             atom.updatedAt = now
             atom.lastSeenAt = now
             try nodeStore.updateMemoryAtom(atom)
@@ -225,6 +231,78 @@ final class MemoryLifecycleEngine {
             try triggerAutomaticReflectionIfNeeded(afterApproving: approved, now: now)
         }
         return approved
+    }
+
+    @discardableResult
+    func stageAutomaticAtom(
+        _ candidate: MemoryAtom,
+        now: Date = Date()
+    ) throws -> MemoryAtom {
+        let statement = candidate.statement.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !statement.isEmpty else { return candidate }
+
+        var automatic = candidate
+        automatic.statement = statement
+        automatic.status = candidate.status == .pending ? .pending : .active
+        automatic.authority = candidate.authority
+        automatic.updatedAt = now
+        automatic.normalizedKey = automatic.normalizedKey
+            ?? MemoryGraphWriter.normalizedKey(type: automatic.type, statement: statement)
+        if automatic.embedding == nil {
+            automatic.embedding = embed(statement)
+        }
+
+        var stored = automatic
+        try nodeStore.inTransaction {
+            let matching = try matchingLifecycleAtom(for: automatic)
+            if let matching, matching.status == .archived {
+                stored = matching
+                return
+            }
+
+            try recordAutomaticObservation(for: automatic, now: now)
+            if let conflict = try conflictingDurableAtom(for: automatic) {
+                try nodeStore.insertMemoryAtom(automatic)
+                var conflicted = conflict
+                conflicted.status = .conflicted
+                conflicted.updatedAt = now
+                try nodeStore.updateMemoryAtom(conflicted)
+                try nodeStore.insertMemoryTension(MemoryTension(
+                    kind: .durableConflict,
+                    existingAtomId: conflict.id,
+                    challengerAtomId: automatic.id,
+                    summary: "Automatic memory challenged durable memory: \(conflict.statement)",
+                    createdAt: now
+                ))
+                stored = automatic
+                return
+            }
+
+            if var existing = matching {
+                existing.statement = automatic.statement
+                existing.confidence = max(existing.confidence, automatic.confidence)
+                existing.updatedAt = now
+                existing.lastSeenAt = Self.maxDate(existing.lastSeenAt, now)
+                existing.sourceNodeId = existing.sourceNodeId ?? automatic.sourceNodeId
+                existing.sourceMessageId = existing.sourceMessageId ?? automatic.sourceMessageId
+                existing.correctsTarget = automatic.correctsTarget ?? existing.correctsTarget
+                existing.embedding = existing.embedding ?? automatic.embedding
+                existing.authority = try promotedAuthorityIfEligible(for: existing, now: now)
+                if existing.authority == .durable {
+                    existing.confidence = max(existing.confidence, 0.86)
+                }
+                try nodeStore.updateMemoryAtom(existing)
+                stored = existing
+            } else {
+                automatic.authority = try promotedAuthorityIfEligible(for: automatic, now: now)
+                if automatic.authority == .durable {
+                    automatic.confidence = max(automatic.confidence, 0.86)
+                }
+                try nodeStore.insertMemoryAtom(automatic)
+                stored = automatic
+            }
+        }
+        return stored
     }
 
     @discardableResult
@@ -243,6 +321,23 @@ final class MemoryLifecycleEngine {
             rejected = atom
         }
         return rejected
+    }
+
+    @discardableResult
+    func resolveTension(_ tensionId: UUID, now: Date = Date()) throws -> MemoryTension? {
+        var resolved: MemoryTension?
+        try nodeStore.inTransaction {
+            guard var tension = try nodeStore.fetchMemoryTensions()
+                .first(where: { $0.id == tensionId })
+            else {
+                return
+            }
+            tension.status = .resolved
+            tension.resolvedAt = now
+            try nodeStore.updateMemoryTension(tension)
+            resolved = tension
+        }
+        return resolved
     }
 
     @discardableResult
@@ -703,6 +798,7 @@ final class MemoryLifecycleEngine {
             String(format: "importance=%.2f", score.importance),
             String(format: "interaction=%.2f", score.interaction),
             String(format: "final=%.2f", score.final),
+            "authority=\(atom.authority.rawValue)",
             "source_node_id=\(atom.sourceNodeId?.uuidString ?? "missing")",
             "source_message_id=\(atom.sourceMessageId?.uuidString ?? "missing")"
         ].joined(separator: " ")
@@ -722,6 +818,66 @@ final class MemoryLifecycleEngine {
 
         return MemoryGraphAtomMapper.normalizedLine(atom.statement)
             == MemoryGraphAtomMapper.normalizedLine(proposal.statement)
+    }
+
+    private func recordAutomaticObservation(for atom: MemoryAtom, now: Date) throws {
+        let key = atom.normalizedKey ?? MemoryGraphWriter.normalizedKey(type: atom.type, statement: atom.statement)
+        try nodeStore.insertMemoryObservation(MemoryObservation(
+            rawText: key,
+            extractedType: atom.type,
+            confidence: atom.confidence,
+            sourceNodeId: atom.sourceNodeId,
+            sourceMessageId: atom.sourceMessageId,
+            createdAt: now
+        ))
+    }
+
+    private func promotedAuthorityIfEligible(for atom: MemoryAtom, now: Date) throws -> MemoryAuthority {
+        guard atom.authority == .tentative,
+              atom.status == .active,
+              let key = atom.normalizedKey,
+              try !hasOpenTension(for: atom.id)
+        else {
+            return atom.authority
+        }
+        let matchingObservations = try nodeStore.fetchMemoryObservations().filter { observation in
+            observation.extractedType == atom.type &&
+                MemoryGraphAtomMapper.normalizedLine(observation.rawText) == MemoryGraphAtomMapper.normalizedLine(key)
+        }
+        let uniqueMessageIds = Set(matchingObservations.compactMap(\.sourceMessageId))
+        let uniqueNodeIds = Set(matchingObservations.compactMap(\.sourceNodeId))
+        return uniqueMessageIds.count >= 3 && uniqueNodeIds.count >= 2 ? .durable : .tentative
+    }
+
+    private func hasOpenTension(for atomId: UUID) throws -> Bool {
+        try nodeStore.fetchMemoryTensions(statuses: [.open]).contains { tension in
+            tension.existingAtomId == atomId || tension.challengerAtomId == atomId
+        }
+    }
+
+    private func conflictingDurableAtom(for candidate: MemoryAtom) throws -> MemoryAtom? {
+        guard candidate.authority == .tentative,
+              candidate.status == .active,
+              candidate.type == .correction || candidate.correctsTarget != nil
+        else { return nil }
+        let target = candidate.correctsTarget.map(MemoryGraphAtomMapper.normalizedLine) ?? ""
+        return try nodeStore.fetchMemoryAtoms(
+            types: [],
+            statuses: [.active],
+            scope: candidate.scope,
+            scopeRefId: candidate.scopeRefId,
+            eventTimeStart: nil,
+            eventTimeEnd: nil,
+            limit: nil
+        )
+        .first { atom in
+            atom.authority == .durable &&
+                atom.id != candidate.id &&
+                (
+                    (!target.isEmpty && MemoryGraphAtomMapper.normalizedLine(atom.statement).contains(target)) ||
+                    (atom.normalizedKey != nil && atom.normalizedKey == candidate.normalizedKey && atom.statement != candidate.statement)
+                )
+        }
     }
 
     private static func maxDate(_ lhs: Date?, _ rhs: Date) -> Date {

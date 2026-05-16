@@ -204,6 +204,33 @@ final class VoiceCommandControllerTests: XCTestCase {
         XCTAssertEqual(controller.status, .thinking)
     }
 
+    func testWritingIntentTranscriptOpensScratchpadInWriteModeBeforeModelToolCall() async throws {
+        let session = FakeRealtimeVoiceSession()
+        let controller = VoiceCommandController(session: session)
+        var scratchpadVisibility: [Bool] = []
+        var writeOpenCount = 0
+        controller.configure(
+            VoiceActionHandlers(
+                navigate: { _ in },
+                setSidebarVisible: { _ in },
+                setScratchPadVisible: { scratchpadVisibility.append($0) },
+                openScratchPadForWriting: { writeOpenCount += 1 },
+                setComposerText: { _ in },
+                appendComposerText: { _ in },
+                clearComposer: {},
+                startNewChat: {},
+                createNote: { _, _ in }
+            )
+        )
+
+        try await controller.start(apiKey: "sk-test")
+        await session.emit(.inputTranscriptCompleted("我想寫作文呀"))
+
+        XCTAssertEqual(scratchpadVisibility, [])
+        XCTAssertEqual(writeOpenCount, 1)
+        XCTAssertEqual(controller.status, .thinking)
+    }
+
     func testRealtimeAssistantTranscriptStreamsIntoSubtitle() async throws {
         let session = FakeRealtimeVoiceSession()
         let controller = VoiceCommandController(session: session)
@@ -743,11 +770,13 @@ final class VoiceCommandControllerTests: XCTestCase {
         let controller = VoiceCommandController()
         var replacedMarkdown: String?
         var appendedMarkdown: String?
+        var writeOpenCount = 0
         controller.configure(
             VoiceActionHandlers(
                 navigate: { _ in },
                 setSidebarVisible: { _ in },
                 setScratchPadVisible: { _ in },
+                openScratchPadForWriting: { writeOpenCount += 1 },
                 replaceScratchPadMarkdown: { replacedMarkdown = $0 },
                 appendScratchPadMarkdown: { appendedMarkdown = $0 },
                 setComposerText: { _ in },
@@ -763,6 +792,7 @@ final class VoiceCommandControllerTests: XCTestCase {
             arguments: ##"{"markdown":"# Essay\n\nDraft thesis."}"##
         ))
         XCTAssertEqual(replacedMarkdown, "# Essay\n\nDraft thesis.")
+        XCTAssertEqual(writeOpenCount, 1)
         XCTAssertEqual(controller.status, .action("Draft updated"))
 
         try await controller.handleToolCall(.init(
@@ -770,6 +800,7 @@ final class VoiceCommandControllerTests: XCTestCase {
             arguments: "{\"markdown\":\"## Body\\n\\nAdd the example.\"}"
         ))
         XCTAssertEqual(appendedMarkdown, "## Body\n\nAdd the example.")
+        XCTAssertEqual(writeOpenCount, 2)
         XCTAssertEqual(controller.status, .action("Draft expanded"))
     }
 

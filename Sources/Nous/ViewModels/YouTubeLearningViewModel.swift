@@ -181,6 +181,11 @@ final class YouTubeLearningViewModel {
             summaryTitle: section.title,
             summary: section.summary,
             transcriptExcerpt: excerpt,
+            summaryMap: Self.summaryMap(
+                for: summarySections,
+                transcript: transcript,
+                evidenceLevel: sourceMaterial.evidenceLevel
+            ),
             evidenceLevel: sourceMaterial.evidenceLevel
         )
     }
@@ -278,6 +283,48 @@ final class YouTubeLearningViewModel {
         \(section.timeRangeLabel) \(section.title)
         \(section.summary)
         """
+    }
+
+    private static func summaryMap(
+        for sections: [YouTubeSummarySection],
+        transcript: YouTubeTranscript?,
+        evidenceLevel: SourceEvidenceLevel
+    ) -> SourceSummaryMap? {
+        guard !sections.isEmpty else { return nil }
+        return SourceSummaryMap(
+            sections: sections.enumerated().map { index, section in
+                SourceSummaryMapSection(
+                    partNumber: index + 1,
+                    title: section.title,
+                    summary: section.summary,
+                    locatorLabel: section.timeRangeLabel,
+                    evidenceExcerpt: evidenceExcerpt(
+                        for: section,
+                        transcript: transcript,
+                        evidenceLevel: evidenceLevel
+                    )
+                )
+            }
+        )
+    }
+
+    private static func evidenceExcerpt(
+        for section: YouTubeSummarySection,
+        transcript: YouTubeTranscript?,
+        evidenceLevel: SourceEvidenceLevel
+    ) -> String? {
+        guard evidenceLevel.isQuoteLevelReliable,
+              let transcript else {
+            return nil
+        }
+
+        let excerpt = transcript.excerpt(
+            startTime: section.startTime,
+            endTime: section.endTime,
+            maxCharacters: 600
+        )
+        let trimmed = excerpt.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private static func fallbackFailureMessage(captionError: Error, analysisError: Error) -> String {

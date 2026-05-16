@@ -1,5 +1,10 @@
 import Foundation
 
+enum MemoryAuthority: String, Codable, CaseIterable {
+    case tentative
+    case durable
+}
+
 enum MemoryAtomType: String, Codable, CaseIterable {
     case identity
     case preference
@@ -30,6 +35,7 @@ struct MemoryAtom: Identifiable, Codable, Equatable {
     var scope: MemoryScope
     var scopeRefId: UUID?
     var status: MemoryStatus
+    var authority: MemoryAuthority
     var confidence: Double
     var eventTime: Date?
     var validFrom: Date?
@@ -50,6 +56,7 @@ struct MemoryAtom: Identifiable, Codable, Equatable {
         scope: MemoryScope,
         scopeRefId: UUID? = nil,
         status: MemoryStatus = .active,
+        authority: MemoryAuthority = .durable,
         confidence: Double = 0.7,
         eventTime: Date? = nil,
         validFrom: Date? = nil,
@@ -69,6 +76,7 @@ struct MemoryAtom: Identifiable, Codable, Equatable {
         self.scope = scope
         self.scopeRefId = scopeRefId
         self.status = status
+        self.authority = authority
         self.confidence = confidence
         self.eventTime = eventTime
         self.validFrom = validFrom

@@ -330,6 +330,40 @@ final class ChatViewModelTests: XCTestCase {
             prompt.contains("source-only late section")
     }
 
+    func testEnsureConversationForVoiceActivatesScratchpadForNewConversation() throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let vectorStore = VectorStore(nodeStore: nodeStore)
+        let embeddingService = EmbeddingService()
+        let graphEngine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+        let userMemoryService = UserMemoryService(nodeStore: nodeStore, llmServiceProvider: { nil })
+        let scheduler = UserMemoryScheduler(service: userMemoryService)
+        let scratchPadStore = makeScratchPadStore(nodeStore: nodeStore)
+
+        let vm = ChatViewModel(
+            nodeStore: nodeStore,
+            vectorStore: vectorStore,
+            embeddingService: embeddingService,
+            graphEngine: graphEngine,
+            userMemoryService: userMemoryService,
+            userMemoryScheduler: scheduler,
+            conversationSessionStore: ConversationSessionStore(nodeStore: nodeStore),
+            llmServiceProvider: { nil },
+            currentProviderProvider: { .local },
+            judgeLLMServiceFactory: { nil },
+            scratchPadStore: scratchPadStore
+        )
+
+        XCTAssertNil(vm.currentNode)
+        XCTAssertNil(scratchPadStore.activeConversationId)
+
+        let conversationId = try vm.ensureConversationForVoice()
+        scratchPadStore.updateContent("# Voice Draft\n\nFirst paragraph.")
+
+        XCTAssertEqual(vm.currentNode?.id, conversationId)
+        XCTAssertEqual(scratchPadStore.activeConversationId, conversationId)
+        XCTAssertEqual(scratchPadStore.currentContent, "# Voice Draft\n\nFirst paragraph.")
+    }
+
     func testChatModeDefaultsToNil() throws {
         let nodeStore = try NodeStore(path: ":memory:")
         let vectorStore = VectorStore(nodeStore: nodeStore)

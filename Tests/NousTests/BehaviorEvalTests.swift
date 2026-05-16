@@ -209,6 +209,15 @@ final class BehaviorEvalTests: XCTestCase {
         XCTAssertTrue(axes.contains(.currentIntent))
     }
 
+    func testQuickSuiteIncludesDelegationContractAxis() {
+        let summary = BehaviorEvalRunner().runQuickSuite()
+        let contract = summary.results.first { $0.axis == .delegationContract }
+
+        XCTAssertEqual(contract?.id, "delegation_contract_boundary")
+        XCTAssertEqual(contract?.verdict, .pass)
+        XCTAssertTrue(contract?.findings.isEmpty == true)
+    }
+
     func testToolLoopReliabilityAdapterPreservesRecentFailureRate() {
         let summary = BehaviorEvalRunner().runQuickSuite(
             agentToolReliability: AgentToolReliabilitySummary(

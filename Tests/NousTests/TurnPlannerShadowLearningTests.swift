@@ -716,10 +716,16 @@ final class TurnPlannerShadowLearningTests: XCTestCase {
 
         XCTAssertEqual(plan.turnSlice.volatile.components(separatedBy: "TURN GUIDANCE:").count - 1, 1)
         XCTAssertTrue(plan.turnSlice.volatile.contains("Reflective meaning:"))
-        XCTAssertTrue(plan.turnSlice.volatile.contains("Name one possible underlying pull"))
-        XCTAssertTrue(plan.turnSlice.volatile.contains("one reusable action"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("plain conversational paragraphs"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("at most two short paragraphs"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("no Markdown, headings, labels, bullets, bold text, or divider lines"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("not just a rhetorical closing question"))
         XCTAssertTrue(plan.turnSlice.volatile.contains("tentative language"))
-        XCTAssertTrue(plan.turnSlice.volatile.contains("If evidence is thin, ask one clarifying question"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("concrete event plus an explicit request"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("do not default to a clarifying question"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("If the event, self-reference, or felt pull is missing"))
+        XCTAssertFalse(plan.turnSlice.volatile.contains("Use the default compact shape"))
+        XCTAssertFalse(plan.turnSlice.volatile.contains("one sentence for the possible underlying pull"))
         XCTAssertFalse(plan.turnSlice.volatile.contains("演唱会"))
         XCTAssertFalse(plan.turnSlice.volatile.lowercased().contains("concert"))
         XCTAssertFalse(plan.turnSlice.volatile.lowercased().contains("girl"))
@@ -753,10 +759,11 @@ final class TurnPlannerShadowLearningTests: XCTestCase {
 
         let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
 
-        XCTAssertTrue(plan.turnSlice.volatile.contains("Use compact three-layer form"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("Only use a compact three-layer form when Alex asks for clearer analysis"))
         XCTAssertTrue(plan.turnSlice.volatile.contains("surface event"))
         XCTAssertTrue(plan.turnSlice.volatile.contains("possible underlying pull"))
         XCTAssertTrue(plan.turnSlice.volatile.contains("reusable action"))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("Do not make the layers feel like a worksheet"))
     }
 
     func testTurnGuidanceDoesNotMentionReflectiveMeaningWithoutSignal() async throws {

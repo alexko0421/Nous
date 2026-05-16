@@ -805,7 +805,10 @@ final class TurnSteward {
             comparisonLoopCandidate(normalized),
             identityPressureCandidate(normalized),
             learningInsteadOfShippingCandidate(normalized),
+            notReadyRationalizationCandidate(normalized),
+            bigSystemEscapeCandidate(normalized),
             planningAsAvoidanceCandidate(normalized),
+            externalJudgmentSensitivityCandidate(normalized),
             overTrustingSystemCandidate(normalized)
         ].compactMap { $0 }
 
@@ -835,8 +838,7 @@ final class TurnSteward {
         guard sourceEligible || ordinaryEligible else {
             return nil
         }
-        guard request.attachments.isEmpty,
-              !memoryOptOut,
+        guard !memoryOptOut,
               !distress,
               !Self.isTextTransformRequest(normalized),
               !containsAny(normalized, in: Self.patternSafetyBypassCues)
@@ -915,6 +917,39 @@ final class TurnSteward {
             return nil
         }
         return PatternCandidate(kind: .learningInsteadOfShipping, confidence: 0.88, reasonCode: "learning_shipping_delay")
+    }
+
+    private func externalJudgmentSensitivityCandidate(_ text: String) -> PatternCandidate? {
+        guard hasSelfReference(text),
+              containsAnyPatternCue(text, in: Self.externalJudgmentCues) else {
+            return nil
+        }
+        let hasProductTruthCue = containsAnyPatternCue(text, in: Self.productTruthCues)
+        let hasSelfPresentationCue = containsAnyPatternCue(text, in: Self.externalJudgmentSelfPresentationCues)
+        guard hasProductTruthCue || hasSelfPresentationCue else {
+            return nil
+        }
+        let reasonCode = hasProductTruthCue
+            ? "external_judgment_over_product_truth"
+            : "external_judgment_self_presentation"
+        return PatternCandidate(kind: .externalJudgmentSensitivity, confidence: 0.88, reasonCode: reasonCode)
+    }
+
+    private func notReadyRationalizationCandidate(_ text: String) -> PatternCandidate? {
+        guard hasSelfReference(text),
+              containsAnyPatternCue(text, in: Self.notReadyDelayCues),
+              containsAnyPatternCue(text, in: Self.shippableReadinessCues) else {
+            return nil
+        }
+        return PatternCandidate(kind: .notReadyRationalization, confidence: 0.87, reasonCode: "not_ready_delay_with_shippable_slice")
+    }
+
+    private func bigSystemEscapeCandidate(_ text: String) -> PatternCandidate? {
+        guard containsAnyPatternCue(text, in: Self.bigSystemExpansionCues),
+              containsAnyPatternCue(text, in: Self.exposedStepCues) else {
+            return nil
+        }
+        return PatternCandidate(kind: .bigSystemEscape, confidence: 0.88, reasonCode: "big_system_before_exposed_step")
     }
 
     private func planningAsAvoidanceCandidate(_ text: String) -> PatternCandidate? {
@@ -1505,6 +1540,15 @@ final class TurnSteward {
         "smc",
         "学校",
         "學校",
+        "大学",
+        "大學",
+        "英文",
+        "english",
+        "技术",
+        "技術",
+        "technical",
+        "成绩",
+        "成績",
         "19",
         "age",
         "身份"
@@ -1521,7 +1565,17 @@ final class TurnSteward {
         "夠格",
         "证明",
         "證明",
-        "not real"
+        "not real",
+        "唔配",
+        "不配",
+        "蚀底",
+        "蝕底",
+        "差学生",
+        "差學生",
+        "好失败",
+        "好失敗",
+        "羞耻",
+        "羞恥"
     ]
 
     private static let learningDelayCues = [
@@ -1548,6 +1602,109 @@ final class TurnSteward {
         "之后先决定",
         "之後先決定",
         "before shipping"
+    ]
+
+    private static let externalJudgmentCues = [
+        "别人觉得",
+        "別人覺得",
+        "别人点睇",
+        "別人點睇",
+        "人哋觉得",
+        "人哋覺得",
+        "人哋点睇",
+        "人哋點睇",
+        "what people on twitter will think",
+        "what people think",
+        "twitter will think",
+        "audience will think",
+        "look stupid",
+        "not impressive",
+        "唔够高级",
+        "唔夠高級",
+        "不够高级",
+        "不夠高級"
+    ]
+
+    private static let externalJudgmentSelfPresentationCues = [
+        "无所事事",
+        "無所事事",
+        "不务正业",
+        "不務正業",
+        "唔务正业",
+        "唔務正業",
+        "wasting time",
+        "not doing real work"
+    ]
+
+    private static let productTruthCues = [
+        "user pain",
+        "product truth",
+        "observable signal",
+        "real signal",
+        "live evidence",
+        "用户反应",
+        "用戶反應",
+        "用户痛点",
+        "用戶痛點",
+        "真实反应",
+        "真實反應",
+        "真实 evidence",
+        "真實 evidence"
+    ]
+
+    private static let notReadyDelayCues = [
+        "not ready",
+        "not-ready",
+        "未准备好",
+        "未準備好",
+        "唔 ready",
+        "未 ready",
+        "等到 ready",
+        "ready 先",
+        "准备好先",
+        "準備好先"
+    ]
+
+    private static let shippableReadinessCues = [
+        "shipping",
+        "ship",
+        "prototype",
+        "smallest",
+        "minimum",
+        "最小版本",
+        "最小 slice",
+        "small slice",
+        "可以发出去",
+        "可以發出去",
+        "发出去",
+        "發出去"
+    ]
+
+    private static let bigSystemExpansionCues = [
+        "whole system",
+        "complete system",
+        "grand system",
+        "full platform",
+        "whole operating system",
+        "memory operating system",
+        "build the whole system",
+        "完整 system",
+        "完整系统",
+        "完整系統",
+        "完整 memory operating system"
+    ]
+
+    private static let exposedStepCues = [
+        "exposed next step",
+        "smallest next step",
+        "rough slice",
+        "show the rough slice",
+        "small slice",
+        "small step",
+        "first real move",
+        "今日测试",
+        "今日測試",
+        "今日 test"
     ]
 
     private static let planningExpansionCues = [

@@ -99,6 +99,36 @@ final class VoiceActionRegistryTests: XCTestCase {
         XCTAssertEqual(json["active_conversation_title"] as? String, "Voice mode")
     }
 
+    func testScratchpadWritingToolsDescribeArtifactSafeguards() throws {
+        let declarations = VoiceActionRegistry.declarations(includeMemoryTools: false)
+        let replace = try Self.declaration(named: "replace_scratchpad_markdown", in: declarations)
+        let append = try Self.declaration(named: "append_scratchpad_markdown", in: declarations)
+        let replaceDescription = try XCTUnwrap(replace["description"] as? String)
+        let appendDescription = try XCTUnwrap(append["description"] as? String)
+
+        XCTAssertTrue(replaceDescription.contains("complete markdown artifact"))
+        XCTAssertTrue(replaceDescription.contains("explicitly asks"))
+        XCTAssertTrue(replaceDescription.contains("synthesize"))
+        XCTAssertTrue(replaceDescription.contains("not raw transcript"))
+        XCTAssertTrue(replaceDescription.contains("quality gate"))
+        XCTAssertTrue(replaceDescription.contains("revised artifact"))
+        XCTAssertTrue(replaceDescription.contains("not cleaned-up dictation"))
+        XCTAssertTrue(replaceDescription.contains("plan"))
+        XCTAssertTrue(appendDescription.contains("without discarding existing content"))
+        XCTAssertTrue(appendDescription.contains("default"))
+        XCTAssertTrue(appendDescription.contains("synthesized"))
+        XCTAssertTrue(appendDescription.contains("quality gate"))
+        XCTAssertTrue(appendDescription.contains("revised artifact"))
+        XCTAssertTrue(appendDescription.contains("research notes"))
+        XCTAssertTrue(appendDescription.contains("incremental artifact work"))
+    }
+
+    private static func declaration(named name: String, in declarations: [[String: Any]]) throws -> [String: Any] {
+        try XCTUnwrap(declarations.first { declaration in
+            declaration["name"] as? String == name
+        })
+    }
+
     private static func toolNames(from declarations: [[String: Any]]) throws -> Set<String> {
         Set(try declarations.map { declaration in
             try XCTUnwrap(declaration["name"] as? String)

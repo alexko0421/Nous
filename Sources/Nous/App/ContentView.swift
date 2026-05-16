@@ -57,6 +57,7 @@ struct ContentView: View {
 
     @State private var isSidebarVisible = true
     @State private var rightPanelMode: RightPanelMode?
+    @State private var scratchPadPanelMode: ScratchPadPanelMode = .preview
     @State private var selectedTab: MainTab = .chat
     @State private var selectedSettingsSection: SettingsSection = .profile
     @State private var selectedProjectId: UUID?
@@ -164,6 +165,16 @@ struct ContentView: View {
             .onChange(of: selectedProjectId) { _, newValue in
                 dependencies.chatVM.defaultProjectId = newValue
             }
+            .onChange(of: selectedTab) { _, newValue in
+                let nextMode = RightPanelSurfaceScope.modeAfterTabChange(
+                    currentMode: rightPanelMode,
+                    selectedTabIsChat: newValue == .chat
+                )
+                guard nextMode != rightPanelMode else { return }
+                withAnimation(AppMotion.markdownPanelSpring.animation) {
+                    rightPanelMode = nextMode
+                }
+            }
     }
 
     @ViewBuilder
@@ -194,6 +205,12 @@ struct ContentView: View {
             onNodeSelected: { node in navigateToNode(node, dependencies: dependencies) },
             onNewChat: {
                 dependencies.chatVM.startBlankConversation()
+                let nextMode = RightPanelSurfaceScope.modeAfterNewBlankConversation(currentMode: rightPanelMode)
+                if nextMode != rightPanelMode {
+                    withAnimation(AppMotion.markdownPanelSpring.animation) {
+                        rightPanelMode = nextMode
+                    }
+                }
                 selectedTab = .chat
             }
         )
@@ -262,7 +279,8 @@ struct ContentView: View {
         case .markdown:
             ScratchPadPanel(
                 isVisible: scratchPadVisibilityBinding,
-                store: dependencies.scratchPadStore
+                store: dependencies.scratchPadStore,
+                mode: $scratchPadPanelMode
             )
             .transition(.move(edge: .trailing).combined(with: .opacity))
 
@@ -367,6 +385,13 @@ struct ContentView: View {
                         }
                     }
                 },
+                openScratchPadForWriting: {
+                    withAnimation(AppMotion.markdownPanelSpring.animation) {
+                        rightPanelMode = .markdown
+                        scratchPadPanelMode = .write
+                        selectedTab = .chat
+                    }
+                },
                 replaceScratchPadMarkdown: { markdown in
                     writeVoiceScratchPadDraft(markdown, mode: .replace, dependencies: dependencies)
                 },
@@ -390,8 +415,9 @@ struct ContentView: View {
                 },
                 startNewChat: {
                     dependencies.chatVM.startBlankConversation()
+                    let nextMode = RightPanelSurfaceScope.modeAfterNewBlankConversation(currentMode: rightPanelMode)
                     withAnimation(AppMotion.markdownPanelSpring.animation) {
-                        rightPanelMode = nil
+                        rightPanelMode = nextMode
                     }
                     selectedTab = .chat
                     voiceAttachmentResetToken = UUID()
@@ -437,6 +463,7 @@ struct ContentView: View {
 
         withAnimation(AppMotion.markdownPanelSpring.animation) {
             rightPanelMode = .markdown
+            scratchPadPanelMode = .write
             selectedTab = .chat
         }
 

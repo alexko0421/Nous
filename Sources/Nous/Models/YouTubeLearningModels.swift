@@ -411,6 +411,7 @@ struct SourceDiscussionContext: Equatable {
     let summaryTitle: String
     let summary: String
     let transcriptExcerpt: String
+    let summaryMap: SourceSummaryMap?
     let evidenceLevel: SourceEvidenceLevel
 
     init(
@@ -422,6 +423,7 @@ struct SourceDiscussionContext: Equatable {
         summaryTitle: String,
         summary: String,
         transcriptExcerpt: String,
+        summaryMap: SourceSummaryMap? = nil,
         evidenceLevel: SourceEvidenceLevel = .unknown
     ) {
         self.sourceNodeId = sourceNodeId
@@ -432,6 +434,7 @@ struct SourceDiscussionContext: Equatable {
         self.summaryTitle = summaryTitle
         self.summary = summary
         self.transcriptExcerpt = transcriptExcerpt
+        self.summaryMap = summaryMap
         self.evidenceLevel = evidenceLevel
     }
 
@@ -471,7 +474,7 @@ struct SourceDiscussionContext: Equatable {
     }
 
     func sourceMaterialContext() -> SourceMaterialContext {
-        SourceMaterialContext(
+        return SourceMaterialContext(
             sourceNodeId: sourceNodeId,
             title: title,
             originalURL: sourceURL,
@@ -484,6 +487,7 @@ struct SourceDiscussionContext: Equatable {
                     similarity: nil
                 )
             ],
+            summaryMap: summaryMap,
             evidenceLevel: evidenceLevel
         )
     }

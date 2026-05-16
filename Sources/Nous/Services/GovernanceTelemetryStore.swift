@@ -776,6 +776,7 @@ enum ContextManifestFactory {
         "user_model",
         "project_goal",
         "recent_conversations",
+        "derived_memory_context",
         "slow_cognition"
     ]
 

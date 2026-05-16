@@ -168,6 +168,7 @@ struct PromptGovernanceTrace: Equatable, Codable {
         "project_goal",
         "recent_conversations",
         "corpus_context",
+        "derived_memory_context",
         "citations",
         "long_gap_bridge_guidance",
         "slow_cognition"

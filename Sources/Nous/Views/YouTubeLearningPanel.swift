@@ -19,7 +19,6 @@ struct YouTubeLearningPanel: View {
                         errorState
                         evidencePill
                         summaries
-                        transcriptList
                     }
                     .padding(.horizontal, 14)
                     .padding(.bottom, 18)
@@ -200,11 +199,9 @@ struct YouTubeLearningPanel: View {
                                 .stroke(AppColor.panelStroke, lineWidth: 1)
                         )
                 } else {
-                    summaryTimeline
-
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(viewModel.summarySections) { section in
-                            summaryDetail(for: section)
+                            summaryBranch(for: section)
                         }
                     }
                 }
@@ -231,70 +228,39 @@ struct YouTubeLearningPanel: View {
         )
     }
 
-    private var summaryTimeline: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(Color(nsColor: AppColor.controlGlassTint))
-                    .overlay(
-                        Capsule()
-                            .stroke(AppColor.panelStroke, lineWidth: 1)
-                    )
-
-                ForEach(viewModel.summaryTimelineSegments) { segment in
-                    Button {
-                        viewModel.selectSectionForPlayback(segment.section)
-                    } label: {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(summaryTimelineColor(for: segment))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .stroke(
-                                        segment.isSelected ? AppColor.colaDarkText.opacity(0.55) : Color.clear,
-                                        lineWidth: 1.4
-                                    )
-                            )
-                            .frame(
-                                width: max(10, proxy.size.width * segment.widthFraction),
-                                height: 18
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .offset(x: proxy.size.width * segment.startFraction)
-                    .help("\(segment.section.timeRangeLabel) \(segment.section.title)")
-                }
-            }
-        }
-        .frame(height: 22)
-    }
-
-    private func summaryDetail(for section: YouTubeSummarySection) -> some View {
+    private func summaryBranch(for section: YouTubeSummarySection) -> some View {
         let isSelected = viewModel.selectedSectionID == section.id
 
         return Button {
             guard let context = viewModel.selectSectionForDiscussionAndPlayback(section) else { return }
             onSelectContext(context)
         } label: {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(section.timeRangeLabel)
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                        .foregroundStyle(isSelected ? AppColor.colaOrange : AppColor.secondaryText)
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(isSelected ? AppColor.colaOrange : AppColor.secondaryText)
+                    .frame(width: 22, height: 22)
+                    .padding(.top, 1)
+
+                VStack(alignment: .leading, spacing: 6) {
                     Text(section.title)
                         .font(.system(size: 13, weight: .semibold, design: .rounded))
                         .foregroundStyle(AppColor.colaDarkText)
                         .lineLimit(2)
-                    Spacer(minLength: 0)
-                    Image(systemName: "link")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(isSelected ? AppColor.colaOrange : AppColor.secondaryText)
+
+                    Text(section.summary)
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(AppColor.secondaryText)
+                        .lineSpacing(4)
+                        .lineLimit(4)
                 }
 
-                Text(section.summary)
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(AppColor.secondaryText)
-                    .lineSpacing(4)
-                    .lineLimit(4)
+                Spacer(minLength: 0)
+
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(isSelected ? AppColor.colaOrange : AppColor.secondaryText)
+                    .padding(.top, 2)
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -312,58 +278,7 @@ struct YouTubeLearningPanel: View {
             )
         }
         .buttonStyle(.plain)
-        .help("Discuss this section")
-    }
-
-    private func summaryTimelineColor(for segment: YouTubeSummaryTimelineSegment) -> Color {
-        let colors = [
-            Color(red: 0.95, green: 0.45, blue: 0.22),
-            Color(red: 0.25, green: 0.58, blue: 0.78),
-            Color(red: 0.36, green: 0.64, blue: 0.43),
-            Color(red: 0.72, green: 0.46, blue: 0.76),
-            Color(red: 0.88, green: 0.68, blue: 0.28),
-            Color(red: 0.32, green: 0.65, blue: 0.64)
-        ]
-        let color = colors[segment.colorIndex % colors.count]
-        return segment.isSelected ? color.opacity(0.9) : color.opacity(0.58)
-    }
-
-    @ViewBuilder
-    private var transcriptList: some View {
-        if let transcript = viewModel.transcript {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Transcript")
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .foregroundColor(AppColor.colaDarkText)
-
-                LazyVStack(alignment: .leading, spacing: 8) {
-                    ForEach(transcript.segments) { segment in
-                        HStack(alignment: .top, spacing: 10) {
-                            Text(YouTubeTranscriptSegment.timestamp(segment.startTime))
-                                .font(.system(size: 11, weight: .semibold, design: .rounded))
-                                .foregroundStyle(AppColor.colaOrange)
-                                .frame(width: 44, alignment: .leading)
-
-                            Text(segment.text)
-                                .font(.system(size: 12, weight: .medium, design: .rounded))
-                                .foregroundStyle(AppColor.colaDarkText.opacity(0.78))
-                                .lineSpacing(4)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .padding(.vertical, 2)
-                    }
-                }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    NativeGlassPanel(cornerRadius: 16, tintColor: AppColor.surfaceGlassTint) { EmptyView() }
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(AppColor.panelStroke, lineWidth: 1)
-                )
-            }
-        }
+        .help("Discuss this summary branch")
     }
 
     private func load() {

@@ -59,6 +59,7 @@ final class ChatViewModel {
     @ObservationIgnored private var pendingSourceDiscussionContextByTurnId: [UUID: SourceDiscussionContext] = [:]
     @ObservationIgnored private var sourceMaterialsByUserMessageId: [UUID: [SourceMaterialContext]] = [:]
     @ObservationIgnored private var sourceBriefingsByUserMessageId: [UUID: SourceBriefing] = [:]
+    @ObservationIgnored private var shouldPreserveRightPanelForBlankConversationBootstrap = false
 
     // MARK: - Dependencies
 
@@ -70,6 +71,7 @@ final class ChatViewModel {
     private let userMemoryService: UserMemoryService
     private let userMemoryScheduler: UserMemoryScheduler
     private let sourceLearningMemoryScheduler: SourceLearningMemoryScheduler?
+    private let automaticMemoryScheduler: AutomaticMemoryPipelineScheduler?
     private let conversationSessionStore: ConversationSessionStore
     @ObservationIgnored private let explicitTurnRunner: ChatTurnRunner?
     @ObservationIgnored private let explicitTurnPlanner: TurnPlanner?
@@ -197,6 +199,7 @@ final class ChatViewModel {
             },
             outcomeFactory: turnOutcomeFactory,
             shadowLearningSignalRecorder: shadowLearningSignalRecorder,
+            inTurnPatternProposalService: InTurnPatternProposalService(nodeStore: nodeStore),
             cognitionReviewer: CognitionReviewer(),
             failureSkillCandidateStore: failureSkillCandidateStore,
             shouldSurfaceThinkingTraces: shouldPersistAssistantThinking,
@@ -343,7 +346,8 @@ final class ChatViewModel {
             userMemoryScheduler: userMemoryScheduler,
             governanceTelemetry: governanceTelemetry,
             perConversationReflectionAutoTrigger: autoTrigger,
-            sourceLearningScheduler: sourceLearningMemoryScheduler
+            sourceLearningScheduler: sourceLearningMemoryScheduler,
+            automaticMemoryScheduler: automaticMemoryScheduler
         )
         cachedContextContinuationService = service
         return service
@@ -409,6 +413,7 @@ final class ChatViewModel {
         userMemoryService: UserMemoryService,
         userMemoryScheduler: UserMemoryScheduler,
         sourceLearningMemoryScheduler: SourceLearningMemoryScheduler? = nil,
+        automaticMemoryScheduler: AutomaticMemoryPipelineScheduler? = nil,
         conversationSessionStore: ConversationSessionStore? = nil,
         turnRunner: ChatTurnRunner? = nil,
         turnPlanner: TurnPlanner? = nil,
@@ -446,6 +451,7 @@ final class ChatViewModel {
         self.userMemoryService = userMemoryService
         self.userMemoryScheduler = userMemoryScheduler
         self.sourceLearningMemoryScheduler = sourceLearningMemoryScheduler
+        self.automaticMemoryScheduler = automaticMemoryScheduler
         self.conversationSessionStore = conversationSessionStore ?? ConversationSessionStore(
             nodeStore: nodeStore,
             telemetry: governanceTelemetry
@@ -487,6 +493,7 @@ final class ChatViewModel {
             cancelInFlightResponse(clearDraft: true, reason: .supersededByNewTurn)
             cancelInFlightJudge()
         }
+        shouldPreserveRightPanelForBlankConversationBootstrap = false
         currentNode = nil
         activeSourceDiscussionContext = nil
         scratchPadStore.activate(conversationId: nil)
@@ -549,6 +556,7 @@ final class ChatViewModel {
             cancelInFlightResponse(clearDraft: true, reason: .conversationSwitched)
         }
         cancelInFlightJudge()  // judges are conversation-scoped; always invalidate on switch
+        shouldPreserveRightPanelForBlankConversationBootstrap = false
         currentNode = node
         bindStreamingSession(for: node)
         if let surfacedError = currentStreamingSession?.markViewed() {
@@ -578,6 +586,12 @@ final class ChatViewModel {
         activeSourceDiscussionContext = nil
     }
 
+    func consumeRightPanelBlankConversationBootstrapPreservation() -> Bool {
+        let shouldPreserve = shouldPreserveRightPanelForBlankConversationBootstrap
+        shouldPreserveRightPanelForBlankConversationBootstrap = false
+        return shouldPreserve
+    }
+
     func sourceMaterials(for message: Message) -> [SourceMaterialContext] {
         guard message.role == .user else { return [] }
         if let materials = sourceMaterialsByUserMessageId[message.id] {
@@ -591,11 +605,11 @@ final class ChatViewModel {
     func sourceBriefing(for message: Message) -> SourceBriefing? {
         guard message.role == .user else { return nil }
         if let briefing = sourceBriefingsByUserMessageId[message.id] {
-            return briefing.items.isEmpty ? nil : briefing
+            return briefing.isEmpty ? nil : briefing
         }
         let briefing = (try? nodeStore.fetchSourceBriefing(messageId: message.id)) ?? .empty
         sourceBriefingsByUserMessageId[message.id] = briefing
-        return briefing.items.isEmpty ? nil : briefing
+        return briefing.isEmpty ? nil : briefing
     }
 
     /// Bind the streaming session that backs the forwarded streaming
@@ -720,6 +734,9 @@ final class ChatViewModel {
     /// ChatViewModel is @MainActor.
     func ensureConversationForVoice() throws -> UUID {
         if let current = currentNode {
+            if scratchPadStore.activeConversationId != current.id {
+                scratchPadStore.activate(conversationId: current.id)
+            }
             return current.id
         }
         let node = try conversationSessionStore.startConversation(
@@ -728,6 +745,7 @@ final class ChatViewModel {
         )
         self.currentNode = node
         bindStreamingSession(for: node)
+        scratchPadStore.activate(conversationId: node.id)
         self.messages = []
         return node.id
     }
@@ -839,7 +857,11 @@ final class ChatViewModel {
         // create the conversation twice.
         let sourceDiscussionContextBeforeBootstrap = activeSourceDiscussionContext
         if currentNode == nil {
+            shouldPreserveRightPanelForBlankConversationBootstrap = true
             startNewConversation(projectId: defaultProjectId, cancelInFlightWork: false)
+            if currentNode == nil {
+                shouldPreserveRightPanelForBlankConversationBootstrap = false
+            }
             if let sourceDiscussionContextBeforeBootstrap {
                 activeSourceDiscussionContext = sourceDiscussionContextBeforeBootstrap
             }
@@ -1216,7 +1238,7 @@ final class ChatViewModel {
     ) -> Bool {
         do {
             try nodeStore.replaceSourceBriefing(briefing, for: userMessageId)
-            if briefing.items.isEmpty {
+            if briefing.isEmpty {
                 sourceBriefingsByUserMessageId[userMessageId] = .empty
             } else {
                 sourceBriefingsByUserMessageId[userMessageId] = briefing

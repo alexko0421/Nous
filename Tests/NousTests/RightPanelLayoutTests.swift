@@ -84,6 +84,111 @@ final class RightPanelLayoutTests: XCTestCase {
         }
     }
 
+    func testRightPanelVisibilityIsScopedToTheCurrentChatSurface() {
+        let currentConversationId = UUID()
+        let nextConversationId = UUID()
+
+        XCTAssertEqual(
+            RightPanelSurfaceScope.modeAfterConversationChange(
+                currentMode: .youtube,
+                oldConversationId: currentConversationId,
+                newConversationId: currentConversationId
+            ),
+            .youtube
+        )
+        XCTAssertNil(
+            RightPanelSurfaceScope.modeAfterConversationChange(
+                currentMode: .youtube,
+                oldConversationId: currentConversationId,
+                newConversationId: nextConversationId
+            )
+        )
+        XCTAssertNil(
+            RightPanelSurfaceScope.modeAfterConversationChange(
+                currentMode: .markdown,
+                oldConversationId: currentConversationId,
+                newConversationId: nil
+            )
+        )
+        XCTAssertEqual(
+            RightPanelSurfaceScope.modeAfterConversationChange(
+                currentMode: .youtube,
+                oldConversationId: nil,
+                newConversationId: nextConversationId,
+                isDraftBootstrap: true
+            ),
+            .youtube
+        )
+        XCTAssertNil(
+            RightPanelSurfaceScope.modeAfterConversationChange(
+                currentMode: .youtube,
+                oldConversationId: nil,
+                newConversationId: nextConversationId,
+                isDraftBootstrap: false
+            )
+        )
+        XCTAssertEqual(
+            RightPanelSurfaceScope.modeAfterTabChange(
+                currentMode: .markdown,
+                selectedTabIsChat: true
+            ),
+            .markdown
+        )
+        XCTAssertNil(
+            RightPanelSurfaceScope.modeAfterTabChange(
+                currentMode: .markdown,
+                selectedTabIsChat: false
+            )
+        )
+        XCTAssertNil(
+            RightPanelSurfaceScope.modeAfterNewBlankConversation(
+                currentMode: .youtube
+            )
+        )
+    }
+
+    func testRightPanelScopePolicyIsAppliedOnNavigationChanges() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let contentViewSource = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/App/ContentView.swift"),
+            encoding: .utf8
+        )
+        let chatAreaSource = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Views/ChatArea.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(contentViewSource.contains("RightPanelSurfaceScope.modeAfterTabChange"))
+        XCTAssertTrue(contentViewSource.contains("RightPanelSurfaceScope.modeAfterNewBlankConversation"))
+        XCTAssertTrue(chatAreaSource.contains("RightPanelSurfaceScope.modeAfterConversationChange"))
+    }
+
+    func testScratchpadInnerSurfaceUsesVisiblePaperStyling() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let panelSource = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Views/ScratchPadPanel.swift"),
+            encoding: .utf8
+        )
+        let themeSource = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Theme/AppColor.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(themeSource.contains("paperSurface"))
+        XCTAssertTrue(themeSource.contains("paperText"))
+        XCTAssertTrue(themeSource.contains("paperSecondaryText"))
+        XCTAssertTrue(panelSource.contains(".fill(AppColor.paperSurface)"))
+        XCTAssertTrue(panelSource.contains(".foregroundColor(AppColor.paperText)"))
+        XCTAssertTrue(panelSource.contains(".foregroundColor(AppColor.paperSecondaryText)"))
+        XCTAssertFalse(panelSource.contains("NativeGlassPanel(cornerRadius: 12, tintColor: AppColor.surfaceGlassTint)"))
+    }
+
     func testLeftSidebarClipsGlassToItsRoundedShapeBeforeShadow() throws {
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
