@@ -1,7 +1,7 @@
 # Composer Action Menu Soft Stagger - Design
 
 **Date:** 2026-05-16
-**Status:** Approved direction from visual calibration; awaiting user review of this written spec.
+**Status:** Implemented after Alex selected option B.
 **Scope:** `Sources/Nous/Views/ChatArea.swift`, `Sources/Nous/Views/WelcomeView.swift`, `Sources/Nous/Models/ActionMenuSeparationMotion.swift`, and focused motion tests.
 **Non-scope:** Attachment picking behavior, source ingestion, YouTube panel behavior, voice routing, send-button separation policy, `anchor.md`, and unrelated composer layout changes.
 
@@ -49,6 +49,8 @@ The approved B motion has these target values:
 - Blur should be removed or kept near zero; the selected visual did not rely on blur.
 
 The menu should feel like it appears from the composer, not like it spins or detaches from it.
+
+Implementation note: the shared motion contract now lives in `ActionMenuSeparationMotion`, while the SwiftUI entry/exit curve is centralized in `ActionMenuSoftStaggerAnimation`. Both Welcome and Chat call the same shared `ActionMenuCapsule` and `ComposerLeadingActionButton`.
 
 ### 2. Leading Button Icon
 

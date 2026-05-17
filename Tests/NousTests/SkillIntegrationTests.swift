@@ -83,7 +83,7 @@ final class SkillIntegrationTests: XCTestCase {
         XCTAssertTrue(plan.promptTrace.promptLayers.contains("quick_action_addendum"))
     }
 
-    func testBrainstormTurnOneUsesSkeletonAndTopFourTasteSkills() async throws {
+    func testBrainstormTurnOneUsesSkeletonFiveDScaffoldAndTopThreeTasteSkills() async throws {
         let plan = try await plan(
             explicitMode: .brainstorm,
             route: .brainstorm,
@@ -93,8 +93,10 @@ final class SkillIntegrationTests: XCTestCase {
 
         let prompt = plan.turnSlice.volatile
         XCTAssertTrue(prompt.contains(brainstormSkeletonMarker))
+        XCTAssertTrue(prompt.contains(brainstorm5DScaffoldMarker))
         XCTAssertFalse(prompt.contains(directionSkeletonMarker))
-        assertContainsTopFourTasteSkills(prompt)
+        assertContainsTopThreeTasteSkills(prompt)
+        XCTAssertFalse(prompt.contains("Use Cantonese for warmth, judgment, and product taste"))
         XCTAssertFalse(prompt.contains(weightAgainstDefaultChatBaselineMarker))
         XCTAssertTrue(plan.promptTrace.promptLayers.contains("quick_action_addendum"))
     }
@@ -448,6 +450,16 @@ final class SkillIntegrationTests: XCTestCase {
         }
     }
 
+    private func assertContainsTopThreeTasteSkills(
+        _ prompt: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        for marker in Array(tasteSkillMarkers.prefix(3)) {
+            XCTAssertTrue(prompt.contains(marker), "Missing taste marker: \(marker)", file: file, line: line)
+        }
+    }
+
     private func assertContainsNoTasteSkills(
         _ prompt: String,
         file: StaticString = #filePath,
@@ -464,6 +476,10 @@ final class SkillIntegrationTests: XCTestCase {
 
     private var brainstormSkeletonMarker: String {
         "BRAINSTORM MODE QUALITY CONTRACT"
+    }
+
+    private var brainstorm5DScaffoldMarker: String {
+        "BRAINSTORM 5D THINKING SCAFFOLD"
     }
 
     private var studySkeletonMarker: String {

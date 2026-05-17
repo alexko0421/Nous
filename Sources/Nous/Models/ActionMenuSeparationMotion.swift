@@ -7,10 +7,10 @@ struct ActionMenuSeparationMotion {
     let closingDelayStep: Double
 
     init(
-        sourceYOffset: CGFloat = 46,
-        collapsedScale: CGSize = CGSize(width: 0.24, height: 0.68),
-        openingDelayStep: Double = 0.018,
-        closingDelayStep: Double = 0.018
+        sourceYOffset: CGFloat = 7,
+        collapsedScale: CGSize = CGSize(width: 0.97, height: 0.97),
+        openingDelayStep: Double = 0.024,
+        closingDelayStep: Double = 0.024
     ) {
         self.sourceYOffset = sourceYOffset
         self.collapsedScale = collapsedScale
@@ -31,7 +31,7 @@ struct ActionMenuSeparationMotion {
     }
 
     func capsuleBlur(isExpanded: Bool) -> CGFloat {
-        isExpanded ? 0 : 8
+        0
     }
 
     func itemOffset(for index: Int, isExpanded: Bool) -> CGSize {
@@ -123,11 +123,11 @@ struct ComposerLeadingActionMotion {
     let separatedGlowOpacity: Double
 
     init(
-        separatedScale: CGFloat = 1.035,
-        separatedYOffset: CGFloat = -0.8,
-        separatedTintAlpha: CGFloat = 0.38,
-        separatedFillOpacity: Double = 0.28,
-        separatedGlowOpacity: Double = 0.055
+        separatedScale: CGFloat = 1.012,
+        separatedYOffset: CGFloat = -0.2,
+        separatedTintAlpha: CGFloat = 0.44,
+        separatedFillOpacity: Double = 0.32,
+        separatedGlowOpacity: Double = 0.052
     ) {
         self.separatedScale = separatedScale
         self.separatedYOffset = separatedYOffset

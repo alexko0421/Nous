@@ -9,9 +9,9 @@ enum TemporaryBranchFocusStyle {
 
 enum TemporaryBranchMembraneStyle {
     static let drawsFramedPanel = false
-    static let inlineComposerMaxWidth: CGFloat = 520
+    static let inlineComposerMaxWidth: CGFloat = ComposerTextInputMetrics.chatComposerMaxWidth
     static let primaryComposerMinHeight: CGFloat = ComposerTextInputMetrics.minimumControlHeight
-    static let primaryComposerCornerRadius: CGFloat = 18
+    static let primaryComposerCornerRadius: CGFloat = ComposerTextInputMetrics.leadingActionCornerRadius
     static let sourceAnchorOpacity = 0.52
     static let dimmedContentOpacity = 0.34
     static let focusedContentOpacity = 1.0
@@ -26,11 +26,11 @@ enum TemporaryBranchMembraneStyle {
 }
 
 enum TemporaryBranchTriggerHitTarget {
-    static let longPressDuration: Double = 0.35
-    static let hoverBridgePadding: CGFloat = 12
-    static let userButtonOutsideOffset: CGFloat = 48
-    static let assistantButtonOutsideOffset: CGFloat = 28
+    static let buttonDiameter: CGFloat = 28
+    static let userButtonOutsideOffset: CGFloat = buttonDiameter
+    static let assistantButtonOutsideOffset: CGFloat = buttonDiameter
     static let buttonVerticalOffset: CGFloat = 2
+    static let hoverExitGraceDuration: TimeInterval = 0.22
 }
 
 struct TemporaryBranchOverlay: View {
@@ -97,7 +97,8 @@ struct TemporaryBranchInlineComposer: View {
     }
 
     private var primaryBranchComposer: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: ComposerTextInputMetrics.controlSpacing) {
+            branchLeadingActionButton
             branchTextField
 
             if shouldShowPrimaryAction {
@@ -109,6 +110,20 @@ struct TemporaryBranchInlineComposer: View {
             .timingCurve(0.68, -0.6, 0.32, 1.6, duration: 0.42),
             value: shouldShowPrimaryAction
         )
+    }
+
+    private var branchLeadingActionButton: some View {
+        ComposerLeadingActionButton(
+            systemImage: "plus",
+            isMenuExpanded: false,
+            isVoiceActive: false,
+            size: ComposerTextInputMetrics.leadingActionSize,
+            cornerRadius: ComposerTextInputMetrics.leadingActionCornerRadius,
+            action: {
+                isComposerFocused = true
+            }
+        )
+        .help("Focus branch input")
     }
 
     private var branchTextField: some View {
@@ -133,19 +148,8 @@ struct TemporaryBranchInlineComposer: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(minHeight: TemporaryBranchMembraneStyle.primaryComposerMinHeight, alignment: .leading)
         .background(
-            NativeGlassPanel(
-                cornerRadius: TemporaryBranchMembraneStyle.primaryComposerCornerRadius,
-                tintColor: AppColor.controlGlassTint
-            ) { EmptyView() }
+            ComposerTextInputGlassBackground(cornerRadius: TemporaryBranchMembraneStyle.primaryComposerCornerRadius)
         )
-        .overlay(
-            RoundedRectangle(
-                cornerRadius: TemporaryBranchMembraneStyle.primaryComposerCornerRadius,
-                style: .continuous
-            )
-            .stroke(AppColor.panelStroke, lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.04), radius: 6, x: 0, y: 2)
     }
 
     private var branchPrimaryActionButton: some View {
@@ -153,14 +157,14 @@ struct TemporaryBranchInlineComposer: View {
             Image(systemName: branch.isGenerating ? "stop.fill" : "arrow.up")
                 .font(.system(size: 13, weight: .bold))
                 .foregroundStyle(.white)
-                .frame(width: 36, height: 36)
+                .frame(width: ComposerTextInputMetrics.leadingActionSize, height: ComposerTextInputMetrics.leadingActionSize)
                 .background(
                     ZStack {
                         Circle()
                             .fill(AppColor.colaOrange.opacity(canSend ? 0.92 : 0.28))
 
                         NativeGlassPanel(
-                            cornerRadius: 18,
+                            cornerRadius: ComposerTextInputMetrics.leadingActionCornerRadius,
                             tintColor: NSColor(red: 243/255, green: 131/255, blue: 53/255, alpha: canSend ? 0.30 : 0.12)
                         ) { EmptyView() }
                         .opacity(canSend ? 0.52 : 0.9)
@@ -534,7 +538,10 @@ struct TemporaryBranchTriggerButton: View {
             Image(systemName: "arrow.triangle.branch")
                 .font(.system(size: 11, weight: .bold))
                 .foregroundStyle(AppColor.colaOrange.opacity(0.92))
-                .frame(width: 28, height: 28)
+                .frame(
+                    width: TemporaryBranchTriggerHitTarget.buttonDiameter,
+                    height: TemporaryBranchTriggerHitTarget.buttonDiameter
+                )
                 .background(
                     Circle()
                         .fill(AppColor.colaDarkText.opacity(0.26))

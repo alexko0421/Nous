@@ -19,6 +19,24 @@ enum SettingsSection: String, CaseIterable {
     }
 }
 
+private enum SettingsLayout {
+    static let shellPadding = RightPanelLayout.windowPadding
+    static let columnSpacing = RightPanelLayout.windowPadding
+    static let sidebarWidth = GalaxySidebarLayout.width
+    static let sidebarCornerRadius: CGFloat = 32
+    static let contentCornerRadius: CGFloat = 36
+    static let pageMaxWidth: CGFloat = 760
+    static let pageHorizontalPadding: CGFloat = 36
+    static let pageVerticalPadding: CGFloat = 30
+    static let pageSpacing: CGFloat = 16
+    static let cardPadding: CGFloat = 20
+    static let cardCornerRadius: CGFloat = 20
+    static let cardStrokeOpacity = 0.58
+    static let controlCornerRadius: CGFloat = 18
+    static let controlVerticalPadding: CGFloat = 10
+    static let controlStrokeOpacity = 0.62
+}
+
 struct SettingsView: View {
     @Bindable var vm: SettingsViewModel
     @Binding var selectedTab: SettingsSection
@@ -38,7 +56,7 @@ struct SettingsView: View {
     @Namespace private var navAnimation
 
     var body: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: SettingsLayout.columnSpacing) {
             // ── Left nav column ───────────────────────────────────
             VStack(alignment: .leading, spacing: 4) {
                 // Back button
@@ -49,7 +67,7 @@ struct SettingsView: View {
                         Text("Back")
                             .font(.system(size: 13, weight: .medium, design: .rounded))
                     }
-                    .foregroundColor(AppColor.secondaryText)
+                    .foregroundColor(AppColor.sidebarMutedText)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                 }
@@ -67,16 +85,18 @@ struct SettingsView: View {
 
                 Spacer()
             }
-            .frame(width: 168)
             .padding(.horizontal, 8)
+            .frame(width: SettingsLayout.sidebarWidth)
+            .frame(maxHeight: .infinity, alignment: .topLeading)
             .background(
-                NativeGlassPanel(cornerRadius: 0, tintColor: AppColor.surfaceGlassTint) { EmptyView() }
+                NativeGlassPanel(cornerRadius: SettingsLayout.sidebarCornerRadius, tintColor: AppColor.sidebarGlassTint) { EmptyView() }
             )
-
-            Rectangle()
-                .fill(AppColor.panelStroke.opacity(0.35))
-                .frame(width: 1)
-                .padding(.vertical, 22)
+            .clipShape(RoundedRectangle(cornerRadius: SettingsLayout.sidebarCornerRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: SettingsLayout.sidebarCornerRadius, style: .continuous)
+                    .stroke(AppColor.sidebarGlassStroke.opacity(0.26), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.10), radius: 18, x: 0, y: 8)
 
             // ── Right content area ────────────────────────────────
             Group {
@@ -101,10 +121,19 @@ struct SettingsView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .background(AppColor.colaBeige)
+            .background(
+                NativeGlassPanel(cornerRadius: SettingsLayout.contentCornerRadius, tintColor: AppColor.rightPanelGlassTint) { EmptyView() }
+            )
+            .clipShape(RoundedRectangle(cornerRadius: SettingsLayout.contentCornerRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: SettingsLayout.contentCornerRadius, style: .continuous)
+                    .stroke(AppColor.panelStroke.opacity(0.48), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.06), radius: 20, x: 0, y: 8)
             .onAppear { vm.updateStats() }
             .onChange(of: selectedTab) { _, _ in vm.updateStats() }
         }
+        .padding(SettingsLayout.shellPadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(AppColor.colaBeige)
     }
@@ -411,13 +440,13 @@ struct SettingsView: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: SettingsLayout.pageSpacing) {
                 pageHeader(title: title, subtitle: subtitle)
                 content()
             }
-            .frame(maxWidth: 820, alignment: .leading)
-            .padding(.horizontal, 44)
-            .padding(.vertical, 36)
+            .frame(maxWidth: SettingsLayout.pageMaxWidth, alignment: .leading)
+            .padding(.horizontal, SettingsLayout.pageHorizontalPadding)
+            .padding(.vertical, SettingsLayout.pageVerticalPadding)
             .frame(maxWidth: .infinity, alignment: .top)
         }
     }
@@ -438,11 +467,11 @@ struct SettingsView: View {
     @ViewBuilder
     private func settingsCard<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 15) { content() }
-            .padding(22)
+            .padding(SettingsLayout.cardPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(NativeGlassPanel(cornerRadius: 22, tintColor: AppColor.surfaceGlassTint) { EmptyView() })
-            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(AppColor.panelStroke.opacity(0.88), lineWidth: 1))
+            .background(NativeGlassPanel(cornerRadius: SettingsLayout.cardCornerRadius, tintColor: AppColor.surfaceGlassTint) { EmptyView() })
+            .clipShape(RoundedRectangle(cornerRadius: SettingsLayout.cardCornerRadius, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: SettingsLayout.cardCornerRadius, style: .continuous).stroke(AppColor.panelStroke.opacity(SettingsLayout.cardStrokeOpacity), lineWidth: 1))
             .shadow(color: .black.opacity(0.04), radius: 10, x: 0, y: 4)
     }
 
@@ -451,10 +480,10 @@ struct SettingsView: View {
         content()
             .textFieldStyle(.plain)
             .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .background(NativeGlassPanel(cornerRadius: 16, tintColor: AppColor.controlGlassTint) { EmptyView() })
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(AppColor.panelStroke.opacity(0.78), lineWidth: 1))
+            .padding(.vertical, SettingsLayout.controlVerticalPadding)
+            .background(NativeGlassPanel(cornerRadius: SettingsLayout.controlCornerRadius, tintColor: AppColor.controlGlassTint) { EmptyView() })
+            .clipShape(RoundedRectangle(cornerRadius: SettingsLayout.controlCornerRadius, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: SettingsLayout.controlCornerRadius, style: .continuous).stroke(AppColor.panelStroke.opacity(SettingsLayout.controlStrokeOpacity), lineWidth: 1))
     }
 
     @ViewBuilder
@@ -497,11 +526,11 @@ struct SettingsView: View {
                 .scrollContentBackground(.hidden)
                 .frame(minHeight: 64)
                 .padding(10)
-                .background(NativeGlassPanel(cornerRadius: 16, tintColor: AppColor.controlGlassTint) { EmptyView() })
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .background(NativeGlassPanel(cornerRadius: SettingsLayout.controlCornerRadius, tintColor: AppColor.controlGlassTint) { EmptyView() })
+                .clipShape(RoundedRectangle(cornerRadius: SettingsLayout.controlCornerRadius, style: .continuous))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(AppColor.panelStroke.opacity(0.78), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: SettingsLayout.controlCornerRadius, style: .continuous)
+                        .stroke(AppColor.panelStroke.opacity(SettingsLayout.controlStrokeOpacity), lineWidth: 1)
                 )
         }
     }
@@ -523,9 +552,9 @@ struct SettingsView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
-        .background(NativeGlassPanel(cornerRadius: 18, tintColor: AppColor.controlGlassTint) { EmptyView() })
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(AppColor.panelStroke.opacity(0.78), lineWidth: 1))
+        .background(NativeGlassPanel(cornerRadius: SettingsLayout.controlCornerRadius, tintColor: AppColor.controlGlassTint) { EmptyView() })
+        .clipShape(RoundedRectangle(cornerRadius: SettingsLayout.controlCornerRadius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: SettingsLayout.controlCornerRadius, style: .continuous).stroke(AppColor.panelStroke.opacity(SettingsLayout.controlStrokeOpacity), lineWidth: 1))
     }
 
     private func preferenceBinding(_ keyPath: ReferenceWritableKeyPath<SettingsViewModel, Bool>) -> Binding<Bool> {
@@ -646,9 +675,9 @@ struct SettingsView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
-        .background(NativeGlassPanel(cornerRadius: 18, tintColor: AppColor.controlGlassTint) { EmptyView() })
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(AppColor.panelStroke.opacity(0.72), lineWidth: 1))
+        .background(NativeGlassPanel(cornerRadius: SettingsLayout.controlCornerRadius, tintColor: AppColor.controlGlassTint) { EmptyView() })
+        .clipShape(RoundedRectangle(cornerRadius: SettingsLayout.controlCornerRadius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: SettingsLayout.controlCornerRadius, style: .continuous).stroke(AppColor.panelStroke.opacity(SettingsLayout.controlStrokeOpacity), lineWidth: 1))
     }
 
     @ViewBuilder
@@ -670,9 +699,9 @@ struct SettingsView: View {
                 .labelsHidden()
         }
         .padding(14)
-        .background(NativeGlassPanel(cornerRadius: 16, tintColor: AppColor.controlGlassTint) { EmptyView() })
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(AppColor.panelStroke.opacity(0.74), lineWidth: 1))
+        .background(NativeGlassPanel(cornerRadius: SettingsLayout.controlCornerRadius, tintColor: AppColor.controlGlassTint) { EmptyView() })
+        .clipShape(RoundedRectangle(cornerRadius: SettingsLayout.controlCornerRadius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: SettingsLayout.controlCornerRadius, style: .continuous).stroke(AppColor.panelStroke.opacity(SettingsLayout.controlStrokeOpacity), lineWidth: 1))
     }
 
     @ViewBuilder
@@ -710,9 +739,9 @@ struct SettingsView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(NativeGlassPanel(cornerRadius: 18, tintColor: AppColor.controlGlassTint) { EmptyView() })
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(AppColor.panelStroke.opacity(0.72), lineWidth: 1))
+        .background(NativeGlassPanel(cornerRadius: SettingsLayout.controlCornerRadius, tintColor: AppColor.controlGlassTint) { EmptyView() })
+        .clipShape(RoundedRectangle(cornerRadius: SettingsLayout.controlCornerRadius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: SettingsLayout.controlCornerRadius, style: .continuous).stroke(AppColor.panelStroke.opacity(SettingsLayout.controlStrokeOpacity), lineWidth: 1))
     }
 
     @ViewBuilder
@@ -731,7 +760,7 @@ struct SettingsView: View {
                     .font(.system(size: 13, weight: active ? .semibold : .medium, design: .rounded))
                 Spacer()
             }
-            .foregroundColor(active ? AppColor.colaOrange : AppColor.secondaryText)
+            .foregroundColor(active ? AppColor.colaOrange : AppColor.sidebarMutedText)
             .padding(.horizontal, 12)
             .frame(height: 34)
             .background(

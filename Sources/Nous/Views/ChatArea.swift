@@ -32,7 +32,8 @@ struct ChatArea: View {
     private let bottomScrollAnchor = "chat-bottom-anchor"
     private let temporaryBranchFocusBottomAnchor = "temporary-branch-focus-bottom-anchor"
     private let bottomVisibleSpacing: CGFloat = 53
-    private let composerMaxWidth: CGFloat = 820
+    private let composerMaxWidth: CGFloat = ComposerTextInputMetrics.chatComposerMaxWidth
+    private let headerTrailingControlReserve: CGFloat = 112
     private let composerActionMotion = ComposerPrimaryActionMotion()
     
     private var isWelcomeState: Bool {
@@ -120,7 +121,7 @@ struct ChatArea: View {
                     onPickPhoto: { isPhotosPickerPresented = true },
                     onYouTubeSummary: {
                         withAnimation(AppMotion.markdownPanelSpring.animation) {
-                            rightPanelMode = .youtube
+                            rightPanelMode = .source
                         }
                     },
                     onVoice: { onToggleVoiceMode() },
@@ -290,6 +291,7 @@ struct ChatArea: View {
                                             agentTraceRecords: vm.currentAgentTrace,
                                             isThinkingStreaming: streamingPresentation.isDraftThinkingStreaming,
                                             isAgentTraceStreaming: streamingPresentation.isDraftAgentTraceStreaming,
+                                            isStreamingDraft: true,
                                             isUser: false,
                                             source: .typed,
                                             timestamp: Date(),
@@ -363,10 +365,11 @@ struct ChatArea: View {
                                 .font(.system(size: 20, weight: .bold, design: .rounded))
                                 .foregroundColor(AppColor.colaDarkText)
                                 .lineLimit(1)
-                            Spacer()
+                                .truncationMode(.tail)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         .padding(.leading, 76)
-                        .padding(.trailing, 36)
+                        .padding(.trailing, headerTrailingControlReserve)
                         .padding(.top, 22)
 
                         if voiceController.visibleSurface == .inWindow &&
@@ -452,13 +455,13 @@ struct ChatArea: View {
                                     size: 36,
                                     cornerRadius: 18,
                                     action: {
-                                        if voiceController.isActive {
-                                            onToggleVoiceMode()
-                                        } else {
-                                            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                                                isActionMenuExpanded.toggle()
-                                            }
+                                    if voiceController.isActive {
+                                        onToggleVoiceMode()
+                                    } else {
+                                        withAnimation(ActionMenuSoftStaggerAnimation.stateChange(isExpanded: !isActionMenuExpanded)) {
+                                            isActionMenuExpanded.toggle()
                                         }
+                                    }
                                     }
                                 )
                                 .help(voiceController.isActive ? "Stop Voice Mode" : "Actions")
@@ -484,14 +487,7 @@ struct ChatArea: View {
                                     perform: handleImageDrop
                                 )
                                 .background(
-                                    MatteGlassPanel(
-                                        cornerRadius: 18,
-                                        overlayColor: AppColor.composerMatteOverlay
-                                    ) { EmptyView() }
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                        .stroke(AppColor.composerMatteStroke, lineWidth: 1)
+                                    ComposerTextInputGlassBackground(cornerRadius: 18)
                                 )
 
                                 if shouldSeparateComposerPrimaryAction {
@@ -508,28 +504,28 @@ struct ChatArea: View {
                                 isExpanded: isActionMenuExpanded,
                                 onFile: {
                                     isFileImporterPresented = true
-                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isActionMenuExpanded = false }
+                                    withAnimation(ActionMenuSoftStaggerAnimation.close) { isActionMenuExpanded = false }
                                 },
                                 onPhoto: {
                                     isPhotosPickerPresented = true
-                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isActionMenuExpanded = false }
+                                    withAnimation(ActionMenuSoftStaggerAnimation.close) { isActionMenuExpanded = false }
                                 },
                                 onYouTube: {
                                     withAnimation(AppMotion.markdownPanelSpring.animation) {
-                                        rightPanelMode = .youtube
+                                        rightPanelMode = .source
                                     }
-                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isActionMenuExpanded = false }
+                                    withAnimation(ActionMenuSoftStaggerAnimation.close) { isActionMenuExpanded = false }
                                 },
                                 onVoice: {
                                     onToggleVoiceMode()
-                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isActionMenuExpanded = false }
+                                    withAnimation(ActionMenuSoftStaggerAnimation.close) { isActionMenuExpanded = false }
                                 },
                                 canPickPhoto: canPickPhotoAttachment
                             )
                             .offset(y: -ActionMenuPopoutMetrics.sourceOffsetFromRowBottom)
                         }
                         .padding(.top, isActionMenuExpanded ? ActionMenuPopoutMetrics.reservedTopPadding : 0)
-                        .animation(.spring(response: 0.38, dampingFraction: 0.82), value: isActionMenuExpanded)
+                        .animation(ActionMenuSoftStaggerAnimation.stateChange(isExpanded: isActionMenuExpanded), value: isActionMenuExpanded)
                         }
                     }
                     .frame(maxWidth: composerMaxWidth)
@@ -661,7 +657,7 @@ struct ChatArea: View {
         }
         .onChange(of: vm.inputText) { _, _ in
             if isActionMenuExpanded {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                withAnimation(ActionMenuSoftStaggerAnimation.close) {
                     isActionMenuExpanded = false
                 }
             }
@@ -684,9 +680,9 @@ struct ChatArea: View {
     private var rightPanelToggleCapsule: some View {
         HStack(spacing: 4) {
             rightPanelToggleButton(
-                mode: .youtube,
-                systemImage: "play.rectangle",
-                helpText: "YouTube"
+                mode: .source,
+                systemImage: "link",
+                helpText: "URL"
             )
             rightPanelToggleButton(
                 mode: .markdown,
@@ -1214,6 +1210,7 @@ struct MessageBubble: View {
     let agentTraceRecords: [AgentTraceRecord]
     let isThinkingStreaming: Bool
     let isAgentTraceStreaming: Bool
+    var isStreamingDraft: Bool = false
     let isUser: Bool
     let source: MessageSource
     let timestamp: Date
@@ -1281,7 +1278,10 @@ struct MessageBubble: View {
                 } else {
                     VStack(alignment: .leading, spacing: 2) {
                         HStack {
-                            AssistantBubbleContent(displayText: assistantDisplayText)
+                            AssistantBubbleContent(
+                                displayText: assistantDisplayText,
+                                isStreamingDraft: isStreamingDraft
+                            )
                                 .temporaryBranchEntry(
                                     isHovering: $isHovering,
                                     triggerAlignment: .topTrailing,
@@ -1407,26 +1407,46 @@ private struct TemporaryBranchEntryModifier: ViewModifier {
     let triggerOffset: CGSize
     let onOpenBranch: (() -> Void)?
 
+    @State private var isContentHovering = false
+    @State private var isTriggerHovering = false
+    @State private var hoverExitToken = UUID()
+
     func body(content: Content) -> some View {
         content
-            .contentShape(Rectangle())
-            .onLongPressGesture(minimumDuration: TemporaryBranchTriggerHitTarget.longPressDuration) {
-                onOpenBranch?()
-            }
             .overlay(alignment: triggerAlignment) {
                 if let onOpenBranch {
                     TemporaryBranchTriggerButton(isVisible: isHovering, action: onOpenBranch)
-                        .padding(TemporaryBranchTriggerHitTarget.hoverBridgePadding)
-                        .contentShape(Rectangle())
                         .offset(x: triggerOffset.width, y: triggerOffset.height)
+                        .allowsHitTesting(isHovering)
                         .onHover { hovering in
-                            isHovering = hovering
+                            isTriggerHovering = hovering
+                            refreshBranchTriggerHoverVisibility()
                         }
                 }
             }
             .onHover { hovering in
-                isHovering = hovering
+                isContentHovering = hovering
+                refreshBranchTriggerHoverVisibility()
             }
+    }
+
+    private func refreshBranchTriggerHoverVisibility() {
+        if isContentHovering || isTriggerHovering {
+            hoverExitToken = UUID()
+            isHovering = true
+        } else {
+            scheduleBranchTriggerHoverClose()
+        }
+    }
+
+    private func scheduleBranchTriggerHoverClose() {
+        let token = UUID()
+        hoverExitToken = token
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + TemporaryBranchTriggerHitTarget.hoverExitGraceDuration) {
+            guard hoverExitToken == token, !isContentHovering, !isTriggerHovering else { return }
+            isHovering = false
+        }
     }
 }
 
@@ -1503,6 +1523,7 @@ struct StreamingAssistantPresentation {
 
 struct AssistantBubbleContent: View {
     let displayText: String
+    var isStreamingDraft: Bool = false
 
     private let assistantTextMaxWidth: CGFloat = 520
 
@@ -1511,7 +1532,7 @@ struct AssistantBubbleContent: View {
         // Computed properties are NOT memoized by SwiftUI — `let` here ensures
         // the renderer and animation modifier reference the same parse output.
         let segments = ChatMarkdownRenderer.parse(displayText)
-        return ChatMarkdownView(segments: segments)
+        return ChatMarkdownView(segments: segments, isStreamingDraft: isStreamingDraft)
             .frame(maxWidth: assistantTextMaxWidth, alignment: .leading)
             .padding(.top, 6)
             .padding(.bottom, 10)
@@ -1573,6 +1594,57 @@ enum ActionMenuPopoutMetrics {
     static let capsuleCornerRadius: CGFloat = 18
 }
 
+enum ActionMenuSoftStaggerAnimation {
+    static let open = Animation.timingCurve(0.2, 0.76, 0.18, 1, duration: 0.3)
+    static let close = Animation.easeOut(duration: 0.2)
+
+    static func stateChange(isExpanded: Bool) -> Animation {
+        isExpanded ? open : close
+    }
+}
+
+struct ComposerTextInputGlassBackground: View {
+    let cornerRadius: CGFloat
+
+    var body: some View {
+        ZStack {
+            NativeGlassPanel(
+                cornerRadius: cornerRadius,
+                tintColor: AppColor.composerInputGlassTint
+            ) { EmptyView() }
+
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(AppColor.composerInputGlassOverlay)
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .stroke(AppColor.composerInputGlassStroke, lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.075), radius: 18, x: 0, y: 8)
+    }
+}
+
+struct ComposerActionMenuGlassBackground: View {
+    let cornerRadius: CGFloat
+
+    var body: some View {
+        ZStack {
+            NativeGlassPanel(
+                cornerRadius: cornerRadius,
+                tintColor: AppColor.composerMenuGlassTint
+            ) { EmptyView() }
+
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(AppColor.composerMenuGlassOverlay)
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .stroke(AppColor.composerMenuGlassStroke, lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.075), radius: 18, x: 0, y: 8)
+    }
+}
+
 struct ComposerLeadingActionButton: View {
     let systemImage: String
     let isMenuExpanded: Bool
@@ -1587,9 +1659,13 @@ struct ComposerLeadingActionButton: View {
         isMenuExpanded || isVoiceActive
     }
 
+    private var iconColor: Color {
+        isSeparated ? AppColor.colaOrange : AppColor.secondaryText
+    }
+
     private var tintColor: NSColor {
         guard isSeparated else {
-            return AppColor.composerMatteOverlay
+            return AppColor.composerInputGlassTint
         }
 
         return NSColor(
@@ -1600,22 +1676,32 @@ struct ComposerLeadingActionButton: View {
         )
     }
 
-    private var iconColor: Color {
-        isSeparated ? AppColor.colaOrange : AppColor.secondaryText
+    @ViewBuilder
+    private var iconStack: some View {
+        if isVoiceActive {
+            Image(systemName: systemImage)
+                .opacity(1)
+        } else {
+            ZStack {
+                Image(systemName: "plus")
+                    .opacity(isMenuExpanded ? 0 : 1)
+                Image(systemName: "xmark")
+                    .opacity(isMenuExpanded ? 1 : 0)
+            }
+        }
     }
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: systemImage)
+            iconStack
                 .font(.system(size: 15, weight: .regular, design: .rounded))
                 .foregroundColor(iconColor)
                 .frame(width: size, height: size)
-                .rotationEffect(.degrees(isMenuExpanded && !isVoiceActive ? 90 : 0))
                 .background(buttonBackground)
                 .overlay(buttonStroke)
                 .shadow(
                     color: AppColor.colaOrange.opacity(motion.glowOpacity(isSeparated: isSeparated)),
-                    radius: isSeparated ? 6 : 0,
+                    radius: isSeparated ? 4 : 0,
                     x: 0,
                     y: isSeparated ? 1 : 0
                 )
@@ -1625,10 +1711,10 @@ struct ComposerLeadingActionButton: View {
         }
         .buttonStyle(.plain)
         .animation(
-            .timingCurve(0.68, -0.6, 0.32, 1.6, duration: 0.42),
+            ActionMenuSoftStaggerAnimation.stateChange(isExpanded: isMenuExpanded),
             value: isMenuExpanded
         )
-        .animation(.spring(response: 0.25, dampingFraction: 0.72), value: isVoiceActive)
+        .animation(.easeInOut(duration: 0.18), value: isVoiceActive)
     }
 
     private var buttonBackground: some View {
@@ -1641,20 +1727,23 @@ struct ComposerLeadingActionButton: View {
                     cornerRadius: cornerRadius,
                     tintColor: tintColor
                 ) { EmptyView() }
-                .opacity(0.72)
+                .opacity(0.84)
             } else {
-                MatteGlassPanel(
+                NativeGlassPanel(
                     cornerRadius: cornerRadius,
-                    overlayColor: tintColor
+                    tintColor: AppColor.composerInputGlassTint
                 ) { EmptyView() }
             }
+
+            Circle()
+                .fill(isSeparated ? AppColor.composerMenuGlassOverlay.opacity(0.52) : AppColor.composerInputGlassOverlay)
         }
     }
 
     private var buttonStroke: some View {
         Circle()
             .stroke(
-                isSeparated ? AppColor.colaOrange.opacity(0.22) : AppColor.composerMatteStroke,
+                isSeparated ? AppColor.colaOrange.opacity(0.28) : AppColor.composerInputGlassStroke,
                 lineWidth: 1
             )
     }
@@ -1698,8 +1787,8 @@ struct ActionMenuCapsule: View {
             ActionMenuDivider(isExpanded: isExpanded)
 
             ActionMenuButton(
-                icon: "play.rectangle",
-                title: "YouTube",
+                icon: "link",
+                title: "URL",
                 isExpanded: isExpanded,
                 separationIndex: 2,
                 action: onYouTube
@@ -1718,14 +1807,9 @@ struct ActionMenuCapsule: View {
         .padding(.horizontal, 6)
         .padding(.vertical, 6)
         .background(
-            NativeGlassPanel(
-                cornerRadius: ActionMenuPopoutMetrics.capsuleCornerRadius,
-                tintColor: AppColor.controlGlassTint
-            ) { EmptyView() }
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: ActionMenuPopoutMetrics.capsuleCornerRadius, style: .continuous)
-                .stroke(AppColor.panelStroke, lineWidth: 1)
+            ComposerActionMenuGlassBackground(
+                cornerRadius: ActionMenuPopoutMetrics.capsuleCornerRadius
+            )
         )
         .scaleEffect(x: capsuleScale.width, y: capsuleScale.height, anchor: .bottomLeading)
         .offset(
@@ -1734,11 +1818,10 @@ struct ActionMenuCapsule: View {
         )
         .opacity(motion.capsuleOpacity(isExpanded: isExpanded))
         .blur(radius: motion.capsuleBlur(isExpanded: isExpanded))
-        .shadow(color: .black.opacity(isExpanded ? 0.12 : 0), radius: 12, x: 0, y: 6)
         .frame(height: ActionMenuPopoutMetrics.reservedTopPadding, alignment: .bottomLeading)
         .allowsHitTesting(isExpanded)
         .accessibilityHidden(!isExpanded)
-        .animation(.spring(response: 0.38, dampingFraction: 0.82), value: isExpanded)
+        .animation(ActionMenuSoftStaggerAnimation.stateChange(isExpanded: isExpanded), value: isExpanded)
     }
 }
 
@@ -1765,7 +1848,7 @@ struct ActionMenuButton: View {
     private let motion = ActionMenuSeparationMotion()
 
     private var emergenceAnimation: Animation {
-        .easeOut(duration: 0.2)
+        .easeOut(duration: 0.22)
             .delay(motion.delay(for: separationIndex, isExpanded: isExpanded))
     }
 
@@ -1794,12 +1877,11 @@ struct ActionMenuButton: View {
         .buttonStyle(.plain)
         .disabled(!isExpanded || !isEnabled)
         .opacity(motion.itemOpacity(isExpanded: isExpanded, isEnabled: isEnabled))
-        .scaleEffect(isExpanded ? (isHovered && isEnabled ? 1.035 : 1.0) : 0.96)
+        .scaleEffect(isExpanded ? (isHovered && isEnabled ? 1.025 : 1.0) : 0.98)
         .offset(
             x: motion.itemOffset(for: separationIndex, isExpanded: isExpanded).width,
             y: motion.itemOffset(for: separationIndex, isExpanded: isExpanded).height
         )
-        .blur(radius: isExpanded ? 0 : 3)
         .animation(emergenceAnimation, value: isExpanded)
         .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isHovered)
         .onHover { isHovered = $0 }

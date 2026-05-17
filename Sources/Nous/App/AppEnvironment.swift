@@ -287,7 +287,8 @@ final class AppEnvironment {
                     return GeminiYouTubeVideoAnalysisService(apiKey: key)
                 }
             ),
-            sourceIngestionService: sourceIngestionService
+            sourceIngestionService: sourceIngestionService,
+            nodeStore: nodeStore
         )
         let voiceTranscriptCommitter = VoiceTranscriptCommitter(
             voiceController: voiceController,

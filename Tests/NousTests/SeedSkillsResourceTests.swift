@@ -6,8 +6,8 @@ final class SeedSkillsResourceTests: XCTestCase {
     func testSeedSkillsResourceDecodesExpectedRows() throws {
         let rows = try decodeSeedRows()
 
-        XCTAssertEqual(rows.count, 12)
-        XCTAssertEqual(Set(rows.map(\.id)).count, 12)
+        XCTAssertEqual(rows.count, 13)
+        XCTAssertEqual(Set(rows.map(\.id)).count, 13)
         XCTAssertTrue(rows.allSatisfy { $0.userId == "alex" })
         XCTAssertTrue(rows.allSatisfy { $0.state == .active })
         XCTAssertTrue(rows.allSatisfy { (1...2).contains($0.payload.payloadVersion) })
@@ -29,6 +29,7 @@ final class SeedSkillsResourceTests: XCTestCase {
             [
                 "direction-skeleton",
                 "brainstorm-skeleton",
+                "brainstorm-5d-thinking-scaffold",
                 "stoic-cantonese-voice",
                 "concrete-over-generic",
                 "direct-when-disagreeing",
@@ -51,6 +52,18 @@ final class SeedSkillsResourceTests: XCTestCase {
         XCTAssertEqual(brainstorm.payload.trigger.kind, .mode)
         XCTAssertEqual(brainstorm.payload.trigger.modes, [.brainstorm])
         XCTAssertEqual(brainstorm.payload.trigger.priority, 90)
+
+        let brainstorm5D = try XCTUnwrap(rows.first { $0.payload.name == "brainstorm-5d-thinking-scaffold" })
+        XCTAssertEqual(brainstorm5D.id, UUID(uuidString: "00000000-0000-0000-0000-000000000013"))
+        XCTAssertEqual(brainstorm5D.payload.payloadVersion, 1)
+        XCTAssertEqual(brainstorm5D.payload.trigger.kind, .mode)
+        XCTAssertEqual(brainstorm5D.payload.trigger.modes, [.brainstorm])
+        XCTAssertEqual(brainstorm5D.payload.trigger.priority, 88)
+        XCTAssertTrue(brainstorm5D.payload.action.content.contains("BRAINSTORM 5D THINKING SCAFFOLD"))
+        XCTAssertTrue(brainstorm5D.payload.action.content.contains("premature closure"))
+        XCTAssertTrue(brainstorm5D.payload.action.content.contains("inner individual"))
+        XCTAssertTrue(brainstorm5D.payload.action.content.contains("collective culture"))
+        XCTAssertTrue(brainstorm5D.payload.action.content.contains("Time:"))
 
         let tasteRows = rows.filter { $0.payload.trigger.kind == .always }
         XCTAssertEqual(tasteRows.count, 8)

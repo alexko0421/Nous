@@ -14,6 +14,7 @@ final class YouTubeLearningViewModel {
     private let transcriptService: YouTubeTranscriptService
     private let summaryService: YouTubeLearningSummaryService
     private let sourceIngestionService: SourceIngestionService
+    private let nodeStore: NodeStore?
     private var sourceMaterial: SourceMaterialContext?
     private var sourceTitle: String?
     private var sourceURL: String?
@@ -21,15 +22,19 @@ final class YouTubeLearningViewModel {
     private var playbackStartSeconds: Int?
     private var playbackRequestID = 0
     private var loadTask: Task<Void, Never>?
+    private var activeConversationId: UUID?
+    private var loadedStates: [UUID: YouTubeLearningPanelState] = [:]
 
     init(
         transcriptService: YouTubeTranscriptService = YouTubeTranscriptService(),
         summaryService: YouTubeLearningSummaryService = YouTubeLearningSummaryService(),
-        sourceIngestionService: SourceIngestionService
+        sourceIngestionService: SourceIngestionService,
+        nodeStore: NodeStore? = nil
     ) {
         self.transcriptService = transcriptService
         self.summaryService = summaryService
         self.sourceIngestionService = sourceIngestionService
+        self.nodeStore = nodeStore
     }
 
     var isSummaryUnavailable: Bool {
@@ -42,6 +47,24 @@ final class YouTubeLearningViewModel {
 
     var currentEvidenceLabel: String? {
         currentEvidenceLevel?.label
+    }
+
+    var sourceDisplayTitle: String {
+        let title = sourceTitle ?? sourceMaterial?.title ?? "URL"
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "URL" : trimmed
+    }
+
+    var sourcePreview: SourceReaderPreview? {
+        guard let sourceMaterial,
+              playerEmbed == nil else {
+            return nil
+        }
+        return SourceReaderPreview(
+            title: sourceDisplayTitle,
+            subtitle: Self.previewSubtitle(for: sourceMaterial, fallbackURL: sourceURL),
+            body: Self.previewBody(for: sourceMaterial)
+        )
     }
 
     var summaryUnavailableMessage: String? {
@@ -100,31 +123,120 @@ final class YouTubeLearningViewModel {
 
     func load(projectId: UUID?) async {
         loadTask?.cancel()
+        let targetConversationId = activeConversationId
         let task = Task {
-            await performLoad(requestedURL: urlText.trimmingCharacters(in: .whitespacesAndNewlines), projectId: projectId)
+            await performLoad(
+                requestedURL: urlText.trimmingCharacters(in: .whitespacesAndNewlines),
+                projectId: projectId,
+                conversationId: targetConversationId
+            )
         }
         loadTask = task
         await task.value
     }
 
-    private func performLoad(requestedURL: String, projectId: UUID?) async {
-        guard !requestedURL.isEmpty else {
-            resetForFailure("Paste a YouTube URL first.")
+    func activate(conversationId: UUID?) {
+        if let previousId = activeConversationId {
+            persist(state: currentPanelState, for: previousId)
+            loadedStates[previousId] = currentPanelState
+        }
+
+        activeConversationId = conversationId
+
+        guard let conversationId else {
+            apply(state: .empty)
             return
         }
 
-        isLoading = true
-        errorMessage = nil
-        transcript = nil
-        summarySections = []
-        selectedSectionID = nil
-        sourceMaterial = nil
-        sourceTitle = nil
-        sourceURL = nil
-        videoDuration = nil
-        playbackStartSeconds = nil
-        playbackRequestID = 0
-        defer { isLoading = false }
+        let state = loadedStates[conversationId] ?? loadState(conversationId: conversationId)
+        loadedStates[conversationId] = state
+        apply(state: state)
+    }
+
+    func loadDocumentAttachments(_ attachments: [AttachedFileContext], projectId: UUID?) {
+        let targetConversationId = activeConversationId
+        if targetConversationId == activeConversationId {
+            isLoading = false
+            errorMessage = nil
+            transcript = nil
+            summarySections = []
+            selectedSectionID = nil
+            sourceMaterial = nil
+            sourceTitle = nil
+            sourceURL = nil
+            videoDuration = nil
+            playbackStartSeconds = nil
+            playbackRequestID = 0
+        }
+
+        do {
+            let materials = try sourceIngestionService.ingestDocumentAttachments(
+                attachments,
+                projectId: projectId
+            )
+            guard let material = materials.first else {
+                storeFailure(
+                    requestedURL: "",
+                    message: "That document could not be read yet.",
+                    conversationId: targetConversationId
+                )
+                return
+            }
+
+            let displayName = material.originalFilename ?? material.title
+            let state = YouTubeLearningPanelState(
+                urlText: displayName,
+                transcript: nil,
+                summarySections: Self.sections(for: material),
+                selectedSectionID: nil,
+                sourceMaterial: material,
+                sourceTitle: material.title,
+                sourceURL: material.originalURL,
+                videoDuration: nil,
+                errorMessage: nil
+            )
+            store(state: state, for: targetConversationId)
+        } catch {
+            storeFailure(
+                requestedURL: "",
+                message: "That document could not be read yet.",
+                conversationId: targetConversationId
+            )
+        }
+    }
+
+    private func performLoad(requestedURL: String, projectId: UUID?, conversationId: UUID?) async {
+        guard !requestedURL.isEmpty else {
+            storeFailure(
+                requestedURL: requestedURL,
+                message: "Paste a URL or document first.",
+                conversationId: conversationId
+            )
+            return
+        }
+
+        if conversationId == activeConversationId {
+            isLoading = true
+            errorMessage = nil
+            transcript = nil
+            summarySections = []
+            selectedSectionID = nil
+            sourceMaterial = nil
+            sourceTitle = nil
+            sourceURL = nil
+            videoDuration = nil
+            playbackStartSeconds = nil
+            playbackRequestID = 0
+        }
+
+        guard Self.looksLikeYouTubeURL(requestedURL) else {
+            await loadURLSource(
+                requestedURL: requestedURL,
+                projectId: projectId,
+                conversationId: conversationId
+            )
+            return
+        }
 
         do {
             let loadedTranscript = try await transcriptService.fetchTranscript(from: requestedURL)
@@ -141,18 +253,71 @@ final class YouTubeLearningViewModel {
             let sections = try await summaryService.generateSections(for: loadedTranscript)
             guard !Task.isCancelled else { return }
 
-            transcript = loadedTranscript
-            sourceMaterial = material
-            sourceTitle = loadedTranscript.title
-            sourceURL = loadedTranscript.sourceURL.absoluteString
-            videoDuration = loadedTranscript.duration
-            summarySections = sections
+            let state = YouTubeLearningPanelState(
+                urlText: requestedURL,
+                transcript: loadedTranscript,
+                summarySections: sections,
+                selectedSectionID: nil,
+                sourceMaterial: material,
+                sourceTitle: loadedTranscript.title,
+                sourceURL: loadedTranscript.sourceURL.absoluteString,
+                videoDuration: loadedTranscript.duration,
+                errorMessage: nil
+            )
+            store(state: state, for: conversationId)
         } catch {
             guard !Task.isCancelled else { return }
             await loadWithGeminiVideoAnalysis(
                 requestedURL: requestedURL,
                 projectId: projectId,
+                conversationId: conversationId,
                 captionError: error
+            )
+        }
+    }
+
+    private func loadURLSource(requestedURL: String, projectId: UUID?, conversationId: UUID?) async {
+        guard let url = Self.normalizedSourceURL(from: requestedURL),
+              SourceURLSafety.allowsNetworkFetch(url) else {
+            storeFailure(
+                requestedURL: requestedURL,
+                message: "Paste a readable public URL or document source.",
+                conversationId: conversationId
+            )
+            return
+        }
+
+        do {
+            let materials = try await sourceIngestionService.ingestURLs([url], projectId: projectId)
+            guard !Task.isCancelled else { return }
+            guard let material = materials.first else {
+                storeFailure(
+                    requestedURL: requestedURL,
+                    message: "That source could not be read yet.",
+                    conversationId: conversationId
+                )
+                return
+            }
+
+            let state = YouTubeLearningPanelState(
+                urlText: requestedURL,
+                transcript: nil,
+                summarySections: Self.sections(for: material),
+                selectedSectionID: nil,
+                sourceMaterial: material,
+                sourceTitle: material.title,
+                sourceURL: material.originalURL ?? url.absoluteString,
+                videoDuration: nil,
+                errorMessage: nil
+            )
+            store(state: state, for: conversationId)
+        } catch is CancellationError {
+            return
+        } catch {
+            storeFailure(
+                requestedURL: requestedURL,
+                message: "That source could not be read yet.",
+                conversationId: conversationId
             )
         }
     }
@@ -162,38 +327,48 @@ final class YouTubeLearningViewModel {
             return nil
         }
 
+        let isVideoSource = Self.isVideoMaterial(sourceMaterial, sourceURL: sourceURL ?? urlText)
+        let mappedSection = sourceSummaryMapSection(matching: section)
         let excerpt: String
         if let transcript {
             excerpt = transcript.excerpt(
                 startTime: section.startTime,
                 endTime: section.endTime
             )
-        } else {
+        } else if isVideoSource {
             excerpt = Self.analysisExcerpt(for: section)
+        } else {
+            excerpt = mappedSection?.evidenceExcerpt ?? Self.sourceExcerpt(for: section, material: sourceMaterial)
         }
 
         return SourceDiscussionContext(
             sourceNodeId: sourceMaterial.sourceNodeId,
             title: sourceTitle ?? sourceMaterial.title,
             sourceURL: sourceURL ?? sourceMaterial.originalURL,
+            originalFilename: sourceMaterial.originalFilename,
             startTime: section.startTime,
             endTime: section.endTime,
+            locatorLabel: isVideoSource ? nil : mappedSection?.locatorLabel,
             summaryTitle: section.title,
             summary: section.summary,
             transcriptExcerpt: excerpt,
-            summaryMap: Self.summaryMap(
+            summaryMap: sourceMaterial.summaryMap ?? Self.summaryMap(
                 for: summarySections,
                 transcript: transcript,
                 evidenceLevel: sourceMaterial.evidenceLevel
             ),
-            evidenceLevel: sourceMaterial.evidenceLevel
+            evidenceLevel: sourceMaterial.evidenceLevel,
+            sourceLabel: isVideoSource ? "YouTube section" : "Source section"
         )
     }
 
     func selectSectionForPlayback(_ section: YouTubeSummarySection) {
         selectedSectionID = section.id
-        playbackStartSeconds = max(0, Int(section.startTime.rounded(.down)))
-        playbackRequestID += 1
+        if Self.isVideoMaterial(sourceMaterial, sourceURL: sourceURL ?? urlText) {
+            playbackStartSeconds = max(0, Int(section.startTime.rounded(.down)))
+            playbackRequestID += 1
+        }
+        persistActiveState()
     }
 
     func discussionContextForSelectedSection() -> SourceDiscussionContext? {
@@ -206,9 +381,16 @@ final class YouTubeLearningViewModel {
         return discussionContext(for: section)
     }
 
+    private func sourceSummaryMapSection(matching section: YouTubeSummarySection) -> SourceSummaryMapSection? {
+        sourceMaterial?.summaryMap?.sections.first { mappedSection in
+            mappedSection.title == section.title && mappedSection.summary == section.summary
+        }
+    }
+
     private func loadWithGeminiVideoAnalysis(
         requestedURL: String,
         projectId: UUID?,
+        conversationId: UUID?,
         captionError: Error
     ) async {
         do {
@@ -224,15 +406,24 @@ final class YouTubeLearningViewModel {
                 projectId: projectId
             )
 
-            transcript = nil
-            sourceMaterial = material
-            sourceTitle = video.title
-            sourceURL = video.sourceURL.absoluteString
-            videoDuration = video.duration ?? sections.map { $0.endTime }.max()
-            summarySections = sections
-            errorMessage = "Captions could not be read, so Gemini 2.5 Pro analyzed the video directly."
+            let state = YouTubeLearningPanelState(
+                urlText: requestedURL,
+                transcript: nil,
+                summarySections: sections,
+                selectedSectionID: nil,
+                sourceMaterial: material,
+                sourceTitle: video.title,
+                sourceURL: video.sourceURL.absoluteString,
+                videoDuration: video.duration ?? sections.map { $0.endTime }.max(),
+                errorMessage: "Captions could not be read, so Gemini 2.5 Pro analyzed the video directly."
+            )
+            store(state: state, for: conversationId)
         } catch {
-            resetForFailure(Self.fallbackFailureMessage(captionError: captionError, analysisError: error))
+            storeFailure(
+                requestedURL: requestedURL,
+                message: Self.fallbackFailureMessage(captionError: captionError, analysisError: error),
+                conversationId: conversationId
+            )
         }
     }
 
@@ -246,17 +437,193 @@ final class YouTubeLearningViewModel {
         }
     }
 
-    private func resetForFailure(_ message: String) {
-        transcript = nil
-        summarySections = []
-        selectedSectionID = nil
-        sourceMaterial = nil
-        sourceTitle = nil
-        sourceURL = nil
-        videoDuration = nil
+    private func storeFailure(requestedURL: String, message: String, conversationId: UUID?) {
+        store(
+            state: YouTubeLearningPanelState(
+                urlText: requestedURL,
+                transcript: nil,
+                summarySections: [],
+                selectedSectionID: nil,
+                sourceMaterial: nil,
+                sourceTitle: nil,
+                sourceURL: nil,
+                videoDuration: nil,
+                errorMessage: message
+            ),
+            for: conversationId
+        )
+    }
+
+    private var currentPanelState: YouTubeLearningPanelState {
+        YouTubeLearningPanelState(
+            urlText: urlText,
+            transcript: transcript,
+            summarySections: summarySections,
+            selectedSectionID: selectedSectionID,
+            sourceMaterial: sourceMaterial,
+            sourceTitle: sourceTitle,
+            sourceURL: sourceURL,
+            videoDuration: videoDuration,
+            errorMessage: errorMessage
+        )
+    }
+
+    private func apply(state: YouTubeLearningPanelState) {
+        urlText = state.urlText
+        transcript = state.transcript
+        summarySections = state.summarySections
+        selectedSectionID = state.selectedSectionID
+        sourceMaterial = state.sourceMaterial
+        sourceTitle = state.sourceTitle
+        sourceURL = state.sourceURL
+        videoDuration = state.videoDuration
+        errorMessage = state.errorMessage
         playbackStartSeconds = nil
         playbackRequestID = 0
-        errorMessage = message
+        isLoading = false
+    }
+
+    private func store(state: YouTubeLearningPanelState, for conversationId: UUID?) {
+        if let conversationId {
+            loadedStates[conversationId] = state
+            persist(state: state, for: conversationId)
+        }
+        if conversationId == activeConversationId {
+            apply(state: state)
+        }
+    }
+
+    private func loadState(conversationId: UUID) -> YouTubeLearningPanelState {
+        guard let nodeStore,
+              let record = try? nodeStore.fetchYouTubeLearningPanelState(nodeId: conversationId) else {
+            return .empty
+        }
+        return record.state
+    }
+
+    private func persistActiveState() {
+        guard let activeConversationId else { return }
+        let state = currentPanelState
+        loadedStates[activeConversationId] = state
+        persist(state: state, for: activeConversationId)
+    }
+
+    private func persist(state: YouTubeLearningPanelState, for conversationId: UUID) {
+        do {
+            if state.shouldPersist {
+                try nodeStore?.saveYouTubeLearningPanelState(
+                    YouTubeLearningPanelStateRecord(
+                        nodeId: conversationId,
+                        state: state,
+                        updatedAt: Date()
+                    )
+                )
+            } else {
+                try nodeStore?.deleteYouTubeLearningPanelState(nodeId: conversationId)
+            }
+        } catch {
+            NSLog("YouTubeLearningViewModel persist failed: %@", error.localizedDescription)
+        }
+    }
+
+    private static func looksLikeYouTubeURL(_ value: String) -> Bool {
+        if (try? YouTubeVideoID(urlString: value)) != nil { return true }
+        let lowercased = value.lowercased()
+        return lowercased.contains("youtube.com") || lowercased.contains("youtu.be")
+    }
+
+    private static func normalizedSourceURL(from value: String) -> URL? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let url = URL(string: trimmed),
+           let scheme = url.scheme?.lowercased(),
+           scheme == "http" || scheme == "https" {
+            return url
+        }
+        return URL(string: "https://\(trimmed)")
+    }
+
+    private static func sections(for material: SourceMaterialContext) -> [YouTubeSummarySection] {
+        if let summaryMap = material.summaryMap, !summaryMap.isEmpty {
+            return summaryMap.sections.map { section in
+                YouTubeSummarySection(
+                    title: section.title,
+                    summary: section.summary,
+                    startTime: Double(max(0, section.partNumber - 1)),
+                    endTime: Double(max(1, section.partNumber))
+                )
+            }
+        }
+
+        return material.chunks.prefix(5).enumerated().compactMap { index, chunk in
+            let summary = clippedPreviewLine(chunk.text)
+            guard !summary.isEmpty else { return nil }
+            return YouTubeSummarySection(
+                title: "Part \(index + 1)",
+                summary: summary,
+                startTime: Double(index),
+                endTime: Double(index + 1)
+            )
+        }
+    }
+
+    private static func previewSubtitle(for material: SourceMaterialContext, fallbackURL: String?) -> String {
+        if let filename = material.originalFilename,
+           !filename.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return filename
+        }
+        if let rawURL = material.originalURL ?? fallbackURL,
+           let url = URL(string: rawURL),
+           let host = url.host,
+           !host.isEmpty {
+            return host.removingWWWPrefix()
+        }
+        return "Source"
+    }
+
+    private static func previewBody(for material: SourceMaterialContext) -> String {
+        if let map = material.summaryMap,
+           let section = map.sections.first {
+            return [section.locatorLabel, section.evidenceExcerpt ?? section.summary]
+                .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                .joined(separator: "\n")
+        }
+        if let chunk = material.chunks.first {
+            return clippedPreviewBody(chunk.text)
+        }
+        return material.previewLine
+    }
+
+    private static func sourceExcerpt(for section: YouTubeSummarySection, material: SourceMaterialContext) -> String {
+        let matchingChunk = material.chunks.first { chunk in
+            chunk.text.contains(section.summary)
+        }
+        return matchingChunk.map { clippedPreviewBody($0.text, limit: 900) } ?? section.summary
+    }
+
+    private static func isVideoMaterial(_ material: SourceMaterialContext?, sourceURL: String?) -> Bool {
+        if material?.evidenceLevel == .transcriptBacked || material?.evidenceLevel == .geminiVideoAnalysis {
+            return true
+        }
+        guard let sourceURL else { return false }
+        return looksLikeYouTubeURL(sourceURL)
+    }
+
+    private static func clippedPreviewLine(_ text: String, limit: Int = 240) -> String {
+        let line = text
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty && !$0.hasPrefix("#") } ?? ""
+        guard line.count > limit else { return line }
+        return String(line.prefix(limit)).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func clippedPreviewBody(_ text: String, limit: Int = 700) -> String {
+        let normalized = SourceTextExtractor.normalizeWhitespace(text)
+            .components(separatedBy: .newlines)
+            .joined(separator: "\n")
+        guard normalized.count > limit else { return normalized }
+        return String(normalized.prefix(limit)).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func analysisText(
@@ -332,5 +699,11 @@ final class YouTubeLearningViewModel {
             return captionError.localizedDescription
         }
         return "Captions could not be read. \(analysisError.localizedDescription)"
+    }
+}
+
+private extension String {
+    func removingWWWPrefix() -> String {
+        hasPrefix("www.") ? String(dropFirst(4)) : self
     }
 }

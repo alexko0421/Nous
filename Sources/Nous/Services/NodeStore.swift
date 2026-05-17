@@ -65,6 +65,12 @@ struct ScratchPadStateRecord: Equatable {
     let contentBaseGeneratedAt: Date?
 }
 
+struct YouTubeLearningPanelStateRecord: Equatable {
+    let nodeId: UUID
+    let state: YouTubeLearningPanelState
+    let updatedAt: Date
+}
+
 // MARK: - NodeStore
 
 final class NodeStore {
@@ -345,6 +351,14 @@ final class NodeStore {
                 currentContent             TEXT NOT NULL DEFAULT '',
                 baseSnapshot               TEXT NOT NULL DEFAULT '',
                 contentBaseGeneratedAt     REAL
+            );
+        """)
+
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS youtube_learning_panel_state (
+                nodeId    TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
+                stateJSON TEXT NOT NULL,
+                updatedAt REAL NOT NULL
             );
         """)
 
@@ -1631,6 +1645,19 @@ final class NodeStore {
         return try? JSONDecoder().decode(SourceBriefing.self, from: data)
     }
 
+    private static func encodeYouTubeLearningPanelState(_ state: YouTubeLearningPanelState) -> String {
+        let data = (try? JSONEncoder().encode(state)) ?? Data("{}".utf8)
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private static func decodeYouTubeLearningPanelState(_ rawValue: String?) -> YouTubeLearningPanelState? {
+        guard let rawValue,
+              let data = rawValue.data(using: .utf8) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(YouTubeLearningPanelState.self, from: data)
+    }
+
     func upsertTemporaryBranchRecord(_ record: TemporaryBranchRecord) throws {
         let recordJSON = String(
             data: try JSONEncoder().encode(record),
@@ -1852,6 +1879,47 @@ final class NodeStore {
     func deleteScratchPadState(nodeId: UUID) throws {
         let stmt = try db.prepare("""
             DELETE FROM scratchpad_state WHERE nodeId = ?;
+        """)
+        try stmt.bind(nodeId.uuidString, at: 1)
+        try stmt.step()
+    }
+
+    func fetchYouTubeLearningPanelState(nodeId: UUID) throws -> YouTubeLearningPanelStateRecord? {
+        let stmt = try db.prepare("""
+            SELECT stateJSON, updatedAt
+            FROM youtube_learning_panel_state
+            WHERE nodeId = ?;
+        """)
+        try stmt.bind(nodeId.uuidString, at: 1)
+        guard try stmt.step(),
+              let state = Self.decodeYouTubeLearningPanelState(stmt.text(at: 0)) else {
+            return nil
+        }
+
+        return YouTubeLearningPanelStateRecord(
+            nodeId: nodeId,
+            state: state,
+            updatedAt: Date(timeIntervalSince1970: stmt.double(at: 1))
+        )
+    }
+
+    func saveYouTubeLearningPanelState(_ record: YouTubeLearningPanelStateRecord) throws {
+        let stmt = try db.prepare("""
+            INSERT INTO youtube_learning_panel_state (nodeId, stateJSON, updatedAt)
+            VALUES (?, ?, ?)
+            ON CONFLICT(nodeId) DO UPDATE SET
+                stateJSON = excluded.stateJSON,
+                updatedAt = excluded.updatedAt;
+        """)
+        try stmt.bind(record.nodeId.uuidString, at: 1)
+        try stmt.bind(Self.encodeYouTubeLearningPanelState(record.state), at: 2)
+        try stmt.bind(record.updatedAt.timeIntervalSince1970, at: 3)
+        try stmt.step()
+    }
+
+    func deleteYouTubeLearningPanelState(nodeId: UUID) throws {
+        let stmt = try db.prepare("""
+            DELETE FROM youtube_learning_panel_state WHERE nodeId = ?;
         """)
         try stmt.bind(nodeId.uuidString, at: 1)
         try stmt.step()

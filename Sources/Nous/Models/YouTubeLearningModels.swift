@@ -323,7 +323,7 @@ struct YouTubeTranscriptSegment: Identifiable, Codable, Equatable {
     }
 }
 
-struct YouTubeTranscript: Equatable {
+struct YouTubeTranscript: Codable, Equatable {
     let videoID: YouTubeVideoID
     let title: String
     let sourceURL: URL
@@ -402,44 +402,94 @@ struct YouTubeSummaryTimelineSegment: Identifiable, Equatable {
     }
 }
 
+struct SourceReaderPreview: Codable, Equatable {
+    let title: String
+    let subtitle: String
+    let body: String
+}
+
+struct YouTubeLearningPanelState: Codable, Equatable {
+    var urlText: String
+    var transcript: YouTubeTranscript?
+    var summarySections: [YouTubeSummarySection]
+    var selectedSectionID: UUID?
+    var sourceMaterial: SourceMaterialContext?
+    var sourceTitle: String?
+    var sourceURL: String?
+    var videoDuration: TimeInterval?
+    var errorMessage: String?
+
+    static let empty = YouTubeLearningPanelState(
+        urlText: "",
+        transcript: nil,
+        summarySections: [],
+        selectedSectionID: nil,
+        sourceMaterial: nil,
+        sourceTitle: nil,
+        sourceURL: nil,
+        videoDuration: nil,
+        errorMessage: nil
+    )
+
+    var shouldPersist: Bool {
+        !urlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            transcript != nil ||
+            !summarySections.isEmpty ||
+            sourceMaterial != nil ||
+            errorMessage != nil
+    }
+}
+
 struct SourceDiscussionContext: Equatable {
     let sourceNodeId: UUID
     let title: String
     let sourceURL: String?
+    let originalFilename: String?
     let startTime: TimeInterval
     let endTime: TimeInterval
+    let locatorLabel: String?
     let summaryTitle: String
     let summary: String
     let transcriptExcerpt: String
     let summaryMap: SourceSummaryMap?
     let evidenceLevel: SourceEvidenceLevel
+    let sourceLabel: String
 
     init(
         sourceNodeId: UUID,
         title: String,
         sourceURL: String?,
+        originalFilename: String? = nil,
         startTime: TimeInterval,
         endTime: TimeInterval,
+        locatorLabel: String? = nil,
         summaryTitle: String,
         summary: String,
         transcriptExcerpt: String,
         summaryMap: SourceSummaryMap? = nil,
-        evidenceLevel: SourceEvidenceLevel = .unknown
+        evidenceLevel: SourceEvidenceLevel = .unknown,
+        sourceLabel: String = "YouTube section"
     ) {
         self.sourceNodeId = sourceNodeId
         self.title = title
         self.sourceURL = sourceURL
+        self.originalFilename = originalFilename
         self.startTime = startTime
         self.endTime = endTime
+        self.locatorLabel = locatorLabel
         self.summaryTitle = summaryTitle
         self.summary = summary
         self.transcriptExcerpt = transcriptExcerpt
         self.summaryMap = summaryMap
         self.evidenceLevel = evidenceLevel
+        self.sourceLabel = sourceLabel
     }
 
     var timeRangeLabel: String {
-        "\(YouTubeTranscriptSegment.timestamp(startTime))-\(YouTubeTranscriptSegment.timestamp(endTime))"
+        if let locatorLabel, !locatorLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return locatorLabel
+        }
+        return "\(YouTubeTranscriptSegment.timestamp(startTime))-\(YouTubeTranscriptSegment.timestamp(endTime))"
     }
 
     var evidenceLabel: String {
@@ -464,13 +514,20 @@ struct SourceDiscussionContext: Equatable {
 
     var promptText: String {
         """
-        YouTube section: \(summaryTitle) (\(timeRangeLabel))
+        \(sourceLabel): \(summaryTitle) (\(timeRangeLabel))
         Evidence: \(evidenceLabel)
         Summary: \(summary)
 
-        \(isQuoteLevelReliable ? "Transcript excerpt" : "Analysis excerpt"):
+        \(excerptHeading):
         \(transcriptExcerpt)
         """
+    }
+
+    private var excerptHeading: String {
+        if sourceLabel == "YouTube section" {
+            return isQuoteLevelReliable ? "Transcript excerpt" : "Analysis excerpt"
+        }
+        return "Source excerpt"
     }
 
     func sourceMaterialContext() -> SourceMaterialContext {
@@ -478,7 +535,7 @@ struct SourceDiscussionContext: Equatable {
             sourceNodeId: sourceNodeId,
             title: title,
             originalURL: sourceURL,
-            originalFilename: nil,
+            originalFilename: originalFilename,
             chunks: [
                 SourceChunkContext(
                     sourceNodeId: sourceNodeId,

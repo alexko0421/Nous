@@ -2,16 +2,13 @@ import XCTest
 @testable import Nous
 
 final class ActionMenuSeparationMotionTests: XCTestCase {
-    func testCollapsedCapsuleStaysConnectedAtPlusSource() {
-        let motion = ActionMenuSeparationMotion(
-            sourceYOffset: 46,
-            collapsedScale: CGSize(width: 0.24, height: 0.68)
-        )
+    func testCollapsedCapsuleUsesGroundedGlassStartingPose() {
+        let motion = ActionMenuSeparationMotion()
 
         XCTAssertEqual(motion.capsuleOffset(isExpanded: false).width, 0)
-        XCTAssertEqual(motion.capsuleOffset(isExpanded: false).height, 46)
-        XCTAssertEqual(motion.capsuleScale(isExpanded: false).width, 0.24)
-        XCTAssertEqual(motion.capsuleScale(isExpanded: false).height, 0.68)
+        XCTAssertEqual(motion.capsuleOffset(isExpanded: false).height, 7)
+        XCTAssertEqual(motion.capsuleScale(isExpanded: false).width, 0.97)
+        XCTAssertEqual(motion.capsuleScale(isExpanded: false).height, 0.97)
         XCTAssertEqual(motion.capsuleScale(isExpanded: true).width, 1)
         XCTAssertEqual(motion.capsuleScale(isExpanded: true).height, 1)
     }
@@ -24,11 +21,16 @@ final class ActionMenuSeparationMotionTests: XCTestCase {
         XCTAssertEqual(motion.itemOffset(for: 2, isExpanded: false), .zero)
     }
 
-    func testOpeningDelaysUseClosingCadenceInsideCapsule() {
+    func testOpeningDelaysUseSoftStaggerCadenceInsideCapsule() {
         let motion = ActionMenuSeparationMotion()
 
         XCTAssertLessThan(motion.delay(for: 0, isExpanded: true), motion.delay(for: 1, isExpanded: true))
         XCTAssertLessThan(motion.delay(for: 1, isExpanded: true), motion.delay(for: 2, isExpanded: true))
+        XCTAssertEqual(
+            motion.delay(for: 1, isExpanded: true) - motion.delay(for: 0, isExpanded: true),
+            0.024,
+            accuracy: 0.0001
+        )
         XCTAssertEqual(
             motion.delay(for: 1, isExpanded: true) - motion.delay(for: 0, isExpanded: true),
             motion.delay(for: 0, isExpanded: false) - motion.delay(for: 1, isExpanded: false),
@@ -41,6 +43,13 @@ final class ActionMenuSeparationMotionTests: XCTestCase {
 
         XCTAssertGreaterThan(motion.delay(for: 0, isExpanded: false), motion.delay(for: 1, isExpanded: false))
         XCTAssertGreaterThan(motion.delay(for: 1, isExpanded: false), motion.delay(for: 2, isExpanded: false))
+    }
+
+    func testCollapsedCapsuleDoesNotUseBlurTrail() {
+        let motion = ActionMenuSeparationMotion()
+
+        XCTAssertEqual(motion.capsuleBlur(isExpanded: false), 0)
+        XCTAssertEqual(motion.capsuleBlur(isExpanded: true), 0)
     }
 
     func testComposerPrimaryActionStaysJoinedWhenIdle() {
@@ -105,13 +114,13 @@ final class ActionMenuSeparationMotionTests: XCTestCase {
         XCTAssertGreaterThan(motion.scale(isSeparated: true), 1)
         XCTAssertLessThan(motion.scale(isSeparated: true), 1.05)
         XCTAssertLessThan(motion.yOffset(isSeparated: true), 0)
-        XCTAssertGreaterThan(motion.yOffset(isSeparated: true), -1.25)
-        XCTAssertGreaterThan(motion.fillOpacity(isSeparated: true), 0.2)
-        XCTAssertLessThan(motion.fillOpacity(isSeparated: true), 0.36)
-        XCTAssertGreaterThan(motion.tintAlpha(isSeparated: true), 0.3)
-        XCTAssertLessThan(motion.tintAlpha(isSeparated: true), 0.46)
-        XCTAssertGreaterThan(motion.glowOpacity(isSeparated: true), 0.03)
-        XCTAssertLessThan(motion.glowOpacity(isSeparated: true), 0.09)
+        XCTAssertGreaterThan(motion.yOffset(isSeparated: true), -0.75)
+        XCTAssertGreaterThan(motion.fillOpacity(isSeparated: true), 0.3)
+        XCTAssertLessThan(motion.fillOpacity(isSeparated: true), 0.38)
+        XCTAssertGreaterThan(motion.tintAlpha(isSeparated: true), 0.4)
+        XCTAssertLessThan(motion.tintAlpha(isSeparated: true), 0.5)
+        XCTAssertGreaterThan(motion.glowOpacity(isSeparated: true), 0.045)
+        XCTAssertLessThan(motion.glowOpacity(isSeparated: true), 0.065)
     }
 
     func testComposerPlusButtonsUseSharedPopoutControl() throws {
@@ -133,10 +142,21 @@ final class ActionMenuSeparationMotionTests: XCTestCase {
         XCTAssertTrue(chatSource.contains("value: isActionMenuExpanded"))
         XCTAssertTrue(welcomeSource.contains("value: isActionMenuExpanded"))
 
-        let leadingButtonRange = try XCTUnwrap(chatSource.range(of: "struct ComposerLeadingActionButton"))
-        let leadingButtonSource = String(chatSource[leadingButtonRange.lowerBound...])
+        let leadingButtonStart = try XCTUnwrap(chatSource.range(of: "struct ComposerLeadingActionButton"))
+        let leadingButtonEnd = try XCTUnwrap(chatSource.range(of: "struct ActionMenuCapsule"))
+        let leadingButtonSource = String(chatSource[leadingButtonStart.lowerBound..<leadingButtonEnd.lowerBound])
         XCTAssertTrue(leadingButtonSource.contains(".foregroundColor(iconColor)"))
+        XCTAssertTrue(leadingButtonSource.contains("isSeparated ? AppColor.colaOrange : AppColor.secondaryText"))
+        XCTAssertTrue(leadingButtonSource.contains("private var tintColor: NSColor"))
+        XCTAssertTrue(leadingButtonSource.contains("red: 243 / 255"))
+        XCTAssertTrue(leadingButtonSource.contains("AppColor.colaOrange.opacity(motion.fillOpacity(isSeparated: isSeparated))"))
+        XCTAssertTrue(leadingButtonSource.contains("AppColor.colaOrange.opacity(motion.glowOpacity(isSeparated: isSeparated))"))
+        XCTAssertTrue(leadingButtonSource.contains("isSeparated ? AppColor.colaOrange.opacity(0.28) : AppColor.composerInputGlassStroke"))
+        XCTAssertTrue(leadingButtonSource.contains("AppColor.composerInputGlassTint"))
+        XCTAssertTrue(leadingButtonSource.contains("AppColor.composerInputGlassOverlay"))
+        XCTAssertTrue(leadingButtonSource.contains("AppColor.composerInputGlassStroke"))
         XCTAssertFalse(leadingButtonSource.contains(".foregroundColor(isSeparated ? .white : AppColor.secondaryText)"))
+        XCTAssertFalse(leadingButtonSource.contains("rotationEffect"))
     }
 
     func testComposerPrimaryActionHasNoFusionPulseImplementation() throws {
@@ -207,6 +227,50 @@ final class ActionMenuSeparationMotionTests: XCTestCase {
 
             XCTAssertTrue(source.contains(expectedTint), relativePath)
         }
+    }
+
+    func testComposerMenuUsesWeightedSharedGlassSurfaces() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let themeSource = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Theme/AppColor.swift"),
+            encoding: .utf8
+        )
+        let chatSource = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Views/ChatArea.swift"),
+            encoding: .utf8
+        )
+        let welcomeSource = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Views/WelcomeView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(themeSource.contains("composerInputGlassTint"))
+        XCTAssertTrue(themeSource.contains("composerMenuGlassTint"))
+        XCTAssertTrue(themeSource.contains("static let composerInputGlassTint = sidebarGlassTint"))
+        XCTAssertTrue(themeSource.contains("static let composerInputGlassOverlay = sidebarGlassVeil"))
+        XCTAssertTrue(themeSource.contains("static let composerInputGlassStroke = sidebarGlassStroke"))
+        XCTAssertTrue(themeSource.contains("static let composerMenuGlassTint = composerInputGlassTint"))
+        XCTAssertTrue(themeSource.contains("static let composerMenuGlassOverlay = composerInputGlassOverlay"))
+        XCTAssertTrue(themeSource.contains("static let composerMenuGlassStroke = composerInputGlassStroke"))
+        XCTAssertTrue(chatSource.contains("ComposerTextInputGlassBackground(cornerRadius: 18)"))
+        XCTAssertTrue(welcomeSource.contains("ComposerTextInputGlassBackground(cornerRadius: 18)"))
+        XCTAssertTrue(chatSource.contains("ComposerActionMenuGlassBackground"))
+        let menuBackgroundStart = try XCTUnwrap(chatSource.range(of: "struct ComposerActionMenuGlassBackground"))
+        let menuBackgroundEnd = try XCTUnwrap(chatSource.range(of: "struct ComposerLeadingActionButton"))
+        let menuBackgroundSource = String(chatSource[menuBackgroundStart.lowerBound..<menuBackgroundEnd.lowerBound])
+        XCTAssertTrue(menuBackgroundSource.contains("tintColor: AppColor.composerMenuGlassTint"))
+        XCTAssertTrue(menuBackgroundSource.contains(".fill(AppColor.composerMenuGlassOverlay)"))
+        XCTAssertTrue(menuBackgroundSource.contains(".stroke(AppColor.composerMenuGlassStroke, lineWidth: 1)"))
+        XCTAssertFalse(menuBackgroundSource.contains("LinearGradient"))
+        XCTAssertFalse(chatSource.contains("ActionMenuAnchorBridge"))
+        XCTAssertFalse(chatSource.contains("topHighlightOpacity"))
+        XCTAssertFalse(chatSource.contains("midHighlightOpacity"))
+        XCTAssertFalse(chatSource.contains("bottomShadeOpacity"))
+        XCTAssertFalse(chatSource.contains("overlayColor: AppColor.composerMatteOverlay"))
+        XCTAssertFalse(welcomeSource.contains("overlayColor: AppColor.composerMatteOverlay"))
     }
 
     func testWelcomeQuickActionsUseQuietControlGlassChips() throws {

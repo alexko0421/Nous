@@ -10,7 +10,10 @@ final class TemporaryBranchUILayoutTests: XCTestCase {
 
     func testTemporaryBranchUsesFocusMembraneInsteadOfModalPanel() throws {
         XCTAssertFalse(TemporaryBranchMembraneStyle.drawsFramedPanel)
-        XCTAssertLessThanOrEqual(TemporaryBranchMembraneStyle.inlineComposerMaxWidth, 540)
+        XCTAssertEqual(
+            TemporaryBranchMembraneStyle.inlineComposerMaxWidth,
+            ComposerTextInputMetrics.chatComposerMaxWidth
+        )
         XCTAssertLessThanOrEqual(TemporaryBranchMembraneStyle.primaryComposerMinHeight, 54)
 
         let repoRoot = URL(fileURLWithPath: #filePath)
@@ -59,9 +62,13 @@ final class TemporaryBranchUILayoutTests: XCTestCase {
         XCTAssertTrue(branchTextFieldSource.contains(".lineLimit(1...ComposerTextInputMetrics.maxVisibleLines)"))
         XCTAssertTrue(branchTextFieldSource.contains(".frame(maxWidth: .infinity, minHeight: ComposerTextInputMetrics.minimumTextHeight, alignment: .topLeading)"))
         XCTAssertTrue(branchTextFieldSource.contains(".padding(.vertical, ComposerTextInputMetrics.verticalPadding)"))
-        XCTAssertTrue(branchTextFieldSource.contains("NativeGlassPanel("))
-        XCTAssertTrue(branchTextFieldSource.contains("cornerRadius: TemporaryBranchMembraneStyle.primaryComposerCornerRadius"))
-        XCTAssertTrue(source.contains(".frame(width: 36, height: 36)"))
+        XCTAssertTrue(branchTextFieldSource.contains("ComposerTextInputGlassBackground(cornerRadius: TemporaryBranchMembraneStyle.primaryComposerCornerRadius)"))
+        XCTAssertTrue(source.contains("HStack(spacing: ComposerTextInputMetrics.controlSpacing)"))
+        XCTAssertTrue(source.contains("ComposerLeadingActionButton("))
+        XCTAssertTrue(source.contains("size: ComposerTextInputMetrics.leadingActionSize"))
+        XCTAssertTrue(source.contains("cornerRadius: ComposerTextInputMetrics.leadingActionCornerRadius"))
+        XCTAssertTrue(source.contains(".frame(width: ComposerTextInputMetrics.leadingActionSize, height: ComposerTextInputMetrics.leadingActionSize)"))
+        XCTAssertTrue(source.contains("inlineComposerMaxWidth"))
         XCTAssertFalse(branchTextFieldSource.contains(".lineLimit(1...4)"))
         XCTAssertFalse(branchTextFieldSource.contains(".font(.system(size: 14, weight: .medium, design: .rounded))"))
         XCTAssertFalse(inlineComposerSource.contains("subtleSourceAnchor"))
@@ -212,10 +219,18 @@ final class TemporaryBranchUILayoutTests: XCTestCase {
         XCTAssertFalse(bubbleSource.contains(".background(isUser ? AppColor.colaOrange.opacity(0.86) : AppColor.colaBubble)"))
     }
 
-    func testBranchTriggerUsesMessageLongPressAndStableHoverHitTarget() throws {
-        XCTAssertEqual(TemporaryBranchTriggerHitTarget.longPressDuration, 0.35)
-        XCTAssertGreaterThanOrEqual(TemporaryBranchTriggerHitTarget.hoverBridgePadding, 10)
-        XCTAssertGreaterThanOrEqual(TemporaryBranchTriggerHitTarget.userButtonOutsideOffset, 44)
+    func testBranchTriggerUsesIconOnlyHitTargetAndStableAlignment() throws {
+        XCTAssertEqual(TemporaryBranchTriggerHitTarget.buttonDiameter, 28)
+        XCTAssertGreaterThan(TemporaryBranchTriggerHitTarget.hoverExitGraceDuration, 0)
+        XCTAssertLessThanOrEqual(TemporaryBranchTriggerHitTarget.hoverExitGraceDuration, 0.35)
+        XCTAssertEqual(
+            TemporaryBranchTriggerHitTarget.userButtonOutsideOffset,
+            TemporaryBranchTriggerHitTarget.buttonDiameter
+        )
+        XCTAssertEqual(
+            TemporaryBranchTriggerHitTarget.assistantButtonOutsideOffset,
+            TemporaryBranchTriggerHitTarget.buttonDiameter
+        )
 
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -226,9 +241,14 @@ final class TemporaryBranchUILayoutTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(source.contains(".onLongPressGesture(minimumDuration: TemporaryBranchTriggerHitTarget.longPressDuration)"))
-        XCTAssertTrue(source.contains("TemporaryBranchTriggerHitTarget.hoverBridgePadding"))
         XCTAssertTrue(source.contains("width: -TemporaryBranchTriggerHitTarget.userButtonOutsideOffset"))
+        XCTAssertTrue(source.contains("width: TemporaryBranchTriggerHitTarget.assistantButtonOutsideOffset"))
+        XCTAssertTrue(source.contains(".allowsHitTesting(isHovering)"))
+        XCTAssertTrue(source.contains("@State private var isContentHovering = false"))
+        XCTAssertTrue(source.contains("@State private var isTriggerHovering = false"))
+        XCTAssertTrue(source.contains("refreshBranchTriggerHoverVisibility()"))
+        XCTAssertTrue(source.contains("scheduleBranchTriggerHoverClose()"))
+        XCTAssertFalse(source.contains(".onLongPressGesture(minimumDuration: TemporaryBranchTriggerHitTarget.longPressDuration)"))
         XCTAssertFalse(source.contains(".offset(x: isUser ? -32 : 32, y: 2)"))
     }
 
