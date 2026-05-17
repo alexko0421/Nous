@@ -1,7 +1,7 @@
 # Visual-Line Streaming Fade - Design
 
 **Date:** 2026-05-16
-**Status:** Approved direction from visual calibration; awaiting user review of this written spec.
+**Status:** Approved direction from visual calibration; implementation corrected after live feedback.
 **Scope:** Assistant reply rendering in `Sources/Nous/Views/ChatArea.swift` and `Sources/Nous/Views/ChatMarkdownRenderer.swift`.
 **Non-scope:** LLM streaming cadence, provider behavior, message persistence, `anchor.md`, tables, code blocks, and user bubbles.
 
@@ -20,7 +20,7 @@ Alex selected the visual-line direction over token pop, soft reveal, and sentenc
 ## Goals
 
 - During an active assistant stream, prose appears one visible line at a time with the calibrated fade/settle motion.
-- The LLM still streams normally. The UI must not buffer model output in a way that makes the assistant feel slower to answer.
+- The LLM still streams normally. The UI may buffer the trailing incomplete visual line so visible text does not grow token by token after it appears.
 - Once a reply is complete and persisted, it renders as normal static Markdown, preserving selection, copy, layout, and existing message behavior.
 - The first slice applies to assistant prose text only. Tables and code/verbatim blocks remain stable.
 - The implementation follows existing chat rendering boundaries instead of adding a new message pipeline.
@@ -40,9 +40,9 @@ Alex selected the visual-line direction over token pop, soft reveal, and sentenc
 
 `ChatViewModel` continues appending text deltas into `currentResponse`. The generation path remains:
 
-`LLM stream -> currentResponse.append(delta) -> ChatArea renders draft bubble`
+`LLM stream -> currentResponse.append(delta) -> ChatArea renders draft bubble -> streaming prose renderer reveals stable visual lines`
 
-The fade is a presentation detail inside the assistant bubble. This keeps latency honest: Nous can still show that a reply has started as soon as the first useful text arrives.
+The reveal is a presentation detail inside the assistant bubble. The data pipeline still receives every delta immediately, but the visible renderer withholds the trailing incomplete visual line until it is stable. This avoids the mistaken double effect where a line fades in and then keeps growing token by token.
 
 ### 2. Add A Streaming-Only Assistant Text Path
 
@@ -78,14 +78,22 @@ The helper should be deliberately narrow:
 
 ### 4. Render Lines With Stable Identity
 
-Each measured line renders as its own `Text` row inside a leading `VStack`. New lines fade in with the calibrated motion:
+Each stable measured line renders as its own `Text` row inside a leading `VStack`. New lines fade in with the calibrated motion:
 
 - Stagger: `0.45s` per newly appearing line
 - Opacity: `0 -> 1`
 - Offset: `y: 10 -> 0`
 - Curve: SwiftUI timing curve approximating `.17, .76, .18, 1`
 
-To avoid replaying the entire answer on every token, line identity should be based on the line index plus a stable prefix/hash of the line content. Existing lines stay visible; only newly added lines animate.
+To avoid replaying the entire answer on every token, the streaming renderer keeps a small reveal state:
+
+- While the segment is still the trailing streaming segment, reveal all measured visual lines except the last one.
+- Once the stream moves to another segment, reveal the trailing line for the now-complete segment.
+- After a line is revealed, freeze its displayed text so later token deltas cannot mutate that visible row.
+
+Existing lines stay visible; only newly appended stable lines animate. If multiple visual lines become stable in one render update, the renderer must assign each new line its own reveal delay in display order, so they do not fade in at the same time.
+
+When a streaming segment stops being the trailing draft segment, the renderer should reveal that segment's last withheld visual line without resetting already visible rows. Otherwise the completed segment can briefly remount its prior lines and create a small per-line pause or stutter.
 
 If a resize changes wrapping, the renderer can reset line identities and re-layout without trying to preserve every animation. Window resize during an active stream is not the core path.
 
@@ -125,7 +133,9 @@ After prose feels right in real use, bullets can be considered for the same visu
 ## Acceptance Criteria
 
 - Active assistant prose streams with visual-line fade using the C timing: `450ms` stagger, no blur, gentle y-settle.
-- Model output starts showing immediately; no sentence/full-line buffering in the data pipeline.
+- Model deltas still enter `currentResponse` immediately, but the visible streaming prose does not mutate already revealed lines token by token.
+- When a large stream delta makes several visual lines revealable at once, those newly revealed lines still stagger in order instead of appearing as a block.
+- When the stream moves to a new segment, the previous segment reveals its final withheld line without replaying or remounting already visible lines.
 - Completed messages render through normal static Markdown.
 - Tables, code/verbatim blocks, headings, and user bubbles are not visually disrupted.
 - Focused tests and a macOS build pass.
