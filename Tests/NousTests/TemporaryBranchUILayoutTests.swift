@@ -221,15 +221,16 @@ final class TemporaryBranchUILayoutTests: XCTestCase {
 
     func testBranchTriggerUsesIconOnlyHitTargetAndStableAlignment() throws {
         XCTAssertEqual(TemporaryBranchTriggerHitTarget.buttonDiameter, 28)
+        XCTAssertEqual(TemporaryBranchTriggerHitTarget.buttonEdgeGap, 8)
         XCTAssertGreaterThan(TemporaryBranchTriggerHitTarget.hoverExitGraceDuration, 0)
         XCTAssertLessThanOrEqual(TemporaryBranchTriggerHitTarget.hoverExitGraceDuration, 0.35)
         XCTAssertEqual(
             TemporaryBranchTriggerHitTarget.userButtonOutsideOffset,
-            TemporaryBranchTriggerHitTarget.buttonDiameter
+            TemporaryBranchTriggerHitTarget.buttonDiameter + TemporaryBranchTriggerHitTarget.buttonEdgeGap
         )
         XCTAssertEqual(
             TemporaryBranchTriggerHitTarget.assistantButtonOutsideOffset,
-            TemporaryBranchTriggerHitTarget.buttonDiameter
+            TemporaryBranchTriggerHitTarget.buttonDiameter + TemporaryBranchTriggerHitTarget.buttonEdgeGap
         )
 
         let repoRoot = URL(fileURLWithPath: #filePath)
@@ -243,6 +244,10 @@ final class TemporaryBranchUILayoutTests: XCTestCase {
 
         XCTAssertTrue(source.contains("width: -TemporaryBranchTriggerHitTarget.userButtonOutsideOffset"))
         XCTAssertTrue(source.contains("width: TemporaryBranchTriggerHitTarget.assistantButtonOutsideOffset"))
+        XCTAssertTrue(source.contains("triggerAlignment: .leading"))
+        XCTAssertTrue(source.contains("triggerAlignment: .trailing"))
+        XCTAssertFalse(source.contains("triggerAlignment: .topLeading"))
+        XCTAssertFalse(source.contains("triggerAlignment: .topTrailing"))
         XCTAssertTrue(source.contains(".allowsHitTesting(isHovering)"))
         XCTAssertTrue(source.contains("@State private var isContentHovering = false"))
         XCTAssertTrue(source.contains("@State private var isTriggerHovering = false"))
@@ -250,6 +255,29 @@ final class TemporaryBranchUILayoutTests: XCTestCase {
         XCTAssertTrue(source.contains("scheduleBranchTriggerHoverClose()"))
         XCTAssertFalse(source.contains(".onLongPressGesture(minimumDuration: TemporaryBranchTriggerHitTarget.longPressDuration)"))
         XCTAssertFalse(source.contains(".offset(x: isUser ? -32 : 32, y: 2)"))
+    }
+
+    func testAssistantBranchTriggerAnchorsBeforeAssistantMaxWidthFrame() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Views/ChatArea.swift"),
+            encoding: .utf8
+        )
+        let contentStart = try XCTUnwrap(source.range(of: "struct AssistantBubbleContent"))
+            .lowerBound
+        let copyButtonStart = try XCTUnwrap(source.range(of: "struct CopyButton"))
+            .lowerBound
+        let assistantContentSource = String(source[contentStart..<copyButtonStart])
+
+        XCTAssertTrue(assistantContentSource.contains("branchHovering: Binding<Bool>? = nil"))
+        XCTAssertTrue(assistantContentSource.contains("onOpenBranch: (() -> Void)? = nil"))
+        XCTAssertTrue(assistantContentSource.contains("return assistantContent(segments: segments)\n            .frame(maxWidth: assistantTextMaxWidth"))
+        XCTAssertTrue(assistantContentSource.contains("private func assistantContent"))
+        XCTAssertTrue(assistantContentSource.contains("triggerAlignment: .trailing"))
+        XCTAssertFalse(source.contains("AssistantBubbleContent(\n                                displayText: assistantDisplayText,\n                                isStreamingDraft: isStreamingDraft\n                            )\n                                .temporaryBranchEntry"))
     }
 
     func testBranchTriggerUsesCalmBranchSymbolInsteadOfChatBubbleIcon() throws {

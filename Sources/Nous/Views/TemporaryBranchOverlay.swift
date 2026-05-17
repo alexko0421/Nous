@@ -27,9 +27,10 @@ enum TemporaryBranchMembraneStyle {
 
 enum TemporaryBranchTriggerHitTarget {
     static let buttonDiameter: CGFloat = 28
-    static let userButtonOutsideOffset: CGFloat = buttonDiameter
-    static let assistantButtonOutsideOffset: CGFloat = buttonDiameter
-    static let buttonVerticalOffset: CGFloat = 2
+    static let buttonEdgeGap: CGFloat = 8
+    static let userButtonOutsideOffset: CGFloat = buttonDiameter + buttonEdgeGap
+    static let assistantButtonOutsideOffset: CGFloat = buttonDiameter + buttonEdgeGap
+    static let buttonVerticalOffset: CGFloat = 0
     static let hoverExitGraceDuration: TimeInterval = 0.22
 }
 

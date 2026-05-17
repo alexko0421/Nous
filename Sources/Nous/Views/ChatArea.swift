@@ -1263,7 +1263,7 @@ struct MessageBubble: View {
                             .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                             .temporaryBranchEntry(
                                 isHovering: $isHovering,
-                                triggerAlignment: .topLeading,
+                                triggerAlignment: .leading,
                                 triggerOffset: CGSize(
                                     width: -TemporaryBranchTriggerHitTarget.userButtonOutsideOffset,
                                     height: TemporaryBranchTriggerHitTarget.buttonVerticalOffset
@@ -1280,17 +1280,10 @@ struct MessageBubble: View {
                         HStack {
                             AssistantBubbleContent(
                                 displayText: assistantDisplayText,
-                                isStreamingDraft: isStreamingDraft
+                                isStreamingDraft: isStreamingDraft,
+                                branchHovering: $isHovering,
+                                onOpenBranch: onOpenBranch
                             )
-                                .temporaryBranchEntry(
-                                    isHovering: $isHovering,
-                                    triggerAlignment: .topTrailing,
-                                    triggerOffset: CGSize(
-                                        width: TemporaryBranchTriggerHitTarget.assistantButtonOutsideOffset,
-                                        height: TemporaryBranchTriggerHitTarget.buttonVerticalOffset
-                                    ),
-                                    onOpenBranch: onOpenBranch
-                                )
                             Spacer(minLength: 0)
                         }
                         timestampRow
@@ -1524,6 +1517,8 @@ struct StreamingAssistantPresentation {
 struct AssistantBubbleContent: View {
     let displayText: String
     var isStreamingDraft: Bool = false
+    var branchHovering: Binding<Bool>? = nil
+    var onOpenBranch: (() -> Void)? = nil
 
     private let assistantTextMaxWidth: CGFloat = 520
 
@@ -1532,11 +1527,31 @@ struct AssistantBubbleContent: View {
         // Computed properties are NOT memoized by SwiftUI — `let` here ensures
         // the renderer and animation modifier reference the same parse output.
         let segments = ChatMarkdownRenderer.parse(displayText)
-        return ChatMarkdownView(segments: segments, isStreamingDraft: isStreamingDraft)
+        return assistantContent(segments: segments)
             .frame(maxWidth: assistantTextMaxWidth, alignment: .leading)
+            .animation(.easeOut(duration: 0.15), value: segments.count)
+    }
+
+    @ViewBuilder
+    private func assistantContent(segments: [Segment]) -> some View {
+        let content = ChatMarkdownView(segments: segments, isStreamingDraft: isStreamingDraft)
             .padding(.top, 6)
             .padding(.bottom, 10)
-            .animation(.easeOut(duration: 0.15), value: segments.count)
+
+        if let branchHovering {
+            content
+                    .temporaryBranchEntry(
+                        isHovering: branchHovering,
+                        triggerAlignment: .trailing,
+                    triggerOffset: CGSize(
+                        width: TemporaryBranchTriggerHitTarget.assistantButtonOutsideOffset,
+                        height: TemporaryBranchTriggerHitTarget.buttonVerticalOffset
+                    ),
+                    onOpenBranch: onOpenBranch
+                )
+        } else {
+            content
+        }
     }
 }
 
