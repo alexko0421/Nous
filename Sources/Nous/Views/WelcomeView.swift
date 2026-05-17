@@ -25,15 +25,25 @@ enum WelcomeActionMenuHitRegion {
 }
 
 struct ChatContentBackgroundLayer: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         LinearGradient(
             colors: [
-                AppColor.welcomeGradientStart.opacity(0.72),
-                AppColor.welcomeGradientEnd.opacity(0.74)
+                AppColor.welcomeGradientStart.opacity(startOpacity),
+                AppColor.welcomeGradientEnd.opacity(endOpacity)
             ],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
         )
+    }
+
+    private var startOpacity: Double {
+        colorScheme == .dark ? 0.72 : 1
+    }
+
+    private var endOpacity: Double {
+        colorScheme == .dark ? 0.74 : 1
     }
 }
 

@@ -16,6 +16,8 @@ enum GlobalVoicePillPolicy {
 }
 
 private struct MainWindowGlassBackground: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     private let cornerRadius: CGFloat = 36
 
     var body: some View {
@@ -28,7 +30,7 @@ private struct MainWindowGlassBackground: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(AppColor.inkBackground.opacity(0.34))
+                    .fill(baseOverlay)
             )
             .overlay(alignment: .top) {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -48,6 +50,14 @@ private struct MainWindowGlassBackground: View {
             }
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .shadow(color: .black.opacity(0.12), radius: 24, x: 0, y: 8)
+    }
+
+    private var baseOverlay: Color {
+        if colorScheme == .dark {
+            return AppColor.inkBackground.opacity(0.34)
+        }
+
+        return Color(red: 254/255, green: 253/255, blue: 250/255).opacity(0.93)
     }
 }
 
