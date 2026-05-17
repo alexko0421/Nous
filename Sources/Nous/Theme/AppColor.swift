@@ -31,74 +31,86 @@ struct AppColor {
     
     // Dark text for contrast on beige
     static let colaDarkText = dynamicColor(
-        light: NSColor(red: 51/255, green: 51/255, blue: 51/255, alpha: 1),
+        light: NSColor(red: 58/255, green: 54/255, blue: 49/255, alpha: 1),
         dark: NSColor(red: 244/255, green: 240/255, blue: 232/255, alpha: 1)
     )
     
     // Slightly darker beige for user chat bubbles
     static let colaBubble = dynamicColor(
-        light: NSColor(red: 240/255, green: 235/255, blue: 225/255, alpha: 1),
+        light: NSColor(red: 237/255, green: 231/255, blue: 220/255, alpha: 1),
         dark: NSColor(red: 46/255, green: 46/255, blue: 49/255, alpha: 1)
     )
 
     static let surfacePrimary = dynamicColor(
-        light: NSColor(white: 1, alpha: 0.88),
+        light: NSColor(red: 251/255, green: 249/255, blue: 245/255, alpha: 0.86),
         dark: NSColor(white: 0.18, alpha: 0.92)
     )
     static let surfaceSecondary = dynamicColor(
-        light: NSColor(white: 1, alpha: 0.72),
+        light: NSColor(red: 246/255, green: 243/255, blue: 237/255, alpha: 0.78),
         dark: NSColor(white: 0.22, alpha: 0.88)
     )
     static let subtleFill = dynamicColor(
-        light: NSColor(white: 0, alpha: 0.04),
+        light: NSColor(red: 74/255, green: 66/255, blue: 55/255, alpha: 0.035),
         dark: NSColor(white: 1, alpha: 0.07)
     )
     static let panelStroke = dynamicColor(
-        light: NSColor(white: 0.2, alpha: 0.08),
+        light: NSColor(red: 58/255, green: 54/255, blue: 48/255, alpha: 0.085),
         dark: NSColor(white: 1, alpha: 0.12)
     )
     static let secondaryText = dynamicColor(
-        light: NSColor(white: 0.2, alpha: 0.62),
+        light: NSColor(red: 54/255, green: 50/255, blue: 45/255, alpha: 0.58),
         dark: NSColor(white: 1, alpha: 0.70)
     )
     static let welcomeGradientStart = dynamicColor(
-        light: NSColor(white: 1, alpha: 1),
+        light: NSColor(red: 253/255, green: 251/255, blue: 247/255, alpha: 1),
         dark: NSColor(red: 28/255, green: 28/255, blue: 30/255, alpha: 1)
     )
     static let welcomeGradientEnd = dynamicColor(
-        light: NSColor(red: 253/255, green: 251/255, blue: 247/255, alpha: 1),
+        light: NSColor(red: 250/255, green: 248/255, blue: 243/255, alpha: 1),
         dark: NSColor(red: 20/255, green: 20/255, blue: 22/255, alpha: 1)
     )
     static let ambientHighlight = dynamicColor(
-        light: NSColor(white: 1, alpha: 0.95),
+        light: NSColor(red: 1, green: 248/255, blue: 240/255, alpha: 0.18),
         dark: NSColor(white: 1, alpha: 0.08)
     )
     static let windowGlassTint = dynamicNSColor(
-        light: NSColor(red: 24/255, green: 24/255, blue: 26/255, alpha: 0.42),
+        light: NSColor(red: 250/255, green: 248/255, blue: 243/255, alpha: 0.66),
         dark: NSColor(red: 24/255, green: 24/255, blue: 26/255, alpha: 0.42)
     )
     static let sidebarGlassTint = dynamicNSColor(
-        light: NSColor(red: 24/255, green: 24/255, blue: 26/255, alpha: 0.58),
+        light: NSColor(red: 253/255, green: 251/255, blue: 247/255, alpha: 0.84),
         dark: NSColor(red: 24/255, green: 24/255, blue: 26/255, alpha: 0.58)
     )
-    static let sidebarGlassStroke = Color.white.opacity(0.07)
-    static let sidebarText = Color(red: 244/255, green: 240/255, blue: 232/255)
-    static let sidebarMutedText = Color.white.opacity(0.62)
+    static let sidebarGlassStroke = dynamicColor(
+        light: NSColor(white: 0, alpha: 0.06),
+        dark: NSColor(white: 1, alpha: 0.07)
+    )
+    static let sidebarText = dynamicColor(
+        light: NSColor(white: 0.12, alpha: 0.92),
+        dark: NSColor(red: 244/255, green: 240/255, blue: 232/255, alpha: 1)
+    )
+    static let sidebarMutedText = dynamicColor(
+        light: NSColor(white: 0.18, alpha: 0.66),
+        dark: NSColor(white: 1, alpha: 0.62)
+    )
     static let composerMatteOverlay = dynamicNSColor(
-        light: NSColor(red: 17/255, green: 17/255, blue: 19/255, alpha: 0.23),
+        light: NSColor(red: 250/255, green: 248/255, blue: 244/255, alpha: 0.48),
         dark: NSColor(red: 17/255, green: 17/255, blue: 19/255, alpha: 0.23)
     )
-    static let composerMatteStroke = Color.white.opacity(0.058)
+    static let composerMatteStroke = dynamicColor(
+        light: NSColor(red: 58/255, green: 54/255, blue: 48/255, alpha: 0.075),
+        dark: NSColor(white: 1, alpha: 0.058)
+    )
     static let surfaceGlassTint = dynamicNSColor(
-        light: NSColor(white: 0, alpha: 0.06),
+        light: NSColor(red: 253/255, green: 251/255, blue: 247/255, alpha: 0.38),
         dark: NSColor(red: 34/255, green: 34/255, blue: 37/255, alpha: 0.20)
     )
     static let controlGlassTint = dynamicNSColor(
-        light: NSColor(red: 24/255, green: 24/255, blue: 26/255, alpha: 0.42),
+        light: NSColor(red: 254/255, green: 253/255, blue: 250/255, alpha: 0.30),
         dark: NSColor(red: 24/255, green: 24/255, blue: 26/255, alpha: 0.42)
     )
     static let rightPanelGlassTint = dynamicNSColor(
-        light: NSColor(white: 0, alpha: 0.06),
+        light: NSColor(red: 253/255, green: 251/255, blue: 247/255, alpha: 0.38),
         dark: NSColor(red: 34/255, green: 34/255, blue: 37/255, alpha: 0.20)
     )
 

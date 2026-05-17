@@ -557,7 +557,7 @@ struct ChatArea: View {
         .background(
             NativeGlassPanel(
                 cornerRadius: 36,
-                tintColor: AppColor.sidebarGlassTint
+                tintColor: AppColor.surfaceGlassTint
             ) { EmptyView() }
         )
         .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
