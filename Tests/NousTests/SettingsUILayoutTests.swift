@@ -75,11 +75,15 @@ final class SettingsUILayoutTests: XCTestCase {
         XCTAssertTrue(source.contains("settingsPage(title: \"General\""))
         XCTAssertTrue(source.contains("settingsPage(title: \"Models\""))
 
-        XCTAssertTrue(source.contains("NativeGlassPanel(cornerRadius: SettingsLayout.cardCornerRadius, tintColor: AppColor.surfaceGlassTint)"))
-        XCTAssertTrue(source.contains("NativeGlassPanel(cornerRadius: SettingsLayout.controlCornerRadius, tintColor: AppColor.controlGlassTint)"))
+        XCTAssertTrue(source.contains("private func settingsGlassBackground("))
+        XCTAssertTrue(source.contains("cornerRadius: SettingsLayout.cardCornerRadius"))
+        XCTAssertTrue(source.contains("tintColor: AppColor.surfaceGlassTint"))
+        XCTAssertTrue(source.contains("cornerRadius: SettingsLayout.controlCornerRadius"))
+        XCTAssertTrue(source.contains("tintColor: AppColor.controlGlassTint"))
         XCTAssertTrue(source.contains("HStack(spacing: SettingsLayout.columnSpacing)"))
         XCTAssertTrue(source.contains("NativeGlassPanel(cornerRadius: SettingsLayout.sidebarCornerRadius, tintColor: AppColor.sidebarGlassTint)"))
-        XCTAssertTrue(source.contains("NativeGlassPanel(cornerRadius: SettingsLayout.contentCornerRadius, tintColor: AppColor.rightPanelGlassTint)"))
+        XCTAssertTrue(source.contains("cornerRadius: SettingsLayout.contentCornerRadius"))
+        XCTAssertTrue(source.contains("tintColor: AppColor.rightPanelGlassTint"))
         XCTAssertTrue(source.contains(".frame(width: SettingsLayout.sidebarWidth)"))
         XCTAssertTrue(source.contains(".frame(height: 34)"))
 
@@ -108,7 +112,8 @@ final class SettingsUILayoutTests: XCTestCase {
         XCTAssertTrue(source.contains("HStack(spacing: SettingsLayout.columnSpacing)"))
         XCTAssertTrue(source.contains(".padding(SettingsLayout.shellPadding)"))
         XCTAssertTrue(source.contains(".frame(width: SettingsLayout.sidebarWidth)"))
-        XCTAssertTrue(source.contains("NativeGlassPanel(cornerRadius: SettingsLayout.contentCornerRadius, tintColor: AppColor.rightPanelGlassTint)"))
+        XCTAssertTrue(source.contains("cornerRadius: SettingsLayout.contentCornerRadius"))
+        XCTAssertTrue(source.contains("darkOpacity: SettingsLayout.contentVeilDarkOpacity"))
         XCTAssertTrue(source.contains(".stroke(AppColor.panelStroke.opacity(SettingsLayout.cardStrokeOpacity), lineWidth: 1)"))
 
         XCTAssertFalse(source.contains("HStack(spacing: 18)"))
@@ -117,6 +122,28 @@ final class SettingsUILayoutTests: XCTestCase {
         XCTAssertFalse(source.contains(".frame(width: 176)"))
         XCTAssertFalse(source.contains(".stroke(AppColor.panelStroke.opacity(0.88), lineWidth: 1)"))
         XCTAssertFalse(source.contains(".stroke(AppColor.panelStroke.opacity(0.78), lineWidth: 1)"))
+    }
+
+    func testSettingsPrimaryPagesMaskSystemBlueGlassInDarkMode() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Views/SettingsView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("@Environment(\\.colorScheme) private var colorScheme"))
+        XCTAssertTrue(source.contains("static let contentVeilDarkOpacity = 0.88"))
+        XCTAssertTrue(source.contains("static let cardVeilDarkOpacity = 0.48"))
+        XCTAssertTrue(source.contains("static let controlVeilDarkOpacity = 0.32"))
+        XCTAssertTrue(source.contains("private var darkGlassVeilOpacity"))
+        XCTAssertTrue(source.contains("colorScheme == .dark ? darkOpacity : lightOpacity"))
+        XCTAssertTrue(source.contains(".background(settingsGlassBackground("))
+        XCTAssertTrue(source.contains(".fill(AppColor.colaBeige.opacity(veilOpacity))"))
+
+        XCTAssertFalse(source.contains(".background(\n                NativeGlassPanel(cornerRadius: SettingsLayout.contentCornerRadius, tintColor: AppColor.rightPanelGlassTint) { EmptyView() }\n            )"))
     }
 
     func testAgentWorkAvoidsNestedWindowGlassInSettings() throws {

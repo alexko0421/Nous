@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // Top-level enum so ContentView can bind to it
@@ -32,6 +33,12 @@ private enum SettingsLayout {
     static let cardPadding: CGFloat = 20
     static let cardCornerRadius: CGFloat = 20
     static let cardStrokeOpacity = 0.58
+    static let contentVeilDarkOpacity = 0.88
+    static let contentVeilLightOpacity = 0.10
+    static let cardVeilDarkOpacity = 0.48
+    static let cardVeilLightOpacity = 0.08
+    static let controlVeilDarkOpacity = 0.32
+    static let controlVeilLightOpacity = 0.06
     static let controlCornerRadius: CGFloat = 18
     static let controlVerticalPadding: CGFloat = 10
     static let controlStrokeOpacity = 0.62
@@ -50,6 +57,7 @@ struct SettingsView: View {
     let beadsAgentWorkVM: BeadsAgentWorkViewModel
     var onBack: (() -> Void)? = nil
 
+    @Environment(\.colorScheme) private var colorScheme
     @AppStorage("nous.username")   private var username       = "ALEX"
     @AppStorage("nous.appearance") private var appearanceMode = "system"
     @Namespace private var toggleAnimation
@@ -121,9 +129,12 @@ struct SettingsView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .background(
-                NativeGlassPanel(cornerRadius: SettingsLayout.contentCornerRadius, tintColor: AppColor.rightPanelGlassTint) { EmptyView() }
-            )
+            .background(settingsGlassBackground(
+                cornerRadius: SettingsLayout.contentCornerRadius,
+                tintColor: AppColor.rightPanelGlassTint,
+                darkOpacity: SettingsLayout.contentVeilDarkOpacity,
+                lightOpacity: SettingsLayout.contentVeilLightOpacity
+            ))
             .clipShape(RoundedRectangle(cornerRadius: SettingsLayout.contentCornerRadius, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: SettingsLayout.contentCornerRadius, style: .continuous)
@@ -451,6 +462,29 @@ struct SettingsView: View {
         }
     }
 
+    private var darkGlassVeilOpacity: (Double, Double) -> Double {
+        { darkOpacity, lightOpacity in
+            colorScheme == .dark ? darkOpacity : lightOpacity
+        }
+    }
+
+    @ViewBuilder
+    private func settingsGlassBackground(
+        cornerRadius: CGFloat,
+        tintColor: NSColor?,
+        darkOpacity: Double,
+        lightOpacity: Double
+    ) -> some View {
+        let veilOpacity = darkGlassVeilOpacity(darkOpacity, lightOpacity)
+
+        ZStack {
+            NativeGlassPanel(cornerRadius: cornerRadius, tintColor: tintColor) { EmptyView() }
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(AppColor.colaBeige.opacity(veilOpacity))
+                .allowsHitTesting(false)
+        }
+    }
+
     @ViewBuilder
     private func pageHeader(title: String, subtitle: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -469,7 +503,12 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 15) { content() }
             .padding(SettingsLayout.cardPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(NativeGlassPanel(cornerRadius: SettingsLayout.cardCornerRadius, tintColor: AppColor.surfaceGlassTint) { EmptyView() })
+            .background(settingsGlassBackground(
+                cornerRadius: SettingsLayout.cardCornerRadius,
+                tintColor: AppColor.surfaceGlassTint,
+                darkOpacity: SettingsLayout.cardVeilDarkOpacity,
+                lightOpacity: SettingsLayout.cardVeilLightOpacity
+            ))
             .clipShape(RoundedRectangle(cornerRadius: SettingsLayout.cardCornerRadius, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: SettingsLayout.cardCornerRadius, style: .continuous).stroke(AppColor.panelStroke.opacity(SettingsLayout.cardStrokeOpacity), lineWidth: 1))
             .shadow(color: .black.opacity(0.04), radius: 10, x: 0, y: 4)
@@ -481,7 +520,12 @@ struct SettingsView: View {
             .textFieldStyle(.plain)
             .padding(.horizontal, 14)
             .padding(.vertical, SettingsLayout.controlVerticalPadding)
-            .background(NativeGlassPanel(cornerRadius: SettingsLayout.controlCornerRadius, tintColor: AppColor.controlGlassTint) { EmptyView() })
+            .background(settingsGlassBackground(
+                cornerRadius: SettingsLayout.controlCornerRadius,
+                tintColor: AppColor.controlGlassTint,
+                darkOpacity: SettingsLayout.controlVeilDarkOpacity,
+                lightOpacity: SettingsLayout.controlVeilLightOpacity
+            ))
             .clipShape(RoundedRectangle(cornerRadius: SettingsLayout.controlCornerRadius, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: SettingsLayout.controlCornerRadius, style: .continuous).stroke(AppColor.panelStroke.opacity(SettingsLayout.controlStrokeOpacity), lineWidth: 1))
     }
@@ -526,7 +570,12 @@ struct SettingsView: View {
                 .scrollContentBackground(.hidden)
                 .frame(minHeight: 64)
                 .padding(10)
-                .background(NativeGlassPanel(cornerRadius: SettingsLayout.controlCornerRadius, tintColor: AppColor.controlGlassTint) { EmptyView() })
+                .background(settingsGlassBackground(
+                    cornerRadius: SettingsLayout.controlCornerRadius,
+                    tintColor: AppColor.controlGlassTint,
+                    darkOpacity: SettingsLayout.controlVeilDarkOpacity,
+                    lightOpacity: SettingsLayout.controlVeilLightOpacity
+                ))
                 .clipShape(RoundedRectangle(cornerRadius: SettingsLayout.controlCornerRadius, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: SettingsLayout.controlCornerRadius, style: .continuous)
@@ -552,7 +601,12 @@ struct SettingsView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
-        .background(NativeGlassPanel(cornerRadius: SettingsLayout.controlCornerRadius, tintColor: AppColor.controlGlassTint) { EmptyView() })
+        .background(settingsGlassBackground(
+            cornerRadius: SettingsLayout.controlCornerRadius,
+            tintColor: AppColor.controlGlassTint,
+            darkOpacity: SettingsLayout.controlVeilDarkOpacity,
+            lightOpacity: SettingsLayout.controlVeilLightOpacity
+        ))
         .clipShape(RoundedRectangle(cornerRadius: SettingsLayout.controlCornerRadius, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: SettingsLayout.controlCornerRadius, style: .continuous).stroke(AppColor.panelStroke.opacity(SettingsLayout.controlStrokeOpacity), lineWidth: 1))
     }
@@ -675,7 +729,12 @@ struct SettingsView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
-        .background(NativeGlassPanel(cornerRadius: SettingsLayout.controlCornerRadius, tintColor: AppColor.controlGlassTint) { EmptyView() })
+        .background(settingsGlassBackground(
+            cornerRadius: SettingsLayout.controlCornerRadius,
+            tintColor: AppColor.controlGlassTint,
+            darkOpacity: SettingsLayout.controlVeilDarkOpacity,
+            lightOpacity: SettingsLayout.controlVeilLightOpacity
+        ))
         .clipShape(RoundedRectangle(cornerRadius: SettingsLayout.controlCornerRadius, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: SettingsLayout.controlCornerRadius, style: .continuous).stroke(AppColor.panelStroke.opacity(SettingsLayout.controlStrokeOpacity), lineWidth: 1))
     }
@@ -699,7 +758,12 @@ struct SettingsView: View {
                 .labelsHidden()
         }
         .padding(14)
-        .background(NativeGlassPanel(cornerRadius: SettingsLayout.controlCornerRadius, tintColor: AppColor.controlGlassTint) { EmptyView() })
+        .background(settingsGlassBackground(
+            cornerRadius: SettingsLayout.controlCornerRadius,
+            tintColor: AppColor.controlGlassTint,
+            darkOpacity: SettingsLayout.controlVeilDarkOpacity,
+            lightOpacity: SettingsLayout.controlVeilLightOpacity
+        ))
         .clipShape(RoundedRectangle(cornerRadius: SettingsLayout.controlCornerRadius, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: SettingsLayout.controlCornerRadius, style: .continuous).stroke(AppColor.panelStroke.opacity(SettingsLayout.controlStrokeOpacity), lineWidth: 1))
     }
@@ -739,7 +803,12 @@ struct SettingsView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(NativeGlassPanel(cornerRadius: SettingsLayout.controlCornerRadius, tintColor: AppColor.controlGlassTint) { EmptyView() })
+        .background(settingsGlassBackground(
+            cornerRadius: SettingsLayout.controlCornerRadius,
+            tintColor: AppColor.controlGlassTint,
+            darkOpacity: SettingsLayout.controlVeilDarkOpacity,
+            lightOpacity: SettingsLayout.controlVeilLightOpacity
+        ))
         .clipShape(RoundedRectangle(cornerRadius: SettingsLayout.controlCornerRadius, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: SettingsLayout.controlCornerRadius, style: .continuous).stroke(AppColor.panelStroke.opacity(SettingsLayout.controlStrokeOpacity), lineWidth: 1))
     }
@@ -782,10 +851,12 @@ struct SettingsView: View {
     @ViewBuilder
     private var appearancePicker: some View {
         ZStack {
-            NativeGlassPanel(
+            settingsGlassBackground(
                 cornerRadius: 16,
-                tintColor: AppColor.controlGlassTint
-            ) { EmptyView() }
+                tintColor: AppColor.controlGlassTint,
+                darkOpacity: SettingsLayout.controlVeilDarkOpacity,
+                lightOpacity: SettingsLayout.controlVeilLightOpacity
+            )
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .stroke(AppColor.panelStroke, lineWidth: 1)
