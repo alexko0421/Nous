@@ -104,6 +104,11 @@ do {
         print(detail)
         exit(0)
     }
+    if arguments.first == "handoff-ab-summary" {
+        let detail = try runHandoffABSummaryCommand(Array(arguments.dropFirst()))
+        print(detail)
+        exit(0)
+    }
 
     var options = try parseOptions(arguments)
     let provider = resolvedProviderForLiveMode(
@@ -204,6 +209,7 @@ func parseOptions(_ arguments: [String]) throws -> CLIBehaviorEval.Options {
               BehaviorEvalRunner export-local [--results-dir path] [--output path] [--include-generated true|false]
               BehaviorEvalRunner local-eval --model local-model-id --mode quick|full --live never|auto|required
               BehaviorEvalRunner dogfood-summary [--input path] [--days 30]
+              BehaviorEvalRunner handoff-ab-summary [--input path] [--days 30]
             """)
             exit(0)
         default:

@@ -482,6 +482,11 @@ final class QuickActionModeAgentExtensionTests: XCTestCase {
             XCTAssertEqual(candidate?.mode, mode)
             XCTAssertEqual(candidate?.variant, .candidate)
             XCTAssertTrue(QuickActionExperimentAssigner.candidateAddendum(for: candidate)?.contains(mode.label) == true)
+            if mode == .direction || mode == .plan {
+                XCTAssertTrue(QuickActionExperimentAssigner.candidateAddendum(for: candidate)?.contains("HUMAN JUDGMENT HANDOFF") == true)
+            } else {
+                XCTAssertFalse(QuickActionExperimentAssigner.candidateAddendum(for: candidate)?.contains("HUMAN JUDGMENT HANDOFF") == true)
+            }
 
             let control = QuickActionExperimentAssigner.assignment(
                 mode: mode,

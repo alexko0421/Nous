@@ -72,11 +72,14 @@ final class SkillIntegrationTests: XCTestCase {
             explicitMode: .direction,
             route: .direction,
             responseShape: .narrowNextStep,
-            userTurnCount: 1
+            userTurnCount: 1,
+            conversationID: candidateConversationID
         )
 
         let prompt = plan.turnSlice.volatile
         XCTAssertTrue(prompt.contains(directionSkeletonMarker))
+        XCTAssertTrue(prompt.contains(humanJudgmentHandoffMarker))
+        XCTAssertEqual(plan.promptTrace.quickActionExperiment?.variant, .candidate)
         XCTAssertFalse(prompt.contains(brainstormSkeletonMarker))
         assertContainsTopFourTasteSkills(prompt)
         XCTAssertFalse(prompt.contains(weightAgainstDefaultChatBaselineMarker))
@@ -94,6 +97,7 @@ final class SkillIntegrationTests: XCTestCase {
         let prompt = plan.turnSlice.volatile
         XCTAssertTrue(prompt.contains(brainstormSkeletonMarker))
         XCTAssertTrue(prompt.contains(brainstorm5DScaffoldMarker))
+        XCTAssertFalse(prompt.contains(humanJudgmentHandoffMarker))
         XCTAssertFalse(prompt.contains(directionSkeletonMarker))
         assertContainsTopThreeTasteSkills(prompt)
         XCTAssertFalse(prompt.contains("Use Cantonese for warmth, judgment, and product taste"))
@@ -106,10 +110,13 @@ final class SkillIntegrationTests: XCTestCase {
             explicitMode: .plan,
             route: .plan,
             responseShape: .askOneQuestion,
-            userTurnCount: 1
+            userTurnCount: 1,
+            conversationID: candidateConversationID
         )
         XCTAssertTrue(turn1.turnSlice.volatile.contains("TURN 1 CONTRACT"))
         XCTAssertTrue(turn1.turnSlice.volatile.contains("best-guess outcome"))
+        XCTAssertTrue(turn1.turnSlice.volatile.contains(humanJudgmentHandoffMarker))
+        XCTAssertEqual(turn1.promptTrace.quickActionExperiment?.variant, .candidate)
         assertContainsAllTasteSkills(turn1.turnSlice.volatile)
 
         let turn2 = try await plan(
@@ -196,7 +203,7 @@ final class SkillIntegrationTests: XCTestCase {
             route: .direction,
             responseShape: .narrowNextStep,
             userTurnCount: 1,
-            conversationID: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+            conversationID: controlConversationID
         )
 
         XCTAssertEqual(plan.promptTrace.quickActionExperiment?.experimentId, "direction-quick-mode-ab-v1")
@@ -204,6 +211,24 @@ final class SkillIntegrationTests: XCTestCase {
         XCTAssertEqual(plan.promptTrace.quickActionExperiment?.variant, .control)
         XCTAssertTrue(plan.promptTrace.promptLayers.contains("quick_action_experiment"))
         XCTAssertFalse(plan.turnSlice.volatile.contains("QUICK ACTION EXPERIMENT CANDIDATE"))
+        XCTAssertFalse(plan.turnSlice.volatile.contains(humanJudgmentHandoffMarker))
+    }
+
+    func testPlanControlVariantDoesNotInjectHumanJudgmentHandoff() async throws {
+        let plan = try await plan(
+            explicitMode: .plan,
+            route: .plan,
+            responseShape: .askOneQuestion,
+            userTurnCount: 1,
+            conversationID: controlConversationID
+        )
+
+        XCTAssertEqual(plan.promptTrace.quickActionExperiment?.experimentId, "plan-quick-mode-ab-v1")
+        XCTAssertEqual(plan.promptTrace.quickActionExperiment?.mode, .plan)
+        XCTAssertEqual(plan.promptTrace.quickActionExperiment?.variant, .control)
+        XCTAssertTrue(plan.promptTrace.promptLayers.contains("quick_action_experiment"))
+        XCTAssertFalse(plan.turnSlice.volatile.contains("QUICK ACTION EXPERIMENT CANDIDATE"))
+        XCTAssertFalse(plan.turnSlice.volatile.contains(humanJudgmentHandoffMarker))
     }
 
     func testStewardInferredDirectionUsesInferredModeSkeletonAtTurnOne() async throws {
@@ -232,6 +257,7 @@ final class SkillIntegrationTests: XCTestCase {
         let prompt = plan.turnSlice.volatile
         XCTAssertFalse(prompt.contains(directionSkeletonMarker))
         XCTAssertFalse(prompt.contains(brainstormSkeletonMarker))
+        XCTAssertFalse(prompt.contains(humanJudgmentHandoffMarker))
         assertContainsNoTasteSkills(prompt)
         XCTAssertFalse(plan.promptTrace.promptLayers.contains("quick_action_addendum"))
     }
@@ -480,6 +506,18 @@ final class SkillIntegrationTests: XCTestCase {
 
     private var brainstorm5DScaffoldMarker: String {
         "BRAINSTORM 5D THINKING SCAFFOLD"
+    }
+
+    private var humanJudgmentHandoffMarker: String {
+        "HUMAN JUDGMENT HANDOFF"
+    }
+
+    private var candidateConversationID: UUID {
+        UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+    }
+
+    private var controlConversationID: UUID {
+        UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
     }
 
     private var studySkeletonMarker: String {
