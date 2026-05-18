@@ -169,6 +169,7 @@ struct PromptGovernanceTrace: Equatable, Codable {
         "recent_conversations",
         "corpus_context",
         "derived_memory_context",
+        "topic_context",
         "citations",
         "long_gap_bridge_guidance",
         "slow_cognition"
@@ -183,6 +184,7 @@ struct PromptGovernanceTrace: Equatable, Codable {
     let citationTrace: CitationTrace?
     let slowCognitionTrace: SlowCognitionPromptTrace?
     let quickActionExperiment: QuickActionExperimentTrace?
+    let topicContext: TopicContextTrace?
     let visibleResponseLanguageTarget: VisibleResponseLanguageTarget
     let visibleResponseLanguageSource: VisibleResponseLanguageSource
 
@@ -200,6 +202,7 @@ struct PromptGovernanceTrace: Equatable, Codable {
         citationTrace: CitationTrace? = nil,
         slowCognitionTrace: SlowCognitionPromptTrace? = nil,
         quickActionExperiment: QuickActionExperimentTrace? = nil,
+        topicContext: TopicContextTrace? = nil,
         visibleResponseLanguageTarget: VisibleResponseLanguageTarget = .unspecified,
         visibleResponseLanguageSource: VisibleResponseLanguageSource = .none
     ) {
@@ -212,6 +215,7 @@ struct PromptGovernanceTrace: Equatable, Codable {
         self.citationTrace = citationTrace
         self.slowCognitionTrace = slowCognitionTrace
         self.quickActionExperiment = quickActionExperiment
+        self.topicContext = topicContext
         self.visibleResponseLanguageTarget = visibleResponseLanguageTarget
         self.visibleResponseLanguageSource = visibleResponseLanguageSource
     }
@@ -226,6 +230,7 @@ struct PromptGovernanceTrace: Equatable, Codable {
         case citationTrace
         case slowCognitionTrace
         case quickActionExperiment
+        case topicContext
         case visibleResponseLanguageTarget
         case visibleResponseLanguageSource
     }
@@ -244,6 +249,7 @@ struct PromptGovernanceTrace: Equatable, Codable {
             QuickActionExperimentTrace.self,
             forKey: .quickActionExperiment
         )
+        topicContext = try container.decodeIfPresent(TopicContextTrace.self, forKey: .topicContext)
         let decodedLanguageTarget = try container.decodeIfPresent(
             VisibleResponseLanguageTarget.self,
             forKey: .visibleResponseLanguageTarget

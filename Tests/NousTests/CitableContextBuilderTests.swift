@@ -247,6 +247,68 @@ final class CitableContextBuilderTests: XCTestCase {
                        "higher-confidence atom must rank first")
     }
 
+    func testTopicLaneBoostRanksSameLaneAtomAboveUnrelatedHigherConfidenceAtom() throws {
+        let now = Date(timeIntervalSince1970: 10_000)
+        let education = MemoryAtom(
+            type: .decision,
+            statement: "SMC visa status means learning depth matters more than shallow AI answers.",
+            scope: .global,
+            confidence: 0.75,
+            eventTime: now,
+            updatedAt: now
+        )
+        let finance = MemoryAtom(
+            type: .decision,
+            statement: "Stock FOMO creates bad spending loops.",
+            scope: .global,
+            confidence: 0.98,
+            eventTime: now,
+            updatedAt: now
+        )
+        try store.insertMemoryAtom(education)
+        try store.insertMemoryAtom(finance)
+        try store.upsertTopicContextAssignment(TopicContextAssignment(
+            targetType: .memoryAtom,
+            targetId: education.id,
+            primaryLane: .education,
+            secondaryLanes: [],
+            subtopicLabel: "school / visa / learning depth",
+            confidence: 0.9,
+            source: .deterministic,
+            createdAt: now,
+            updatedAt: now
+        ))
+        try store.upsertTopicContextAssignment(TopicContextAssignment(
+            targetType: .memoryAtom,
+            targetId: finance.id,
+            primaryLane: .finance,
+            secondaryLanes: [],
+            subtopicLabel: "stock FOMO",
+            confidence: 0.9,
+            source: .deterministic,
+            createdAt: now,
+            updatedAt: now
+        ))
+
+        let ctx = builder.build(
+            turnText: "remember the decision about SMC and school",
+            conversationId: UUID(),
+            projectId: nil,
+            mode: .companion,
+            topicContext: TopicContextClassification(
+                primaryLane: .education,
+                secondaryLanes: [],
+                subtopicLabel: "school / visa / learning depth",
+                confidence: 0.9,
+                source: .deterministic
+            ),
+            cardCap: 2,
+            now: now
+        )
+
+        XCTAssertEqual(ctx.entries.first?.id, education.id.uuidString)
+    }
+
     func testManifestCapturesIntentAndMode() throws {
         try store.insertMemoryAtom(MemoryAtom(
             type: .decision,

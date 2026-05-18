@@ -17,6 +17,7 @@ struct TurnMemoryContext {
     let citablePool: [CitableEntry]
     let memoryProvenance: [String: ContextManifestMemoryProvenance]
     let derivedMemoryContext: DerivedMemoryPromptContext
+    let topicContext: TopicContextTrace?
     /// Block 4a side-by-side: built every turn but NOT yet injected into the
     /// prompt. Available for tests and telemetry. Block 4a inject-half wires
     /// it into PromptContextAssembler; Block 4b makes cards primary.
@@ -37,6 +38,7 @@ final class TurnMemoryContextBuilder {
     private let contradictionMemoryService: ContradictionMemoryService
     private let contextEvidenceSteward: ContextEvidenceSteward
     private let citableContextBuilder: CitableContextBuilder
+    private let topicContextClassifier: TopicContextClassifier
 
     init(
         nodeStore: NodeStore,
@@ -44,7 +46,8 @@ final class TurnMemoryContextBuilder {
         embeddingService: EmbeddingService,
         memoryProjectionService: MemoryProjectionService,
         contradictionMemoryService: ContradictionMemoryService,
-        contextEvidenceSteward: ContextEvidenceSteward = ContextEvidenceSteward()
+        contextEvidenceSteward: ContextEvidenceSteward = ContextEvidenceSteward(),
+        topicContextClassifier: TopicContextClassifier = TopicContextClassifier()
     ) {
         self.nodeStore = nodeStore
         self.vectorStore = vectorStore
@@ -52,6 +55,7 @@ final class TurnMemoryContextBuilder {
         self.memoryProjectionService = memoryProjectionService
         self.contradictionMemoryService = contradictionMemoryService
         self.contextEvidenceSteward = contextEvidenceSteward
+        self.topicContextClassifier = topicContextClassifier
         self.citableContextBuilder = CitableContextBuilder(
             nodeStore: nodeStore,
             lexicalIndex: nodeStore.lexicalIndex,
@@ -72,9 +76,23 @@ final class TurnMemoryContextBuilder {
             currentNodeId: node.id,
             sourceMaterials: citationSourceMaterials
         )
-        let citations = policy.includeCitations
+        let activeTopicContext = Self.activeTopicContext(
+            topicContextClassifier.classify(text: promptQuery)
+        )
+        if let activeTopicContext,
+           let targetType = Self.topicTargetType(for: node.type) {
+            try persistTopicContext(
+                activeTopicContext,
+                targetType: targetType,
+                targetId: node.id,
+                now: now
+            )
+        }
+        let rawCitations = policy.includeCitations
             ? try retrieveCitations(retrievalQuery: retrievalQuery, excludingIds: excludedCitationIds)
             : []
+        let citations = prioritizedCitations(rawCitations, topicContext: activeTopicContext)
+        let topicTrace = topicTrace(for: activeTopicContext)
         let operatingContext = try? nodeStore.fetchOperatingContext()
         let projectGoal = policy.includeProjectGoal
             ? try projectGoal(for: node.projectId)
@@ -183,6 +201,7 @@ final class TurnMemoryContextBuilder {
                 conversationId: node.id,
                 projectId: node.projectId,
                 queryEmbedding: queryEmbedding,
+                topicContext: activeTopicContext,
                 now: now
             )
             : .empty
@@ -209,6 +228,7 @@ final class TurnMemoryContextBuilder {
             citablePool: citablePool,
             memoryProvenance: memoryProvenance,
             derivedMemoryContext: derivedMemoryContext,
+            topicContext: topicTrace,
             corpusContext: corpusContext,
             resolvedCorpusEntries: resolvedCorpusEntries
         )
@@ -296,6 +316,96 @@ final class TurnMemoryContextBuilder {
             )
         } catch {
             throw TurnPlanningError(message: "Failed to build retrieval context: \(error.localizedDescription)")
+        }
+    }
+
+    private static func activeTopicContext(
+        _ classification: TopicContextClassification
+    ) -> TopicContextClassification? {
+        guard classification.primaryLane != .general,
+              classification.confidence >= 0.55
+        else { return nil }
+        return classification
+    }
+
+    private func persistTopicContext(
+        _ classification: TopicContextClassification,
+        targetType: TopicContextAssignmentTargetType,
+        targetId: UUID,
+        now: Date
+    ) throws {
+        let existing = try nodeStore.fetchTopicContextAssignment(
+            targetType: targetType,
+            targetId: targetId
+        )
+        try nodeStore.upsertTopicContextAssignment(TopicContextAssignment(
+            targetType: targetType,
+            targetId: targetId,
+            primaryLane: classification.primaryLane,
+            secondaryLanes: classification.secondaryLanes,
+            subtopicLabel: classification.subtopicLabel,
+            confidence: classification.confidence,
+            source: classification.source,
+            createdAt: existing?.createdAt ?? now,
+            updatedAt: now
+        ))
+    }
+
+    private func topicTrace(for classification: TopicContextClassification?) -> TopicContextTrace? {
+        guard let classification else { return nil }
+        let matchedCount = (
+            try? nodeStore.fetchTopicContextAssignments(
+                primaryLane: classification.primaryLane,
+                limit: 8
+            ).count
+        ) ?? 0
+        return TopicContextTrace(
+            primaryLane: classification.primaryLane,
+            secondaryLanes: classification.secondaryLanes,
+            subtopicLabel: classification.subtopicLabel,
+            confidence: classification.confidence,
+            matchedAssignmentCount: matchedCount
+        )
+    }
+
+    private func prioritizedCitations(
+        _ citations: [SearchResult],
+        topicContext: TopicContextClassification?
+    ) -> [SearchResult] {
+        guard let topicContext,
+              topicContext.primaryLane != .general,
+              !citations.isEmpty
+        else { return citations }
+
+        var topicMatches = Set<UUID>()
+        for citation in citations {
+            guard let targetType = Self.topicTargetType(for: citation.node.type),
+                  let assignment = try? nodeStore.fetchTopicContextAssignment(
+                    targetType: targetType,
+                    targetId: citation.node.id
+                  ),
+                  assignment.primaryLane == topicContext.primaryLane
+            else { continue }
+            topicMatches.insert(citation.node.id)
+        }
+
+        guard !topicMatches.isEmpty else { return citations }
+        return citations.sorted { lhs, rhs in
+            let lhsMatches = topicMatches.contains(lhs.node.id)
+            let rhsMatches = topicMatches.contains(rhs.node.id)
+            if lhsMatches != rhsMatches { return lhsMatches }
+            return lhs.similarity > rhs.similarity
+        }
+    }
+
+    private static func topicTargetType(for nodeType: NodeType) -> TopicContextAssignmentTargetType? {
+        switch nodeType {
+        case .conversation:
+            return .conversation
+        case .source:
+            return .source
+        case .note:
+            return nil
         }
     }
 

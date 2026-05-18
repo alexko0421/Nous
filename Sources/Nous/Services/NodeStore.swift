@@ -458,6 +458,21 @@ final class NodeStore {
         )
 
         try db.exec("""
+            CREATE TABLE IF NOT EXISTS topic_context_assignments (
+                target_type     TEXT NOT NULL,
+                target_id       TEXT NOT NULL,
+                primary_lane    TEXT NOT NULL,
+                secondary_lanes TEXT NOT NULL DEFAULT '[]',
+                subtopic_label  TEXT,
+                confidence      REAL NOT NULL,
+                source          TEXT NOT NULL,
+                created_at      REAL NOT NULL,
+                updated_at      REAL NOT NULL,
+                PRIMARY KEY(target_type, target_id)
+            );
+        """)
+
+        try db.exec("""
             CREATE TABLE IF NOT EXISTS memory_edges (
                 id                TEXT PRIMARY KEY,
                 from_atom_id      TEXT NOT NULL REFERENCES memory_atoms(id) ON DELETE CASCADE,
@@ -794,6 +809,7 @@ final class NodeStore {
         try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_atoms_source_node ON memory_atoms(source_node_id);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_atoms_source_message ON memory_atoms(source_message_id);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_atoms_authority ON memory_atoms(authority);")
+        try db.exec("CREATE INDEX IF NOT EXISTS idx_topic_context_lane_target_updated ON topic_context_assignments(primary_lane, target_type, updated_at DESC);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_edges_from_type ON memory_edges(from_atom_id, type);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_edges_to_type ON memory_edges(to_atom_id, type);")
         try db.exec("CREATE INDEX IF NOT EXISTS idx_memory_observations_source_message ON memory_observations(source_message_id);")
@@ -2318,6 +2334,183 @@ final class NodeStore {
         return arr.compactMap { UUID(uuidString: $0) }
     }
 
+    // MARK: - Topic Context
+
+    func upsertTopicContextAssignment(_ assignment: TopicContextAssignment) throws {
+        let stmt = try db.prepare("""
+            INSERT INTO topic_context_assignments
+              (target_type, target_id, primary_lane, secondary_lanes, subtopic_label,
+               confidence, source, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(target_type, target_id) DO UPDATE SET
+                primary_lane = excluded.primary_lane,
+                secondary_lanes = excluded.secondary_lanes,
+                subtopic_label = excluded.subtopic_label,
+                confidence = excluded.confidence,
+                source = excluded.source,
+                updated_at = excluded.updated_at;
+        """)
+        try stmt.bind(assignment.targetType.rawValue, at: 1)
+        try stmt.bind(assignment.targetId.uuidString, at: 2)
+        try stmt.bind(assignment.primaryLane.rawValue, at: 3)
+        try stmt.bind(encodeTopicContextLanes(assignment.secondaryLanes), at: 4)
+        try stmt.bind(assignment.subtopicLabel, at: 5)
+        try stmt.bind(assignment.confidence, at: 6)
+        try stmt.bind(assignment.source.rawValue, at: 7)
+        try stmt.bind(assignment.createdAt.timeIntervalSince1970, at: 8)
+        try stmt.bind(assignment.updatedAt.timeIntervalSince1970, at: 9)
+        try stmt.step()
+    }
+
+    func fetchTopicContextAssignment(
+        targetType: TopicContextAssignmentTargetType,
+        targetId: UUID
+    ) throws -> TopicContextAssignment? {
+        let stmt = try db.prepare("""
+            SELECT target_type, target_id, primary_lane, secondary_lanes,
+                   subtopic_label, confidence, source, created_at, updated_at
+            FROM topic_context_assignments
+            WHERE target_type = ? AND target_id = ?
+            LIMIT 1;
+        """)
+        try stmt.bind(targetType.rawValue, at: 1)
+        try stmt.bind(targetId.uuidString, at: 2)
+        guard try stmt.step() else { return nil }
+        return topicContextAssignmentFrom(stmt)
+    }
+
+    func fetchTopicContextAssignments(
+        primaryLane: TopicContextLane,
+        targetType: TopicContextAssignmentTargetType? = nil,
+        limit: Int
+    ) throws -> [TopicContextAssignment] {
+        guard limit > 0 else { return [] }
+        let targetClause = targetType == nil ? "" : " AND target_type = ?"
+        let stmt = try db.prepare("""
+            SELECT target_type, target_id, primary_lane, secondary_lanes,
+                   subtopic_label, confidence, source, created_at, updated_at
+            FROM topic_context_assignments
+            WHERE primary_lane = ?\(targetClause)
+            ORDER BY updated_at DESC
+            LIMIT ?;
+        """)
+        try stmt.bind(primaryLane.rawValue, at: 1)
+        if let targetType {
+            try stmt.bind(targetType.rawValue, at: 2)
+            try stmt.bind(limit, at: 3)
+        } else {
+            try stmt.bind(limit, at: 2)
+        }
+
+        var results: [TopicContextAssignment] = []
+        while try stmt.step() {
+            if let assignment = topicContextAssignmentFrom(stmt) {
+                results.append(assignment)
+            }
+        }
+        return results
+    }
+
+    func debugTopicContextAssignmentRows() throws -> [String] {
+        let stmt = try db.prepare("""
+            SELECT target_type || '|' || target_id || '|' || primary_lane || '|' ||
+                   secondary_lanes || '|' || COALESCE(subtopic_label, '') || '|' ||
+                   printf('%.4f', confidence) || '|' || source
+            FROM topic_context_assignments
+            ORDER BY target_type, target_id;
+        """)
+        var rows: [String] = []
+        while try stmt.step() {
+            rows.append(stmt.text(at: 0) ?? "")
+        }
+        return rows
+    }
+
+    private func deleteTopicContextAssignment(
+        targetType: TopicContextAssignmentTargetType,
+        targetId: UUID
+    ) throws {
+        let stmt = try db.prepare("""
+            DELETE FROM topic_context_assignments
+            WHERE target_type = ? AND target_id = ?;
+        """)
+        try stmt.bind(targetType.rawValue, at: 1)
+        try stmt.bind(targetId.uuidString, at: 2)
+        try stmt.step()
+    }
+
+    private func upsertTopicContextAssignmentIfUseful(
+        targetType: TopicContextAssignmentTargetType,
+        targetId: UUID,
+        text: String,
+        now: Date
+    ) throws {
+        let classification = TopicContextClassifier().classify(text: text)
+        guard classification.primaryLane != .general,
+              classification.confidence >= 0.55
+        else {
+            try deleteTopicContextAssignment(targetType: targetType, targetId: targetId)
+            return
+        }
+
+        let existing = try fetchTopicContextAssignment(
+            targetType: targetType,
+            targetId: targetId
+        )
+        try upsertTopicContextAssignment(TopicContextAssignment(
+            targetType: targetType,
+            targetId: targetId,
+            primaryLane: classification.primaryLane,
+            secondaryLanes: classification.secondaryLanes,
+            subtopicLabel: classification.subtopicLabel,
+            confidence: classification.confidence,
+            source: classification.source,
+            createdAt: existing?.createdAt ?? now,
+            updatedAt: now
+        ))
+    }
+
+    private func encodeTopicContextLanes(_ lanes: [TopicContextLane]) -> String {
+        let rawValues = lanes.map(\.rawValue)
+        guard let data = try? JSONSerialization.data(withJSONObject: rawValues),
+              let json = String(data: data, encoding: .utf8) else {
+            return "[]"
+        }
+        return json
+    }
+
+    private func decodeTopicContextLanes(_ json: String) -> [TopicContextLane] {
+        guard let data = json.data(using: .utf8),
+              let rawValues = try? JSONSerialization.jsonObject(with: data) as? [String] else {
+            return []
+        }
+        return rawValues.compactMap(TopicContextLane.init(rawValue:))
+    }
+
+    private func topicContextAssignmentFrom(_ stmt: Statement) -> TopicContextAssignment? {
+        guard let targetTypeText = stmt.text(at: 0),
+              let targetType = TopicContextAssignmentTargetType(rawValue: targetTypeText),
+              let targetIdText = stmt.text(at: 1),
+              let targetId = UUID(uuidString: targetIdText),
+              let primaryLaneText = stmt.text(at: 2),
+              let primaryLane = TopicContextLane(rawValue: primaryLaneText),
+              let sourceText = stmt.text(at: 6),
+              let source = TopicContextClassificationSource(rawValue: sourceText)
+        else { return nil }
+
+        return TopicContextAssignment(
+            targetType: targetType,
+            targetId: targetId,
+            primaryLane: primaryLane,
+            secondaryLanes: decodeTopicContextLanes(stmt.text(at: 3) ?? "[]"),
+            subtopicLabel: stmt.text(at: 4),
+            confidence: stmt.double(at: 5),
+            source: source,
+            createdAt: Date(timeIntervalSince1970: stmt.double(at: 7)),
+            updatedAt: Date(timeIntervalSince1970: stmt.double(at: 8))
+        )
+    }
+
     private func deleteCanonicalMemory(scope: MemoryScope, scopeRefId: UUID) throws {
         let deleteEntries = try db.prepare("""
             DELETE FROM memory_entries
@@ -2451,6 +2644,12 @@ final class NodeStore {
         let embeddingData = atom.embedding.map { encodeFloats($0) }
         try stmt.bind(embeddingData, at: 19)
         try stmt.step()
+        try upsertTopicContextAssignmentIfUseful(
+            targetType: .memoryAtom,
+            targetId: atom.id,
+            text: atom.statement,
+            now: atom.updatedAt
+        )
     }
 
     func updateMemoryAtom(_ atom: MemoryAtom) throws {
@@ -2487,6 +2686,12 @@ final class NodeStore {
         try stmt.bind(embeddingData, at: 17)
         try stmt.bind(atom.id.uuidString, at: 18)
         try stmt.step()
+        try upsertTopicContextAssignmentIfUseful(
+            targetType: .memoryAtom,
+            targetId: atom.id,
+            text: atom.statement,
+            now: atom.updatedAt
+        )
     }
 
     func fetchMemoryAtom(id: UUID) throws -> MemoryAtom? {
@@ -2707,6 +2912,7 @@ final class NodeStore {
 
     func deleteMemoryAtomInCurrentTransaction(id: UUID) throws {
         try deleteEdgesSupportedByMemoryAtom(id: id)
+        try deleteTopicContextAssignment(targetType: .memoryAtom, targetId: id)
         let stmt = try db.prepare("DELETE FROM memory_atoms WHERE id = ?;")
         try stmt.bind(id.uuidString, at: 1)
         try stmt.step()

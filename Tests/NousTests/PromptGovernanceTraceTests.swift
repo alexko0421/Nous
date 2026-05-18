@@ -504,6 +504,35 @@ final class PromptGovernanceTraceTests: XCTestCase {
         XCTAssertEqual(trace.agentCoordination, coordination)
     }
 
+    func testGovernanceTraceAddsTopicContextMetadataWithoutRawPrompt() {
+        let topicTrace = TopicContextTrace(
+            primaryLane: .education,
+            secondaryLanes: [.personalReflection],
+            subtopicLabel: "school / visa / learning depth",
+            confidence: 0.83,
+            matchedAssignmentCount: 3
+        )
+
+        let trace = PromptContextAssembler.governanceTrace(
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil,
+            topicContext: topicTrace
+        )
+
+        XCTAssertTrue(trace.promptLayers.contains("topic_context"))
+        XCTAssertEqual(trace.topicContext, topicTrace)
+
+        let data = try! JSONEncoder().encode(trace)
+        let raw = String(data: data, encoding: .utf8)!
+        XCTAssertFalse(raw.contains("SMC class registration and F-1 visa status"))
+        XCTAssertFalse(raw.contains("userPrompt"))
+        XCTAssertFalse(raw.contains("assistantText"))
+    }
+
     func testPromptTraceEvaluationHarnessPassesHealthyMemoryRAGCase() {
         let trace = PromptGovernanceTrace(
             promptLayers: ["anchor", "chat_mode", "memory_evidence", "citations", "long_gap_bridge_guidance"],

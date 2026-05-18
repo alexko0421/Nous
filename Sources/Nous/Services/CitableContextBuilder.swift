@@ -66,6 +66,7 @@ final class CitableContextBuilder {
         projectId: UUID?,
         mode: ChatMode = .companion,
         queryEmbedding: [Float]? = nil,
+        topicContext: TopicContextClassification? = nil,
         confidenceFloor: Double = 0.6,
         cardCap: Int = 8,
         atomLimit: Int = 6,
@@ -94,7 +95,16 @@ final class CitableContextBuilder {
         ).map(\.rowId)) ?? []
         let plannerIdSet = Set(packet.retrievedAtomIds)
         let lexicalOnlyIds = lexicalAtomIds.filter { !plannerIdSet.contains($0) }
-        let mergedAtomIds: [UUID] = packet.retrievedAtomIds + lexicalOnlyIds
+        let topicAtomIds = Self.topicAtomIds(
+            for: topicContext,
+            nodeStore: nodeStore,
+            limit: atomLimit * 3
+        )
+        let plannerAndLexicalIds = packet.retrievedAtomIds + lexicalOnlyIds
+        let plannerAndLexicalIdSet = Set(plannerAndLexicalIds)
+        let topicOnlyIds = topicAtomIds.filter { !plannerAndLexicalIdSet.contains($0) }
+        let mergedAtomIds: [UUID] = plannerAndLexicalIds + topicOnlyIds
+        let topicAtomIdSet = Set(topicAtomIds)
 
         let atomById: [UUID: MemoryAtom] = Self.fetchAtomsById(
             ids: mergedAtomIds,
@@ -145,7 +155,12 @@ final class CitableContextBuilder {
                 continue
             }
             let baseScore = Self.scoreAtom(atom, now: now)
-            ranked.append((Self.shapeAtom(atom), baseScore * Self.feedbackMultiplier(penalty: penalty)))
+            ranked.append((
+                Self.shapeAtom(atom),
+                baseScore
+                    * Self.feedbackMultiplier(penalty: penalty)
+                    * Self.topicMultiplier(atomId: id, topicAtomIds: topicAtomIdSet)
+            ))
         }
 
         // Reflection lane.
@@ -283,6 +298,10 @@ final class CitableContextBuilder {
         return 1.0 + boost
     }
 
+    private static func topicMultiplier(atomId: UUID, topicAtomIds: Set<UUID>) -> Double {
+        topicAtomIds.contains(atomId) ? 1.8 : 1.0
+    }
+
     private static func recencyFactor(_ referenceTime: Date, now: Date) -> Double {
         let ageDays = max(0, now.timeIntervalSince(referenceTime) / 86400.0)
         let halfLife = 30.0
@@ -309,5 +328,23 @@ final class CitableContextBuilder {
         let idSet = Set(ids)
         let matched = allActive.filter { idSet.contains($0.id) }
         return Dictionary(uniqueKeysWithValues: matched.map { ($0.id, $0) })
+    }
+
+    private static func topicAtomIds(
+        for topicContext: TopicContextClassification?,
+        nodeStore: NodeStore,
+        limit: Int
+    ) -> [UUID] {
+        guard let topicContext,
+              topicContext.primaryLane != .general
+        else { return [] }
+
+        return (
+            try? nodeStore.fetchTopicContextAssignments(
+                primaryLane: topicContext.primaryLane,
+                targetType: .memoryAtom,
+                limit: limit
+            ).map(\.targetId)
+        ) ?? []
     }
 }
