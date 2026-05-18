@@ -109,8 +109,6 @@ Accepted aliases:
 - Pure CJK phrases with at least three CJK characters: `第一性原理`, `冇呢样嘢`, `帮我整理`, `先整理` (3 chars, accepted).
 - Mixed CJK + ASCII phrases with at least two CJK characters **and** at least one ASCII alphabetic word of four or more letters: `具体 tradeoff`, `具體 tradeoff`. The four-letter floor on the ASCII word filters fillers like `the`, `and`, `but`, `for`, `you`, `use` while admitting content words like `tradeoff`, `push`, `back`, `pain`. The ASCII portion must contain only ASCII letters (a-z, A-Z) — digits, Cyrillic, Greek, and other non-Latin alphabetic characters do **not** satisfy the rule. Examples that are rejected: `具体 2026` (digits), `具体 GPT4` (mixed letters/digits), `具体 русский` (Cyrillic).
 - Mixed phrases require whitespace or punctuation between the CJK and ASCII portions, because `isAllowedAlias` splits on `CharacterSet.alphanumerics.inverted`. `具体tradeoff` (no separator) is treated as a single alphanumeric run that contains CJK and is therefore evaluated under the pure-CJK rule, where it has only two CJK chars and is rejected. Always include a space (or punctuation) between CJK and ASCII when authoring mixed aliases.
-- Single English carve-out: `inversion`. Violates the multi-word rule but is preserved because the bare word reliably signals the inversion thinking move in Alex's writing.
-
 Rejected aliases (filtered silently by `isAllowedAlias`):
 
 - Single CJK characters.
@@ -121,8 +119,7 @@ Rejected aliases (filtered silently by `isAllowedAlias`):
 
 Known limitations of this policy:
 
-- Single English-word phrases other than `inversion` cannot be added without an additional carve-out. New phrases like `pushback` (one word) would need to be rephrased as `push back` to pass.
-- The `inversion` carve-out can produce false positives in software contexts such as `inversion of control` and `matrix inversion`. Tracked as accepted risk; revisit if log review shows misfires.
+- Single English-word phrases cannot be added without an additional carve-out. New phrases like `pushback` (one word) would need to be rephrased as `push back` to pass.
 - The four-letter ASCII floor for mixed phrases is heuristic. Useful three-letter content words like `use` cannot anchor a mixed alias; if such a phrase becomes important in practice, drop the threshold or list both languages separately.
 
 This policy intentionally narrows some prior detection sensitivity. False learning silently changes prompt behavior, so the spec prefers strictness over recall.
@@ -328,7 +325,7 @@ xcodebuild test -project Nous.xcodeproj -scheme NousTests -destination 'platform
 
 ## Risks
 
-The main risk is false positives from broad aliases. The phrase policy deliberately rejects short generic aliases to reduce that risk. The `inversion` single-word carve-out is the most exposed case — software discussions involving `inversion of control` or `matrix inversion` will misfire. Accepted for v1; revisit if log review shows misfires.
+The main risk is false positives from broad aliases. The phrase policy deliberately rejects short generic aliases to reduce that risk.
 
 The second risk is missed detections from being stricter than the old keyword list. That is acceptable for v1 because missed weak learning is recoverable, while wrong learning silently changes prompt behavior. Mixed-language phrases like `具体 tradeoff` are now accepted via the cjk≥2 + ASCII-word≥4 rule; `直接 push back` already matched the existing `push back` ASCII alias and does not need a mixed entry. The remaining gap is mixed phrases whose ASCII portion is short (e.g. `具体 use case` matches because `case` is four letters, but `具体 use` alone does not).
 
