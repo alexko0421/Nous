@@ -179,6 +179,13 @@ struct ContentView: View {
             .onChange(of: dependencies.chatVM.currentNode?.id) { _, newValue in
                 dependencies.youtubeLearningVM.activate(conversationId: newValue)
             }
+            .onChange(of: dependencies.scratchPadStore.latestSummary) { _, latestSummary in
+                guard latestSummary != nil, selectedTab == .chat else { return }
+                scratchPadPanelMode = .preview
+                withAnimation(AppMotion.markdownPanelSpring.animation) {
+                    rightPanelMode = .markdown
+                }
+            }
             .onChange(of: selectedTab) { _, newValue in
                 let nextMode = RightPanelSurfaceScope.modeAfterTabChange(
                     currentMode: rightPanelMode,

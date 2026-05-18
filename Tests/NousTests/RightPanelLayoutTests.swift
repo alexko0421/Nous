@@ -174,7 +174,7 @@ final class RightPanelLayoutTests: XCTestCase {
         XCTAssertFalse(rightPanelModeSource.contains("case youtube"))
         XCTAssertTrue(contentViewSource.contains("case .source"))
         XCTAssertFalse(contentViewSource.contains("case .youtube:"))
-        XCTAssertTrue(chatAreaSource.contains("mode: .source"))
+        XCTAssertTrue(chatAreaSource.contains("rightPanelMode = .source"))
         XCTAssertFalse(chatAreaSource.contains("mode: .youtube"))
         XCTAssertFalse(panelSource.contains("Text(\"YouTube\")"))
         XCTAssertFalse(panelSource.contains("TextField(\"YouTube URL\""))
@@ -238,10 +238,28 @@ final class RightPanelLayoutTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(chatAreaSource.contains("private let headerTrailingControlReserve: CGFloat = 112"))
+        XCTAssertTrue(chatAreaSource.contains("private let headerTrailingControlReserve: CGFloat = 24"))
         XCTAssertTrue(chatAreaSource.contains(".truncationMode(.tail)"))
         XCTAssertTrue(chatAreaSource.contains(".frame(maxWidth: .infinity, alignment: .leading)"))
         XCTAssertTrue(chatAreaSource.contains(".padding(.trailing, headerTrailingControlReserve)"))
+        XCTAssertFalse(chatAreaSource.contains("rightPanelToggleCapsule"))
+        XCTAssertFalse(chatAreaSource.contains("rightPanelToggleButton"))
+        XCTAssertFalse(chatAreaSource.contains("systemImage: \"note.text\""))
+    }
+
+    func testSummaryCaptureAutoOpensMarkdownPanelInsteadOfHeaderToggle() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let contentViewSource = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/App/ContentView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(contentViewSource.contains(".onChange(of: dependencies.scratchPadStore.latestSummary)"))
+        XCTAssertTrue(contentViewSource.contains("rightPanelMode = .markdown"))
+        XCTAssertTrue(contentViewSource.contains("scratchPadPanelMode = .preview"))
     }
 
     func testScratchpadInnerSurfaceUsesVisiblePaperStyling() throws {

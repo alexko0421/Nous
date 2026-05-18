@@ -18,11 +18,9 @@ enum ClarificationCardParser {
     ]
 
     private static let summaryPattern = #"<summary>([\s\S]*?)</summary>"#
-
-    /// Open/close tags of <summary>. Used to strip the tag markers out of chat display
-    /// text while preserving the inner markdown, so the summary reads naturally in the
-    /// chat bubble and the panel renders the same content in document style.
-    private static let summaryTagMarkerPattern = #"</?summary>"#
+    private static let summaryBlockPattern = #"<summary>[\s\S]*?</summary>"#
+    private static let unclosedSummaryBlockPattern = #"<summary>[\s\S]*$"#
+    private static let summaryAcknowledgementText = "已经整理好啦，请睇右边。"
 
     private static let summaryRegex = try? NSRegularExpression(
         pattern: summaryPattern,
@@ -34,16 +32,29 @@ enum ClarificationCardParser {
         options: [.caseInsensitive, .dotMatchesLineSeparators]
     )
 
-    private static let summaryTagMarkerRegex = try? NSRegularExpression(
-        pattern: summaryTagMarkerPattern,
-        options: [.caseInsensitive]
+    private static let summaryBlockRegex = try? NSRegularExpression(
+        pattern: summaryBlockPattern,
+        options: [.caseInsensitive, .dotMatchesLineSeparators]
+    )
+
+    private static let unclosedSummaryBlockRegex = try? NSRegularExpression(
+        pattern: unclosedSummaryBlockPattern,
+        options: [.caseInsensitive, .dotMatchesLineSeparators]
     )
 
     static func parse(_ text: String) -> ClarificationContent {
         let phaseKept = containsUnderstandingPhaseMarker(in: text)
-        let sanitizedText = removingSummaryTagMarkers(
-            from: removingInternalReasoningMarkers(from: text)
-        )
+        let internalReasoningRemoved = removingInternalReasoningMarkers(from: text)
+
+        if containsClosedSummaryBlock(in: internalReasoningRemoved) {
+            return ClarificationContent(
+                displayText: summaryAcknowledgementText,
+                card: nil,
+                keepsQuickActionMode: phaseKept
+            )
+        }
+
+        let sanitizedText = removingUnclosedSummaryBlock(from: internalReasoningRemoved)
 
         guard
             let blockRegex = try? NSRegularExpression(
@@ -136,13 +147,24 @@ enum ClarificationCardParser {
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static func removingSummaryTagMarkers(from text: String) -> String {
+    private static func containsClosedSummaryBlock(in text: String) -> Bool {
         guard
-            let regex = summaryTagMarkerRegex,
+            let regex = summaryBlockRegex,
+            let range = nsRange(for: text)
+        else {
+            return false
+        }
+        return regex.firstMatch(in: text, options: [], range: range) != nil
+    }
+
+    private static func removingUnclosedSummaryBlock(from text: String) -> String {
+        guard
+            let regex = unclosedSummaryBlockRegex,
             let range = nsRange(for: text)
         else {
             return text
         }
+
         return regex.stringByReplacingMatches(
             in: text,
             options: [],

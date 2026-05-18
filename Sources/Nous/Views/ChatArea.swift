@@ -33,7 +33,7 @@ struct ChatArea: View {
     private let temporaryBranchFocusBottomAnchor = "temporary-branch-focus-bottom-anchor"
     private let bottomVisibleSpacing: CGFloat = 53
     private let composerMaxWidth: CGFloat = ComposerTextInputMetrics.chatComposerMaxWidth
-    private let headerTrailingControlReserve: CGFloat = 112
+    private let headerTrailingControlReserve: CGFloat = 24
     private let composerActionMotion = ComposerPrimaryActionMotion()
     
     private var isWelcomeState: Bool {
@@ -49,10 +49,6 @@ struct ChatArea: View {
 
     private var canPrimaryAction: Bool {
         vm.isGenerating || canSend
-    }
-
-    private func isRightPanelModeActive(_ mode: RightPanelMode) -> Bool {
-        rightPanelMode == mode
     }
 
     private var shouldSeparateComposerPrimaryAction: Bool {
@@ -592,17 +588,6 @@ struct ChatArea: View {
                 .padding(.leading, 24)
             }
         }
-        .overlay(alignment: .topTrailing) {
-            if !isWelcomeState && !temporaryBranch.isPresented {
-                rightPanelToggleCapsule
-                    .padding(.top, 16)
-                    .padding(.trailing, 24)
-                    .transition(.opacity)
-                .blur(radius: branchBackgroundBlurRadius)
-                .opacity(branchBackgroundOpacity)
-                .allowsHitTesting(!temporaryBranch.isPresented)
-            }
-        }
         .confirmationDialog("Add Attachment", isPresented: $isAttachmentMenuPresented, titleVisibility: .visible) {
             Button("File") {
                 isFileImporterPresented = true
@@ -679,57 +664,6 @@ struct ChatArea: View {
         let pendingAttachments = AttachmentLimitPolicy.limitingImageAttachments(attachments)
         attachments = []
         Task { await vm.send(attachments: pendingAttachments) }
-    }
-
-    private var rightPanelToggleCapsule: some View {
-        HStack(spacing: 4) {
-            rightPanelToggleButton(
-                mode: .source,
-                systemImage: "link",
-                helpText: "URL"
-            )
-            rightPanelToggleButton(
-                mode: .markdown,
-                systemImage: "note.text",
-                helpText: "Markdown"
-            )
-        }
-        .padding(4)
-        .background(NativeGlassPanel(cornerRadius: 18, tintColor: AppColor.controlGlassTint) { EmptyView() })
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(AppColor.panelStroke, lineWidth: 1)
-        )
-    }
-
-    private func rightPanelToggleButton(
-        mode: RightPanelMode,
-        systemImage: String,
-        helpText: String
-    ) -> some View {
-        let isActive = isRightPanelModeActive(mode)
-
-        return Button {
-            withAnimation(AppMotion.markdownPanelSpring.animation) {
-                rightPanelMode = isActive ? nil : mode
-            }
-        } label: {
-            ZStack {
-                Circle()
-                    .fill(isActive ? AppColor.colaOrange.opacity(0.14) : Color.clear)
-                    .overlay(
-                        Circle()
-                            .stroke(isActive ? AppColor.colaOrange.opacity(0.34) : Color.clear, lineWidth: 1)
-                    )
-
-                Image(systemName: systemImage)
-                    .font(.system(size: 14, weight: .regular, design: .rounded))
-                    .foregroundColor(isActive ? AppColor.colaOrange : AppColor.secondaryText)
-            }
-            .frame(width: 28, height: 28)
-        }
-        .buttonStyle(.plain)
-        .help(helpText)
     }
 
     private var temporaryBranchBottomRail: some View {
