@@ -226,6 +226,31 @@ final class TemporaryBranchViewModelTests: XCTestCase {
         XCTAssertEqual(branch.currentResponse, "")
     }
 
+    func testSendCarriesTemporaryBranchAttachmentsAndClearsComposer() async throws {
+        let source = Message(nodeId: UUID(), role: .assistant, content: "Open a side thought")
+        let branch = TemporaryBranchViewModel()
+        let image = AttachedFileContext(
+            name: "branch-image.png",
+            extractedText: nil,
+            kind: .image,
+            imageData: Data([0x01, 0x02, 0x03]),
+            imageMimeType: "image/png"
+        )
+        branch.open(from: source, in: [source])
+        branch.attachments = [image]
+
+        let llm = CapturingTemporaryBranchLLMService(text: "Branch answer.")
+        await branch.send(using: { llm })
+
+        XCTAssertTrue(branch.attachments.isEmpty)
+        XCTAssertEqual(branch.messages.first?.role, .user)
+        XCTAssertEqual(branch.messages.first?.attachments, [image])
+        XCTAssertEqual(llm.capturedMessages.first?.content, "Please review the attached files.\n\nFiles: branch-image.png")
+        XCTAssertEqual(llm.capturedMessages.first?.imageAttachments.count, 1)
+        XCTAssertEqual(llm.capturedMessages.first?.imageAttachments.first?.mimeType, "image/png")
+        XCTAssertEqual(branch.messages.last?.content, "Branch answer.")
+    }
+
     func testEvaluatorSuppressesGreetingOnlyBranch() async throws {
         let source = Message(nodeId: UUID(), role: .user, content: "hi")
         let record = TemporaryBranchRecord(
@@ -1004,6 +1029,23 @@ private struct StaticTemporaryBranchLLMService: LLMService {
 
     func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
+            continuation.yield(text)
+            continuation.finish()
+        }
+    }
+}
+
+private final class CapturingTemporaryBranchLLMService: LLMService {
+    let text: String
+    private(set) var capturedMessages: [LLMMessage] = []
+
+    init(text: String) {
+        self.text = text
+    }
+
+    func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
+        capturedMessages = messages
+        return AsyncThrowingStream { continuation in
             continuation.yield(text)
             continuation.finish()
         }

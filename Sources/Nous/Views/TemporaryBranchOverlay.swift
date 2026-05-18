@@ -27,10 +27,10 @@ enum TemporaryBranchMembraneStyle {
 
 enum TemporaryBranchTriggerHitTarget {
     static let buttonDiameter: CGFloat = 28
-    static let buttonEdgeGap: CGFloat = 8
+    static let buttonEdgeGap: CGFloat = 14
     static let userButtonOutsideOffset: CGFloat = buttonDiameter + buttonEdgeGap
     static let assistantButtonOutsideOffset: CGFloat = buttonDiameter + buttonEdgeGap
-    static let buttonVerticalOffset: CGFloat = 0
+    static let buttonVerticalOffset: CGFloat = 2
     static let hoverExitGraceDuration: TimeInterval = 0.22
 }
 
@@ -47,7 +47,14 @@ struct TemporaryBranchOverlay: View {
 
             TemporaryBranchInlineComposer(
                 branch: branch,
-                onSend: onSend
+                onSend: onSend,
+                onPickAttachment: {},
+                onPickPhoto: {},
+                onYouTube: {},
+                onVoice: {},
+                canPickPhoto: false,
+                onRemoveAttachment: { _ in },
+                onImageDrop: { _ in false }
             )
             .padding(.horizontal, 48)
         }
@@ -62,17 +69,29 @@ struct TemporaryBranchOverlay: View {
 struct TemporaryBranchInlineComposer: View {
     @Bindable var branch: TemporaryBranchViewModel
     let onSend: () -> Void
+    let onPickAttachment: () -> Void
+    let onPickPhoto: () -> Void
+    let onYouTube: () -> Void
+    let onVoice: () -> Void
+    let canPickPhoto: Bool
+    let onRemoveAttachment: (UUID) -> Void
+    let onImageDrop: ([NSItemProvider]) -> Bool
 
+    @State private var isActionMenuExpanded = false
     @FocusState private var isComposerFocused: Bool
 
     private var canSend: Bool {
-        !branch.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        (
+            !branch.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            !branch.attachments.isEmpty
+        ) &&
         !branch.isGenerating
     }
 
     private var shouldShowPrimaryAction: Bool {
         branch.isGenerating ||
-        !branch.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !branch.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+        !branch.attachments.isEmpty
     }
 
     var body: some View {
@@ -80,6 +99,13 @@ struct TemporaryBranchInlineComposer: View {
             .onAppear {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
                     isComposerFocused = true
+                }
+            }
+            .onChange(of: branch.inputText) { _, _ in
+                if isActionMenuExpanded {
+                    withAnimation(ActionMenuSoftStaggerAnimation.close) {
+                        isActionMenuExpanded = false
+                    }
                 }
             }
     }
@@ -93,6 +119,7 @@ struct TemporaryBranchInlineComposer: View {
     private var composerStack: some View {
         VStack(alignment: .leading, spacing: 10) {
             TemporaryBranchSourceQuote(branch: branch)
+            branchAttachmentChips
             primaryBranchComposer
         }
     }
@@ -107,24 +134,72 @@ struct TemporaryBranchInlineComposer: View {
                     .transition(.scale(scale: 0.72, anchor: .leading).combined(with: .opacity))
             }
         }
+        .overlay(alignment: .bottomLeading) {
+            ActionMenuCapsule(
+                isExpanded: isActionMenuExpanded,
+                onFile: {
+                    onPickAttachment()
+                    closeActionMenu()
+                },
+                onPhoto: {
+                    onPickPhoto()
+                    closeActionMenu()
+                },
+                onYouTube: {
+                    onYouTube()
+                    closeActionMenu()
+                },
+                onVoice: {
+                    onVoice()
+                    closeActionMenu()
+                },
+                canPickPhoto: canPickPhoto
+            )
+            .offset(y: -ActionMenuPopoutMetrics.sourceOffsetFromRowBottom)
+        }
+        .padding(.top, isActionMenuExpanded ? ActionMenuPopoutMetrics.reservedTopPadding : 0)
         .animation(
             .timingCurve(0.68, -0.6, 0.32, 1.6, duration: 0.42),
             value: shouldShowPrimaryAction
         )
+        .animation(ActionMenuSoftStaggerAnimation.stateChange(isExpanded: isActionMenuExpanded), value: isActionMenuExpanded)
+        .onDrop(
+            of: AttachmentDropSupport.allFileTypeIdentifiers,
+            isTargeted: nil,
+            perform: onImageDrop
+        )
+    }
+
+    @ViewBuilder
+    private var branchAttachmentChips: some View {
+        if !branch.attachments.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(branch.attachments) { attachment in
+                        AttachmentChip(attachment: attachment) {
+                            onRemoveAttachment(attachment.id)
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private var branchLeadingActionButton: some View {
         ComposerLeadingActionButton(
-            systemImage: "plus",
-            isMenuExpanded: false,
+            systemImage: isActionMenuExpanded ? "xmark" : "plus",
+            isMenuExpanded: isActionMenuExpanded,
             isVoiceActive: false,
             size: ComposerTextInputMetrics.leadingActionSize,
             cornerRadius: ComposerTextInputMetrics.leadingActionCornerRadius,
             action: {
                 isComposerFocused = true
+                withAnimation(ActionMenuSoftStaggerAnimation.stateChange(isExpanded: !isActionMenuExpanded)) {
+                    isActionMenuExpanded.toggle()
+                }
             }
         )
-        .help("Focus branch input")
+        .help("Actions")
     }
 
     private var branchTextField: some View {
@@ -150,6 +225,11 @@ struct TemporaryBranchInlineComposer: View {
         .frame(minHeight: TemporaryBranchMembraneStyle.primaryComposerMinHeight, alignment: .leading)
         .background(
             ComposerTextInputGlassBackground(cornerRadius: TemporaryBranchMembraneStyle.primaryComposerCornerRadius)
+        )
+        .onDrop(
+            of: AttachmentDropSupport.allFileTypeIdentifiers,
+            isTargeted: nil,
+            perform: onImageDrop
         )
     }
 
@@ -186,6 +266,12 @@ struct TemporaryBranchInlineComposer: View {
         .buttonStyle(.plain)
         .disabled(!canSend)
         .help(branch.isGenerating ? "Branch is responding" : "Send branch message")
+    }
+
+    private func closeActionMenu() {
+        withAnimation(ActionMenuSoftStaggerAnimation.close) {
+            isActionMenuExpanded = false
+        }
     }
 }
 
@@ -229,6 +315,7 @@ struct TemporaryBranchTranscript: View {
                 ForEach(branch.messages) { message in
                     TemporaryBranchBubble(
                         text: message.content,
+                        attachments: message.attachments,
                         isUser: message.role == .user,
                         feedback: branch.feedback(forMessageId: message.id),
                         canRegenerate: branch.canRegenerateAssistantMessage(message.id),
@@ -246,6 +333,7 @@ struct TemporaryBranchTranscript: View {
                 if !branch.currentResponse.isEmpty {
                     TemporaryBranchBubble(
                         text: branch.currentResponse,
+                        attachments: [],
                         isUser: false,
                         feedback: nil,
                         canRegenerate: false,
@@ -418,6 +506,7 @@ struct TemporaryBranchRecordMarker: View {
 
 private struct TemporaryBranchBubble: View {
     let text: String
+    let attachments: [AttachedFileContext]
     let isUser: Bool
     let feedback: JudgeFeedback?
     let canRegenerate: Bool
@@ -438,13 +527,17 @@ private struct TemporaryBranchBubble: View {
         HStack {
             Spacer(minLength: 60)
 
-            VStack(alignment: .leading) {
+            VStack(alignment: .leading, spacing: 8) {
                 Text(text)
                     .font(.system(size: 14, weight: .regular))
                     .lineSpacing(6)
                     .foregroundStyle(Color.white)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
+
+                if !attachments.isEmpty {
+                    MessageAttachmentRow(attachments: attachments, alignment: .leading)
+                }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)

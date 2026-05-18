@@ -63,8 +63,12 @@ struct ChatArea: View {
         )
     }
 
+    private var pickerScopedAttachments: [AttachedFileContext] {
+        temporaryBranch.isPresented ? temporaryBranch.attachments : attachments
+    }
+
     private var remainingImageAttachmentSlots: Int {
-        AttachmentLimitPolicy.remainingImageSlots(in: attachments)
+        AttachmentLimitPolicy.remainingImageSlots(in: pickerScopedAttachments)
     }
 
     private var canPickPhotoAttachment: Bool {
@@ -731,7 +735,18 @@ struct ChatArea: View {
     private var temporaryBranchBottomRail: some View {
         TemporaryBranchInlineComposer(
             branch: temporaryBranch,
-            onSend: sendTemporaryBranchInput
+            onSend: sendTemporaryBranchInput,
+            onPickAttachment: { isFileImporterPresented = true },
+            onPickPhoto: { isPhotosPickerPresented = true },
+            onYouTube: {
+                withAnimation(AppMotion.markdownPanelSpring.animation) {
+                    rightPanelMode = .source
+                }
+            },
+            onVoice: { onToggleVoiceMode() },
+            canPickPhoto: canPickPhotoAttachment,
+            onRemoveAttachment: removeAttachment,
+            onImageDrop: handleImageDrop
         )
         .frame(maxWidth: composerMaxWidth)
     }
@@ -1060,6 +1075,11 @@ struct ChatArea: View {
     }
 
     private func removeAttachment(_ id: UUID) {
+        if temporaryBranch.isPresented {
+            temporaryBranch.attachments.removeAll { $0.id == id }
+            return
+        }
+
         attachments.removeAll { $0.id == id }
     }
 
@@ -1079,7 +1099,7 @@ struct ChatArea: View {
     }
 
     private func appendAttachments(_ newAttachments: [AttachedFileContext]) {
-        var updatedAttachments = attachments
+        var updatedAttachments = temporaryBranch.isPresented ? temporaryBranch.attachments : attachments
         for attachment in newAttachments {
             let alreadyExists = !AttachmentLimitPolicy.isImageAttachment(attachment) && updatedAttachments.contains {
                 AttachmentLimitPolicy.isDuplicateNonImageAttachment(attachment, of: $0)
@@ -1091,7 +1111,12 @@ struct ChatArea: View {
                 )
             }
         }
-        attachments = updatedAttachments
+
+        if temporaryBranch.isPresented {
+            temporaryBranch.attachments = updatedAttachments
+        } else {
+            attachments = updatedAttachments
+        }
     }
 
     private func shouldShowRelevantChats(after message: Message) -> Bool {

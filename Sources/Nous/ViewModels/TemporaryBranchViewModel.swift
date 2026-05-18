@@ -5,18 +5,34 @@ struct TemporaryBranchMessage: Identifiable, Codable, Equatable {
     let id: UUID
     let role: MessageRole
     var content: String
+    var attachments: [AttachedFileContext]
     let timestamp: Date
 
     init(
         id: UUID = UUID(),
         role: MessageRole,
         content: String,
+        attachments: [AttachedFileContext] = [],
         timestamp: Date = Date()
     ) {
         self.id = id
         self.role = role
         self.content = content
+        self.attachments = attachments
         self.timestamp = timestamp
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, role, content, attachments, timestamp
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        role = try container.decode(MessageRole.self, forKey: .role)
+        content = try container.decode(String.self, forKey: .content)
+        attachments = try container.decodeIfPresent([AttachedFileContext].self, forKey: .attachments) ?? []
+        timestamp = try container.decodeIfPresent(Date.self, forKey: .timestamp) ?? Date()
     }
 }
 
@@ -777,6 +793,7 @@ final class TemporaryBranchViewModel {
     var localContext: [Message] = []
     var messages: [TemporaryBranchMessage] = []
     var inputText: String = ""
+    var attachments: [AttachedFileContext] = []
     var currentResponse: String = ""
     var currentThinkingStartedAt: Date?
     var isGenerating: Bool = false
@@ -807,6 +824,7 @@ final class TemporaryBranchViewModel {
         localContext = resolvedLocalContext
         self.messages = recordsBySourceMessageId[message.id]?.messages ?? []
         inputText = ""
+        attachments = []
         currentResponse = ""
         currentThinkingStartedAt = nil
         isGenerating = false
@@ -818,6 +836,7 @@ final class TemporaryBranchViewModel {
         localContext = []
         messages = []
         inputText = ""
+        attachments = []
         currentResponse = ""
         currentThinkingStartedAt = nil
         isGenerating = false
@@ -838,6 +857,7 @@ final class TemporaryBranchViewModel {
         localContext = []
         messages = []
         inputText = ""
+        attachments = []
         currentResponse = ""
         currentThinkingStartedAt = nil
         isGenerating = false
@@ -875,11 +895,17 @@ final class TemporaryBranchViewModel {
     func send(using llmServiceProvider: () -> (any LLMService)?) async {
         guard let sourceMessage else { return }
         let query = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty, !isGenerating else { return }
+        let pendingAttachments = AttachmentLimitPolicy.limitingImageAttachments(attachments)
+        guard (!query.isEmpty || !pendingAttachments.isEmpty), !isGenerating else { return }
 
-        let userMessage = TemporaryBranchMessage(role: .user, content: query)
+        let userMessage = TemporaryBranchMessage(
+            role: .user,
+            content: query.isEmpty ? "Please review the attached files." : query,
+            attachments: pendingAttachments
+        )
         messages.append(userMessage)
         inputText = ""
+        attachments = []
         currentResponse = ""
         currentThinkingStartedAt = Date()
         isGenerating = true
@@ -988,9 +1014,14 @@ final class TemporaryBranchViewModel {
 
     private func transcriptMessages() -> [LLMMessage] {
         messages.map { message in
-            LLMMessage(
+            let attachments = message.role == .user ? message.attachments : []
+            return LLMMessage(
                 role: message.role == .user ? "user" : "assistant",
-                content: message.content
+                content: message.role == .user
+                    ? TurnPlanner.userMessageContent(inputText: message.content, attachments: attachments)
+                    : message.content,
+                imageAttachments: TurnPlanner.imageAttachments(from: attachments),
+                documentAttachments: TurnPlanner.documentAttachments(from: attachments)
             )
         }
     }

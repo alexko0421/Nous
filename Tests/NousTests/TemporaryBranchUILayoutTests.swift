@@ -76,6 +76,36 @@ final class TemporaryBranchUILayoutTests: XCTestCase {
         XCTAssertFalse(inlineComposerSource.contains("branch.sourceExcerpt"))
     }
 
+    func testTemporaryBranchComposerUsesMainActionMenuAndAttachments() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Views/TemporaryBranchOverlay.swift"),
+            encoding: .utf8
+        )
+        let composerStart = try XCTUnwrap(source.range(of: "struct TemporaryBranchInlineComposer"))
+            .lowerBound
+        let quoteStart = try XCTUnwrap(source.range(of: "struct TemporaryBranchSourceQuote"))
+            .lowerBound
+        let composerSource = String(source[composerStart..<quoteStart])
+
+        XCTAssertTrue(composerSource.contains("@State private var isActionMenuExpanded = false"))
+        XCTAssertTrue(composerSource.contains("branchAttachmentChips"))
+        XCTAssertTrue(composerSource.contains("ForEach(branch.attachments)"))
+        XCTAssertTrue(composerSource.contains("AttachmentChip(attachment: attachment)"))
+        XCTAssertTrue(composerSource.contains("ActionMenuCapsule("))
+        XCTAssertTrue(composerSource.contains("onFile:"))
+        XCTAssertTrue(composerSource.contains("onPhoto:"))
+        XCTAssertTrue(composerSource.contains("onYouTube:"))
+        XCTAssertTrue(composerSource.contains("onVoice:"))
+        XCTAssertTrue(composerSource.contains("canPickPhoto: canPickPhoto"))
+        XCTAssertTrue(composerSource.contains(".overlay(alignment: .bottomLeading)"))
+        XCTAssertTrue(composerSource.contains(".padding(.top, isActionMenuExpanded ? ActionMenuPopoutMetrics.reservedTopPadding : 0)"))
+        XCTAssertFalse(composerSource.contains(".help(\"Focus branch input\")"))
+    }
+
     func testTemporaryBranchComposerKeepsSourceQuoteAboveInput() throws {
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -221,7 +251,8 @@ final class TemporaryBranchUILayoutTests: XCTestCase {
 
     func testBranchTriggerUsesIconOnlyHitTargetAndStableAlignment() throws {
         XCTAssertEqual(TemporaryBranchTriggerHitTarget.buttonDiameter, 28)
-        XCTAssertEqual(TemporaryBranchTriggerHitTarget.buttonEdgeGap, 8)
+        XCTAssertEqual(TemporaryBranchTriggerHitTarget.buttonEdgeGap, 14)
+        XCTAssertEqual(TemporaryBranchTriggerHitTarget.buttonVerticalOffset, 2)
         XCTAssertGreaterThan(TemporaryBranchTriggerHitTarget.hoverExitGraceDuration, 0)
         XCTAssertLessThanOrEqual(TemporaryBranchTriggerHitTarget.hoverExitGraceDuration, 0.35)
         XCTAssertEqual(
@@ -278,6 +309,27 @@ final class TemporaryBranchUILayoutTests: XCTestCase {
         XCTAssertTrue(assistantContentSource.contains("private func assistantContent"))
         XCTAssertTrue(assistantContentSource.contains("triggerAlignment: .trailing"))
         XCTAssertFalse(source.contains("AssistantBubbleContent(\n                                displayText: assistantDisplayText,\n                                isStreamingDraft: isStreamingDraft\n                            )\n                                .temporaryBranchEntry"))
+    }
+
+    func testChatAreaRoutesAttachmentsToTemporaryBranchComposerWhenOpen() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Views/ChatArea.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("temporaryBranch.isPresented ? temporaryBranch.attachments : attachments"))
+        XCTAssertTrue(source.contains("temporaryBranch.attachments.removeAll { $0.id == id }"))
+        XCTAssertTrue(source.contains("var updatedAttachments = temporaryBranch.isPresented ? temporaryBranch.attachments : attachments"))
+        XCTAssertTrue(source.contains("temporaryBranch.attachments = updatedAttachments"))
+        XCTAssertTrue(source.contains("onPickAttachment: { isFileImporterPresented = true }"))
+        XCTAssertTrue(source.contains("onPickPhoto: { isPhotosPickerPresented = true }"))
+        XCTAssertTrue(source.contains("onYouTube: {"))
+        XCTAssertTrue(source.contains("onVoice: { onToggleVoiceMode() }"))
+        XCTAssertTrue(source.contains("onImageDrop: handleImageDrop"))
     }
 
     func testBranchTriggerUsesCalmBranchSymbolInsteadOfChatBubbleIcon() throws {
