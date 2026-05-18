@@ -109,4 +109,85 @@ final class TopicContextStoreTests: XCTestCase {
             targetId: atom.id
         ), "updating an atom to a general fallback should not leave a stale topic lane")
     }
+
+    func testDeleteNodeRemovesConversationAndSourceTopicAssignments() throws {
+        let conversation = NousNode(type: .conversation, title: "SMC visa planning")
+        let source = NousNode(type: .source, title: "AI operator research")
+        try store.insertNode(conversation)
+        try store.insertNode(source)
+
+        try store.upsertTopicContextAssignment(TopicContextAssignment(
+            targetType: .conversation,
+            targetId: conversation.id,
+            primaryLane: .education,
+            secondaryLanes: [],
+            subtopicLabel: "school / visa / learning depth",
+            confidence: 0.9,
+            source: .deterministic,
+            createdAt: Date(timeIntervalSince1970: 10),
+            updatedAt: Date(timeIntervalSince1970: 10)
+        ))
+        try store.upsertTopicContextAssignment(TopicContextAssignment(
+            targetType: .source,
+            targetId: source.id,
+            primaryLane: .aiResearch,
+            secondaryLanes: [],
+            subtopicLabel: "ai research / agents / models",
+            confidence: 0.9,
+            source: .deterministic,
+            createdAt: Date(timeIntervalSince1970: 10),
+            updatedAt: Date(timeIntervalSince1970: 10)
+        ))
+
+        try store.deleteNode(id: conversation.id)
+        try store.deleteNode(id: source.id)
+
+        XCTAssertNil(try store.fetchTopicContextAssignment(
+            targetType: .conversation,
+            targetId: conversation.id
+        ))
+        XCTAssertNil(try store.fetchTopicContextAssignment(
+            targetType: .source,
+            targetId: source.id
+        ))
+    }
+
+    func testDeleteNodeSucceedsWhenTopicAssignmentTableIsUnavailable() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("topic-context-delete-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let store = try NodeStore(path: url.path)
+        let conversation = NousNode(type: .conversation, title: "SMC visa planning")
+        try store.insertNode(conversation)
+
+        let db = try Database(path: url.path)
+        try db.exec("DROP TABLE topic_context_assignments;")
+
+        try store.deleteNode(id: conversation.id)
+
+        XCTAssertNil(try store.fetchNode(id: conversation.id))
+    }
+
+    func testDeleteMemoryAtomSucceedsWhenTopicAssignmentTableIsUnavailable() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("topic-context-atom-delete-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let store = try NodeStore(path: url.path)
+        let atom = MemoryAtom(
+            type: .decision,
+            statement: "Stock FOMO creates bad spending loops.",
+            scope: .global,
+            confidence: 0.9
+        )
+        try store.insertMemoryAtom(atom)
+
+        let db = try Database(path: url.path)
+        try db.exec("DROP TABLE topic_context_assignments;")
+
+        try store.deleteMemoryAtom(id: atom.id)
+
+        XCTAssertNil(try store.fetchMemoryAtom(id: atom.id))
+    }
 }

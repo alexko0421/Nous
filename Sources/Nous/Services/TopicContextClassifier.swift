@@ -11,10 +11,9 @@ final class TopicContextClassifier {
         LaneRule(
             lane: .nousProduct,
             keywords: [
-                "nous", "product", "app", "memory", "source recall", "skill",
-                "prompt", "scratchpad", "quick mode", "voice", "ui", "project",
-                "node", "recall", "rag", "codex", "xcode", "swiftui",
-                "記憶", "回憶", "產品", "語音", "介面"
+                "nous", "source recall", "skill", "scratchpad", "quick mode",
+                "voice", "node", "recall", "rag", "codex", "xcode", "swiftui",
+                "回憶", "語音"
             ],
             subtopic: "nous product / memory / source recall"
         ),

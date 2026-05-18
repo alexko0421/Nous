@@ -29,6 +29,16 @@ final class TopicContextClassifierTests: XCTestCase {
         })
     }
 
+    func testGenericSchoolProjectAppTextDoesNotClassifyAsNousProduct() {
+        let classifier = TopicContextClassifier()
+
+        let result = classifier.classify(
+            text: "My school project needs a simple app UI for class."
+        )
+
+        XCTAssertEqual(result.primaryLane, .education)
+    }
+
     func testFallsBackToGeneralForUnclearText() {
         let classifier = TopicContextClassifier()
 

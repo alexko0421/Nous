@@ -124,6 +124,35 @@ final class TurnMemoryContextBuilderTests: XCTestCase {
         XCTAssertEqual(assignment.source, .deterministic)
     }
 
+    func testLeanPolicyDoesNotPersistOrTraceTopicContext() throws {
+        let store = try NodeStore(path: ":memory:")
+        let current = NousNode(type: .conversation, title: "Current chat")
+        try store.insertNode(current)
+
+        let core = UserMemoryCore(nodeStore: store, llmServiceProvider: { nil })
+        let builder = TurnMemoryContextBuilder(
+            nodeStore: store,
+            vectorStore: VectorStore(nodeStore: store),
+            embeddingService: EmbeddingService(),
+            memoryProjectionService: MemoryProjectionService(nodeStore: store),
+            contradictionMemoryService: ContradictionMemoryService(core: core)
+        )
+
+        let context = try builder.build(
+            retrievalQuery: "SMC F-1 visa school plan",
+            promptQuery: "SMC F-1 visa school plan",
+            node: current,
+            policy: .lean,
+            now: Date(timeIntervalSince1970: 5_000)
+        )
+
+        XCTAssertNil(context.topicContext)
+        XCTAssertNil(try store.fetchTopicContextAssignment(
+            targetType: .conversation,
+            targetId: current.id
+        ))
+    }
+
     func testBuilderAttachesActiveMemoryProvenance() throws {
         let store = try NodeStore(path: ":memory:")
         let current = NousNode(type: .conversation, title: "Current chat")

@@ -76,9 +76,9 @@ final class TurnMemoryContextBuilder {
             currentNodeId: node.id,
             sourceMaterials: citationSourceMaterials
         )
-        let activeTopicContext = Self.activeTopicContext(
-            topicContextClassifier.classify(text: promptQuery)
-        )
+        let activeTopicContext = policy.includeTopicContext
+            ? Self.activeTopicContext(topicContextClassifier.classify(text: promptQuery))
+            : nil
         if let activeTopicContext,
            let targetType = Self.topicTargetType(for: node.type) {
             try persistTopicContext(

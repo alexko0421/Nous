@@ -1018,6 +1018,8 @@ final class NodeStore {
     func deleteNode(id: UUID) throws {
         try inTransaction {
             try deleteCanonicalMemory(scope: .conversation, scopeRefId: id)
+            deleteTopicContextAssignmentBestEffort(targetType: .conversation, targetId: id)
+            deleteTopicContextAssignmentBestEffort(targetType: .source, targetId: id)
             let stmt = try db.prepare("DELETE FROM nodes WHERE id=?;")
             try stmt.bind(id.uuidString, at: 1)
             try stmt.step()
@@ -2439,6 +2441,14 @@ final class NodeStore {
         try stmt.step()
     }
 
+    private func deleteTopicContextAssignmentBestEffort(
+        targetType: TopicContextAssignmentTargetType,
+        targetId: UUID
+    ) {
+        // Topic lanes are auxiliary recall metadata; deletion must not block primary row cleanup.
+        try? deleteTopicContextAssignment(targetType: targetType, targetId: targetId)
+    }
+
     private func upsertTopicContextAssignmentIfUseful(
         targetType: TopicContextAssignmentTargetType,
         targetId: UUID,
@@ -2468,6 +2478,21 @@ final class NodeStore {
             createdAt: existing?.createdAt ?? now,
             updatedAt: now
         ))
+    }
+
+    private func upsertTopicContextAssignmentIfUsefulBestEffort(
+        targetType: TopicContextAssignmentTargetType,
+        targetId: UUID,
+        text: String,
+        now: Date
+    ) {
+        // Topic lanes are auxiliary recall metadata; they must not fail canonical memory writes.
+        try? upsertTopicContextAssignmentIfUseful(
+            targetType: targetType,
+            targetId: targetId,
+            text: text,
+            now: now
+        )
     }
 
     private func encodeTopicContextLanes(_ lanes: [TopicContextLane]) -> String {
@@ -2644,7 +2669,7 @@ final class NodeStore {
         let embeddingData = atom.embedding.map { encodeFloats($0) }
         try stmt.bind(embeddingData, at: 19)
         try stmt.step()
-        try upsertTopicContextAssignmentIfUseful(
+        upsertTopicContextAssignmentIfUsefulBestEffort(
             targetType: .memoryAtom,
             targetId: atom.id,
             text: atom.statement,
@@ -2686,7 +2711,7 @@ final class NodeStore {
         try stmt.bind(embeddingData, at: 17)
         try stmt.bind(atom.id.uuidString, at: 18)
         try stmt.step()
-        try upsertTopicContextAssignmentIfUseful(
+        upsertTopicContextAssignmentIfUsefulBestEffort(
             targetType: .memoryAtom,
             targetId: atom.id,
             text: atom.statement,
@@ -2912,7 +2937,7 @@ final class NodeStore {
 
     func deleteMemoryAtomInCurrentTransaction(id: UUID) throws {
         try deleteEdgesSupportedByMemoryAtom(id: id)
-        try deleteTopicContextAssignment(targetType: .memoryAtom, targetId: id)
+        deleteTopicContextAssignmentBestEffort(targetType: .memoryAtom, targetId: id)
         let stmt = try db.prepare("DELETE FROM memory_atoms WHERE id = ?;")
         try stmt.bind(id.uuidString, at: 1)
         try stmt.step()
