@@ -88,3 +88,39 @@ struct SkillDogfoodSummary: Codable, Equatable, Sendable {
     let zeroSignalDayCount: Int
     let topSkills: [SkillDogfoodTopSkill]
 }
+
+struct QuickActionExperimentDogfoodEvent: Codable, Equatable, Identifiable, Sendable {
+    let id: UUID
+    let recordedAt: Date
+    let experimentId: String
+    let mode: QuickActionMode
+    let variant: QuickActionExperimentVariant
+
+    init(
+        id: UUID = UUID(),
+        recordedAt: Date = Date(),
+        experimentId: String,
+        mode: QuickActionMode,
+        variant: QuickActionExperimentVariant
+    ) {
+        self.id = id
+        self.recordedAt = recordedAt
+        self.experimentId = experimentId
+        self.mode = mode
+        self.variant = variant
+    }
+}
+
+struct QuickActionExperimentDogfoodExperimentSummary: Codable, Equatable, Sendable {
+    let experimentId: String
+    let mode: QuickActionMode
+    let controlCount: Int
+    let candidateCount: Int
+}
+
+struct QuickActionExperimentDogfoodSummary: Codable, Equatable, Sendable {
+    let turnCount: Int
+    let activeDayCount: Int
+    let zeroSignalDayCount: Int
+    let experiments: [QuickActionExperimentDogfoodExperimentSummary]
+}

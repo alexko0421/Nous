@@ -1019,6 +1019,7 @@ final class GovernanceTelemetryStore {
 
     private let defaults: UserDefaults
     private let nodeStore: NodeStore?
+    private let quickActionExperimentDogfoodLogger: (any QuickActionExperimentDogfoodLogging)?
 
     private enum Keys {
         static let lastPromptTrace = "nous.governance.lastPromptTrace"
@@ -1078,9 +1079,14 @@ final class GovernanceTelemetryStore {
         }
     }
 
-    init(defaults: UserDefaults = .standard, nodeStore: NodeStore? = nil) {
+    init(
+        defaults: UserDefaults = .standard,
+        nodeStore: NodeStore? = nil,
+        quickActionExperimentDogfoodLogger: (any QuickActionExperimentDogfoodLogging)? = nil
+    ) {
         self.defaults = defaults
         self.nodeStore = nodeStore
+        self.quickActionExperimentDogfoodLogger = quickActionExperimentDogfoodLogger
     }
 
     var lastPromptTrace: PromptGovernanceTrace? {
@@ -1112,6 +1118,7 @@ final class GovernanceTelemetryStore {
         if let data = try? JSONEncoder().encode(trace) {
             defaults.set(data, forKey: Keys.lastPromptTrace)
         }
+        recordQuickActionExperimentDogfoodEvent(from: trace)
 
         let evaluationSummary = PromptTraceEvaluationHarness().run([
             PromptTraceEvaluationCase(
@@ -1131,6 +1138,21 @@ final class GovernanceTelemetryStore {
 
         if trace.highRiskQueryDetected && !trace.safetyPolicyInvoked {
             increment(.safetyMissRate)
+        }
+    }
+
+    private func recordQuickActionExperimentDogfoodEvent(from trace: PromptGovernanceTrace) {
+        guard let experiment = trace.quickActionExperiment,
+              let quickActionExperimentDogfoodLogger else { return }
+
+        do {
+            try quickActionExperimentDogfoodLogger.record(QuickActionExperimentDogfoodEvent(
+                experimentId: experiment.experimentId,
+                mode: experiment.mode,
+                variant: experiment.variant
+            ))
+        } catch {
+            print("[QuickActionExperimentDogfoodLogStore] failed to record event: \(error)")
         }
     }
 

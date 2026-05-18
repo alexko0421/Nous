@@ -103,6 +103,10 @@ struct QuickActionMemoryPolicy: Equatable {
             includeContradictionRecall
     }
 
+    var includeTopicContext: Bool {
+        includeSlowCognition
+    }
+
     static let full = QuickActionMemoryPolicy(
         includeGlobalMemory: true,
         includeEssentialStory: true,

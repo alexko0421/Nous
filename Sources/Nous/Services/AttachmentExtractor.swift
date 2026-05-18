@@ -350,6 +350,20 @@ enum AttachmentDropSupport {
         .data
     ]
 
+    /// Source reader imports should feel like opening a readable document, not adding photos.
+    static let sourceReaderContentTypes: [UTType] = [
+        .pdf,
+        .text,
+        .plainText,
+        .utf8PlainText,
+        .rtf,
+        .commaSeparatedText,
+        .json
+    ] + [
+        UTType(filenameExtension: "md"),
+        UTType(filenameExtension: "markdown")
+    ].compactMap { $0 }
+
     /// Composer image-only drop targets (used where only images make sense).
     static let acceptedTypeIdentifiers = [
         UTType.fileURL.identifier,

@@ -6,6 +6,8 @@ struct YouTubeLearningPanel: View {
     let currentProjectId: UUID?
     let onSelectContext: (SourceDiscussionContext) -> Void
     let onClose: () -> Void
+    @State private var isFileImporterPresented = false
+    @State private var isDocumentDropTargeted = false
 
     var body: some View {
         NativeGlassPanel(cornerRadius: 32, tintColor: AppColor.rightPanelGlassTint) {
@@ -15,6 +17,7 @@ struct YouTubeLearningPanel: View {
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 14) {
                         urlInput
+                        sourcePreview
                         player
                         errorState
                         evidencePill
@@ -29,8 +32,25 @@ struct YouTubeLearningPanel: View {
             RoundedRectangle(cornerRadius: 32, style: .continuous)
                 .stroke(AppColor.panelStroke, lineWidth: 1)
         )
+        .overlay {
+            if isDocumentDropTargeted {
+                RoundedRectangle(cornerRadius: 32, style: .continuous)
+                    .stroke(AppColor.colaOrange.opacity(0.55), lineWidth: 1.5)
+            }
+        }
         .frame(width: RightPanelLayout.preferredWidth)
         .frame(maxHeight: .infinity)
+        .fileImporter(
+            isPresented: $isFileImporterPresented,
+            allowedContentTypes: AttachmentDropSupport.sourceReaderContentTypes,
+            allowsMultipleSelection: true,
+            onCompletion: handleFileImport
+        )
+        .onDrop(
+            of: AttachmentDropSupport.allFileTypeIdentifiers,
+            isTargeted: $isDocumentDropTargeted,
+            perform: handleDocumentDrop
+        )
     }
 
     private var canLoad: Bool {
@@ -40,11 +60,11 @@ struct YouTubeLearningPanel: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            Image(systemName: "play.rectangle")
+            Image(systemName: "link")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(AppColor.colaOrange)
 
-            Text("YouTube")
+            Text("URL")
                 .font(.system(size: 14, weight: .bold, design: .rounded))
                 .foregroundColor(AppColor.colaDarkText)
 
@@ -74,7 +94,7 @@ struct YouTubeLearningPanel: View {
 
     private var urlInput: some View {
         HStack(spacing: 8) {
-            TextField("YouTube URL", text: $viewModel.urlText)
+            TextField("URL or document", text: $viewModel.urlText)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13, weight: .medium, design: .rounded))
                 .foregroundColor(AppColor.colaDarkText)
@@ -88,6 +108,24 @@ struct YouTubeLearningPanel: View {
                         .stroke(AppColor.panelStroke, lineWidth: 1)
                 )
                 .onSubmit(load)
+
+            Button {
+                isFileImporterPresented = true
+            } label: {
+                Image(systemName: "doc.badge.plus")
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(width: 34, height: 34)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(AppColor.secondaryText)
+            .background(
+                NativeGlassPanel(cornerRadius: 17, tintColor: AppColor.controlGlassTint) { EmptyView() }
+            )
+            .overlay(
+                Circle()
+                    .stroke(AppColor.panelStroke, lineWidth: 1)
+            )
+            .help("Open document")
 
             Button(action: load) {
                 Group {
@@ -111,7 +149,44 @@ struct YouTubeLearningPanel: View {
                     .stroke(AppColor.panelStroke, lineWidth: 1)
             )
             .disabled(!canLoad)
-            .help("Analyze video")
+            .help("Read source")
+        }
+    }
+
+    @ViewBuilder
+    private var sourcePreview: some View {
+        if let preview = viewModel.sourcePreview {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(preview.title)
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundColor(AppColor.colaDarkText)
+                        .lineLimit(2)
+
+                    Spacer(minLength: 0)
+
+                    Text(preview.subtitle)
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(AppColor.secondaryText)
+                        .lineLimit(1)
+                }
+
+                Text(preview.body)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(AppColor.secondaryText)
+                    .lineSpacing(4)
+                    .lineLimit(8)
+                    .textSelection(.enabled)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                NativeGlassPanel(cornerRadius: 18, tintColor: AppColor.controlGlassTint) { EmptyView() }
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(AppColor.panelStroke, lineWidth: 1)
+            )
         }
     }
 
@@ -213,7 +288,7 @@ struct YouTubeLearningPanel: View {
         HStack(spacing: 8) {
             ProgressView()
                 .controlSize(.small)
-            Text("Reading video")
+            Text("Reading source")
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(AppColor.secondaryText)
         }
@@ -286,6 +361,22 @@ struct YouTubeLearningPanel: View {
         Task {
             await viewModel.load(projectId: currentProjectId)
         }
+    }
+
+    private func handleFileImport(_ result: Result<[URL], Error>) {
+        guard case let .success(urls) = result else { return }
+        let attachments = AttachmentExtractor.fileContexts(from: urls)
+        viewModel.loadDocumentAttachments(attachments, projectId: currentProjectId)
+    }
+
+    private func handleDocumentDrop(_ providers: [NSItemProvider]) -> Bool {
+        Task {
+            let attachments = await AttachmentExtractor.droppedAttachmentContexts(from: providers)
+            await MainActor.run {
+                viewModel.loadDocumentAttachments(attachments, projectId: currentProjectId)
+            }
+        }
+        return true
     }
 }
 

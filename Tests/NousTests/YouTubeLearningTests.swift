@@ -776,6 +776,164 @@ final class YouTubeLearningTests: XCTestCase {
     }
 
     @MainActor
+    func testLearningViewModelRestoresPanelStatePerConversation() async throws {
+        let store = try NodeStore(path: ":memory:")
+        let conversationA = NousNode(type: .conversation, title: "YouTube chat")
+        let conversationB = NousNode(type: .conversation, title: "Other chat")
+        try store.insertNode(conversationA)
+        try store.insertNode(conversationB)
+
+        let viewModel = YouTubeLearningViewModel(
+            transcriptService: transcriptServiceReturningTwoSegments(),
+            summaryService: YouTubeLearningSummaryService(
+                llmServiceProvider: {
+                    StaticYouTubeSummaryLLM(output: """
+                    [
+                      {"title":"Opening idea","summary":"Explains the opening.","startTime":0,"endTime":2.4},
+                      {"title":"Second idea","summary":"Explains the second part.","startTime":2.4,"endTime":5.4}
+                    ]
+                    """)
+                }
+            ),
+            sourceIngestionService: makeSourceIngestionService(nodeStore: store),
+            nodeStore: store
+        )
+
+        viewModel.activate(conversationId: conversationA.id)
+        viewModel.urlText = "https://youtu.be/dQw4w9WgXcQ"
+        await viewModel.load(projectId: nil)
+        let selected = try XCTUnwrap(viewModel.summarySections.last)
+        let selectedContext = try XCTUnwrap(viewModel.selectSectionForDiscussionAndPlayback(selected))
+
+        viewModel.activate(conversationId: conversationB.id)
+        XCTAssertEqual(viewModel.urlText, "")
+        XCTAssertTrue(viewModel.summarySections.isEmpty)
+        XCTAssertNil(viewModel.playerEmbed)
+
+        let restored = YouTubeLearningViewModel(
+            transcriptService: transcriptServiceReturningTwoSegments(),
+            summaryService: YouTubeLearningSummaryService(
+                llmServiceProvider: { StaticYouTubeSummaryLLM(output: "[]") }
+            ),
+            sourceIngestionService: makeSourceIngestionService(nodeStore: store),
+            nodeStore: store
+        )
+        restored.activate(conversationId: conversationA.id)
+
+        XCTAssertEqual(restored.urlText, "https://youtu.be/dQw4w9WgXcQ")
+        XCTAssertEqual(restored.summarySections.map(\.title), ["Opening idea", "Second idea"])
+        XCTAssertEqual(restored.selectedSectionID, selected.id)
+        XCTAssertEqual(restored.playerEmbed?.videoID.rawValue, "dQw4w9WgXcQ")
+
+        let restoredContext = try XCTUnwrap(restored.discussionContextForSelectedSection())
+        XCTAssertEqual(restoredContext.sourceNodeId, selectedContext.sourceNodeId)
+        XCTAssertEqual(restoredContext.summaryTitle, "Second idea")
+        XCTAssertTrue(restoredContext.transcriptExcerpt.contains("Second line"))
+    }
+
+    @MainActor
+    func testLearningViewModelLoadsNonYouTubeURLAsSourceReaderPreview() async throws {
+        let store = try NodeStore(path: ":memory:")
+        let url = try XCTUnwrap(URL(string: "https://example.com/research-plan"))
+        let viewModel = YouTubeLearningViewModel(
+            transcriptService: transcriptServiceReturningTwoSegments(),
+            summaryService: YouTubeLearningSummaryService(
+                llmServiceProvider: { StaticYouTubeSummaryLLM(output: "[]") }
+            ),
+            sourceIngestionService: makeSourceIngestionService(
+                nodeStore: store,
+                fetcher: StubSourceFetcher(
+                    document: SourceFetchedDocument(
+                        url: url,
+                        title: "Research plan",
+                        text: """
+                        ## One entry point
+                        Paste one URL or document. Nous decides whether it is video, web text, Drive, PDF, or Markdown.
+
+                        ## Preview first
+                        Keep the extracted source visible before generated notes.
+                        """
+                    )
+                )
+            ),
+            nodeStore: store
+        )
+
+        viewModel.urlText = url.absoluteString
+        await viewModel.load(projectId: nil)
+
+        let preview = try XCTUnwrap(viewModel.sourcePreview)
+        XCTAssertEqual(viewModel.sourceDisplayTitle, "Research plan")
+        XCTAssertEqual(preview.title, "Research plan")
+        XCTAssertEqual(preview.subtitle, "example.com")
+        XCTAssertTrue(preview.body.contains("One entry point"))
+        XCTAssertNil(viewModel.playerEmbed)
+        XCTAssertFalse(viewModel.summarySections.isEmpty)
+
+        let section = try XCTUnwrap(viewModel.summarySections.first)
+        let context = try XCTUnwrap(viewModel.selectSectionForDiscussionAndPlayback(section))
+        XCTAssertTrue(context.promptText.contains("Source section:"))
+        XCTAssertFalse(context.promptText.contains("YouTube section:"))
+        XCTAssertEqual(context.originalFilename, nil)
+
+        let metadata = try XCTUnwrap(try store.fetchSourceMetadata(nodeId: context.sourceNodeId))
+        XCTAssertEqual(metadata.kind, .web)
+        XCTAssertEqual(metadata.originalURL, url.absoluteString)
+    }
+
+    @MainActor
+    func testLearningViewModelLoadsDocumentAttachmentAsSourceReaderPreview() throws {
+        let store = try NodeStore(path: ":memory:")
+        let text = """
+        # Research plan
+        Intro line for the whole document.
+
+        ## One entry point
+        Paste one URL or document. Nous decides the source shape.
+
+        ## Preview first
+        Keep the extracted source visible before generated notes.
+        """
+        let viewModel = YouTubeLearningViewModel(
+            transcriptService: transcriptServiceReturningTwoSegments(),
+            summaryService: YouTubeLearningSummaryService(
+                llmServiceProvider: { StaticYouTubeSummaryLLM(output: "[]") }
+            ),
+            sourceIngestionService: makeSourceIngestionService(nodeStore: store),
+            nodeStore: store
+        )
+
+        viewModel.loadDocumentAttachments(
+            [
+                AttachedFileContext(
+                    name: "research-plan.md",
+                    extractedText: text,
+                    sourceText: text,
+                    kind: .textFile
+                )
+            ],
+            projectId: nil
+        )
+
+        let preview = try XCTUnwrap(viewModel.sourcePreview)
+        XCTAssertEqual(viewModel.urlText, "research-plan.md")
+        XCTAssertEqual(preview.title, "research-plan.md")
+        XCTAssertEqual(preview.subtitle, "research-plan.md")
+        XCTAssertTrue(preview.body.contains("# Research plan"))
+        XCTAssertEqual(viewModel.summarySections.map(\.title), ["Research plan", "One entry point", "Preview first"])
+
+        let section = try XCTUnwrap(viewModel.summarySections.dropFirst().first)
+        let context = try XCTUnwrap(viewModel.selectSectionForDiscussionAndPlayback(section))
+        XCTAssertEqual(context.timeRangeLabel, "## One entry point")
+        XCTAssertTrue(context.promptText.contains("Source section: One entry point"))
+        XCTAssertTrue(context.promptText.contains("Source excerpt:"))
+
+        let metadata = try XCTUnwrap(try store.fetchSourceMetadata(nodeId: context.sourceNodeId))
+        XCTAssertEqual(metadata.kind, .document)
+        XCTAssertEqual(metadata.originalFilename, "research-plan.md")
+    }
+
+    @MainActor
     func testLearningViewModelKeepsTranscriptUsableWhenSummaryOutputIsInvalid() async throws {
         let store = try NodeStore(path: ":memory:")
         let viewModel = YouTubeLearningViewModel(
@@ -1047,10 +1205,18 @@ final class YouTubeLearningTests: XCTestCase {
 }
 
 private func makeSourceIngestionService(nodeStore: NodeStore) -> SourceIngestionService {
+    makeSourceIngestionService(nodeStore: nodeStore, fetcher: SourceFetchService())
+}
+
+private func makeSourceIngestionService(
+    nodeStore: NodeStore,
+    fetcher: any SourceFetching
+) -> SourceIngestionService {
     SourceIngestionService(
         nodeStore: nodeStore,
         vectorStore: VectorStore(nodeStore: nodeStore),
-        embeddingProvider: EmbeddingService()
+        embeddingProvider: EmbeddingService(),
+        fetcher: fetcher
     )
 }
 
@@ -1172,6 +1338,14 @@ private struct StaticYouTubeSummaryLLM: LLMService {
             continuation.yield(output)
             continuation.finish()
         }
+    }
+}
+
+private struct StubSourceFetcher: SourceFetching {
+    let document: SourceFetchedDocument
+
+    func fetch(url: URL) async throws -> SourceFetchedDocument {
+        document
     }
 }
 

@@ -4,6 +4,10 @@ protocol SkillDogfoodLogging {
     func record(_ event: SkillDogfoodTurnEvent) throws
 }
 
+protocol QuickActionExperimentDogfoodLogging {
+    func record(_ event: QuickActionExperimentDogfoodEvent) throws
+}
+
 final class SkillDogfoodLogStore: SkillDogfoodLogging {
     private let url: URL
     private let lock = NSLock()
@@ -96,6 +100,95 @@ final class SkillDogfoodLogStore: SkillDogfoodLogging {
             activeDayCount: activeDays.count,
             zeroSignalDayCount: max(0, windowDays - activeDays.count),
             topSkills: topSkills
+        )
+    }
+}
+
+final class QuickActionExperimentDogfoodLogStore: QuickActionExperimentDogfoodLogging {
+    private let url: URL
+    private let lock = NSLock()
+
+    init(url: URL) {
+        self.url = url
+    }
+
+    static func defaultStore(fileManager: FileManager = .default) throws -> QuickActionExperimentDogfoodLogStore {
+        let root = try SkillDogfoodLogStore.defaultDirectory(fileManager: fileManager)
+        return QuickActionExperimentDogfoodLogStore(
+            url: root.appendingPathComponent("quick-action-experiment-dogfood.jsonl")
+        )
+    }
+
+    func record(_ event: QuickActionExperimentDogfoodEvent) throws {
+        lock.lock()
+        defer { lock.unlock() }
+
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        let line = try SkillDogfoodJSONL.encode(event) + "\n"
+        let data = Data(line.utf8)
+        if FileManager.default.fileExists(atPath: url.path) {
+            let handle = try FileHandle(forWritingTo: url)
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: data)
+        } else {
+            try data.write(to: url)
+        }
+    }
+
+    func loadEvents() throws -> [QuickActionExperimentDogfoodEvent] {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+        let contents = try String(contentsOf: url, encoding: .utf8)
+        return contents.split(separator: "\n").compactMap { line in
+            try? JSONDecoder.skillDogfood.decode(
+                QuickActionExperimentDogfoodEvent.self,
+                from: Data(String(line).utf8)
+            )
+        }.sorted { $0.recordedAt < $1.recordedAt }
+    }
+
+    func summary(days: Int, now: Date = Date()) throws -> QuickActionExperimentDogfoodSummary {
+        let windowDays = max(1, days)
+        let since = now.addingTimeInterval(-Double(windowDays) * 86_400)
+        let events = try loadEvents()
+            .filter { $0.recordedAt >= since && $0.recordedAt <= now }
+
+        var activeDays = Set<Int>()
+        var buckets: [String: (mode: QuickActionMode, control: Int, candidate: Int)] = [:]
+        for event in events {
+            activeDays.insert(Int(floor(event.recordedAt.timeIntervalSince1970 / 86_400)))
+            let current = buckets[event.experimentId] ?? (event.mode, 0, 0)
+            switch event.variant {
+            case .control:
+                buckets[event.experimentId] = (event.mode, current.control + 1, current.candidate)
+            case .candidate:
+                buckets[event.experimentId] = (event.mode, current.control, current.candidate + 1)
+            }
+        }
+
+        let experiments = buckets
+            .map { entry in
+                QuickActionExperimentDogfoodExperimentSummary(
+                    experimentId: entry.key,
+                    mode: entry.value.mode,
+                    controlCount: entry.value.control,
+                    candidateCount: entry.value.candidate
+                )
+            }
+            .sorted { $0.experimentId < $1.experimentId }
+
+        return QuickActionExperimentDogfoodSummary(
+            turnCount: events.count,
+            activeDayCount: activeDays.count,
+            zeroSignalDayCount: max(0, windowDays - activeDays.count),
+            experiments: experiments
         )
     }
 }

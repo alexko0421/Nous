@@ -1,4 +1,5 @@
 import XCTest
+import AppKit
 @testable import Nous
 
 final class ChatMarkdownRendererTests: XCTestCase {
@@ -363,5 +364,156 @@ final class ChatMarkdownRendererTests: XCTestCase {
             ChatMarkdownRenderer.parse("- **item**"),
             [.bulletBlock(["item"])]
         )
+    }
+
+    // MARK: - Visual line splitting
+
+    func testVisualLineBreaksWrapLongProseAtFixedWidth() {
+        let text = "This is a calm assistant reply that should wrap into multiple visible lines."
+        let lines = VisualLineBreaks.lines(
+            for: text,
+            width: 150,
+            font: .systemFont(ofSize: 14, weight: .regular)
+        )
+
+        XCTAssertGreaterThan(lines.count, 1)
+        XCTAssertEqual(lines.joined(), text)
+    }
+
+    func testVisualLineBreaksKeepsShortProseAsOneLine() {
+        let text = "Short reply."
+        let lines = VisualLineBreaks.lines(
+            for: text,
+            width: 520,
+            font: .systemFont(ofSize: 14, weight: .regular)
+        )
+
+        XCTAssertEqual(lines, [text])
+    }
+
+    func testStreamingRevealPolicyHidesTrailingDraftLine() {
+        let visualLines = [
+            "This is the first complete visual line ",
+            "and this is still growing"
+        ]
+
+        XCTAssertEqual(
+            StreamingVisualLineRevealPolicy.revealableLines(
+                visualLines,
+                revealTrailingLine: false
+            ),
+            ["This is the first complete visual line "]
+        )
+    }
+
+    func testStreamingRevealPolicyShowsTrailingLineForCompletedSegment() {
+        let visualLines = [
+            "This line is complete because the stream ",
+            "has moved to another segment."
+        ]
+
+        XCTAssertEqual(
+            StreamingVisualLineRevealPolicy.revealableLines(
+                visualLines,
+                revealTrailingLine: true
+            ),
+            visualLines
+        )
+    }
+
+    func testStreamingRevealStateDoesNotMutateVisibleLinesWhenNewTokensArrive() {
+        var state = StreamingVisualLineRevealState()
+
+        state.update(revealableTexts: ["This line was already revealed"])
+        state.update(revealableTexts: [
+            "This line was already revealed plus new token",
+            "Next complete line"
+        ])
+
+        XCTAssertEqual(
+            state.lines.map(\.text),
+            [
+                "This line was already revealed",
+                "Next complete line"
+            ]
+        )
+    }
+
+    func testStreamingRevealStateStaggersLinesAddedInSameBatch() {
+        var state = StreamingVisualLineRevealState()
+
+        state.update(revealableTexts: ["First stable line"])
+        state.update(revealableTexts: [
+            "First stable line with draft growth ignored",
+            "Second stable line",
+            "Third stable line"
+        ])
+
+        XCTAssertEqual(
+            state.lines.map(\.text),
+            [
+                "First stable line",
+                "Second stable line",
+                "Third stable line"
+            ]
+        )
+        let delays = state.lines.map(\.revealDelay)
+        XCTAssertEqual(delays.count, 3)
+        XCTAssertEqual(delays[0], 0, accuracy: 0.0001)
+        XCTAssertEqual(delays[1], 0, accuracy: 0.0001)
+        XCTAssertEqual(delays[2], 0.45, accuracy: 0.0001)
+    }
+
+    func testStreamingRevealStateStaggersResetLinesInDisplayOrder() {
+        var state = StreamingVisualLineRevealState()
+
+        state.update(
+            revealableTexts: [
+                "First reset line",
+                "Second reset line",
+                "Third reset line"
+            ],
+            resetExisting: true
+        )
+
+        let delays = state.lines.map(\.revealDelay)
+        XCTAssertEqual(delays.count, 3)
+        XCTAssertEqual(delays[0], 0, accuracy: 0.0001)
+        XCTAssertEqual(delays[1], 0.45, accuracy: 0.0001)
+        XCTAssertEqual(delays[2], 0.9, accuracy: 0.0001)
+    }
+
+    func testStreamingRevealStateKeepsExistingLineWhenTrailingLineCompletes() {
+        var state = StreamingVisualLineRevealState()
+
+        state.update(
+            visualLines: [
+                "Already visible line ",
+                "trailing draft line"
+            ],
+            revealTrailingLine: false,
+            reason: .textChanged
+        )
+
+        let firstLineID = state.lines.first?.id
+
+        state.update(
+            visualLines: [
+                "Already visible line ",
+                "trailing draft line"
+            ],
+            revealTrailingLine: true,
+            reason: .trailingRevealChanged
+        )
+
+        XCTAssertEqual(
+            state.lines.map(\.text),
+            [
+                "Already visible line ",
+                "trailing draft line"
+            ]
+        )
+        XCTAssertEqual(state.lines.first?.id, firstLineID)
+        XCTAssertEqual(state.lines.last?.revealDelay ?? -1, 0, accuracy: 0.0001)
     }
 }

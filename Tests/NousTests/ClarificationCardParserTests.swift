@@ -209,8 +209,8 @@ final class ClarificationCardParserTests: XCTestCase {
     func testParseStripsOpenSummaryTagEvenWhenNotYetClosed() {
         // During streaming, the model may emit <summary> and partial body before the
         // </summary> arrives. `extractSummary` must return nil (no valid summary yet),
-        // but `parse(_:)` should still strip the lone <summary> marker from displayText
-        // so users don't see raw tag markup during streaming.
+        // and `parse(_:)` should keep the partial markdown body out of chat display
+        // so the right panel remains the only summary surface.
         let raw = """
         整好了。
         <summary>
@@ -222,11 +222,12 @@ final class ClarificationCardParserTests: XCTestCase {
 
         let parsed = ClarificationCardParser.parse(raw)
         XCTAssertFalse(parsed.displayText.contains("<summary>"))
-        XCTAssertTrue(parsed.displayText.contains("# Hello"))
+        XCTAssertFalse(parsed.displayText.contains("# Hello"))
+        XCTAssertFalse(parsed.displayText.contains("still streaming"))
         XCTAssertTrue(parsed.displayText.contains("整好了"))
     }
 
-    func testParseStripsSummaryTagsButPreservesInnerContentInDisplayText() {
+    func testParseKeepsSummaryBodyOutOfDisplayText() {
         let raw = """
         整好了。
         <summary>
@@ -238,9 +239,9 @@ final class ClarificationCardParserTests: XCTestCase {
         let parsed = ClarificationCardParser.parse(raw)
         XCTAssertFalse(parsed.displayText.contains("<summary>"))
         XCTAssertFalse(parsed.displayText.contains("</summary>"))
-        XCTAssertTrue(parsed.displayText.contains("# Hello"))
-        XCTAssertTrue(parsed.displayText.contains("世界"))
-        XCTAssertTrue(parsed.displayText.contains("整好了"))
+        XCTAssertFalse(parsed.displayText.contains("# Hello"))
+        XCTAssertFalse(parsed.displayText.contains("世界"))
+        XCTAssertEqual(parsed.displayText, "已经整理好啦，请睇右边。")
     }
 
     func testExtractChatTitleReturnsInnerTextWhenWellFormed() {
@@ -279,7 +280,7 @@ final class ClarificationCardParserTests: XCTestCase {
         XCTAssertEqual(parsed.displayText, "我会直接答你。")
     }
 
-    func testSummaryWithInnerMarkdownPreservesStructure() {
+    func testSummaryWithInnerMarkdownPreservesStructureForExtractionOnly() throws {
         let input = """
         Here is the summary:
 
@@ -298,12 +299,16 @@ final class ClarificationCardParserTests: XCTestCase {
         """
         let parsed = ClarificationCardParser.parse(input)
         let display = parsed.displayText
+        let extracted = try XCTUnwrap(ClarificationCardParser.extractSummary(from: input))
 
-        // Markdown structure inside <summary> must survive parsing intact.
-        XCTAssertTrue(display.contains("# Title"), "heading preserved")
-        XCTAssertTrue(display.contains("- bullet 1"), "bullets preserved")
-        XCTAssertTrue(display.contains("| col | col |"), "table header preserved")
-        XCTAssertTrue(display.contains("|---|---|"), "table separator preserved")
+        // Markdown structure inside <summary> must survive extraction intact for
+        // the right panel, while the chat display stays to a short pointer.
+        XCTAssertTrue(extracted.contains("# Title"), "heading preserved")
+        XCTAssertTrue(extracted.contains("- bullet 1"), "bullets preserved")
+        XCTAssertTrue(extracted.contains("| col | col |"), "table header preserved")
+        XCTAssertTrue(extracted.contains("|---|---|"), "table separator preserved")
+        XCTAssertFalse(display.contains("# Title"), "heading hidden from chat")
+        XCTAssertEqual(display, "已经整理好啦，请睇右边。")
 
         // Tag markers must be stripped.
         XCTAssertFalse(display.contains("<summary>"), "<summary> tag stripped")

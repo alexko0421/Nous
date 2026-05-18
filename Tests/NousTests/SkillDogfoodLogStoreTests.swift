@@ -144,6 +144,76 @@ final class SkillDogfoodLogStoreTests: XCTestCase {
         XCTAssertEqual(summary.topSkills, [])
     }
 
+    func testQuickActionExperimentDogfoodLogRecordsOnlySanitizedAssignmentMetadata() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("QuickActionExperimentDogfood-\(UUID().uuidString).jsonl")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let store = QuickActionExperimentDogfoodLogStore(url: url)
+        let event = QuickActionExperimentDogfoodEvent(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000401")!,
+            recordedAt: Date(timeIntervalSince1970: 1_234),
+            experimentId: "plan-quick-mode-ab-v1",
+            mode: .plan,
+            variant: .candidate
+        )
+
+        try store.record(event)
+
+        XCTAssertEqual(try store.loadEvents(), [event])
+
+        let raw = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertTrue(raw.contains("\"experimentId\":\"plan-quick-mode-ab-v1\""))
+        XCTAssertTrue(raw.contains("\"mode\":\"plan\""))
+        XCTAssertTrue(raw.contains("\"variant\":\"candidate\""))
+        XCTAssertFalse(raw.contains("userPrompt"))
+        XCTAssertFalse(raw.contains("assistantText"))
+        XCTAssertFalse(raw.contains("anchor"))
+    }
+
+    func testQuickActionExperimentDogfoodSummaryCountsVariantsByExperiment() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("QuickActionExperimentDogfoodSummary-\(UUID().uuidString).jsonl")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let store = QuickActionExperimentDogfoodLogStore(url: url)
+        try store.record(QuickActionExperimentDogfoodEvent(
+            recordedAt: Date(timeIntervalSince1970: 2_000),
+            experimentId: "plan-quick-mode-ab-v1",
+            mode: .plan,
+            variant: .candidate
+        ))
+        try store.record(QuickActionExperimentDogfoodEvent(
+            recordedAt: Date(timeIntervalSince1970: 2_000 + 86_400),
+            experimentId: "plan-quick-mode-ab-v1",
+            mode: .plan,
+            variant: .control
+        ))
+        try store.record(QuickActionExperimentDogfoodEvent(
+            recordedAt: Date(timeIntervalSince1970: 2_000 + 2 * 86_400),
+            experimentId: "direction-quick-mode-ab-v1",
+            mode: .direction,
+            variant: .candidate
+        ))
+
+        let summary = try store.summary(
+            days: 5,
+            now: Date(timeIntervalSince1970: 2_000 + 4 * 86_400)
+        )
+
+        XCTAssertEqual(summary.turnCount, 3)
+        XCTAssertEqual(summary.activeDayCount, 3)
+        XCTAssertEqual(summary.zeroSignalDayCount, 2)
+        XCTAssertEqual(summary.experiments.map(\.experimentId), [
+            "direction-quick-mode-ab-v1",
+            "plan-quick-mode-ab-v1"
+        ])
+        XCTAssertEqual(summary.experiments.first?.candidateCount, 1)
+        XCTAssertEqual(summary.experiments.first?.controlCount, 0)
+        XCTAssertEqual(summary.experiments.last?.candidateCount, 1)
+        XCTAssertEqual(summary.experiments.last?.controlCount, 1)
+    }
+
     private func event(
         id: UUID = UUID(),
         recordedAt: Date,

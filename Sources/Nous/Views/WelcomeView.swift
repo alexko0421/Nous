@@ -5,6 +5,10 @@ enum ComposerTextInputMetrics {
     static let minimumTextHeight: CGFloat = 18
     static let maximumTextHeight: CGFloat = 108
     static let verticalPadding: CGFloat = 9
+    static let chatComposerMaxWidth: CGFloat = 820
+    static let controlSpacing: CGFloat = 12
+    static let leadingActionSize: CGFloat = 36
+    static let leadingActionCornerRadius: CGFloat = 18
 
     static var minimumControlHeight: CGFloat {
         minimumTextHeight + verticalPadding * 2
@@ -25,15 +29,25 @@ enum WelcomeActionMenuHitRegion {
 }
 
 struct ChatContentBackgroundLayer: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         LinearGradient(
             colors: [
-                AppColor.welcomeGradientStart.opacity(0.72),
-                AppColor.welcomeGradientEnd.opacity(0.74)
+                AppColor.welcomeGradientStart.opacity(startOpacity),
+                AppColor.welcomeGradientEnd.opacity(endOpacity)
             ],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
         )
+    }
+
+    private var startOpacity: Double {
+        colorScheme == .dark ? 0.72 : 1
+    }
+
+    private var endOpacity: Double {
+        colorScheme == .dark ? 0.74 : 1
     }
 }
 
@@ -101,7 +115,7 @@ struct WelcomeView: View {
                 VStack(spacing: 30) {
                     VStack(spacing: 20) {
                         NOUSLogoView(logoColor: AppColor.colaOrange)
-                            .frame(width: 200)
+                            .frame(width: 210)
 
                         Text("\(greeting), \(displayName)")
                             .font(.system(size: 34, weight: .medium, design: .rounded))
@@ -186,7 +200,7 @@ struct WelcomeView: View {
                     if isVoiceActive {
                         onVoice()
                     } else {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                        withAnimation(ActionMenuSoftStaggerAnimation.stateChange(isExpanded: !isActionMenuExpanded)) {
                             isActionMenuExpanded.toggle()
                         }
                     }
@@ -212,7 +226,7 @@ struct WelcomeView: View {
                         .onSubmit { onSend() }
                         .onChange(of: inputText) { _, _ in
                             if isActionMenuExpanded {
-                                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                withAnimation(ActionMenuSoftStaggerAnimation.close) {
                                     isActionMenuExpanded = false
                                 }
                             }
@@ -229,14 +243,7 @@ struct WelcomeView: View {
             .padding(.trailing, 16)
             .padding(.vertical, ComposerTextInputMetrics.verticalPadding)
             .background(
-                MatteGlassPanel(
-                    cornerRadius: 18,
-                    overlayColor: AppColor.composerMatteOverlay
-                ) { EmptyView() }
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(AppColor.composerMatteStroke, lineWidth: 1)
+                ComposerTextInputGlassBackground(cornerRadius: 18)
             )
 
             if shouldSeparateComposerPrimaryAction {
@@ -258,19 +265,19 @@ struct WelcomeView: View {
                     isExpanded: isActionMenuExpanded,
                     onFile: {
                         onPickAttachment()
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isActionMenuExpanded = false }
+                        withAnimation(ActionMenuSoftStaggerAnimation.close) { isActionMenuExpanded = false }
                     },
                     onPhoto: {
                         onPickPhoto()
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isActionMenuExpanded = false }
+                        withAnimation(ActionMenuSoftStaggerAnimation.close) { isActionMenuExpanded = false }
                     },
                     onYouTube: {
                         onYouTubeSummary()
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isActionMenuExpanded = false }
+                        withAnimation(ActionMenuSoftStaggerAnimation.close) { isActionMenuExpanded = false }
                     },
                     onVoice: {
                         onVoice()
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isActionMenuExpanded = false }
+                        withAnimation(ActionMenuSoftStaggerAnimation.close) { isActionMenuExpanded = false }
                     },
                     canPickPhoto: canPickPhoto
                 )
@@ -283,7 +290,7 @@ struct WelcomeView: View {
                 : WelcomeActionMenuHitRegion.composerHeight,
             alignment: .bottomLeading
         )
-        .animation(.spring(response: 0.38, dampingFraction: 0.82), value: isActionMenuExpanded)
+        .animation(ActionMenuSoftStaggerAnimation.stateChange(isExpanded: isActionMenuExpanded), value: isActionMenuExpanded)
     }
 
     private func circleActionButton(systemImage: String, isVoiceActive: Bool, action: @escaping () -> Void) -> some View {

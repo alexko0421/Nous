@@ -1,4 +1,5 @@
 import XCTest
+import UniformTypeIdentifiers
 @testable import Nous
 
 final class RightPanelLayoutTests: XCTestCase {
@@ -90,15 +91,15 @@ final class RightPanelLayoutTests: XCTestCase {
 
         XCTAssertEqual(
             RightPanelSurfaceScope.modeAfterConversationChange(
-                currentMode: .youtube,
+                currentMode: .source,
                 oldConversationId: currentConversationId,
                 newConversationId: currentConversationId
             ),
-            .youtube
+            .source
         )
         XCTAssertNil(
             RightPanelSurfaceScope.modeAfterConversationChange(
-                currentMode: .youtube,
+                currentMode: .source,
                 oldConversationId: currentConversationId,
                 newConversationId: nextConversationId
             )
@@ -112,16 +113,16 @@ final class RightPanelLayoutTests: XCTestCase {
         )
         XCTAssertEqual(
             RightPanelSurfaceScope.modeAfterConversationChange(
-                currentMode: .youtube,
+                currentMode: .source,
                 oldConversationId: nil,
                 newConversationId: nextConversationId,
                 isDraftBootstrap: true
             ),
-            .youtube
+            .source
         )
         XCTAssertNil(
             RightPanelSurfaceScope.modeAfterConversationChange(
-                currentMode: .youtube,
+                currentMode: .source,
                 oldConversationId: nil,
                 newConversationId: nextConversationId,
                 isDraftBootstrap: false
@@ -142,9 +143,70 @@ final class RightPanelLayoutTests: XCTestCase {
         )
         XCTAssertNil(
             RightPanelSurfaceScope.modeAfterNewBlankConversation(
-                currentMode: .youtube
+                currentMode: .source
             )
         )
+    }
+
+    func testURLSourceReaderReplacesVisibleYouTubePanelMode() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let rightPanelModeSource = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Models/RightPanelMode.swift"),
+            encoding: .utf8
+        )
+        let contentViewSource = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/App/ContentView.swift"),
+            encoding: .utf8
+        )
+        let chatAreaSource = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Views/ChatArea.swift"),
+            encoding: .utf8
+        )
+        let panelSource = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Views/YouTubeLearningPanel.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(rightPanelModeSource.contains("case source"))
+        XCTAssertFalse(rightPanelModeSource.contains("case youtube"))
+        XCTAssertTrue(contentViewSource.contains("case .source"))
+        XCTAssertFalse(contentViewSource.contains("case .youtube:"))
+        XCTAssertTrue(chatAreaSource.contains("rightPanelMode = .source"))
+        XCTAssertFalse(chatAreaSource.contains("mode: .youtube"))
+        XCTAssertFalse(panelSource.contains("Text(\"YouTube\")"))
+        XCTAssertFalse(panelSource.contains("TextField(\"YouTube URL\""))
+        XCTAssertFalse(panelSource.contains(".help(\"Analyze video\")"))
+        XCTAssertFalse(panelSource.contains("Text(\"Reading video\")"))
+        XCTAssertTrue(panelSource.contains("Text(\"URL\")"))
+        XCTAssertTrue(panelSource.contains("TextField(\"URL or document\""))
+        XCTAssertTrue(panelSource.contains("Text(\"Reading source\")"))
+        XCTAssertTrue(panelSource.contains(".fileImporter("))
+        XCTAssertTrue(panelSource.contains("loadDocumentAttachments"))
+    }
+
+    func testURLSourceReaderUsesDocumentOnlyImporterTypes() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let panelSource = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Views/YouTubeLearningPanel.swift"),
+            encoding: .utf8
+        )
+        let extractorSource = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Services/AttachmentExtractor.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(extractorSource.contains("sourceReaderContentTypes"))
+        XCTAssertTrue(panelSource.contains("allowedContentTypes: AttachmentDropSupport.sourceReaderContentTypes"))
+        XCTAssertFalse(panelSource.contains("allowedContentTypes: AttachmentDropSupport.fileImporterContentTypes"))
+        XCTAssertTrue(AttachmentDropSupport.sourceReaderContentTypes.contains { $0.conforms(to: .pdf) })
+        XCTAssertFalse(AttachmentDropSupport.sourceReaderContentTypes.contains { $0.conforms(to: .image) })
+        XCTAssertTrue(AttachmentDropSupport.fileImporterContentTypes.contains { $0.conforms(to: .image) })
     }
 
     func testRightPanelScopePolicyIsAppliedOnNavigationChanges() throws {
@@ -164,6 +226,40 @@ final class RightPanelLayoutTests: XCTestCase {
         XCTAssertTrue(contentViewSource.contains("RightPanelSurfaceScope.modeAfterTabChange"))
         XCTAssertTrue(contentViewSource.contains("RightPanelSurfaceScope.modeAfterNewBlankConversation"))
         XCTAssertTrue(chatAreaSource.contains("RightPanelSurfaceScope.modeAfterConversationChange"))
+    }
+
+    func testChatHeaderTitleTruncatesBeforeRightPanelControls() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let chatAreaSource = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Views/ChatArea.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(chatAreaSource.contains("private let headerTrailingControlReserve: CGFloat = 24"))
+        XCTAssertTrue(chatAreaSource.contains(".truncationMode(.tail)"))
+        XCTAssertTrue(chatAreaSource.contains(".frame(maxWidth: .infinity, alignment: .leading)"))
+        XCTAssertTrue(chatAreaSource.contains(".padding(.trailing, headerTrailingControlReserve)"))
+        XCTAssertFalse(chatAreaSource.contains("rightPanelToggleCapsule"))
+        XCTAssertFalse(chatAreaSource.contains("rightPanelToggleButton"))
+        XCTAssertFalse(chatAreaSource.contains("systemImage: \"note.text\""))
+    }
+
+    func testSummaryCaptureAutoOpensMarkdownPanelInsteadOfHeaderToggle() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let contentViewSource = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/App/ContentView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(contentViewSource.contains(".onChange(of: dependencies.scratchPadStore.latestSummary)"))
+        XCTAssertTrue(contentViewSource.contains("rightPanelMode = .markdown"))
+        XCTAssertTrue(contentViewSource.contains("scratchPadPanelMode = .preview"))
     }
 
     func testScratchpadInnerSurfaceUsesVisiblePaperStyling() throws {

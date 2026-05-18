@@ -100,11 +100,21 @@ enum QuickActionExperimentAssigner {
 
         let guidance: String = switch trace.mode {
         case .direction:
-            "For Direction, name the real question first, remove one distracting branch, then give the judgment and one next step."
+            """
+            HUMAN JUDGMENT HANDOFF:
+            Use this as a hidden checkpoint before applying the problem frame. First preserve Alex's own view before you frame the answer: what he thinks is happening, what constraint he thinks matters, or what decision he is trying to make. If his view is absent, name your framing as provisional instead of letting the AI's framing silently become the frame.
+            AI may execute, but it must not own the root cause, core tradeoff, or failure mode. Leave Alex with a one-sentence mental model he could repeat without the model.
+            For Direction, name the real question first, remove one distracting branch, then give the judgment and one next step.
+            """
         case .brainstorm:
             "For Brainstorm, keep divergence alive but state the real constraint before ideas so the set is useful instead of random."
         case .plan:
-            "For Plan, make the first deliverable and the next concrete action unmistakable; avoid planning theater."
+            """
+            HUMAN JUDGMENT HANDOFF:
+            Use this as a hidden checkpoint before applying the problem frame. First preserve Alex's own view before you frame the answer: what he thinks is happening, what constraint he thinks matters, or what decision he is trying to make. If his view is absent, name your framing as provisional instead of letting the AI's framing silently become the frame.
+            AI may execute, but it must not own the root cause, core tradeoff, or failure mode. Leave Alex with a one-sentence mental model he could repeat without the model.
+            For Plan, make the first deliverable and the next concrete action unmistakable; avoid planning theater.
+            """
         case .study:
             "For Study, slow down into tutor mode: read one section at a time, check the source claim, then land one sentence Alex can carry."
         }

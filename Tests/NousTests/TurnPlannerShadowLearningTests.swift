@@ -372,6 +372,42 @@ final class TurnPlannerShadowLearningTests: XCTestCase {
         XCTAssertNil(plan.focusBlock)
     }
 
+    func testFastLatencyTierSkipsTopicContextTraceAndPersistence() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let planner = makePlanner(
+            nodeStore: nodeStore,
+            judgeLLMServiceFactory: { nil },
+            provocationJudgeFactory: { _ in CountingJudge() }
+        )
+        let node = NousNode(type: .conversation, title: "Fast topic turn")
+        let message = Message(nodeId: node.id, role: .user, content: "what does SMC F-1 visa mean?")
+        let prepared = PreparedConversationTurn(
+            node: node,
+            userMessage: message,
+            messagesAfterUserAppend: [message]
+        )
+        let request = self.request(input: message.content, node: node)
+        let stewardship = TurnStewardDecision(
+            route: .ordinaryChat,
+            memoryPolicy: .full,
+            challengeStance: .useSilently,
+            responseShape: .answerNow,
+            source: .deterministic,
+            reason: "ordinary companion default",
+            latencyTier: .fast
+        )
+
+        let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
+
+        XCTAssertEqual(plan.latencyTier, .fast)
+        XCTAssertFalse(plan.promptTrace.promptLayers.contains("topic_context"))
+        XCTAssertNil(plan.promptTrace.topicContext)
+        XCTAssertNil(try nodeStore.fetchTopicContextAssignment(
+            targetType: .conversation,
+            targetId: node.id
+        ))
+    }
+
     func testNormalOrdinaryChatKeepsFullMemoryAndTranscript() async throws {
         let nodeStore = try NodeStore(path: ":memory:")
         try nodeStore.insertMemoryEntry(MemoryEntry(

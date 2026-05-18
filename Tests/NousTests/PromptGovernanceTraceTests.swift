@@ -78,6 +78,60 @@ final class PromptGovernanceTraceTests: XCTestCase {
         XCTAssertTrue(decoded.promptLayers.contains("quick_action_experiment"))
     }
 
+    func testRecordPromptTraceAppendsQuickActionExperimentDogfoodEvent() throws {
+        let suiteName = "PromptGovernanceTraceTests.quickActionExperiment.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PromptTraceQuickActionExperiment-\(UUID().uuidString).jsonl")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let logger = QuickActionExperimentDogfoodLogStore(url: url)
+        let telemetry = GovernanceTelemetryStore(
+            defaults: defaults,
+            quickActionExperimentDogfoodLogger: logger
+        )
+
+        telemetry.recordPromptTrace(PromptGovernanceTrace(
+            promptLayers: ["anchor", "quick_action_experiment"],
+            evidenceAttached: false,
+            safetyPolicyInvoked: false,
+            highRiskQueryDetected: false,
+            quickActionExperiment: QuickActionExperimentTrace(
+                experimentId: "direction-quick-mode-ab-v1",
+                mode: .direction,
+                variant: .candidate
+            )
+        ))
+
+        let event = try XCTUnwrap(try logger.loadEvents().first)
+        XCTAssertEqual(event.experimentId, "direction-quick-mode-ab-v1")
+        XCTAssertEqual(event.mode, .direction)
+        XCTAssertEqual(event.variant, .candidate)
+    }
+
+    func testRecordPromptTraceSkipsQuickActionExperimentDogfoodWhenTraceHasNoExperiment() throws {
+        let suiteName = "PromptGovernanceTraceTests.noQuickActionExperiment.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PromptTraceNoQuickActionExperiment-\(UUID().uuidString).jsonl")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let logger = QuickActionExperimentDogfoodLogStore(url: url)
+        let telemetry = GovernanceTelemetryStore(
+            defaults: defaults,
+            quickActionExperimentDogfoodLogger: logger
+        )
+
+        telemetry.recordPromptTrace(PromptGovernanceTrace(
+            promptLayers: ["anchor"],
+            evidenceAttached: false,
+            safetyPolicyInvoked: false,
+            highRiskQueryDetected: false
+        ))
+
+        XCTAssertEqual(try logger.loadEvents(), [])
+    }
+
     func testEncodesAndDecodesTurnStewardTrace() throws {
         let stewardTrace = TurnStewardTrace(
             route: .brainstorm,
@@ -448,6 +502,35 @@ final class PromptGovernanceTraceTests: XCTestCase {
 
         XCTAssertTrue(trace.promptLayers.contains("agent_coordination"))
         XCTAssertEqual(trace.agentCoordination, coordination)
+    }
+
+    func testGovernanceTraceAddsTopicContextMetadataWithoutRawPrompt() {
+        let topicTrace = TopicContextTrace(
+            primaryLane: .education,
+            secondaryLanes: [.personalReflection],
+            subtopicLabel: "school / visa / learning depth",
+            confidence: 0.83,
+            matchedAssignmentCount: 3
+        )
+
+        let trace = PromptContextAssembler.governanceTrace(
+            globalMemory: nil,
+            projectMemory: nil,
+            conversationMemory: nil,
+            recentConversations: [],
+            citations: [],
+            projectGoal: nil,
+            topicContext: topicTrace
+        )
+
+        XCTAssertTrue(trace.promptLayers.contains("topic_context"))
+        XCTAssertEqual(trace.topicContext, topicTrace)
+
+        let data = try! JSONEncoder().encode(trace)
+        let raw = String(data: data, encoding: .utf8)!
+        XCTAssertFalse(raw.contains("SMC class registration and F-1 visa status"))
+        XCTAssertFalse(raw.contains("userPrompt"))
+        XCTAssertFalse(raw.contains("assistantText"))
     }
 
     func testPromptTraceEvaluationHarnessPassesHealthyMemoryRAGCase() {

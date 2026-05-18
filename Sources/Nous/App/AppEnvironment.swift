@@ -197,7 +197,11 @@ final class AppEnvironment {
                 return try? embeddingService.embed(text)
             }
         )
-        let governanceTelemetry = GovernanceTelemetryStore(nodeStore: nodeStore)
+        let quickActionExperimentDogfoodLogger = try? QuickActionExperimentDogfoodLogStore.defaultStore()
+        let governanceTelemetry = GovernanceTelemetryStore(
+            nodeStore: nodeStore,
+            quickActionExperimentDogfoodLogger: quickActionExperimentDogfoodLogger
+        )
         let scratchPadStore = ScratchPadStore(nodeStore: nodeStore)
         let userMemoryService = UserMemoryService(
             nodeStore: nodeStore,
@@ -287,7 +291,8 @@ final class AppEnvironment {
                     return GeminiYouTubeVideoAnalysisService(apiKey: key)
                 }
             ),
-            sourceIngestionService: sourceIngestionService
+            sourceIngestionService: sourceIngestionService,
+            nodeStore: nodeStore
         )
         let voiceTranscriptCommitter = VoiceTranscriptCommitter(
             voiceController: voiceController,

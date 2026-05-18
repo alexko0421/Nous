@@ -1891,6 +1891,7 @@ User: "我中意又软又硬嘅人，反差先系 depth"
         slowCognitionArtifacts: [CognitionArtifact] = [],
         corpusContext: CitableContext = .empty,
         derivedMemoryContext: DerivedMemoryPromptContext = .empty,
+        topicContext: TopicContextTrace? = nil,
         now: Date = Date()
     ) -> PromptGovernanceTrace {
         governanceTrace(
@@ -1921,6 +1922,7 @@ User: "我中意又软又硬嘅人，反差先系 depth"
             slowCognitionArtifacts: slowCognitionArtifacts,
             corpusContext: corpusContext,
             derivedMemoryContext: derivedMemoryContext,
+            topicContext: topicContext,
             now: now
         )
     }
@@ -1953,6 +1955,7 @@ User: "我中意又软又硬嘅人，反差先系 depth"
         slowCognitionArtifacts: [CognitionArtifact] = [],
         corpusContext: CitableContext = .empty,
         derivedMemoryContext: DerivedMemoryPromptContext = .empty,
+        topicContext: TopicContextTrace? = nil,
         now: Date = Date()
     ) -> PromptGovernanceTrace {
         var layers = ["anchor", "memory_interpretation_policy", "memory_authority_policy", "core_safety_policy", "user_address_policy", "visible_response_language_policy", "epistemic_grounding_policy", "explanation_clarity_policy", "answer_closure_policy", "enumerable_list_format_policy", "stoic_grounding_policy", "real_world_decision_policy", "summary_output_policy", "conversation_title_output_policy", "chat_mode"]
@@ -1984,6 +1987,7 @@ User: "我中意又软又硬嘅人，反差先系 depth"
         if operatingContext?.promptBlock() != nil { layers.append("operating_context") }
         if let effectiveGlobalMemory, !effectiveGlobalMemory.isEmpty { layers.append("global_memory") }
         if corpusBlock != nil { layers.append("corpus_context") }
+        if topicContext != nil { layers.append("topic_context") }
         if let essentialStory, !essentialStory.isEmpty { layers.append("essential_story") }
         if let projectMemory, !projectMemory.isEmpty { layers.append("project_memory") }
         if let conversationMemory, !conversationMemory.isEmpty { layers.append("conversation_memory") }
@@ -2044,6 +2048,7 @@ User: "我中意又软又硬嘅人，反差先系 depth"
             citationTrace: citationTrace(for: promptCitations),
             slowCognitionTrace: selectedSlowCognitionArtifact.map(SlowCognitionPromptTrace.init),
             quickActionExperiment: quickActionExperiment,
+            topicContext: topicContext,
             visibleResponseLanguageTarget: visibleLanguageDecision.target,
             visibleResponseLanguageSource: visibleLanguageDecision.source
         )

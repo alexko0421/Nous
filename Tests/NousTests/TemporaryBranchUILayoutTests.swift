@@ -10,7 +10,10 @@ final class TemporaryBranchUILayoutTests: XCTestCase {
 
     func testTemporaryBranchUsesFocusMembraneInsteadOfModalPanel() throws {
         XCTAssertFalse(TemporaryBranchMembraneStyle.drawsFramedPanel)
-        XCTAssertLessThanOrEqual(TemporaryBranchMembraneStyle.inlineComposerMaxWidth, 540)
+        XCTAssertEqual(
+            TemporaryBranchMembraneStyle.inlineComposerMaxWidth,
+            ComposerTextInputMetrics.chatComposerMaxWidth
+        )
         XCTAssertLessThanOrEqual(TemporaryBranchMembraneStyle.primaryComposerMinHeight, 54)
 
         let repoRoot = URL(fileURLWithPath: #filePath)
@@ -59,14 +62,48 @@ final class TemporaryBranchUILayoutTests: XCTestCase {
         XCTAssertTrue(branchTextFieldSource.contains(".lineLimit(1...ComposerTextInputMetrics.maxVisibleLines)"))
         XCTAssertTrue(branchTextFieldSource.contains(".frame(maxWidth: .infinity, minHeight: ComposerTextInputMetrics.minimumTextHeight, alignment: .topLeading)"))
         XCTAssertTrue(branchTextFieldSource.contains(".padding(.vertical, ComposerTextInputMetrics.verticalPadding)"))
-        XCTAssertTrue(branchTextFieldSource.contains("NativeGlassPanel("))
-        XCTAssertTrue(branchTextFieldSource.contains("cornerRadius: TemporaryBranchMembraneStyle.primaryComposerCornerRadius"))
-        XCTAssertTrue(source.contains(".frame(width: 36, height: 36)"))
+        XCTAssertTrue(branchTextFieldSource.contains("ComposerTextInputGlassBackground(cornerRadius: TemporaryBranchMembraneStyle.primaryComposerCornerRadius)"))
+        XCTAssertTrue(source.contains("HStack(spacing: ComposerTextInputMetrics.controlSpacing)"))
+        XCTAssertTrue(source.contains("ComposerLeadingActionButton("))
+        XCTAssertTrue(source.contains("size: ComposerTextInputMetrics.leadingActionSize"))
+        XCTAssertTrue(source.contains("cornerRadius: ComposerTextInputMetrics.leadingActionCornerRadius"))
+        XCTAssertTrue(source.contains(".frame(width: ComposerTextInputMetrics.leadingActionSize, height: ComposerTextInputMetrics.leadingActionSize)"))
+        XCTAssertTrue(source.contains("inlineComposerMaxWidth"))
         XCTAssertFalse(branchTextFieldSource.contains(".lineLimit(1...4)"))
         XCTAssertFalse(branchTextFieldSource.contains(".font(.system(size: 14, weight: .medium, design: .rounded))"))
         XCTAssertFalse(inlineComposerSource.contains("subtleSourceAnchor"))
         XCTAssertFalse(inlineComposerSource.contains("Side thought"))
         XCTAssertFalse(inlineComposerSource.contains("branch.sourceExcerpt"))
+    }
+
+    func testTemporaryBranchComposerUsesMainActionMenuAndAttachments() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Views/TemporaryBranchOverlay.swift"),
+            encoding: .utf8
+        )
+        let composerStart = try XCTUnwrap(source.range(of: "struct TemporaryBranchInlineComposer"))
+            .lowerBound
+        let quoteStart = try XCTUnwrap(source.range(of: "struct TemporaryBranchSourceQuote"))
+            .lowerBound
+        let composerSource = String(source[composerStart..<quoteStart])
+
+        XCTAssertTrue(composerSource.contains("@State private var isActionMenuExpanded = false"))
+        XCTAssertTrue(composerSource.contains("branchAttachmentChips"))
+        XCTAssertTrue(composerSource.contains("ForEach(branch.attachments)"))
+        XCTAssertTrue(composerSource.contains("AttachmentChip(attachment: attachment)"))
+        XCTAssertTrue(composerSource.contains("ActionMenuCapsule("))
+        XCTAssertTrue(composerSource.contains("onFile:"))
+        XCTAssertTrue(composerSource.contains("onPhoto:"))
+        XCTAssertTrue(composerSource.contains("onYouTube:"))
+        XCTAssertTrue(composerSource.contains("onVoice:"))
+        XCTAssertTrue(composerSource.contains("canPickPhoto: canPickPhoto"))
+        XCTAssertTrue(composerSource.contains(".overlay(alignment: .bottomLeading)"))
+        XCTAssertTrue(composerSource.contains(".padding(.top, isActionMenuExpanded ? ActionMenuPopoutMetrics.reservedTopPadding : 0)"))
+        XCTAssertFalse(composerSource.contains(".help(\"Focus branch input\")"))
     }
 
     func testTemporaryBranchComposerKeepsSourceQuoteAboveInput() throws {
@@ -212,10 +249,20 @@ final class TemporaryBranchUILayoutTests: XCTestCase {
         XCTAssertFalse(bubbleSource.contains(".background(isUser ? AppColor.colaOrange.opacity(0.86) : AppColor.colaBubble)"))
     }
 
-    func testBranchTriggerUsesMessageLongPressAndStableHoverHitTarget() throws {
-        XCTAssertEqual(TemporaryBranchTriggerHitTarget.longPressDuration, 0.35)
-        XCTAssertGreaterThanOrEqual(TemporaryBranchTriggerHitTarget.hoverBridgePadding, 10)
-        XCTAssertGreaterThanOrEqual(TemporaryBranchTriggerHitTarget.userButtonOutsideOffset, 44)
+    func testBranchTriggerUsesIconOnlyHitTargetAndStableAlignment() throws {
+        XCTAssertEqual(TemporaryBranchTriggerHitTarget.buttonDiameter, 28)
+        XCTAssertEqual(TemporaryBranchTriggerHitTarget.buttonEdgeGap, 14)
+        XCTAssertEqual(TemporaryBranchTriggerHitTarget.buttonVerticalOffset, 2)
+        XCTAssertGreaterThan(TemporaryBranchTriggerHitTarget.hoverExitGraceDuration, 0)
+        XCTAssertLessThanOrEqual(TemporaryBranchTriggerHitTarget.hoverExitGraceDuration, 0.35)
+        XCTAssertEqual(
+            TemporaryBranchTriggerHitTarget.userButtonOutsideOffset,
+            TemporaryBranchTriggerHitTarget.buttonDiameter + TemporaryBranchTriggerHitTarget.buttonEdgeGap
+        )
+        XCTAssertEqual(
+            TemporaryBranchTriggerHitTarget.assistantButtonOutsideOffset,
+            TemporaryBranchTriggerHitTarget.buttonDiameter + TemporaryBranchTriggerHitTarget.buttonEdgeGap
+        )
 
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -226,10 +273,63 @@ final class TemporaryBranchUILayoutTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(source.contains(".onLongPressGesture(minimumDuration: TemporaryBranchTriggerHitTarget.longPressDuration)"))
-        XCTAssertTrue(source.contains("TemporaryBranchTriggerHitTarget.hoverBridgePadding"))
         XCTAssertTrue(source.contains("width: -TemporaryBranchTriggerHitTarget.userButtonOutsideOffset"))
+        XCTAssertTrue(source.contains("width: TemporaryBranchTriggerHitTarget.assistantButtonOutsideOffset"))
+        XCTAssertTrue(source.contains("triggerAlignment: .leading"))
+        XCTAssertTrue(source.contains("triggerAlignment: .trailing"))
+        XCTAssertFalse(source.contains("triggerAlignment: .topLeading"))
+        XCTAssertFalse(source.contains("triggerAlignment: .topTrailing"))
+        XCTAssertTrue(source.contains(".allowsHitTesting(isHovering)"))
+        XCTAssertTrue(source.contains("@State private var isContentHovering = false"))
+        XCTAssertTrue(source.contains("@State private var isTriggerHovering = false"))
+        XCTAssertTrue(source.contains("refreshBranchTriggerHoverVisibility()"))
+        XCTAssertTrue(source.contains("scheduleBranchTriggerHoverClose()"))
+        XCTAssertFalse(source.contains(".onLongPressGesture(minimumDuration: TemporaryBranchTriggerHitTarget.longPressDuration)"))
         XCTAssertFalse(source.contains(".offset(x: isUser ? -32 : 32, y: 2)"))
+    }
+
+    func testAssistantBranchTriggerAnchorsBeforeAssistantMaxWidthFrame() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Views/ChatArea.swift"),
+            encoding: .utf8
+        )
+        let contentStart = try XCTUnwrap(source.range(of: "struct AssistantBubbleContent"))
+            .lowerBound
+        let copyButtonStart = try XCTUnwrap(source.range(of: "struct CopyButton"))
+            .lowerBound
+        let assistantContentSource = String(source[contentStart..<copyButtonStart])
+
+        XCTAssertTrue(assistantContentSource.contains("branchHovering: Binding<Bool>? = nil"))
+        XCTAssertTrue(assistantContentSource.contains("onOpenBranch: (() -> Void)? = nil"))
+        XCTAssertTrue(assistantContentSource.contains("return assistantContent(segments: segments)\n            .frame(maxWidth: assistantTextMaxWidth"))
+        XCTAssertTrue(assistantContentSource.contains("private func assistantContent"))
+        XCTAssertTrue(assistantContentSource.contains("triggerAlignment: .trailing"))
+        XCTAssertFalse(source.contains("AssistantBubbleContent(\n                                displayText: assistantDisplayText,\n                                isStreamingDraft: isStreamingDraft\n                            )\n                                .temporaryBranchEntry"))
+    }
+
+    func testChatAreaRoutesAttachmentsToTemporaryBranchComposerWhenOpen() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Views/ChatArea.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("temporaryBranch.isPresented ? temporaryBranch.attachments : attachments"))
+        XCTAssertTrue(source.contains("temporaryBranch.attachments.removeAll { $0.id == id }"))
+        XCTAssertTrue(source.contains("var updatedAttachments = temporaryBranch.isPresented ? temporaryBranch.attachments : attachments"))
+        XCTAssertTrue(source.contains("temporaryBranch.attachments = updatedAttachments"))
+        XCTAssertTrue(source.contains("onPickAttachment: { isFileImporterPresented = true }"))
+        XCTAssertTrue(source.contains("onPickPhoto: { isPhotosPickerPresented = true }"))
+        XCTAssertTrue(source.contains("onYouTube: {"))
+        XCTAssertTrue(source.contains("onVoice: { onToggleVoiceMode() }"))
+        XCTAssertTrue(source.contains("onImageDrop: handleImageDrop"))
     }
 
     func testBranchTriggerUsesCalmBranchSymbolInsteadOfChatBubbleIcon() throws {

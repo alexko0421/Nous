@@ -44,6 +44,32 @@
     "state": "active"
   },
   {
+    "id": "00000000-0000-0000-0000-000000000013",
+    "userId": "alex",
+    "payload": {
+      "payloadVersion": 1,
+      "name": "brainstorm-5d-thinking-scaffold",
+      "description": "Brainstorm 5D thinking scaffold",
+      "source": "alex",
+      "trigger": {
+        "kind": "mode",
+        "modes": ["brainstorm"],
+        "priority": 88
+      },
+      "action": {
+        "kind": "promptFragment",
+        "content": "BRAINSTORM 5D THINKING SCAFFOLD:\n\nUse this as a hidden thinking scaffold, not as visible headings unless it naturally helps. The point is to prevent premature closure, not to make the reply theoretical.\n\nBefore narrowing, keep the idea open across five moves:\n- Width: find at least three distinct lines or domains the idea could live in.\n- Depth: name the lower-level assumption, fear, or identity attachment that may be closing the frame too early.\n- Altitude: look for the adjacent life/product/system domain that could unlock the stuck line.\n- Four lenses: check inner individual, outer behavior, collective culture, and external system.\n- Time: ask what this looked like before, what it becomes if it compounds, and what should be transcended while keeping the useful part.\n\nThen answer in the normal Brainstorm format: distinct directions plus a taste judgment about what feels alive vs what is noise."
+      },
+      "rationale": "Added after reviewing Dan Koe's 5D thinking article: Brainstorm should preserve openness across width, depth, altitude, perspective, and time without adding UI or turning into theory.",
+      "antiPatternExamples": [
+        "Collapsing to one clever answer before exploring the frame.",
+        "Listing many ideas that all come from the same assumption.",
+        "Explaining the 5D model instead of using it to produce sharper directions."
+      ]
+    },
+    "state": "active"
+  },
+  {
     "id": "00000000-0000-0000-0000-000000000003",
     "userId": "alex",
     "payload": {

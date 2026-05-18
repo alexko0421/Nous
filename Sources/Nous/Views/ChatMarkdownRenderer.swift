@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 enum Segment: Equatable {
     case heading(level: Int, text: String)
@@ -7,6 +8,136 @@ enum Segment: Equatable {
     case horizontalRule
     case prose(String)
     case verbatim(String)
+}
+
+enum VisualLineBreaks {
+    static func lines(for text: String, width: CGFloat, font: NSFont) -> [String] {
+        guard !text.isEmpty else { return [] }
+        guard width.isFinite, width > 0 else { return [text] }
+
+        let storage = NSTextStorage(string: text, attributes: [.font: font])
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(
+            size: CGSize(width: width, height: .greatestFiniteMagnitude)
+        )
+        textContainer.lineFragmentPadding = 0
+        textContainer.maximumNumberOfLines = 0
+        textContainer.lineBreakMode = .byWordWrapping
+
+        layoutManager.addTextContainer(textContainer)
+        storage.addLayoutManager(layoutManager)
+        layoutManager.ensureLayout(for: textContainer)
+
+        var lines: [String] = []
+        var glyphIndex = 0
+        while glyphIndex < layoutManager.numberOfGlyphs {
+            var glyphRange = NSRange(location: 0, length: 0)
+            layoutManager.lineFragmentUsedRect(
+                forGlyphAt: glyphIndex,
+                effectiveRange: &glyphRange
+            )
+
+            guard glyphRange.length > 0 else { break }
+            let characterRange = layoutManager.characterRange(
+                forGlyphRange: glyphRange,
+                actualGlyphRange: nil
+            )
+            if let range = Range(characterRange, in: text) {
+                lines.append(String(text[range]))
+            }
+            glyphIndex = NSMaxRange(glyphRange)
+        }
+
+        return lines.isEmpty ? [text] : lines
+    }
+}
+
+struct StreamingVisualLine: Identifiable, Equatable {
+    let id: Int
+    let text: String
+    let revealDelay: TimeInterval
+}
+
+enum StreamingVisualLineRevealTiming {
+    static let lineStagger: TimeInterval = 0.45
+}
+
+enum StreamingVisualLineRevealPolicy {
+    static func revealableLines(
+        _ visualLines: [String],
+        revealTrailingLine: Bool
+    ) -> [String] {
+        guard !visualLines.isEmpty else { return [] }
+        guard !revealTrailingLine else { return visualLines }
+
+        return Array(visualLines.dropLast())
+    }
+}
+
+enum StreamingVisualLineRevealSyncReason {
+    case initial
+    case textChanged
+    case measuredWidthChanged
+    case trailingRevealChanged
+
+    var resetsExistingLines: Bool {
+        switch self {
+        case .initial, .measuredWidthChanged:
+            return true
+        case .textChanged, .trailingRevealChanged:
+            return false
+        }
+    }
+}
+
+struct StreamingVisualLineRevealState {
+    private var nextLineID = 0
+    private(set) var lines: [StreamingVisualLine] = []
+
+    mutating func update(
+        visualLines: [String],
+        revealTrailingLine: Bool,
+        reason: StreamingVisualLineRevealSyncReason
+    ) {
+        let revealableTexts = StreamingVisualLineRevealPolicy.revealableLines(
+            visualLines,
+            revealTrailingLine: revealTrailingLine
+        )
+        update(
+            revealableTexts: revealableTexts,
+            resetExisting: reason.resetsExistingLines
+        )
+    }
+
+    mutating func update(revealableTexts: [String], resetExisting: Bool = false) {
+        if resetExisting || revealableTexts.count < lines.count {
+            replace(with: revealableTexts)
+            return
+        }
+
+        guard revealableTexts.count > lines.count else { return }
+
+        for (index, text) in revealableTexts.dropFirst(lines.count).enumerated() {
+            append(text, revealDelay: Double(index) * StreamingVisualLineRevealTiming.lineStagger)
+        }
+    }
+
+    mutating func reset() {
+        nextLineID = 0
+        lines = []
+    }
+
+    private mutating func replace(with texts: [String]) {
+        reset()
+        for (index, text) in texts.enumerated() {
+            append(text, revealDelay: Double(index) * StreamingVisualLineRevealTiming.lineStagger)
+        }
+    }
+
+    private mutating func append(_ text: String, revealDelay: TimeInterval) {
+        lines.append(StreamingVisualLine(id: nextLineID, text: text, revealDelay: revealDelay))
+        nextLineID += 1
+    }
 }
 
 enum ChatMarkdownRenderer {
@@ -213,8 +344,15 @@ enum ChatMarkdownRenderer {
 struct ChatMarkdownView: View {
 
     let segments: [Segment]
+    let isStreamingDraft: Bool
+
+    init(segments: [Segment], isStreamingDraft: Bool = false) {
+        self.segments = segments
+        self.isStreamingDraft = isStreamingDraft
+    }
 
     private let bodyFont: Font = .system(size: 14, weight: .regular)
+    private let bodyNSFont: NSFont = .systemFont(ofSize: 14, weight: .regular)
     private let h1Font: Font = .system(size: 16, weight: .semibold)
     private let h2Font: Font = .system(size: 15, weight: .semibold)
     private let tableHeaderFont: Font = .system(size: 14, weight: .semibold)
@@ -226,14 +364,20 @@ struct ChatMarkdownView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: segmentSpacing) {
-            ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
-                segmentView(segment)
+            ForEach(Array(segments.enumerated()), id: \.offset) { index, segment in
+                segmentView(
+                    segment,
+                    isFinalStreamingSegment: isStreamingDraft && index == segments.count - 1
+                )
             }
         }
     }
 
     @ViewBuilder
-    private func segmentView(_ segment: Segment) -> some View {
+    private func segmentView(
+        _ segment: Segment,
+        isFinalStreamingSegment: Bool
+    ) -> some View {
         switch segment {
         case .heading(let level, let text):
             Text(text)
@@ -268,12 +412,22 @@ struct ChatMarkdownView: View {
                 .padding(.vertical, 4)
 
         case .prose(let text):
-            Text(text)
-                .font(bodyFont)
-                .foregroundColor(AppColor.colaDarkText)
-                .lineSpacing(bodyLineSpacing)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
+            if isStreamingDraft {
+                StreamingProseVisualLineView(
+                    text: text,
+                    bodyFont: bodyFont,
+                    bodyNSFont: bodyNSFont,
+                    lineSpacing: bodyLineSpacing,
+                    revealTrailingLine: !isFinalStreamingSegment
+                )
+            } else {
+                Text(text)
+                    .font(bodyFont)
+                    .foregroundColor(AppColor.colaDarkText)
+                    .lineSpacing(bodyLineSpacing)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
 
         case .verbatim(let text):
             Text(text)
@@ -282,6 +436,127 @@ struct ChatMarkdownView: View {
                 .lineSpacing(bodyLineSpacing)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
+        }
+    }
+}
+
+private struct StreamingProseVisualLineView: View {
+    let text: String
+    let bodyFont: Font
+    let bodyNSFont: NSFont
+    let lineSpacing: CGFloat
+    let revealTrailingLine: Bool
+
+    @State private var measuredWidth: CGFloat = 0
+    @State private var revealState = StreamingVisualLineRevealState()
+
+    private var effectiveWidth: CGFloat {
+        measuredWidth > 1 ? measuredWidth : 520
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: lineSpacing) {
+            ForEach(revealState.lines) { line in
+                StreamingVisualLineRow(
+                    text: line.text,
+                    revealDelay: line.revealDelay,
+                    bodyFont: bodyFont
+                )
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: StreamingProseWidthPreferenceKey.self,
+                    value: proxy.size.width
+                )
+            }
+        )
+        .onPreferenceChange(StreamingProseWidthPreferenceKey.self) { width in
+            guard width > 1, abs(width - measuredWidth) > 0.5 else { return }
+            measuredWidth = width
+        }
+        .onAppear {
+            syncRevealState(reason: .initial)
+        }
+        .onChange(of: text) { _, _ in
+            syncRevealState(reason: .textChanged)
+        }
+        .onChange(of: measuredWidth) { _, _ in
+            syncRevealState(reason: .measuredWidthChanged)
+        }
+        .onChange(of: revealTrailingLine) { _, _ in
+            syncRevealState(reason: .trailingRevealChanged)
+        }
+    }
+
+    private func syncRevealState(reason: StreamingVisualLineRevealSyncReason) {
+        guard !text.isEmpty else {
+            revealState.reset()
+            return
+        }
+
+        let visualLines = VisualLineBreaks.lines(
+            for: text,
+            width: effectiveWidth,
+            font: bodyNSFont
+        )
+        revealState.update(
+            visualLines: visualLines,
+            revealTrailingLine: revealTrailingLine,
+            reason: reason
+        )
+    }
+}
+
+private struct StreamingVisualLineRow: View {
+    let text: String
+    let revealDelay: TimeInterval
+    let bodyFont: Font
+
+    @State private var isVisible = false
+
+    private static let revealOffset: CGFloat = 10
+    private static let revealAnimation = Animation.timingCurve(
+        0.17,
+        0.76,
+        0.18,
+        1,
+        duration: 0.74
+    )
+
+    var body: some View {
+        Text(text)
+            .font(bodyFont)
+            .foregroundColor(AppColor.colaDarkText)
+            .fixedSize(horizontal: false, vertical: true)
+            .textSelection(.enabled)
+            .opacity(isVisible ? 1 : 0)
+            .offset(y: isVisible ? 0 : Self.revealOffset)
+            .onAppear(perform: reveal)
+    }
+
+    private func reveal() {
+        guard !isVisible else { return }
+
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + revealDelay
+        ) {
+            withAnimation(Self.revealAnimation) {
+                isVisible = true
+            }
+        }
+    }
+}
+
+private struct StreamingProseWidthPreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        let next = nextValue()
+        if next > 1 {
+            value = next
         }
     }
 }

@@ -381,6 +381,7 @@ final class TurnPlanner {
             slowCognitionArtifacts: slowCognitionArtifacts,
             corpusContext: memoryContext.corpusContext,
             derivedMemoryContext: memoryContext.derivedMemoryContext,
+            topicContext: memoryContext.topicContext,
             now: request.now
         )
         let promptTrace = recentTurnContinuityBlock == nil
@@ -1218,6 +1219,7 @@ final class TurnPlanner {
             citationTrace: trace.citationTrace,
             slowCognitionTrace: trace.slowCognitionTrace,
             quickActionExperiment: trace.quickActionExperiment,
+            topicContext: trace.topicContext,
             visibleResponseLanguageTarget: trace.visibleResponseLanguageTarget,
             visibleResponseLanguageSource: trace.visibleResponseLanguageSource
         )

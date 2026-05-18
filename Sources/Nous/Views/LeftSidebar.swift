@@ -520,6 +520,11 @@ struct LeftSidebar: View {
                 .padding(.horizontal, 8)
                 .padding(.bottom, 16)
             }
+            .background(
+                RoundedRectangle(cornerRadius: 32, style: .continuous)
+                    .fill(AppColor.sidebarGlassVeil)
+                    .allowsHitTesting(false)
+            )
         }
         .frame(width: GalaxySidebarLayout.width)
         .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
