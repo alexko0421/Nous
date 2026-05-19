@@ -396,7 +396,10 @@ final class BehaviorEvalRunner {
         Task objective: inspect the failing gate.
         Context included: build log and changed files only.
         Context excluded: unrelated voice UI files.
+        Ownership paths: Tests/NousTests/HarnessHealthTests.swift only.
+        Forbidden actions: do not edit anchor.md or unrelated UI files.
         Output schema: findings first, then verification evidence.
+        Stop condition: stop after reporting the first reproducible blocker.
         Failure behavior: stop and report blocker if the gate cannot run.
         Acceptance rubric: each finding needs file evidence.
         Verification evidence: command output summary.

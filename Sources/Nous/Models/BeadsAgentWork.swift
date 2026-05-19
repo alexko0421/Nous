@@ -203,7 +203,10 @@ struct AgentOutcomeContractSummary: Equatable {
     let hasObjective: Bool
     let hasContextIncluded: Bool
     let hasContextExcluded: Bool
+    let hasOwnershipPaths: Bool
+    let hasForbiddenActions: Bool
     let hasOutputSchema: Bool
+    let hasStopCondition: Bool
     let hasFailureBehavior: Bool
     let hasAcceptanceRubric: Bool
     let hasVerificationEvidence: Bool
@@ -212,7 +215,10 @@ struct AgentOutcomeContractSummary: Equatable {
         hasObjective &&
             hasContextIncluded &&
             hasContextExcluded &&
+            hasOwnershipPaths &&
+            hasForbiddenActions &&
             hasOutputSchema &&
+            hasStopCondition &&
             hasFailureBehavior &&
             hasAcceptanceRubric &&
             hasVerificationEvidence
@@ -223,7 +229,10 @@ struct AgentOutcomeContractSummary: Equatable {
         if !hasObjective { labels.append("objective") }
         if !hasContextIncluded { labels.append("context-in") }
         if !hasContextExcluded { labels.append("context-out") }
+        if !hasOwnershipPaths { labels.append("ownership") }
+        if !hasForbiddenActions { labels.append("forbidden") }
         if !hasOutputSchema { labels.append("output") }
+        if !hasStopCondition { labels.append("stop") }
         if !hasFailureBehavior { labels.append("failure") }
         if !hasAcceptanceRubric { labels.append("rubric") }
         if !hasVerificationEvidence { labels.append("verification") }
@@ -242,7 +251,10 @@ enum AgentOutcomeContractParser {
             hasObjective: containsAny(normalized, ["task objective", "objective:", "goal:"]),
             hasContextIncluded: containsAny(normalized, ["context included", "context needed", "context in"]),
             hasContextExcluded: containsAny(normalized, ["context excluded", "context out", "ignore:", "ignore these", "do not inspect"]),
+            hasOwnershipPaths: containsAny(normalized, ["ownership paths", "owned paths", "write set", "responsible files", "responsible only for"]),
+            hasForbiddenActions: containsAny(normalized, ["forbidden actions", "do not edit", "do not modify", "must not", "never"]),
             hasOutputSchema: containsAny(normalized, ["output schema", "expected output", "return format"]),
+            hasStopCondition: containsAny(normalized, ["stop condition", "stop after", "stop when", "done when"]),
             hasFailureBehavior: containsAny(normalized, ["failure behavior", "if blocked", "when blocked"]),
             hasAcceptanceRubric: containsAny(normalized, ["acceptance rubric", "acceptance criteria", "rubric"]),
             hasVerificationEvidence: containsAny(normalized, ["verification evidence", "verification", "commands run"])
