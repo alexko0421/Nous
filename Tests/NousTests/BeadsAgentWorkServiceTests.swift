@@ -54,7 +54,7 @@ final class BeadsAgentWorkServiceTests: XCTestCase {
         [{
           "id": "new-york-contract",
           "title": "Contracted task",
-          "description": "Task objective: map logs.\\nContext included: build logs only.\\nContext excluded: source code changes.\\nOutput schema: findings table.\\nFailure behavior: stop if blocked.\\nAcceptance rubric: file refs and concrete risks.\\nVerification evidence: commands inspected.",
+          "description": "Task objective: map logs.\\nContext included: build logs only.\\nContext excluded: source code changes.\\nOwnership paths: logs/.\\nForbidden actions: do not edit files.\\nOutput schema: findings table.\\nStop condition: stop after mapping the failure.\\nFailure behavior: stop if blocked.\\nAcceptance rubric: file refs and concrete risks.\\nVerification evidence: commands inspected.",
           "status": "open",
           "priority": 2,
           "issue_type": "task",
@@ -90,7 +90,7 @@ final class BeadsAgentWorkServiceTests: XCTestCase {
         XCTAssertFalse(issues[0].outcomeContract.isComplete)
         XCTAssertEqual(
             issues[0].outcomeContract.missingLabels,
-            ["objective", "context-in", "context-out", "output", "failure", "rubric", "verification"]
+            ["objective", "context-in", "context-out", "ownership", "forbidden", "output", "stop", "failure", "rubric", "verification"]
         )
     }
 
@@ -99,7 +99,7 @@ final class BeadsAgentWorkServiceTests: XCTestCase {
         [{
           "id": "new-york-almost-contract",
           "title": "Almost contracted task",
-          "description": "Task objective: map logs.\\nContext included: build logs only.\\nIgnored an old warning after checking it was stale.\\nOutput schema: findings table.\\nFailure behavior: stop if blocked.\\nAcceptance rubric: file refs and concrete risks.\\nVerification evidence: commands inspected.",
+          "description": "Task objective: map logs.\\nContext included: build logs only.\\nIgnored an old warning after checking it was stale.\\nOwnership paths: logs/.\\nForbidden actions: do not edit files.\\nOutput schema: findings table.\\nStop condition: stop after mapping the failure.\\nFailure behavior: stop if blocked.\\nAcceptance rubric: file refs and concrete risks.\\nVerification evidence: commands inspected.",
           "status": "open",
           "priority": 2,
           "issue_type": "task",
@@ -132,7 +132,7 @@ final class BeadsAgentWorkServiceTests: XCTestCase {
           {
             "id": "new-york-b",
             "title": "B contracted handoff",
-            "description": "Task objective: inspect this gate.\\nContext included: changed workflow docs and tests.\\nContext excluded: unrelated voice UI files.\\nOutput schema: findings first, then evidence.\\nFailure behavior: stop and report blocker.\\nAcceptance rubric: every finding has file evidence.\\nVerification evidence: commands inspected.",
+            "description": "Task objective: inspect this gate.\\nContext included: changed workflow docs and tests.\\nContext excluded: unrelated voice UI files.\\nOwnership paths: docs/ and scripts/.\\nForbidden actions: do not edit unrelated files.\\nOutput schema: findings first, then evidence.\\nStop condition: stop after checking changed files.\\nFailure behavior: stop and report blocker.\\nAcceptance rubric: every finding has file evidence.\\nVerification evidence: commands inspected.",
             "status": "open",
             "priority": 2,
             "issue_type": "task",
@@ -330,7 +330,7 @@ final class BeadsAgentWorkServiceTests: XCTestCase {
               {
                 "id": "new-york-ready-contract",
                 "title": "Ready contracted task",
-                "description": "Task objective: map logs.\\nContext included: build logs only.\\nContext excluded: source code changes.\\nOutput schema: findings table.\\nFailure behavior: stop if blocked.\\nAcceptance rubric: file refs and concrete risks.\\nVerification evidence: commands inspected.",
+                "description": "Task objective: map logs.\\nContext included: build logs only.\\nContext excluded: source code changes.\\nOwnership paths: logs/.\\nForbidden actions: do not edit files.\\nOutput schema: findings table.\\nStop condition: stop after mapping the failure.\\nFailure behavior: stop if blocked.\\nAcceptance rubric: file refs and concrete risks.\\nVerification evidence: commands inspected.",
                 "status": "open",
                 "priority": 2,
                 "issue_type": "task",

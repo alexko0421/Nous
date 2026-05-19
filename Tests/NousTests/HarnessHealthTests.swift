@@ -217,7 +217,10 @@ final class HarnessHealthTests: XCTestCase {
             hasObjective: true,
             hasContextIncluded: true,
             hasContextExcluded: true,
+            hasOwnershipPaths: true,
+            hasForbiddenActions: true,
             hasOutputSchema: true,
+            hasStopCondition: true,
             hasFailureBehavior: true,
             hasAcceptanceRubric: true,
             hasVerificationEvidence: true
@@ -226,7 +229,10 @@ final class HarnessHealthTests: XCTestCase {
             hasObjective: true,
             hasContextIncluded: false,
             hasContextExcluded: true,
+            hasOwnershipPaths: true,
+            hasForbiddenActions: true,
             hasOutputSchema: false,
+            hasStopCondition: true,
             hasFailureBehavior: true,
             hasAcceptanceRubric: true,
             hasVerificationEvidence: true

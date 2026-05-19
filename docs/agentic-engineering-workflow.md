@@ -47,13 +47,16 @@ Before spawning any subagent, write the boundary in the prompt:
 - **Task objective:** the exact question or change the subagent owns.
 - **Context needed:** the files, docs, logs, or concepts it should inspect.
 - **Context excluded:** what it should ignore so it does not duplicate the lead.
+- **Ownership paths:** the exact files, directories, or read-only areas it owns.
+- **Forbidden actions:** edits, commands, memory writes, or scope expansions it
+  must not perform.
 - **Output schema:** the exact structure the lead expects back: bullets, JSON,
   table, patch summary, changed files, or pass/fail findings.
+- **Stop condition:** when it should stop exploring or editing.
 - **Failure behavior:** what the subagent should do when blocked, uncertain,
   or unable to verify. It should report the gap and stop rather than inventing.
 - **Acceptance rubric:** the concrete criteria the lead will use to decide
   whether the returned work is usable.
-- **Stop condition:** when it should stop exploring or editing.
 - **Verification evidence:** commands, file references, or checks required before
   claiming the subtask is ready.
 
@@ -270,10 +273,12 @@ Context Boundary Card:
 - Task objective: Explore <area/question>.
 - Context needed: Inspect only <files/modules/logs>.
 - Context excluded: Do not inspect or propose changes outside <excluded area>.
+- Ownership paths: Read-only ownership of <files/modules/logs>.
+- Forbidden actions: Do not edit files, create Beads, run mutating commands, or broaden scope.
 - Output schema: Return bullets under Findings, Evidence, Open Questions, and Remaining Risk.
+- Stop condition: Stop after mapping entry points, data flow, and likely files.
 - Failure behavior: If blocked, return the blocker, evidence inspected, and the next smallest unblock.
 - Acceptance rubric: The result is usable only if every claim has a file, command, or source reference.
-- Stop condition: Stop after mapping entry points, data flow, and likely files.
 - Verification evidence: Cite the exact files/lines or commands inspected.
 
 Do not edit files.
@@ -292,13 +297,19 @@ must report the blocker and stop. Wait for all results before synthesizing.
 Worker implementation:
 
 ```text
-You are responsible only for <files/modules>. Other agents may be editing
-elsewhere. Do not revert or overwrite changes you did not make. Implement the
-requested behavior, write or update the focused tests for your change, run the
-specified verification, and report changed files, commands run, evidence seen,
-and remaining risks. If blocked, stop and return the blocker, files inspected,
-and the next smallest unblock. The work is acceptable only when the requested
-files changed, focused verification ran, and every residual risk is named.
+Context Boundary Card:
+- Task objective: Implement <specific behavior>.
+- Context needed: Inspect <files/modules/tests> needed for this change.
+- Context excluded: Ignore unrelated product/UI/worktree changes.
+- Ownership paths: Write only inside <files/modules/tests>.
+- Forbidden actions: Do not revert or overwrite changes you did not make; do not edit `Sources/Nous/Resources/anchor.md`; do not run destructive git commands.
+- Output schema: Return Changed Files, Verification, Residual Risk, and Notes.
+- Stop condition: Stop when the owned patch and focused tests are complete.
+- Failure behavior: If blocked, stop and return the blocker, files inspected, and the next smallest unblock.
+- Acceptance rubric: The work is acceptable only when owned files changed, focused verification ran, and every residual risk is named.
+- Verification evidence: List exact commands run and whether they passed.
+
+Other agents may be editing elsewhere. Adjust to their work without reverting it.
 ```
 
 Fresh review:
@@ -312,24 +323,33 @@ files and lines. Skip style-only comments unless they hide a real bug.
 Verifier / Gatekeeper:
 
 ```text
-Act as Verifier / Gatekeeper for this task. Do not edit files. Check whether
-the claimed scope, Bead, changed files, verification commands, and acceptance
-evidence prove the task is ready to finish. Look for false OK/PASS paths,
-dirty-worktree leakage, missing commands, and residual risks. Name the concrete
-commands, files, diffs, or outputs you inspected. Return only Findings,
-Evidence, Required Fixes, and Remaining Risk, or "ready to finish" with the
-evidence you relied on. If evidence is missing, say what is missing and stop.
+Context Boundary Card:
+- Task objective: Verify whether <task/bead/PR> is ready to finish.
+- Context needed: Inspect <diff/status/test output/bead/docs>.
+- Context excluded: Do not re-implement or broaden product scope.
+- Ownership paths: Read-only ownership of verification evidence.
+- Forbidden actions: Do not edit files, stage files, close Beads, or mutate PR state.
+- Output schema: Return Findings, Evidence, Required Fixes, and Remaining Risk, or "ready to finish" with the evidence relied on.
+- Stop condition: Stop after checking scope, changed files, Bead state, verification commands, skipped checks, and residual risks.
+- Failure behavior: If evidence is missing, say what is missing and stop.
+- Acceptance rubric: The verification is usable only if every ready/not-ready claim names concrete commands, files, diffs, or outputs inspected.
+- Verification evidence: Cite exact commands, file paths, PR state, or Bead state.
 ```
 
 Memory Steward:
 
 ```text
-Act as Memory Steward for this task. Do not edit files. Decide what belongs in
-Beads, what belongs in Nous product/semantic/personal memory, what belongs in
-docs, and what should remain ephemeral. Protect `anchor.md`: it is frozen.
-Return Recommendation, Boundary Risks, and Store / Do Not Store wording. If the
-boundary cannot be decided from the provided context, say what evidence is
-missing and do not recommend durable storage.
+Context Boundary Card:
+- Task objective: Decide the durable-memory boundary for <lesson/finding>.
+- Context needed: Inspect <conversation/task/docs/code> needed to classify it.
+- Context excluded: Do not infer Alex values or product strategy beyond evidence.
+- Ownership paths: Read-only ownership of memory-boundary judgment.
+- Forbidden actions: Do not edit files, write `bd remember`, create Nous memory, or modify `Sources/Nous/Resources/anchor.md`.
+- Output schema: Return Recommendation, Boundary Risks, Store wording, and Do Not Store wording.
+- Stop condition: Stop once the narrowest durable-memory action is identified.
+- Failure behavior: If the boundary cannot be decided, say what evidence is missing and do not recommend durable storage.
+- Acceptance rubric: The recommendation is usable only if it keeps Beads, Nous memory, docs, and ephemeral notes separate.
+- Verification evidence: Cite the source text, file, or Bead state inspected.
 ```
 
 Handoff:

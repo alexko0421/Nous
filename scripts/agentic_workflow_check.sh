@@ -147,7 +147,7 @@ fi
 
 print_section "Agentic workflow"
 echo "Default: one lead agent. Use explorers for noisy read-heavy work."
-echo "Use the Context Boundary Card with output schema, failure behavior, and acceptance rubric before delegating."
+echo "Use the Context Boundary Card with ownership paths, forbidden actions, output schema, stop condition, failure behavior, and acceptance rubric before delegating."
 echo "Do not split planner / implementer / tester roles when context overlaps."
 echo "Workers need explicit ownership and disjoint write sets."
 echo "Agent teams remain deferred unless explicitly requested."
@@ -258,6 +258,49 @@ if command -v bd >/dev/null 2>&1; then
       hard_fail=true
     elif printf '%s\n' "$bead_json" | grep -q '"status"[[:space:]]*:[[:space:]]*"in_progress"'; then
       echo "OK: requested bead $bead_id is in progress."
+      contract_missing="$(
+        BEAD_JSON="$bead_json" python3 - <<'PY'
+import json
+import os
+import unicodedata
+
+raw = os.environ.get("BEAD_JSON", "")
+try:
+    payload = json.loads(raw)
+except json.JSONDecodeError:
+    print("contract-parse")
+    raise SystemExit
+
+issue = payload[0] if isinstance(payload, list) and payload else payload
+text = "\n\n".join(
+    str(issue.get(key) or "")
+    for key in ("description", "notes", "design", "acceptance_criteria")
+)
+normalized = unicodedata.normalize("NFKD", text.lower())
+normalized = normalized.replace("_", " ").replace("-", " ")
+
+fields = [
+    ("objective", ["task objective", "objective:", "goal:"]),
+    ("context-in", ["context included", "context needed", "context in"]),
+    ("context-out", ["context excluded", "context out", "ignore:", "ignore these", "do not inspect"]),
+    ("ownership", ["ownership paths", "owned paths", "write set", "responsible files", "responsible only for"]),
+    ("forbidden", ["forbidden actions", "do not edit", "do not modify", "must not", "never"]),
+    ("output", ["output schema", "expected output", "return format"]),
+    ("stop", ["stop condition", "stop after", "stop when", "done when"]),
+    ("failure", ["failure behavior", "if blocked", "when blocked"]),
+    ("rubric", ["acceptance rubric", "acceptance criteria", "rubric"]),
+    ("verification", ["verification evidence", "verification", "commands run"]),
+]
+missing = [label for label, needles in fields if not any(needle in normalized for needle in needles)]
+print(" ".join(missing))
+PY
+      )"
+      if [ -n "$contract_missing" ]; then
+        echo "ERROR: requested bead $bead_id is missing delegation contract field(s): $contract_missing"
+        hard_fail=true
+      else
+        echo "OK: requested bead $bead_id has a complete delegation contract."
+      fi
     else
       status="$(printf '%s\n' "$bead_json" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
       echo "ERROR: requested bead $bead_id status is ${status:-unknown}; expected in_progress."
