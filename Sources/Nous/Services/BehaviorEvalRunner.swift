@@ -393,11 +393,13 @@ final class BehaviorEvalRunner {
 
     private func delegationContractResult() -> BehaviorEvalResult {
         let contracted = AgentOutcomeContractParser.parse("""
+        Worker profile: verifier.
         Task objective: inspect the failing gate.
         Context included: build log and changed files only.
         Context excluded: unrelated voice UI files.
         Ownership paths: Tests/NousTests/HarnessHealthTests.swift only.
         Forbidden actions: do not edit anchor.md or unrelated UI files.
+        Sandbox policy: read-only evidence check; no writes.
         Output schema: findings first, then verification evidence.
         Stop condition: stop after reporting the first reproducible blocker.
         Failure behavior: stop and report blocker if the gate cannot run.

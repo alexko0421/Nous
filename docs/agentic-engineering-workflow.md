@@ -45,11 +45,15 @@ If any answer is no, stay single-agent.
 Before spawning any subagent, write the boundary in the prompt:
 
 - **Task objective:** the exact question or change the subagent owns.
+- **Worker profile:** one of explorer, worker, reviewer, verifier, or memory
+  steward.
 - **Context needed:** the files, docs, logs, or concepts it should inspect.
 - **Context excluded:** what it should ignore so it does not duplicate the lead.
 - **Ownership paths:** the exact files, directories, or read-only areas it owns.
 - **Forbidden actions:** edits, commands, memory writes, or scope expansions it
   must not perform.
+- **Sandbox policy:** read-only, write-scoped to ownership paths, or explicit
+  command-only permissions.
 - **Output schema:** the exact structure the lead expects back: bullets, JSON,
   table, patch summary, changed files, or pass/fail findings.
 - **Stop condition:** when it should stop exploring or editing.
@@ -61,6 +65,24 @@ Before spawning any subagent, write the boundary in the prompt:
   claiming the subtask is ready.
 
 If the card cannot be filled clearly, keep the work in the lead thread.
+
+## Worker Profiles And Sandbox Policy
+
+Worker profiles are permission bundles, not job titles. Pick the narrowest
+profile that can finish the delegated slice.
+
+| Profile | Default sandbox | Allowed work | Forbidden by default |
+|---|---|---|---|
+| Explorer | Read-only | Inspect files, logs, docs, and command output; map code paths. | File edits, Bead mutation, PR mutation, broad refactors. |
+| Worker | Write-scoped | Edit only named ownership paths; run focused verification. | Reverting unrelated changes, expanding write set silently, editing `anchor.md`. |
+| Reviewer | Read-only | Report bugs, regressions, missing tests, and residual risk. | Fixing the patch, staging files, rewriting the plan. |
+| Verifier | Read-only | Check whether evidence supports the finish claim. | Re-implementation, cosmetic review, default ceremony. |
+| Memory Steward | Read-only | Classify whether a lesson belongs in Beads, Nous memory, docs, or nowhere. | Writing durable memory, editing `anchor.md`, inferring Alex values. |
+
+Sandbox policy must be explicit even when it feels obvious. "Read-only" means no
+file writes and no mutating Beads/PR/git operations. "Write-scoped" means the
+worker may edit only the ownership paths in the card and must list changed
+files. Any broader write requires returning to the lead for a new boundary.
 
 ## Delegation Decision Tree
 
@@ -271,10 +293,12 @@ Read-only exploration:
 ```text
 Context Boundary Card:
 - Task objective: Explore <area/question>.
+- Worker profile: explorer.
 - Context needed: Inspect only <files/modules/logs>.
 - Context excluded: Do not inspect or propose changes outside <excluded area>.
 - Ownership paths: Read-only ownership of <files/modules/logs>.
 - Forbidden actions: Do not edit files, create Beads, run mutating commands, or broaden scope.
+- Sandbox policy: read-only.
 - Output schema: Return bullets under Findings, Evidence, Open Questions, and Remaining Risk.
 - Stop condition: Stop after mapping entry points, data flow, and likely files.
 - Failure behavior: If blocked, return the blocker, evidence inspected, and the next smallest unblock.
@@ -292,6 +316,7 @@ explorer must include a Context Boundary Card, inspect only its assigned area,
 avoid proposing fixes unless necessary to explain a risk, and return bullets
 under Findings, Evidence, Open Questions, and Remaining Risk. If blocked, it
 must report the blocker and stop. Wait for all results before synthesizing.
+Each card must name Worker profile: explorer and Sandbox policy: read-only.
 ```
 
 Worker implementation:
@@ -299,25 +324,40 @@ Worker implementation:
 ```text
 Context Boundary Card:
 - Task objective: Implement <specific behavior>.
+- Worker profile: worker.
 - Context needed: Inspect <files/modules/tests> needed for this change.
 - Context excluded: Ignore unrelated product/UI/worktree changes.
 - Ownership paths: Write only inside <files/modules/tests>.
 - Forbidden actions: Do not revert or overwrite changes you did not make; do not edit `Sources/Nous/Resources/anchor.md`; do not run destructive git commands.
+- Sandbox policy: write-scoped to ownership paths only.
 - Output schema: Return Changed Files, Verification, Residual Risk, and Notes.
 - Stop condition: Stop when the owned patch and focused tests are complete.
 - Failure behavior: If blocked, stop and return the blocker, files inspected, and the next smallest unblock.
 - Acceptance rubric: The work is acceptable only when owned files changed, focused verification ran, and every residual risk is named.
 - Verification evidence: List exact commands run and whether they passed.
 
-Other agents may be editing elsewhere. Adjust to their work without reverting it.
+You are not alone in the codebase. Other agents may be editing elsewhere; adjust
+to their work without reverting unrelated changes.
 ```
 
 Fresh review:
 
 ```text
-Review this diff like an owner. Prioritize correctness, behavior regressions,
-security/privacy risks, and missing tests. Lead with concrete findings tied to
-files and lines. Skip style-only comments unless they hide a real bug.
+Context Boundary Card:
+- Task objective: Review <diff/branch/PR> like an owner.
+- Worker profile: reviewer.
+- Context needed: Inspect <diff/files/tests> needed to judge correctness.
+- Context excluded: Do not redesign the feature or broaden into unrelated cleanup.
+- Ownership paths: Read-only ownership of review findings.
+- Forbidden actions: Do not edit files, stage files, close Beads, or mutate PR state.
+- Sandbox policy: read-only.
+- Output schema: Findings first by severity, then Open Questions, then Test Gaps.
+- Stop condition: Stop after checking correctness, behavior regressions, security/privacy risk, and missing tests.
+- Failure behavior: If the diff or evidence is unavailable, report the missing input and stop.
+- Acceptance rubric: The review is usable only if every finding is tied to a file/line or concrete behavior.
+- Verification evidence: Cite diff hunks, files, tests, or command output inspected.
+
+Skip style-only comments unless they hide a real bug.
 ```
 
 Verifier / Gatekeeper:
@@ -325,10 +365,12 @@ Verifier / Gatekeeper:
 ```text
 Context Boundary Card:
 - Task objective: Verify whether <task/bead/PR> is ready to finish.
+- Worker profile: verifier.
 - Context needed: Inspect <diff/status/test output/bead/docs>.
 - Context excluded: Do not re-implement or broaden product scope.
 - Ownership paths: Read-only ownership of verification evidence.
 - Forbidden actions: Do not edit files, stage files, close Beads, or mutate PR state.
+- Sandbox policy: read-only.
 - Output schema: Return Findings, Evidence, Required Fixes, and Remaining Risk, or "ready to finish" with the evidence relied on.
 - Stop condition: Stop after checking scope, changed files, Bead state, verification commands, skipped checks, and residual risks.
 - Failure behavior: If evidence is missing, say what is missing and stop.
@@ -341,10 +383,12 @@ Memory Steward:
 ```text
 Context Boundary Card:
 - Task objective: Decide the durable-memory boundary for <lesson/finding>.
+- Worker profile: memory steward.
 - Context needed: Inspect <conversation/task/docs/code> needed to classify it.
 - Context excluded: Do not infer Alex values or product strategy beyond evidence.
 - Ownership paths: Read-only ownership of memory-boundary judgment.
 - Forbidden actions: Do not edit files, write `bd remember`, create Nous memory, or modify `Sources/Nous/Resources/anchor.md`.
+- Sandbox policy: read-only.
 - Output schema: Return Recommendation, Boundary Risks, Store wording, and Do Not Store wording.
 - Stop condition: Stop once the narrowest durable-memory action is identified.
 - Failure behavior: If the boundary cannot be decided, say what evidence is missing and do not recommend durable storage.

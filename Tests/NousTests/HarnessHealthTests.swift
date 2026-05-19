@@ -214,11 +214,13 @@ final class HarnessHealthTests: XCTestCase {
 
     func testOutcomeContractHealthSummarizesMissingFields() {
         let ready = AgentOutcomeContractSummary(
+            workerProfile: .worker,
             hasObjective: true,
             hasContextIncluded: true,
             hasContextExcluded: true,
             hasOwnershipPaths: true,
             hasForbiddenActions: true,
+            hasSandboxPolicy: true,
             hasOutputSchema: true,
             hasStopCondition: true,
             hasFailureBehavior: true,
@@ -226,11 +228,13 @@ final class HarnessHealthTests: XCTestCase {
             hasVerificationEvidence: true
         )
         let missing = AgentOutcomeContractSummary(
+            workerProfile: .explorer,
             hasObjective: true,
             hasContextIncluded: false,
             hasContextExcluded: true,
             hasOwnershipPaths: true,
             hasForbiddenActions: true,
+            hasSandboxPolicy: true,
             hasOutputSchema: false,
             hasStopCondition: true,
             hasFailureBehavior: true,
