@@ -1342,7 +1342,7 @@ final class TurnPlannerShadowLearningTests: XCTestCase {
         XCTAssertFalse(plan.turnSlice.volatile.contains("RESPONSE STANCE:"))
     }
 
-    func testTurnGuidanceRendersInTurnPatternNamingWhenSignalExists() async throws {
+    func testTurnGuidanceRendersNaturalInTurnPatternNamingWhenSignalExists() async throws {
         let nodeStore = try NodeStore(path: ":memory:")
         let planner = makePlanner(
             nodeStore: nodeStore,
@@ -1375,10 +1375,14 @@ final class TurnPlannerShadowLearningTests: XCTestCase {
         let plan = try await planner.plan(from: prepared, request: request, stewardship: stewardship)
 
         XCTAssertEqual(plan.turnSlice.volatile.components(separatedBy: "TURN GUIDANCE:").count - 1, 1)
-        XCTAssertTrue(plan.turnSlice.volatile.contains("Pattern naming: Name at most one live pattern."))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("Pattern naming: Surface at most one live pattern as a brief conversational observation."))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("Do not write \"Pattern:\" or \"Action:\""))
+        XCTAssertTrue(plan.turnSlice.volatile.contains("fold the paired action into the next sentence"))
         XCTAssertTrue(plan.turnSlice.volatile.contains("comparison loop"))
         XCTAssertTrue(plan.turnSlice.volatile.contains("say the comparison out loud"))
         XCTAssertTrue(plan.turnSlice.volatile.contains("Continue helping with Alex's original task."))
+        XCTAssertFalse(plan.turnSlice.volatile.contains("Pattern: comparison loop"))
+        XCTAssertFalse(plan.turnSlice.volatile.contains("Action: say the comparison out loud"))
         XCTAssertFalse(plan.turnSlice.volatile.contains("therapy worksheet"))
         XCTAssertFalse(plan.turnSlice.volatile.contains("you always"))
     }
