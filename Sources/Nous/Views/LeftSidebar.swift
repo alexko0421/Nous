@@ -149,96 +149,6 @@ func getAppWindow() -> NSWindow? {
     )
 }
 
-// Galaxy Icon - clean port of the React reference
-struct GalaxyIcon: View {
-    let color: Color
-    var body: some View {
-        ZStack {
-            // Two tiny stardust dots
-            Circle()
-                .fill(color.opacity(0.35))
-                .frame(width: 2, height: 2)
-                .offset(x: -7, y: -7)
-            Circle()
-                .fill(color.opacity(0.25))
-                .frame(width: 1.5, height: 1.5)
-                .offset(x: 8, y: 5)
-
-            // Central planet body (stroked circle)
-            Circle()
-                .stroke(color, lineWidth: 1.5)
-                .frame(width: 10, height: 10)
-
-            // Ring (stroked ellipse, rotated -20°)
-            Ellipse()
-                .stroke(color.opacity(0.85), lineWidth: 1.5)
-                .frame(width: 20, height: 6)
-                .rotationEffect(.degrees(-20))
-        }
-        .frame(width: 18, height: 18)
-    }
-}
-
-// Project Icon - clean 'stacked tray' design
-struct ProjectIcon: View {
-    let color: Color
-    var body: some View {
-        Canvas { ctx, size in
-            let w = size.width
-            let h = size.height
-            let r: CGFloat = 3.5
-            let lw: CGFloat = 1.5
-
-            // Outer rounded rect
-            let outerRect = CGRect(x: 2, y: 4, width: w - 4, height: h - 6)
-            ctx.stroke(
-                Path(roundedRect: outerRect, cornerRadius: r),
-                with: .color(color),
-                lineWidth: lw
-            )
-
-            // Inner shelf — a strong horizontal line 1/3 down from top
-            let shelfY = outerRect.minY + outerRect.height * 0.38
-            var shelf = Path()
-            shelf.move(to: CGPoint(x: outerRect.minX, y: shelfY))
-            shelf.addLine(to: CGPoint(x: outerRect.maxX, y: shelfY))
-            ctx.stroke(shelf, with: .color(color), lineWidth: lw)
-        }
-        .frame(width: 18, height: 18)
-    }
-}
-
-struct NavIconButton<Icon: View>: View {
-    let icon: Icon
-    let label: String
-    let action: () -> Void
-    @State private var isHovered = false
-    
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 6) {
-                NativeGlassPanel(cornerRadius: 18, tintColor: AppColor.controlGlassTint) {
-                    EmptyView()
-                }
-                .frame(width: 36, height: 36)
-                .overlay(
-                    Circle()
-                        .stroke(AppColor.sidebarGlassStroke.opacity(0.55), lineWidth: 1)
-                )
-                .overlay(icon)
-                
-                Text(label)
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .foregroundColor(AppColor.sidebarMutedText)
-            }
-        }
-        .buttonStyle(.plain)
-        .scaleEffect(isHovered ? 1.07 : 1.0)
-        .animation(.spring(response: 0.28, dampingFraction: 0.6), value: isHovered)
-        .onHover { isHovered = $0 }
-    }
-}
-
 struct SidebarDivider: View {
     var body: some View {
         Path { path in
@@ -314,7 +224,6 @@ struct LeftSidebar: View {
     let nodeStore: NodeStore
     let conversationSessionStore: ConversationSessionStore
     @Binding var selectedTab: MainTab
-    @Binding var selectedProjectId: UUID?
     let selectedNodeId: UUID?
     var onNodeSelected: ((NousNode) -> Void)?
     var onNewChat: (() -> Void)?
@@ -323,7 +232,6 @@ struct LeftSidebar: View {
 
     @State private var favorites: [NousNode] = []
     @State private var recents: [NousNode] = []
-    @State private var showProjectList = false
     @State private var renameTarget: NousNode?
     @State private var searchQuery: String = ""
     @State private var searchResults: [NousNode] = []
@@ -420,8 +328,6 @@ struct LeftSidebar: View {
                         .padding(.leading, 20)
                         .padding(.trailing, 8)
                     }
-                } else if showProjectList {
-                    ProjectListView(nodeStore: nodeStore, selectedProjectId: $selectedProjectId)
                 } else {
                     ScrollView(.vertical, showsIndicators: false) {
                         VStack(alignment: .leading, spacing: 28) {
@@ -526,7 +432,7 @@ struct LeftSidebar: View {
                     .allowsHitTesting(false)
             )
         }
-        .frame(width: GalaxySidebarLayout.width)
+        .frame(width: AppSidebarLayout.width)
         .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 32, style: .continuous)

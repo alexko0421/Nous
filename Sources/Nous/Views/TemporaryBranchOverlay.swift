@@ -368,7 +368,10 @@ struct TemporaryBranchRecordMarker: View {
     let onMemoryCandidateAction: (UUID, TemporaryBranchMemoryCandidateAction) -> Void
 
     private var visibleMemoryCandidates: [TemporaryBranchMemoryCandidate] {
-        record.memoryCandidates.filter { $0.scope != .ignore }
+        record.memoryCandidates.filter { candidate in
+            candidate.scope != .ignore &&
+            (candidate.scope != .project || RetiredFeaturePolicy.projectSurfacesEnabled)
+        }
     }
 
     var body: some View {
@@ -480,7 +483,7 @@ struct TemporaryBranchRecordMarker: View {
     private func saveLabel(for candidate: TemporaryBranchMemoryCandidate) -> String {
         switch candidate.scope {
         case .project:
-            return "Save to Project"
+            return "Unavailable"
         case .global:
             return "Save to Memory"
         case .conversation:
@@ -493,7 +496,7 @@ struct TemporaryBranchRecordMarker: View {
     private func savedLabel(for candidate: TemporaryBranchMemoryCandidate) -> String {
         switch candidate.scope {
         case .project:
-            return "Saved to Project Memory"
+            return "Unavailable"
         case .global:
             return "Saved to Long-term Memory"
         case .conversation:

@@ -107,7 +107,7 @@ final class SettingsUILayoutTests: XCTestCase {
         XCTAssertTrue(source.contains("private enum SettingsLayout"))
         XCTAssertTrue(source.contains("static let shellPadding = RightPanelLayout.windowPadding"))
         XCTAssertTrue(source.contains("static let columnSpacing = RightPanelLayout.windowPadding"))
-        XCTAssertTrue(source.contains("static let sidebarWidth = GalaxySidebarLayout.width"))
+        XCTAssertTrue(source.contains("static let sidebarWidth = AppSidebarLayout.width"))
         XCTAssertTrue(source.contains("static let contentCornerRadius: CGFloat = 36"))
         XCTAssertTrue(source.contains("HStack(spacing: SettingsLayout.columnSpacing)"))
         XCTAssertTrue(source.contains(".padding(SettingsLayout.shellPadding)"))

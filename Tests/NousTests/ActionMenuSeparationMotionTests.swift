@@ -217,8 +217,7 @@ final class ActionMenuSeparationMotionTests: XCTestCase {
 
         let surfaceTintExpectations = [
             "Sources/Nous/Views/LeftSidebar.swift": "tintColor: AppColor.sidebarGlassTint",
-            "Sources/Nous/Views/ScratchPadPanel.swift": "tintColor: AppColor.surfaceGlassTint",
-            "Sources/Nous/Views/GalaxyView.swift": "tintColor: AppColor.surfaceGlassTint"
+            "Sources/Nous/Views/ScratchPadPanel.swift": "tintColor: AppColor.surfaceGlassTint"
         ]
 
         for (relativePath, expectedTint) in surfaceTintExpectations {

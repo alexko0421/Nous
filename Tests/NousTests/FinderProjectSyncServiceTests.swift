@@ -17,9 +17,11 @@ final class FinderProjectSyncServiceTests: XCTestCase {
 
         let dbURL = tempDirectoryURL.appendingPathComponent("nous.sqlite", isDirectory: false)
         store = try NodeStore(path: dbURL.path)
+        RetiredFeaturePolicy.projectSurfacesEnabledOverride = true
     }
 
     override func tearDownWithError() throws {
+        RetiredFeaturePolicy.projectSurfacesEnabledOverride = nil
         store = nil
         if let tempDirectoryURL {
             try? FileManager.default.removeItem(at: tempDirectoryURL)

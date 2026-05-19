@@ -2,6 +2,16 @@ import XCTest
 @testable import Nous
 
 final class GalaxyRelationRefinementQueueTests: XCTestCase {
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        RetiredFeaturePolicy.galaxyBackgroundWorkEnabledOverride = true
+    }
+
+    override func tearDownWithError() throws {
+        RetiredFeaturePolicy.galaxyBackgroundWorkEnabledOverride = nil
+        try super.tearDownWithError()
+    }
+
     func testQueueDeduplicatesPendingNode() async {
         let refiner = RecordingRelationRefiner()
         let telemetry = GalaxyRelationTelemetry()

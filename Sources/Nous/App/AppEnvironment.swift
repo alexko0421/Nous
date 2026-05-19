@@ -24,7 +24,6 @@ struct AppDependencies {
     let embeddingService: EmbeddingService
     let localLLM: LocalLLMService
     let graphEngine: GraphEngine
-    let relationRefinementQueue: GalaxyRelationRefinementQueue
     let finderProjectSync: FinderProjectSyncService
     let conversationTitleBackfill: ConversationTitleBackfillService
     let memoryGraphMessageBackfill: MemoryGraphMessageBackfillService
@@ -42,7 +41,6 @@ struct AppDependencies {
     let chatVM: ChatViewModel
     let youtubeLearningVM: YouTubeLearningViewModel
     let noteVM: NoteViewModel
-    let galaxyVM: GalaxyViewModel
     let beadsAgentWorkVM: BeadsAgentWorkViewModel
     let weeklyReflectionRollover: (@Sendable () async -> Void)?
 }
@@ -168,14 +166,6 @@ final class AppEnvironment {
             ),
             telemetry: galaxyRelationTelemetry
         )
-        let relationRefinementQueue = GalaxyRelationRefinementQueue(
-            refiner: graphEngine,
-            isEnabled: {
-                guard settingsVM.backgroundAnalysisEnabled else { return false }
-                return settingsVM.makeJudgeLLMService() != nil
-            },
-            telemetry: galaxyRelationTelemetry
-        )
         let finderProjectSync = FinderProjectSyncService(
             nodeStore: nodeStore,
             shouldExportAssistantThinking: { settingsVM.assistantThinkingEnabled }
@@ -239,7 +229,6 @@ final class AppEnvironment {
             onSourceNodeIngested: { node in
                 Task { @MainActor in
                     try? graphEngine.regenerateEdges(for: node)
-                    relationRefinementQueue.enqueue(nodeId: node.id)
                 }
             }
         )
@@ -248,7 +237,6 @@ final class AppEnvironment {
             vectorStore: vectorStore,
             embeddingService: embeddingService,
             graphEngine: graphEngine,
-            relationRefinementQueue: relationRefinementQueue,
             userMemoryService: userMemoryService,
             userMemoryScheduler: scheduler,
             sourceLearningMemoryScheduler: sourceLearningMemoryScheduler,
@@ -302,10 +290,8 @@ final class AppEnvironment {
             nodeStore: nodeStore,
             vectorStore: vectorStore,
             embeddingService: embeddingService,
-            graphEngine: graphEngine,
-            relationRefinementQueue: relationRefinementQueue
+            graphEngine: graphEngine
         )
-        let galaxyVM = GalaxyViewModel(nodeStore: nodeStore, graphEngine: graphEngine)
         let beadsAgentWorkVM = BeadsAgentWorkViewModel(
             service: BeadsAgentWorkService(
                 runtimeHarnessLoader: RuntimeHarnessService(
@@ -363,7 +349,6 @@ final class AppEnvironment {
             embeddingService: embeddingService,
             localLLM: localLLM,
             graphEngine: graphEngine,
-            relationRefinementQueue: relationRefinementQueue,
             finderProjectSync: finderProjectSync,
             conversationTitleBackfill: conversationTitleBackfill,
             memoryGraphMessageBackfill: memoryGraphMessageBackfill,
@@ -381,7 +366,6 @@ final class AppEnvironment {
             chatVM: chatVM,
             youtubeLearningVM: youtubeLearningVM,
             noteVM: noteVM,
-            galaxyVM: galaxyVM,
             beadsAgentWorkVM: beadsAgentWorkVM,
             weeklyReflectionRollover: reflectionRollover
         )

@@ -295,8 +295,6 @@ struct CorpusAtomCardListView: View {
                     )
                 }
             ),
-            style: .chat,
-            telemetry: nil,
             onChange: { _, _ in }
         )
         return AnyView(view)

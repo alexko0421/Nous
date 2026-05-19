@@ -38,10 +38,6 @@ struct NoteEditor: View {
 
             // Metadata row
             HStack(spacing: 8) {
-                if let project = vm.currentProject {
-                    Text(project.emoji)
-                        .font(.system(size: 13))
-                }
                 Text(Self.dateFormatter.string(from: note.updatedAt))
                     .font(.system(size: 12, design: .rounded))
                     .foregroundColor(AppColor.colaDarkText.opacity(0.45))

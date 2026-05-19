@@ -419,15 +419,16 @@ final class TemporaryBranchUILayoutTests: XCTestCase {
         let recordSource = String(source[recordStart..<bubbleStart])
 
         XCTAssertTrue(recordSource.contains("Worth remembering"))
-        XCTAssertTrue(recordSource.contains("Save to Project"))
+        XCTAssertFalse(recordSource.contains("Save to Project"))
         XCTAssertTrue(recordSource.contains("Save to Memory"))
         XCTAssertTrue(recordSource.contains("Ignore"))
-        XCTAssertTrue(recordSource.contains("Saved to Project Memory"))
+        XCTAssertFalse(recordSource.contains("Saved to Project Memory"))
         XCTAssertTrue(recordSource.contains("Saved to Long-term Memory"))
         XCTAssertTrue(recordSource.contains("onMemoryCandidateAction"))
         XCTAssertTrue(recordSource.contains("ForEach(visibleMemoryCandidates)"))
         XCTAssertTrue(recordSource.contains("Save to Thread"))
-        XCTAssertTrue(recordSource.contains("$0.scope != .ignore"))
+        XCTAssertTrue(recordSource.contains("candidate.scope != .ignore"))
+        XCTAssertTrue(recordSource.contains("RetiredFeaturePolicy.projectSurfacesEnabled"))
         XCTAssertFalse(recordSource.contains("record.memoryCandidates.first"))
     }
 }

@@ -449,8 +449,8 @@ final class TemporaryBranchViewModelTests: XCTestCase {
                 },
                 {
                   "content": "Branch candidates should stay pending before confirmation.",
-                  "scope": "project",
-                  "kind": "decision",
+                  "scope": "global",
+                  "kind": "preference",
                   "confidence": 12.5,
                   "reason": "Overconfident LLM output should be clamped.",
                   "evidence_quote": "Branch candidates should stay pending"
@@ -467,7 +467,7 @@ final class TemporaryBranchViewModelTests: XCTestCase {
         XCTAssertTrue(evaluation.candidates[0].content.contains("pending before confirmation"))
     }
 
-    func testEvaluatorCreatesProjectCandidateForProductDecision() async throws {
+    func testEvaluatorSuppressesProjectCandidateForProductDecisionWhenProjectsAreRetired() async throws {
         let source = Message(nodeId: UUID(), role: .assistant, content: "How should branch memory work?")
         let record = TemporaryBranchRecord(
             sourceMessage: source,
@@ -483,12 +483,7 @@ final class TemporaryBranchViewModelTests: XCTestCase {
 
         let evaluation = await TemporaryBranchMemoryEvaluator().evaluate(record: record)
 
-        let candidate = try XCTUnwrap(evaluation.candidates.first)
-        XCTAssertEqual(candidate.scope, .project)
-        XCTAssertEqual(candidate.kind, .decision)
-        XCTAssertEqual(candidate.status, .pending)
-        XCTAssertGreaterThanOrEqual(candidate.confidence, 0.55)
-        XCTAssertTrue(candidate.evidenceQuote.contains("branch summary should enter thread context"))
+        XCTAssertTrue(evaluation.candidates.isEmpty)
     }
 
     func testEvaluatorDoesNotCreateProjectDecisionCandidateForOpenQuestion() async throws {
@@ -900,7 +895,7 @@ final class TemporaryBranchViewModelTests: XCTestCase {
         XCTAssertNil(try store.fetchActiveMemoryEntry(scope: .global, scopeRefId: nil))
     }
 
-    func testMemoryServiceAppliesProjectAndGlobalCandidatesToCorrectScopes() async throws {
+    func testMemoryServiceRejectsProjectCandidateWhenProjectsAreRetiredButKeepsGlobalCandidate() async throws {
         let store = try NodeStore(path: ":memory:")
         let service = UserMemoryService(nodeStore: store, llmServiceProvider: { nil })
         let projectId = UUID()
@@ -939,12 +934,11 @@ final class TemporaryBranchViewModelTests: XCTestCase {
         let didApplyProjectCandidate = await service.applyTemporaryBranchCandidate(projectCandidate, record: baseRecord)
         let didApplyGlobalCandidate = await service.applyTemporaryBranchCandidate(globalCandidate, record: baseRecord)
 
-        XCTAssertTrue(didApplyProjectCandidate)
+        XCTAssertFalse(didApplyProjectCandidate)
         XCTAssertTrue(didApplyGlobalCandidate)
 
-        let projectMemory = try XCTUnwrap(try store.fetchActiveMemoryEntry(scope: .project, scopeRefId: projectId))
         let globalMemory = try XCTUnwrap(try store.fetchActiveMemoryEntry(scope: .global, scopeRefId: nil))
-        XCTAssertTrue(projectMemory.content.contains("Branch summary enters thread context"))
+        XCTAssertNil(try store.fetchActiveMemoryEntry(scope: .project, scopeRefId: projectId))
         XCTAssertTrue(globalMemory.content.contains("non-linear thinking"))
     }
 

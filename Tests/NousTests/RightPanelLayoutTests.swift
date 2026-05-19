@@ -295,7 +295,7 @@ final class RightPanelLayoutTests: XCTestCase {
             encoding: .utf8
         )
 
-        let frameRange = try XCTUnwrap(source.range(of: ".frame(width: GalaxySidebarLayout.width)"))
+        let frameRange = try XCTUnwrap(source.range(of: ".frame(width: AppSidebarLayout.width)"))
         let clippedSource = String(source[frameRange.lowerBound...])
         XCTAssertTrue(clippedSource.contains(".clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))"))
         XCTAssertTrue(clippedSource.contains(".shadow(color: .black.opacity(0.12), radius: 18, x: 0, y: 8)"))

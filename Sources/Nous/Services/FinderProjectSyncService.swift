@@ -22,6 +22,7 @@ final class FinderProjectSyncService {
     }
 
     func scheduleSync() {
+        guard RetiredFeaturePolicy.projectSurfacesEnabled else { return }
         pendingSyncTask?.cancel()
         pendingSyncTask = Task.detached(priority: .utility) { [weak self] in
             try? await Task.sleep(for: .milliseconds(350))
@@ -31,6 +32,7 @@ final class FinderProjectSyncService {
     }
 
     func syncNow() {
+        guard RetiredFeaturePolicy.projectSurfacesEnabled else { return }
         syncLock.lock()
         defer { syncLock.unlock() }
 

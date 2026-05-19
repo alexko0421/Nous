@@ -37,7 +37,6 @@ targets:
       - sdk: Accelerate.framework
       - sdk: AVFoundation.framework
       - sdk: Security.framework
-      - sdk: SpriteKit.framework
       - sdk: WebKit.framework
   ProvocationFixtureRunner:
     type: tool

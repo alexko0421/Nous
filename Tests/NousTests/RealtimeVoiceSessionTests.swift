@@ -260,9 +260,9 @@ final class RealtimeVoiceSessionTests: XCTestCase {
     }
 
     func testParsesInputAudioTranscriptionCompleted() throws {
-        let raw = #"{"type":"conversation.item.input_audio_transcription.completed","transcript":"Open Galaxy"}"#
+        let raw = #"{"type":"conversation.item.input_audio_transcription.completed","transcript":"Open Settings"}"#
 
-        XCTAssertEqual(RealtimeVoiceEventParser.parse(raw), .inputTranscriptCompleted("Open Galaxy"))
+        XCTAssertEqual(RealtimeVoiceEventParser.parse(raw), .inputTranscriptCompleted("Open Settings"))
     }
 
     func testParsesResponseAudioTranscriptDelta() throws {
@@ -272,9 +272,9 @@ final class RealtimeVoiceSessionTests: XCTestCase {
     }
 
     func testParsesResponseAudioTranscriptDone() throws {
-        let raw = #"{"type":"response.audio_transcript.done","transcript":"Opening Galaxy"}"#
+        let raw = #"{"type":"response.audio_transcript.done","transcript":"Opening Settings"}"#
 
-        XCTAssertEqual(RealtimeVoiceEventParser.parse(raw), .outputTranscriptCompleted("Opening Galaxy"))
+        XCTAssertEqual(RealtimeVoiceEventParser.parse(raw), .outputTranscriptCompleted("Opening Settings"))
     }
 
     func testParsesResponseDoneAsThinkingComplete() throws {

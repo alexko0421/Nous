@@ -51,7 +51,7 @@ enum VoiceActionRegistry {
             name: "navigate_to_tab",
             description: "Navigate to a main Nous tab.",
             properties: [
-                "tab": ["type": "string", "enum": ["chat", "notes", "galaxy", "settings"]]
+                "tab": ["type": "string", "enum": ["chat", "notes", "settings"]]
             ],
             required: ["tab"],
             risk: .direct
