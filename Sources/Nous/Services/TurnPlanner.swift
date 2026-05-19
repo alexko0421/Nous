@@ -806,7 +806,7 @@ final class TurnPlanner {
         }
 
         return """
-        Name at most one live pattern. Pattern: \(signal.kind.displayLabel). Action: \(signal.kind.pairedAction). \(surfaceInstruction) Use one sentence of evidence from Alex's current words, then give the action. Continue helping with Alex's original task. Never use always-style identity claims, diagnosis language, routing language, or clinical worksheets.
+        Surface at most one live pattern as a brief conversational observation. The pattern label available to you is \(signal.kind.displayLabel); the paired action is to \(signal.kind.pairedAction). \(surfaceInstruction) Use one sentence of evidence from Alex's current words, then fold the paired action into the next sentence as the next useful move. Do not write "Pattern:" or "Action:", do not announce that you are naming a pattern, and do not use therapy or worksheet language. Continue helping with Alex's original task. Never use always-style identity claims, diagnosis language, routing language, or clinical worksheet framing.
         """
     }
 
