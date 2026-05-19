@@ -202,7 +202,7 @@ final class BeadsAgentWorkServiceTests: XCTestCase {
               }
             ]
             """,
-            "list --status=closed --json": """
+            "list --status=closed --sort=closed --reverse --limit=1 --json": """
             [
               {
                 "id": "new-york-b1e",
@@ -247,7 +247,7 @@ final class BeadsAgentWorkServiceTests: XCTestCase {
             ["where"],
             ["ready", "--json"],
             ["list", "--status=in_progress", "--json"],
-            ["list", "--status=closed", "--json"]
+            ["list", "--status=closed", "--sort=closed", "--reverse", "--limit=1", "--json"]
         ])
     }
 
@@ -260,7 +260,7 @@ final class BeadsAgentWorkServiceTests: XCTestCase {
             """,
             "ready --json": "[]",
             "list --status=in_progress --json": "[]",
-            "list --status=closed --json": "[]"
+            "list --status=closed --sort=closed --reverse --limit=6 --json": "[]"
         ])
         let service = BeadsAgentWorkService(commandRunner: runner)
 
@@ -310,7 +310,7 @@ final class BeadsAgentWorkServiceTests: XCTestCase {
             "where": "  /shared/beads  \n",
             "ready --json": "",
             "list --status=in_progress --json": "   \n",
-            "list --status=closed --json": "[]"
+            "list --status=closed --sort=closed --reverse --limit=6 --json": "[]"
         ])
         let service = BeadsAgentWorkService(commandRunner: runner)
 
@@ -355,7 +355,7 @@ final class BeadsAgentWorkServiceTests: XCTestCase {
               }
             ]
             """,
-            "list --status=closed --json": "[]"
+            "list --status=closed --sort=closed --reverse --limit=6 --json": "[]"
         ])
         let runtime = RuntimeHarnessSnapshot(totalTurnCount: 1)
         let service = BeadsAgentWorkService(

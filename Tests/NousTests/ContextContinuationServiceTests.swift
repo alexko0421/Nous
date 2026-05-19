@@ -601,6 +601,82 @@ final class ContextContinuationServiceTests: XCTestCase {
         XCTAssertEqual(event.activeCount, 1)
     }
 
+    func testSourceLearningSchedulerReleasesCompletedTasksAfterIdle() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let projectId = UUID()
+        try nodeStore.insertProject(Project(id: projectId, title: "Community"))
+        let conversation = NousNode(type: .conversation, title: "Source learning cleanup", projectId: projectId)
+        let sourceNode = NousNode(type: .source, title: "Source", content: "Leaders frame the worldview.")
+        try nodeStore.insertNode(conversation)
+        try nodeStore.insertNode(sourceNode)
+
+        let userMessage = Message(
+            nodeId: conversation.id,
+            role: .user,
+            content: "I think this source connects to my community strategy.",
+            timestamp: Date(timeIntervalSince1970: 40)
+        )
+        let assistantMessage = Message(
+            nodeId: conversation.id,
+            role: .assistant,
+            content: "This source has a community framing angle.",
+            timestamp: Date(timeIntervalSince1970: 41)
+        )
+        try nodeStore.insertMessage(userMessage)
+        try nodeStore.insertMessage(assistantMessage)
+
+        let service = SourceLearningMemoryService(
+            nodeStore: nodeStore,
+            llmServiceProvider: {
+                StaticContextSourceLearningLLM(output: """
+                {
+                  "candidates": [
+                    {
+                      "type": "belief",
+                      "statement": "Alex believes this source connects to his community strategy.",
+                      "scope": "project",
+                      "confidence": 0.82,
+                      "evidence_quote": "I think this source connects to my community strategy."
+                    }
+                  ]
+                }
+                """)
+            },
+            now: { Date(timeIntervalSince1970: 50) }
+        )
+        let scheduler = SourceLearningMemoryScheduler(service: service)
+        await scheduler.enqueue(SourceLearningDigestRequest(
+            turnId: UUID(),
+            conversationId: conversation.id,
+            projectId: projectId,
+            userMessage: userMessage,
+            assistantMessage: assistantMessage,
+            sourceMaterials: [
+                SourceMaterialContext(
+                    sourceNodeId: sourceNode.id,
+                    title: sourceNode.title,
+                    originalURL: nil,
+                    originalFilename: "source.md",
+                    chunks: [
+                        SourceChunkContext(
+                            sourceNodeId: sourceNode.id,
+                            ordinal: 0,
+                            text: "Leaders frame the worldview.",
+                            similarity: nil
+                        )
+                    ],
+                    evidenceLevel: .transcriptBacked
+                )
+            ]
+        ))
+
+        await scheduler.waitUntilIdle()
+
+        let retainedCounts = await scheduler.debugRetainedTaskCounts()
+        XCTAssertEqual(retainedCounts.conversationTails, 0)
+        XCTAssertEqual(retainedCounts.scheduledTasks, 0)
+    }
+
     func testMemoryActivitySnapshotIgnoresStaleTurnEvents() {
         let currentTurnId = UUID()
         let staleTurnId = UUID()

@@ -977,6 +977,7 @@ struct MemoryGraphInspector: View {
                 }
             } catch {
                 await MainActor.run {
+                    reload()
                     loadError = "Failed to approve visible memory atoms: \(error.localizedDescription)"
                     actingAtomId = nil
                 }
@@ -996,6 +997,7 @@ struct MemoryGraphInspector: View {
             loadError = nil
             reload()
         } catch {
+            reload()
             loadError = "Failed to reject visible memory atoms: \(error.localizedDescription)"
         }
         actingAtomId = nil

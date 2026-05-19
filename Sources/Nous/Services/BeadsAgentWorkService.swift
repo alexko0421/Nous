@@ -237,12 +237,16 @@ final class BeadsAgentWorkService: @unchecked Sendable {
             command: "bd list --status=in_progress --json"
         )
         let closed = try decodeIssues(
-            from: commandRunner.run(["list", "--status=closed", "--json"]),
-            command: "bd list --status=closed --json"
+            from: commandRunner.run([
+                "list",
+                "--status=closed",
+                "--sort=closed",
+                "--reverse",
+                "--limit=\(recentClosedLimit)",
+                "--json"
+            ]),
+            command: "bd list --status=closed --sort=closed --reverse --limit=\(recentClosedLimit) --json"
         )
-        .sorted { left, right in
-            (left.closedAt ?? left.updatedAt ?? "") > (right.closedAt ?? right.updatedAt ?? "")
-        }
         var runtimeHarness = runtimeHarnessLoader.loadSnapshot()
         runtimeHarness.outcomeContracts = AgentOutcomeContractHealthSummary.summarize(
             (ready + inProgress).map(\.outcomeContract)

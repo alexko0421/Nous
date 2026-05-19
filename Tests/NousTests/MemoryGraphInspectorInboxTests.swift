@@ -24,6 +24,8 @@ final class MemoryGraphInspectorInboxTests: XCTestCase {
         XCTAssertTrue(source.contains("MemoryLifecycleEngine(nodeStore: nodeStore).reject(atom.id)"))
         XCTAssertTrue(source.contains("atomActionButton(title: \"Forget\""))
         XCTAssertTrue(source.contains("MemoryLifecycleEngine(nodeStore: nodeStore).forget(atom.id)"))
+        XCTAssertTrue(source.contains("reload()\n                    loadError = \"Failed to approve visible memory atoms"))
+        XCTAssertTrue(source.contains("reload()\n            loadError = \"Failed to reject visible memory atoms"))
     }
 
     func testMemoryGraphInspectorSourceQuoteUsesMessageIdAndEvidenceFallback() throws {

@@ -4,8 +4,13 @@ actor SourceLearningMemoryScheduler {
     private let service: SourceLearningMemoryService
     private var activityHandler: (@Sendable (MemoryActivityEvent) async -> Void)?
     private var latestActivityEventsByConversation: [UUID: MemoryActivityEvent] = [:]
-    private var conversationTails: [UUID: Task<Void, Never>] = [:]
-    private var scheduledTasks: [Task<Void, Never>] = []
+    private struct ScheduledTask {
+        let token: UUID
+        let task: Task<Void, Never>
+    }
+
+    private var conversationTails: [UUID: ScheduledTask] = [:]
+    private var scheduledTasks: [UUID: Task<Void, Never>] = [:]
 
     init(service: SourceLearningMemoryService) {
         self.service = service
@@ -20,7 +25,8 @@ actor SourceLearningMemoryScheduler {
     }
 
     func enqueue(_ request: SourceLearningDigestRequest) {
-        let previous = conversationTails[request.conversationId]
+        let previous = conversationTails[request.conversationId]?.task
+        let token = UUID()
         let task = Task { [service, weak self] in
             if let previous {
                 await previous.value
@@ -35,17 +41,21 @@ actor SourceLearningMemoryScheduler {
                 rejectedCount: result.rejectedCount,
                 recordedAt: Date()
             ))
+            await self?.finish(conversationId: request.conversationId, token: token)
         }
-        conversationTails[request.conversationId] = task
-        scheduledTasks.append(task)
+        conversationTails[request.conversationId] = ScheduledTask(token: token, task: task)
+        scheduledTasks[token] = task
     }
 
     func waitUntilIdle() async {
-        let tasks = scheduledTasks
-        scheduledTasks = []
+        let tasks = Array(scheduledTasks.values)
         for task in tasks {
             await task.value
         }
+    }
+
+    func debugRetainedTaskCounts() -> (conversationTails: Int, scheduledTasks: Int) {
+        (conversationTails.count, scheduledTasks.count)
     }
 
     private func recordActivity(_ event: MemoryActivityEvent) async {
@@ -53,5 +63,12 @@ actor SourceLearningMemoryScheduler {
         if let activityHandler {
             await activityHandler(event)
         }
+    }
+
+    private func finish(conversationId: UUID, token: UUID) {
+        if conversationTails[conversationId]?.token == token {
+            conversationTails[conversationId] = nil
+        }
+        scheduledTasks[token] = nil
     }
 }
