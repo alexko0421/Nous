@@ -56,14 +56,12 @@ enum VoiceModeTogglePolicy {
 enum VoiceNavigationTarget: String, CaseIterable, Equatable {
     case chat
     case notes
-    case galaxy
     case settings
 
     var actionTitle: String {
         switch self {
         case .chat: return "Opening Chat"
         case .notes: return "Opening Notes"
-        case .galaxy: return "Opening Galaxy"
         case .settings: return "Opening Settings"
         }
     }
@@ -236,7 +234,6 @@ struct VoiceAppSnapshot: Equatable {
     var currentTab: VoiceNavigationTarget
     var settingsSection: VoiceSettingsSection?
     var composerText: String
-    var selectedProjectName: String?
     var sidebarVisible: Bool
     var scratchpadVisible: Bool
     var scratchpadMarkdown: String
@@ -252,7 +249,6 @@ struct VoiceAppSnapshot: Equatable {
         currentTab: VoiceNavigationTarget,
         settingsSection: VoiceSettingsSection?,
         composerText: String,
-        selectedProjectName: String?,
         sidebarVisible: Bool,
         scratchpadVisible: Bool,
         scratchpadMarkdown: String = "",
@@ -267,7 +263,6 @@ struct VoiceAppSnapshot: Equatable {
         self.currentTab = currentTab
         self.settingsSection = settingsSection
         self.composerText = composerText
-        self.selectedProjectName = selectedProjectName
         self.sidebarVisible = sidebarVisible
         self.scratchpadVisible = scratchpadVisible
         self.scratchpadMarkdown = scratchpadMarkdown
@@ -286,7 +281,6 @@ struct VoiceAppSnapshot: Equatable {
                 "current_tab": currentTab.rawValue,
                 "settings_section": Self.stringOrNull(settingsSection?.rawValue),
                 "composer_text": composerText,
-                "selected_project_name": Self.stringOrNull(selectedProjectName),
                 "sidebar_visible": sidebarVisible,
                 "scratchpad_visible": scratchpadVisible,
                 "scratchpad_markdown": scratchpadMarkdown,
@@ -311,7 +305,6 @@ struct VoiceAppSnapshot: Equatable {
         currentTab: .chat,
         settingsSection: nil,
         composerText: "",
-        selectedProjectName: nil,
         sidebarVisible: false,
         scratchpadVisible: false,
         scratchpadMarkdown: "",

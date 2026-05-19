@@ -149,12 +149,12 @@ final class VoiceCommandControllerTests: XCTestCase {
         )
 
         try await controller.start(apiKey: " sk-test \n")
-        await session.emit(.toolCall(.init(name: "navigate_to_tab", arguments: #"{"tab":"galaxy"}"#), callId: "call-1"))
+        await session.emit(.toolCall(.init(name: "navigate_to_tab", arguments: #"{"tab":"settings"}"#), callId: "call-1"))
 
         XCTAssertEqual(session.startedAPIKeys, ["sk-test"])
-        XCTAssertEqual(navigated, .galaxy)
-        XCTAssertEqual(controller.status, .action("Opening Galaxy"))
-        XCTAssertEqual(session.functionOutputs, [.init(callId: "call-1", output: "Opening Galaxy")])
+        XCTAssertEqual(navigated, .settings)
+        XCTAssertEqual(controller.status, .action("Opening Settings"))
+        XCTAssertEqual(session.functionOutputs, [.init(callId: "call-1", output: "Opening Settings")])
     }
 
     func testRealtimeToolCallArgumentsWaitForResponseDoneBeforeRunningHandler() async throws {
@@ -197,10 +197,10 @@ final class VoiceCommandControllerTests: XCTestCase {
 
         try await controller.start(apiKey: "sk-test")
         await session.emit(.inputTranscriptDelta("Open"))
-        await session.emit(.inputTranscriptDelta(" Galaxy"))
-        await session.emit(.inputTranscriptCompleted("Open Galaxy"))
+        await session.emit(.inputTranscriptDelta(" Settings"))
+        await session.emit(.inputTranscriptCompleted("Open Settings"))
 
-        XCTAssertEqual(controller.subtitleText, "Open Galaxy")
+        XCTAssertEqual(controller.subtitleText, "Open Settings")
         XCTAssertEqual(controller.status, .thinking)
     }
 
@@ -237,10 +237,10 @@ final class VoiceCommandControllerTests: XCTestCase {
 
         try await controller.start(apiKey: "sk-test")
         await session.emit(.outputTranscriptDelta("Opening"))
-        await session.emit(.outputTranscriptDelta(" Galaxy"))
-        await session.emit(.outputTranscriptCompleted("Opening Galaxy"))
+        await session.emit(.outputTranscriptDelta(" Settings"))
+        await session.emit(.outputTranscriptCompleted("Opening Settings"))
 
-        XCTAssertEqual(controller.subtitleText, "Opening Galaxy")
+        XCTAssertEqual(controller.subtitleText, "Opening Settings")
     }
 
     func testStopClearsRealtimeSubtitle() async throws {
@@ -248,7 +248,7 @@ final class VoiceCommandControllerTests: XCTestCase {
         let controller = VoiceCommandController(session: session)
 
         try await controller.start(apiKey: "sk-test")
-        await session.emit(.inputTranscriptCompleted("Open Galaxy"))
+        await session.emit(.inputTranscriptCompleted("Open Settings"))
         controller.stop()
 
         XCTAssertEqual(controller.subtitleText, "")
@@ -271,10 +271,9 @@ final class VoiceCommandControllerTests: XCTestCase {
                 createNote: { _, _ in },
                 appSnapshot: {
                     VoiceAppSnapshot(
-                        currentTab: .galaxy,
+                        currentTab: .settings,
                         settingsSection: nil,
                         composerText: "",
-                        selectedProjectName: "New York",
                         sidebarVisible: true,
                         scratchpadVisible: false,
                         activeConversationTitle: "Voice mode"
@@ -284,12 +283,12 @@ final class VoiceCommandControllerTests: XCTestCase {
         )
 
         try await controller.start(apiKey: "sk-test")
-        await session.emit(.toolCall(.init(name: "navigate_to_tab", arguments: #"{"tab":"galaxy"}"#), callId: "call-state-sync"))
+        await session.emit(.toolCall(.init(name: "navigate_to_tab", arguments: #"{"tab":"settings"}"#), callId: "call-state-sync"))
 
         let output = try XCTUnwrap(session.functionOutputs.first?.output)
-        XCTAssertTrue(output.contains("Opening Galaxy"))
+        XCTAssertTrue(output.contains("Opening Settings"))
         XCTAssertTrue(output.contains("APP_STATE:"))
-        XCTAssertTrue(output.contains(#""current_tab":"galaxy""#))
+        XCTAssertTrue(output.contains(#""current_tab":"settings""#))
     }
 
     func testRealtimeRejectedToolCallSendsRejectedFunctionOutput() async throws {
@@ -321,7 +320,6 @@ final class VoiceCommandControllerTests: XCTestCase {
                         currentTab: .settings,
                         settingsSection: .models,
                         composerText: "Draft from voice",
-                        selectedProjectName: "New York",
                         sidebarVisible: true,
                         scratchpadVisible: false,
                         activeConversationTitle: "Voice mode"
@@ -341,7 +339,6 @@ final class VoiceCommandControllerTests: XCTestCase {
         XCTAssertEqual(json["current_tab"] as? String, "settings")
         XCTAssertEqual(json["settings_section"] as? String, "models")
         XCTAssertEqual(json["composer_text"] as? String, "Draft from voice")
-        XCTAssertEqual(json["selected_project_name"] as? String, "New York")
         XCTAssertEqual(json["sidebar_visible"] as? Bool, true)
         XCTAssertEqual(json["scratchpad_visible"] as? Bool, false)
         XCTAssertEqual(json["active_conversation_title"] as? String, "Voice mode")
@@ -573,7 +570,7 @@ final class VoiceCommandControllerTests: XCTestCase {
         let controller = VoiceCommandController(session: session)
 
         try await controller.start(apiKey: "sk-test")
-        await session.emit(.inputTranscriptCompleted("Open Galaxy"))
+        await session.emit(.inputTranscriptCompleted("Open Settings"))
         await session.emit(.sessionEnded)
 
         XCTAssertEqual(session.stopCallCount, 1)
@@ -589,7 +586,7 @@ final class VoiceCommandControllerTests: XCTestCase {
         let controller = VoiceCommandController(session: session)
 
         try await controller.start(apiKey: "sk-test")
-        await session.emit(.toolCall(.init(name: "navigate_to_tab", arguments: #"{"tab":"galaxy"}"#), callId: "call-6"))
+        await session.emit(.toolCall(.init(name: "navigate_to_tab", arguments: #"{"tab":"settings"}"#), callId: "call-6"))
 
         XCTAssertEqual(session.stopCallCount, 1)
         XCTAssertFalse(controller.isActive)
@@ -604,7 +601,7 @@ final class VoiceCommandControllerTests: XCTestCase {
 
         try await controller.start(apiKey: "sk-test")
         let eventTask = Task {
-            await session.emit(.toolCall(.init(name: "navigate_to_tab", arguments: #"{"tab":"galaxy"}"#), callId: "call-8"))
+            await session.emit(.toolCall(.init(name: "navigate_to_tab", arguments: #"{"tab":"settings"}"#), callId: "call-8"))
         }
 
         await sendGate.waitUntilInFlight()
@@ -627,7 +624,7 @@ final class VoiceCommandControllerTests: XCTestCase {
 
         try await controller.start(apiKey: "sk-old")
         let eventTask = Task {
-            await session.emit(.toolCall(.init(name: "navigate_to_tab", arguments: #"{"tab":"galaxy"}"#), callId: "call-9"))
+            await session.emit(.toolCall(.init(name: "navigate_to_tab", arguments: #"{"tab":"settings"}"#), callId: "call-9"))
         }
 
         await sendGate.waitUntilInFlight()
@@ -663,7 +660,7 @@ final class VoiceCommandControllerTests: XCTestCase {
 
         try await controller.start(apiKey: "sk-test")
         controller.stop()
-        await session.emit(.toolCall(.init(name: "navigate_to_tab", arguments: #"{"tab":"galaxy"}"#), callId: "call-7"))
+        await session.emit(.toolCall(.init(name: "navigate_to_tab", arguments: #"{"tab":"settings"}"#), callId: "call-7"))
 
         XCTAssertNil(navigated)
         XCTAssertEqual(session.functionOutputs, [])
@@ -686,10 +683,10 @@ final class VoiceCommandControllerTests: XCTestCase {
             )
         )
 
-        try await controller.handleToolCall(.init(name: "navigate_to_tab", arguments: #"{"tab":"galaxy"}"#))
+        try await controller.handleToolCall(.init(name: "navigate_to_tab", arguments: #"{"tab":"settings"}"#))
 
-        XCTAssertEqual(navigated, .galaxy)
-        XCTAssertEqual(controller.status, .action("Opening Galaxy"))
+        XCTAssertEqual(navigated, .settings)
+        XCTAssertEqual(controller.status, .action("Opening Settings"))
         XCTAssertNil(controller.pendingAction)
     }
 

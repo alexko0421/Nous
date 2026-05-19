@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 enum MainTab {
-    case chat, notes, galaxy, settings
+    case chat, notes, settings
 }
 
 enum GlobalVoicePillPolicy {
@@ -11,7 +11,7 @@ enum GlobalVoicePillPolicy {
     }
 
     static func canHostCapsule(selectedTab: MainTab) -> Bool {
-        selectedTab != .chat && selectedTab != .galaxy
+        selectedTab != .chat
     }
 }
 
@@ -70,8 +70,6 @@ struct ContentView: View {
     @State private var scratchPadPanelMode: ScratchPadPanelMode = .preview
     @State private var selectedTab: MainTab = .chat
     @State private var selectedSettingsSection: SettingsSection = .profile
-    @State private var selectedProjectId: UUID?
-    @State private var selectedGalaxyLens: GalaxyLensFilter = .meaningful
     @State private var voiceAttachmentResetToken = UUID()
     @State private var isSetupComplete = UserDefaults.standard.bool(forKey: "nous.setup.complete")
     @State private var voiceFocusObserver = VoiceMainWindowFocusObserver()
@@ -137,7 +135,6 @@ struct ContentView: View {
             }
             .task {
                 configureVoiceHandlers(dependencies: dependencies)
-                dependencies.chatVM.defaultProjectId = selectedProjectId
                 handleFinderSyncPreferenceChange(dependencies: dependencies, isEnabled: dependencies.settingsVM.finderSyncEnabled)
                 if !Self.isRunningUnitTests {
                     await dependencies.settingsVM.loadEmbeddingModel()
@@ -150,6 +147,7 @@ struct ContentView: View {
                     object: dependencies.nodeStore
                 )
             ) { _ in
+                guard RetiredFeaturePolicy.projectSurfacesEnabled else { return }
                 guard dependencies.settingsVM.finderSyncEnabled else { return }
                 dependencies.finderProjectSync.scheduleSync()
             }
@@ -159,7 +157,8 @@ struct ContentView: View {
             .onChange(of: dependencies.settingsVM.assistantThinkingEnabled) { _, enabled in
                 guard !enabled else { return }
                 dependencies.chatVM.purgePersistedThinkingFromLoadedMessages()
-                if dependencies.settingsVM.finderSyncEnabled {
+                if RetiredFeaturePolicy.projectSurfacesEnabled,
+                   dependencies.settingsVM.finderSyncEnabled {
                     dependencies.finderProjectSync.scheduleSync()
                 }
             }
@@ -172,9 +171,6 @@ struct ContentView: View {
             .onChange(of: dependencies.settingsVM.backgroundAnalysisEnabled) { _, enabled in
                 guard enabled else { return }
                 runBackgroundMaintenanceIfEnabled(dependencies: dependencies)
-            }
-            .onChange(of: selectedProjectId) { _, newValue in
-                dependencies.chatVM.defaultProjectId = newValue
             }
             .onChange(of: dependencies.chatVM.currentNode?.id) { _, newValue in
                 dependencies.youtubeLearningVM.activate(conversationId: newValue)
@@ -221,7 +217,6 @@ struct ContentView: View {
             nodeStore: dependencies.nodeStore,
             conversationSessionStore: dependencies.conversationSessionStore,
             selectedTab: $selectedTab,
-            selectedProjectId: $selectedProjectId,
             selectedNodeId: currentSidebarNodeId(dependencies: dependencies),
             onNodeSelected: { node in navigateToNode(node, dependencies: dependencies) },
             onNewChat: {
@@ -263,12 +258,6 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(AppColor.colaBeige)
                 .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
-            case .galaxy:
-                GalaxyView(
-                    vm: dependencies.galaxyVM,
-                    selectedLens: $selectedGalaxyLens,
-                    onNodeSelected: { node in navigateToNode(node, dependencies: dependencies) }
-                )
             case .settings:
                 SettingsView(
                     vm: dependencies.settingsVM,
@@ -308,7 +297,7 @@ struct ContentView: View {
         case .source:
             YouTubeLearningPanel(
                 viewModel: dependencies.youtubeLearningVM,
-                currentProjectId: dependencies.chatVM.currentNode?.projectId ?? dependencies.chatVM.defaultProjectId,
+                currentProjectId: nil,
                 onSelectContext: { context in
                     dependencies.chatVM.activateSourceDiscussion(context)
                     selectedTab = .chat
@@ -345,7 +334,7 @@ struct ContentView: View {
             return dependencies.chatVM.currentNode?.id
         case .notes:
             return dependencies.noteVM.currentNote?.id
-        case .galaxy, .settings:
+        case .settings:
             return nil
         }
     }
@@ -370,8 +359,6 @@ struct ContentView: View {
             selectedTab = .chat
         case .notes:
             selectedTab = .notes
-        case .galaxy:
-            selectedTab = .galaxy
         case .settings:
             selectedTab = .settings
         }
@@ -381,7 +368,7 @@ struct ContentView: View {
         dependencies.voiceController.setMemoryContextProvider {
             guard let conversationId = dependencies.chatVM.currentNode?.id else { return nil }
             return VoiceMemoryContext(
-                projectId: dependencies.chatVM.currentNode?.projectId ?? dependencies.chatVM.defaultProjectId,
+                projectId: nil,
                 conversationId: conversationId
             )
         }
@@ -552,19 +539,12 @@ struct ContentView: View {
     }
 
     private func voiceAppSnapshot(dependencies: AppDependencies) -> VoiceAppSnapshot {
-        let projectId = dependencies.chatVM.currentNode?.projectId
-            ?? selectedProjectId
-            ?? dependencies.chatVM.defaultProjectId
-        let projectName = projectId.flatMap { id in
-            (try? dependencies.nodeStore.fetchProject(id: id))?.title
-        }
         let sourceContext = dependencies.chatVM.activeSourceDiscussionContext
 
         return VoiceAppSnapshot(
             currentTab: voiceNavigationTarget(for: selectedTab),
             settingsSection: selectedTab == .settings ? voiceSettingsSection(for: selectedSettingsSection) : nil,
             composerText: dependencies.chatVM.inputText,
-            selectedProjectName: projectName,
             sidebarVisible: isSidebarVisible,
             scratchpadVisible: rightPanelMode == .markdown,
             scratchpadMarkdown: dependencies.scratchPadStore.currentContent,
@@ -613,9 +593,7 @@ struct ContentView: View {
             rightPanelMode = .source
         }
         dependencies.youtubeLearningVM.urlText = resolvedURL
-        await dependencies.youtubeLearningVM.load(
-            projectId: dependencies.chatVM.currentNode?.projectId ?? dependencies.chatVM.defaultProjectId
-        )
+        await dependencies.youtubeLearningVM.load(projectId: nil)
 
         if !dependencies.youtubeLearningVM.summarySections.isEmpty {
             return VoiceYouTubeSummaryResult(
@@ -639,7 +617,6 @@ struct ContentView: View {
         switch tab {
         case .chat: return .chat
         case .notes: return .notes
-        case .galaxy: return .galaxy
         case .settings: return .settings
         }
     }
@@ -656,7 +633,7 @@ struct ContentView: View {
 
     private func createVoiceNote(title: String, body: String, dependencies: AppDependencies) {
         do {
-            try dependencies.noteVM.createNote(title: title, content: body, projectId: selectedProjectId)
+            try dependencies.noteVM.createNote(title: title, content: body, projectId: nil)
             selectedTab = .notes
         } catch {
             dependencies.voiceController.status = .error("Could not create note")
@@ -703,6 +680,7 @@ struct ContentView: View {
     }
 
     private func handleFinderSyncPreferenceChange(dependencies: AppDependencies, isEnabled: Bool) {
+        guard RetiredFeaturePolicy.projectSurfacesEnabled else { return }
         if isEnabled {
             dependencies.finderProjectSync.scheduleSync()
         } else {

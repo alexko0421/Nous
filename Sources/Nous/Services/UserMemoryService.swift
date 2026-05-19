@@ -518,6 +518,7 @@ final class UserMemoryCore {
     /// v2.2d: aggregation reads from `memory_entries` (active conversation
     /// rows) instead of the frozen v2.1 `conversation_memory` blob.
     func refreshProject(projectId: UUID) async {
+        guard RetiredFeaturePolicy.projectSurfacesEnabled else { return }
         guard let nodes = try? nodeStore.fetchNodes(projectId: projectId) else { return }
 
         var projectSourceNodeIds: [UUID] = []
@@ -724,6 +725,7 @@ final class UserMemoryCore {
         case .global:
             scopeRefId = nil
         case .project:
+            guard RetiredFeaturePolicy.projectSurfacesEnabled else { return false }
             guard let projectId = try? nodeStore.fetchNode(id: record.sourceMessage.nodeId)?.projectId else {
                 return false
             }

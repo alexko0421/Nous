@@ -11,7 +11,6 @@ final class NoteViewModel {
     var title: String = ""
     var content: String = ""
     var relatedNodes: [SearchResult] = []
-    var currentProject: Project?
     var canEditCurrentNote: Bool {
         currentNote?.type == .note
     }
@@ -75,11 +74,6 @@ final class NoteViewModel {
         currentNote = node
         title = node.title
         content = node.content
-        if let projectId = node.projectId {
-            currentProject = try? nodeStore.fetchProject(id: projectId)
-        } else {
-            currentProject = nil
-        }
         loadRelatedNodes()
     }
 

@@ -47,6 +47,7 @@ final class GraphEngine: GalaxyRelationRefining {
         for node: NousNode,
         threshold: Float = GalaxyRelationTuning.semanticThreshold
     ) throws {
+        guard RetiredFeaturePolicy.galaxyBackgroundWorkEnabled else { return }
         try edgeEngine.generateSemanticEdges(for: node, threshold: threshold)
     }
 
@@ -55,6 +56,7 @@ final class GraphEngine: GalaxyRelationRefining {
         threshold: Float = GalaxyRelationTuning.semanticThreshold,
         maxCandidates: Int = GalaxyRelationTuning.manualRefinementCandidateLimit
     ) async throws {
+        guard RetiredFeaturePolicy.galaxyBackgroundWorkEnabled else { return }
         try await edgeEngine.generateSemanticEdgesWithRefinement(
             for: node,
             threshold: threshold,
@@ -63,11 +65,13 @@ final class GraphEngine: GalaxyRelationRefining {
     }
 
     func refineRelations(forNodeId nodeId: UUID) async throws {
+        guard RetiredFeaturePolicy.galaxyBackgroundWorkEnabled else { return }
         try await edgeEngine.refineRelations(forNodeId: nodeId)
     }
 
     func refineSemanticEdge(sourceId: UUID, targetId: UUID) async throws -> NodeEdge? {
-        try await edgeEngine.refineSemanticEdge(sourceId: sourceId, targetId: targetId)
+        guard RetiredFeaturePolicy.galaxyBackgroundWorkEnabled else { return nil }
+        return try await edgeEngine.refineSemanticEdge(sourceId: sourceId, targetId: targetId)
     }
 
     func refineSemanticEdges(
@@ -75,6 +79,7 @@ final class GraphEngine: GalaxyRelationRefining {
         threshold: Float = GalaxyRelationTuning.semanticThreshold,
         maxCandidates: Int = GalaxyRelationTuning.queuedRefinementCandidateLimit
     ) async throws {
+        guard RetiredFeaturePolicy.galaxyBackgroundWorkEnabled else { return }
         try await edgeEngine.refineSemanticEdges(
             for: node,
             threshold: threshold,
@@ -83,14 +88,17 @@ final class GraphEngine: GalaxyRelationRefining {
     }
 
     func generateSharedEdges(for node: NousNode) throws {
+        guard RetiredFeaturePolicy.galaxyBackgroundWorkEnabled else { return }
         try edgeEngine.generateSharedEdges(for: node)
     }
 
     func regenerateEdges(for node: NousNode) throws {
+        guard RetiredFeaturePolicy.galaxyBackgroundWorkEnabled else { return }
         try edgeEngine.regenerateEdges(for: node)
     }
 
     func regenerateEdgesWithRefinement(for node: NousNode) async throws {
+        guard RetiredFeaturePolicy.galaxyBackgroundWorkEnabled else { return }
         try await edgeEngine.regenerateEdgesWithRefinement(for: node)
     }
 }

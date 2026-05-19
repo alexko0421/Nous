@@ -77,8 +77,8 @@ struct VoiceTranscriptPanel: View {
 #Preview("Multi-turn") {
     VoiceTranscriptPanel(
         lines: [
-            VoiceTranscriptLine(role: .user, text: "Open Galaxy.", isFinal: true, createdAt: Date()),
-            VoiceTranscriptLine(role: .assistant, text: "Opening Galaxy now.", isFinal: true, createdAt: Date()),
+            VoiceTranscriptLine(role: .user, text: "Open Settings.", isFinal: true, createdAt: Date()),
+            VoiceTranscriptLine(role: .assistant, text: "Opening Settings now.", isFinal: true, createdAt: Date()),
             VoiceTranscriptLine(role: .user, text: "Show my recent thoughts on Path B.", isFinal: true, createdAt: Date()),
             VoiceTranscriptLine(role: .assistant, text: "Searching memory…", isFinal: false, createdAt: Date()),
         ],

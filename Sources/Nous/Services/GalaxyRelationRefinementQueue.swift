@@ -54,6 +54,11 @@ final class GalaxyRelationRefinementQueue {
     }
 
     func enqueue(nodeId: UUID) {
+        guard RetiredFeaturePolicy.galaxyBackgroundWorkEnabled else {
+            telemetry?.record(.queueDisabledDrop(1))
+            return
+        }
+
         guard isEnabled() else {
             telemetry?.record(.queueDisabledDrop(1))
             return
@@ -135,7 +140,7 @@ final class GalaxyRelationRefinementQueue {
 
     private func nextJob() -> NextJob {
         withLock {
-            guard isEnabled() else {
+            guard RetiredFeaturePolicy.galaxyBackgroundWorkEnabled, isEnabled() else {
                 telemetry?.record(.queueDisabledDrop(pendingJobs.count))
                 pendingJobs.removeAll()
                 queuedNodeIds.removeAll()

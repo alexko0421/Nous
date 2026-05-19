@@ -35,7 +35,7 @@ enum RightPanelLayout {
     }
 
     private static func estimatedOpenContentWidth(windowWidth: CGFloat, sidebarVisible: Bool) -> CGFloat {
-        let sidebarWidth = sidebarVisible ? GalaxySidebarLayout.width : 0
+        let sidebarWidth = sidebarVisible ? AppSidebarLayout.width : 0
         let visibleGaps: CGFloat = sidebarVisible ? 2 : 1
         return max(0, windowWidth - windowPadding * 2 - sidebarWidth - columnSpacing * visibleGaps)
     }

@@ -8,9 +8,15 @@ final class GraphEngineTests: XCTestCase {
 
     override func setUpWithError() throws {
         try super.setUpWithError()
+        RetiredFeaturePolicy.galaxyBackgroundWorkEnabledOverride = true
         nodeStore = try NodeStore(path: ":memory:")
         vectorStore = VectorStore(nodeStore: nodeStore)
         engine = GraphEngine(nodeStore: nodeStore, vectorStore: vectorStore)
+    }
+
+    override func tearDownWithError() throws {
+        RetiredFeaturePolicy.galaxyBackgroundWorkEnabledOverride = nil
+        try super.tearDownWithError()
     }
 
     func testForceLayoutProducesPositions() throws {

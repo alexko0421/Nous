@@ -330,7 +330,8 @@ final class TemporaryBranchMemoryEvaluator {
         )
         var candidates: [TemporaryBranchMemoryCandidate] = []
 
-        if let decisionLine = Self.firstLine(containingAny: ["decision:", "决定:", "決定:"], in: transcript)
+        if RetiredFeaturePolicy.projectSurfacesEnabled,
+           let decisionLine = Self.firstLine(containingAny: ["decision:", "决定:", "決定:"], in: transcript)
             ?? (Self.looksLikeProjectDecision(transcript) ? Self.firstUserLine(from: record) : nil) {
             candidates.append(TemporaryBranchMemoryCandidate(
                 content: Self.trimDecisionPrefix(decisionLine),
@@ -383,6 +384,7 @@ final class TemporaryBranchMemoryEvaluator {
         !candidate.evidenceQuote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         candidate.confidence >= 0.55 &&
         candidate.scope != .ignore &&
+        (candidate.scope != .project || RetiredFeaturePolicy.projectSurfacesEnabled) &&
         candidate.status != .applied &&
         candidate.status != .rejected
     }

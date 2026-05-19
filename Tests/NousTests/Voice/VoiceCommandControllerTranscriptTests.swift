@@ -9,16 +9,16 @@ final class VoiceCommandControllerTranscriptTests: XCTestCase {
         try await controller.start(apiKey: "k")
 
         await session.emit(.inputTranscriptDelta("Open"))
-        await session.emit(.inputTranscriptDelta(" Galaxy"))
+        await session.emit(.inputTranscriptDelta(" Settings"))
         XCTAssertEqual(controller.transcript.count, 1)
         XCTAssertEqual(controller.transcript[0].role, .user)
-        XCTAssertEqual(controller.transcript[0].text, "Open Galaxy")
+        XCTAssertEqual(controller.transcript[0].text, "Open Settings")
         XCTAssertFalse(controller.transcript[0].isFinal)
 
-        await session.emit(.inputTranscriptCompleted("Open Galaxy."))
+        await session.emit(.inputTranscriptCompleted("Open Settings."))
         XCTAssertEqual(controller.transcript.count, 1)
         XCTAssertTrue(controller.transcript[0].isFinal)
-        XCTAssertEqual(controller.transcript[0].text, "Open Galaxy.")
+        XCTAssertEqual(controller.transcript[0].text, "Open Settings.")
     }
 
     func test_assistantAfterUser_opensSecondLine() async throws {

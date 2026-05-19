@@ -23,7 +23,7 @@ enum SettingsSection: String, CaseIterable {
 private enum SettingsLayout {
     static let shellPadding = RightPanelLayout.windowPadding
     static let columnSpacing = RightPanelLayout.windowPadding
-    static let sidebarWidth = GalaxySidebarLayout.width
+    static let sidebarWidth = AppSidebarLayout.width
     static let sidebarCornerRadius: CGFloat = 32
     static let contentCornerRadius: CGFloat = 36
     static let pageMaxWidth: CGFloat = 760
@@ -350,11 +350,13 @@ struct SettingsView: View {
 
             settingsCard {
                 sectionLabel("Privacy-sensitive automation")
-                toggleRow(
-                    title: "Finder export",
-                    subtitle: "Write notes and conversations as Markdown in Documents for Finder browsing. Assistant thinking only exports if the toggle below is on. Turning this off removes the generated export folder.",
-                    isOn: preferenceBinding(\.finderSyncEnabled)
-                )
+                if RetiredFeaturePolicy.projectSurfacesEnabled {
+                    toggleRow(
+                        title: "Finder export",
+                        subtitle: "Write notes and conversations as Markdown in Documents for Finder browsing. Assistant thinking only exports if the toggle below is on. Turning this off removes the generated export folder.",
+                        isOn: preferenceBinding(\.finderSyncEnabled)
+                    )
+                }
                 toggleRow(
                     title: "Background AI maintenance",
                     subtitle: "Allow launch-time chat-title repair and weekly reflections. With cloud providers, this can send existing chats to the active model. Off by default.",
@@ -369,7 +371,7 @@ struct SettingsView: View {
                 }
                 toggleRow(
                     title: "Store assistant thinking",
-                    subtitle: "Keep assistant reasoning traces in local chat history and Finder export. Turning this off clears previously stored thinking from SQLite. Off by default.",
+                    subtitle: "Keep assistant reasoning traces in local chat history. Turning this off clears previously stored thinking from SQLite. Off by default.",
                     isOn: preferenceBinding(\.assistantThinkingEnabled)
                 )
                 toggleRow(

@@ -2,6 +2,16 @@ import XCTest
 @testable import Nous
 
 final class TurnMemoryContextBuilderTests: XCTestCase {
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        RetiredFeaturePolicy.projectSurfacesEnabledOverride = true
+    }
+
+    override func tearDownWithError() throws {
+        RetiredFeaturePolicy.projectSurfacesEnabledOverride = nil
+        try super.tearDownWithError()
+    }
+
     func testCitationExclusionIdsIncludeFreshSourceMaterials() {
         let currentNodeId = UUID()
         let sourceA = UUID()

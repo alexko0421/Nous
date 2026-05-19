@@ -25,6 +25,17 @@ final class VoiceActionRegistryTests: XCTestCase {
         }
     }
 
+    func testNavigateToTabDoesNotExposeRetiredGalaxySurface() throws {
+        let declarations = VoiceActionRegistry.declarations(includeMemoryTools: false)
+        let navigate = try Self.declaration(named: "navigate_to_tab", in: declarations)
+        let parameters = try XCTUnwrap(navigate["parameters"] as? [String: Any])
+        let properties = try XCTUnwrap(parameters["properties"] as? [String: Any])
+        let tab = try XCTUnwrap(properties["tab"] as? [String: Any])
+        let tabs = try XCTUnwrap(tab["enum"] as? [String])
+
+        XCTAssertEqual(tabs, ["chat", "notes", "settings"])
+    }
+
     func testRiskMetadataMatchesExpectedMap() {
         let expectedRisks: [String: VoiceActionRisk] = [
             "get_app_state": .readOnly,
@@ -61,7 +72,6 @@ final class VoiceActionRegistryTests: XCTestCase {
             currentTab: .settings,
             settingsSection: .models,
             composerText: "Review voice control",
-            selectedProjectName: "New York",
             sidebarVisible: true,
             scratchpadVisible: false,
             activeConversationTitle: "Voice mode"
@@ -76,7 +86,6 @@ final class VoiceActionRegistryTests: XCTestCase {
                 "current_tab",
                 "settings_section",
                 "composer_text",
-                "selected_project_name",
                 "sidebar_visible",
                 "scratchpad_visible",
                 "scratchpad_markdown",
@@ -92,7 +101,6 @@ final class VoiceActionRegistryTests: XCTestCase {
         XCTAssertEqual(json["current_tab"] as? String, "settings")
         XCTAssertEqual(json["settings_section"] as? String, "models")
         XCTAssertEqual(json["composer_text"] as? String, "Review voice control")
-        XCTAssertEqual(json["selected_project_name"] as? String, "New York")
         XCTAssertEqual(json["sidebar_visible"] as? Bool, true)
         XCTAssertEqual(json["scratchpad_visible"] as? Bool, false)
         XCTAssertEqual(json["scratchpad_markdown"] as? String, "")

@@ -240,6 +240,12 @@ struct MemoryDebugInspector: View {
         case conversation = "Thread"
         case review = "Review"
 
+        static var availableCases: [MemoryFocus] {
+            allCases.filter { focus in
+                focus != .project || RetiredFeaturePolicy.projectSurfacesEnabled
+            }
+        }
+
         var icon: String {
             switch self {
             case .active:
@@ -426,7 +432,9 @@ struct MemoryDebugInspector: View {
 
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 132), spacing: 12)], spacing: 12) {
                     overviewMetric(title: "Long-term", value: count(for: MemoryScope.global), subtitle: "Identity memory")
-                    overviewMetric(title: "Project", value: count(for: MemoryScope.project), subtitle: "Cross-chat project context")
+                    if RetiredFeaturePolicy.projectSurfacesEnabled {
+                        overviewMetric(title: "Project", value: count(for: MemoryScope.project), subtitle: "Cross-chat project context")
+                    }
                     overviewMetric(title: "Thread", value: count(for: MemoryScope.conversation), subtitle: "Single-thread memory")
                     overviewMetric(title: "Review", value: reviewEntries.count, subtitle: "Needs attention", accent: reviewEntries.isEmpty ? AppColor.surfacePrimary : Color.red.opacity(0.10))
                 }
@@ -452,7 +460,7 @@ struct MemoryDebugInspector: View {
                 VStack(alignment: .leading, spacing: 8) {
                     sectionLabel("Browse")
                     filterRow(
-                        options: MemoryFocus.allCases,
+                        options: MemoryFocus.availableCases,
                         selection: selectedFocus,
                         onSelect: { selectedFocus = $0 }
                     )
@@ -993,7 +1001,10 @@ struct MemoryDebugInspector: View {
     #endif
 
     private var activeEntries: [MemoryEntry] {
-        sortedEntries.filter { $0.status == .active }
+        sortedEntries.filter { entry in
+            entry.status == .active &&
+                (entry.scope != .project || RetiredFeaturePolicy.projectSurfacesEnabled)
+        }
     }
 
     private var activeFactEntries: [MemoryFactEntry] {
@@ -1015,7 +1026,9 @@ struct MemoryDebugInspector: View {
         case .global:
             return activeEntries.filter { $0.scope == .global }
         case .project:
-            return activeEntries.filter { $0.scope == .project }
+            return RetiredFeaturePolicy.projectSurfacesEnabled
+                ? activeEntries.filter { $0.scope == .project }
+                : []
         case .conversation:
             return activeEntries.filter { $0.scope == .conversation }
         case .review:
@@ -1763,8 +1776,10 @@ struct MemoryDebugInspector: View {
                     .tabItem { Label("Cognition", systemImage: "brain.head.profile") }
                 #endif
 
-                GalaxyRelationTelemetryTab(telemetry: galaxyRelationTelemetry)
-                    .tabItem { Label("Galaxy", systemImage: "point.3.connected.trianglepath.dotted") }
+                if RetiredFeaturePolicy.galaxyBackgroundWorkEnabled {
+                    GalaxyRelationTelemetryTab(telemetry: galaxyRelationTelemetry)
+                        .tabItem { Label("Galaxy", systemImage: "point.3.connected.trianglepath.dotted") }
+                }
 
                 ReflectionClaimsTab(nodeStore: nodeStore)
                     .tabItem { Label("Reflections", systemImage: "sparkles.rectangle.stack") }

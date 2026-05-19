@@ -144,13 +144,7 @@ struct AppColor {
         dark: NSColor(red: 140/255, green: 80/255, blue: 45/255, alpha: 0.7)
     )
     
-    // Galaxy dark theme
-    static let galaxyBackground = Color(red: 26/255, green: 26/255, blue: 46/255)
-    static let galaxyNodeGlow = Color(red: 243/255, green: 131/255, blue: 53/255)
-
-    // Morandi dusty rose — galaxy edge `roseLine` and shared feedback UI
-    // selected state. Matches GalaxyScene.roseLine RGB so galaxy inspector
-    // and chat thumb feedback share one accent across surfaces.
+    // Morandi dusty rose — shared feedback UI selected state.
     static let dustyRose = Color(red: 205/255, green: 137/255, blue: 156/255)
 
     // Welcome/chat dark theme

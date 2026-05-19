@@ -22,6 +22,7 @@ final class MemoryProjectionService {
     }
 
     func currentProject(projectId: UUID) -> String? {
+        guard RetiredFeaturePolicy.projectSurfacesEnabled else { return nil }
         let content = readActiveEntry(scope: .project, scopeRefId: projectId)
         return Self.cap(content, budget: Self.projectBudget)
     }
@@ -39,7 +40,7 @@ final class MemoryProjectionService {
 
         var projectTitle: String?
         var projectMemory = ""
-        if let projectId {
+        if let projectId, RetiredFeaturePolicy.projectSurfacesEnabled {
             projectTitle = (try? nodeStore.fetchProject(id: projectId))?.title ?? "Untitled Project"
             projectMemory = readActiveEntry(scope: .project, scopeRefId: projectId)
         }
@@ -94,6 +95,7 @@ final class MemoryProjectionService {
         var candidates: [(label: String, entry: MemoryEntry)] = []
 
         if let projectId,
+           RetiredFeaturePolicy.projectSurfacesEnabled,
            let projectEntry = try? nodeStore.fetchActiveMemoryEntry(scope: .project, scopeRefId: projectId),
            !projectEntry.sourceNodeIds.isEmpty {
             candidates.append(("Project context", projectEntry))
@@ -152,6 +154,7 @@ final class MemoryProjectionService {
         var seen: Set<String> = []
 
         if let projectId,
+           RetiredFeaturePolicy.projectSurfacesEnabled,
            let project = try? nodeStore.fetchProject(id: projectId),
            !project.goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let trimmedGoal = project.goal.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -326,6 +329,7 @@ final class MemoryProjectionService {
     private func goalModelEntries(projectId: UUID?, conversationId: UUID?) -> [MemoryEntry] {
         var entries: [MemoryEntry] = []
         if let projectId,
+           RetiredFeaturePolicy.projectSurfacesEnabled,
            let projectEntry = try? nodeStore.fetchActiveMemoryEntry(scope: .project, scopeRefId: projectId) {
             entries.append(projectEntry)
         }
@@ -343,6 +347,7 @@ final class MemoryProjectionService {
             entries.append(globalEntry)
         }
         if let projectId,
+           RetiredFeaturePolicy.projectSurfacesEnabled,
            let projectEntry = try? nodeStore.fetchActiveMemoryEntry(scope: .project, scopeRefId: projectId) {
             entries.append(projectEntry)
         }
@@ -359,6 +364,7 @@ final class MemoryProjectionService {
             entries.append(globalEntry)
         }
         if let projectId,
+           RetiredFeaturePolicy.projectSurfacesEnabled,
            let projectEntry = try? nodeStore.fetchActiveMemoryEntry(scope: .project, scopeRefId: projectId) {
             entries.append(projectEntry)
         }

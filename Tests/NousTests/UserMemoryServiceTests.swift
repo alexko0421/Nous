@@ -7,10 +7,12 @@ final class UserMemoryServiceTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
+        RetiredFeaturePolicy.projectSurfacesEnabledOverride = true
         store = try! NodeStore(path: ":memory:")
     }
 
     override func tearDown() {
+        RetiredFeaturePolicy.projectSurfacesEnabledOverride = nil
         store = nil
         super.tearDown()
     }
