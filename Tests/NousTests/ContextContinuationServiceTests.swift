@@ -44,6 +44,18 @@ private final class RecordingMemorySynthesizer: MemorySynthesizing, @unchecked S
     }
 }
 
+private actor RecordingMemoryActivitySink {
+    private var events: [MemoryActivityEvent] = []
+
+    func record(_ event: MemoryActivityEvent) {
+        events.append(event)
+    }
+
+    func recordedEvents() -> [MemoryActivityEvent] {
+        events
+    }
+}
+
 @MainActor
 final class ContextContinuationServiceTests: XCTestCase {
     private func makeScratchPadStore(nodeStore: NodeStore) -> ScratchPadStore {
@@ -439,9 +451,192 @@ final class ContextContinuationServiceTests: XCTestCase {
         XCTAssertEqual(calls.first?.messageContents, messages.map(\.content))
         XCTAssertEqual(telemetry.memoryStorageSuppressedCount(), 0)
     }
+
+    func testRunReportsAutomaticMemoryActivityCounts() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let conversation = NousNode(type: .conversation, title: "Automatic activity")
+        try nodeStore.insertNode(conversation)
+        let userMessage = Message(
+            nodeId: conversation.id,
+            role: .user,
+            content: "I prefer automatic memory, and I think this pattern may matter.",
+            timestamp: Date(timeIntervalSince1970: 20)
+        )
+        let assistantMessage = Message(
+            nodeId: conversation.id,
+            role: .assistant,
+            content: "We can keep low-risk memory automatic and reflective memory reviewable.",
+            timestamp: Date(timeIntervalSince1970: 21)
+        )
+        try nodeStore.insertMessage(userMessage)
+        try nodeStore.insertMessage(assistantMessage)
+
+        let automaticService = AutomaticMemoryPipelineService(
+            nodeStore: nodeStore,
+            llmServiceProvider: {
+                StaticContextAutomaticMemoryLLM(output: """
+                {
+                  "candidates": [
+                    {
+                      "type": "preference",
+                      "statement": "Alex prefers automatic memory.",
+                      "scope": "global",
+                      "confidence": 0.82,
+                      "evidence_quote": "I prefer automatic memory"
+                    },
+                    {
+                      "type": "insight",
+                      "statement": "Alex may have a recurring pattern around memory automation.",
+                      "scope": "conversation",
+                      "confidence": 0.84,
+                      "evidence_quote": "I think this pattern may matter"
+                    }
+                  ]
+                }
+                """)
+            },
+            now: { Date(timeIntervalSince1970: 30) }
+        )
+        let automaticScheduler = AutomaticMemoryPipelineScheduler(service: automaticService)
+        let sink = RecordingMemoryActivitySink()
+        await automaticScheduler.setActivityHandler { event in
+            await sink.record(event)
+        }
+        let service = ContextContinuationService(
+            scratchPadStore: makeScratchPadStore(nodeStore: nodeStore),
+            userMemoryScheduler: UserMemoryScheduler(service: RecordingMemorySynthesizer()),
+            governanceTelemetry: makeTelemetry(),
+            automaticMemoryScheduler: automaticScheduler
+        )
+        let turnId = UUID()
+
+        await service.run(
+            ContextContinuationPlan(
+                turnId: turnId,
+                conversationId: conversation.id,
+                assistantMessageId: assistantMessage.id,
+                scratchpadIngest: nil,
+                memoryRefresh: nil,
+                automaticMemoryDigest: AutomaticMemoryDigestRequest(
+                    turnId: turnId,
+                    conversationId: conversation.id,
+                    projectId: nil,
+                    userMessage: userMessage,
+                    assistantMessage: assistantMessage,
+                    sourceMaterials: []
+                )
+            )
+        )
+        await automaticScheduler.waitUntilIdle()
+
+        let events = await sink.recordedEvents()
+        let event = try XCTUnwrap(events.first)
+        XCTAssertEqual(event.source, .automatic)
+        XCTAssertEqual(event.turnId, turnId)
+        XCTAssertEqual(event.activeCount, 1)
+        XCTAssertEqual(event.pendingCount, 1)
+        XCTAssertEqual(event.rejectedCount, 0)
+    }
+
+    func testMemoryActivitySnapshotIgnoresStaleTurnEvents() {
+        let currentTurnId = UUID()
+        let staleTurnId = UUID()
+        let conversationId = UUID()
+        let queuedAt = Date(timeIntervalSince1970: 100)
+        let snapshot = MemoryActivitySnapshot.queued(
+            from: ContextContinuationPlan(
+                turnId: currentTurnId,
+                conversationId: conversationId,
+                assistantMessageId: UUID(),
+                scratchpadIngest: nil,
+                memoryRefresh: nil
+            ),
+            now: queuedAt
+        )
+
+        let updated = snapshot.recording(MemoryActivityEvent(
+            source: .automatic,
+            turnId: staleTurnId,
+            conversationId: conversationId,
+            activeCount: 3,
+            pendingCount: 2,
+            rejectedCount: 1,
+            recordedAt: Date(timeIntervalSince1970: 101)
+        ))
+
+        XCTAssertEqual(updated, snapshot)
+    }
+
+    func testMemoryActivitySnapshotIgnoresEventsBeforeQueuedState() {
+        let updated = MemoryActivitySnapshot.empty.recording(MemoryActivityEvent(
+            source: .automatic,
+            turnId: UUID(),
+            conversationId: UUID(),
+            activeCount: 1,
+            pendingCount: 0,
+            rejectedCount: 0,
+            recordedAt: Date(timeIntervalSince1970: 101)
+        ))
+
+        XCTAssertEqual(updated, .empty)
+    }
+
+    func testMemoryActivitySnapshotStaysIdleWhenNoMemoryWorkQueued() {
+        let snapshot = MemoryActivitySnapshot.queued(
+            from: ContextContinuationPlan(
+                turnId: UUID(),
+                conversationId: UUID(),
+                assistantMessageId: UUID(),
+                scratchpadIngest: nil,
+                memoryRefresh: nil
+            ),
+            now: Date(timeIntervalSince1970: 100)
+        )
+
+        XCTAssertEqual(snapshot, .empty)
+    }
+
+    func testMemoryActivitySnapshotDoesNotOverwriteSkippedSuppression() {
+        let turnId = UUID()
+        let conversationId = UUID()
+        let skipped = MemoryActivitySnapshot.queued(
+            from: ContextContinuationPlan(
+                turnId: turnId,
+                conversationId: conversationId,
+                assistantMessageId: UUID(),
+                scratchpadIngest: nil,
+                memoryRefresh: nil,
+                memorySuppressionReason: .fastLatencyTier
+            ),
+            now: Date(timeIntervalSince1970: 100)
+        )
+
+        let updated = skipped.recording(MemoryActivityEvent(
+            source: .automatic,
+            turnId: turnId,
+            conversationId: conversationId,
+            activeCount: 2,
+            pendingCount: 1,
+            rejectedCount: 0,
+            recordedAt: Date(timeIntervalSince1970: 101)
+        ))
+
+        XCTAssertEqual(updated, skipped)
+    }
 }
 
 private struct StaticContextSourceLearningLLM: LLMService {
+    let output: String
+
+    func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.yield(output)
+            continuation.finish()
+        }
+    }
+}
+
+private struct StaticContextAutomaticMemoryLLM: LLMService {
     let output: String
 
     func generate(messages: [LLMMessage], system: String?) async throws -> AsyncThrowingStream<String, Error> {

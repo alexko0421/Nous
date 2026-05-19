@@ -134,11 +134,14 @@ struct AgentWorkView: View {
             }
 
             HStack(spacing: 8) {
-                Image(systemName: "externaldrive")
+                Image(systemName: vm.snapshot.beadsConnection.status == .failed ? "externaldrive.badge.exclamationmark" : "externaldrive")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(AppColor.colaOrange)
+                    .foregroundStyle(vm.snapshot.beadsConnection.status == .failed ? AppColor.colaOrange : AppColor.secondaryText)
 
-                Text(vm.snapshot.beadsPath.isEmpty ? "Beads path unavailable" : vm.snapshot.beadsPath)
+                Text(vm.snapshot.beadsConnection.pathDisplayText(
+                    beadsPath: vm.snapshot.beadsPath,
+                    unavailableText: "Beads path unavailable"
+                ))
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .foregroundStyle(AppColor.secondaryText)
                     .lineLimit(1)
@@ -282,10 +285,7 @@ struct AgentWorkView: View {
     }
 
     private func harnessDetailText(_ snapshot: HarnessHealthSnapshot) -> String {
-        if snapshot.findingTitles.isEmpty {
-            return snapshot.latestRun?.detail.isEmpty == false ? snapshot.latestRun?.detail ?? "" : "No local harness findings."
-        }
-        return snapshot.findingTitles.joined(separator: " · ")
+        snapshot.diagnosticDetailText
     }
 
     private func runtimeDetailText(_ snapshot: RuntimeHarnessSnapshot) -> String {

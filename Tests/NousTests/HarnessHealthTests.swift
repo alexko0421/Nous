@@ -13,6 +13,18 @@ final class HarnessHealthTests: XCTestCase {
         XCTAssertTrue(result.findings.contains(.protectedAnchorChanged))
     }
 
+    func testHarnessDiagnosticTextNamesProtectedAnchorPath() {
+        let snapshot = HarnessHealthSnapshot(
+            changeClassification: HarnessChangeClassifier.classify(
+                changedPaths: ["Sources/Nous/Resources/anchor.md"],
+                rootSwiftFiles: []
+            )
+        )
+
+        XCTAssertTrue(snapshot.diagnosticDetailText.contains("anchor.md changed"))
+        XCTAssertTrue(snapshot.diagnosticDetailText.contains("Sources/Nous/Resources/anchor.md"))
+    }
+
     func testClassifiesRootSwiftOrphanAsBlockingIssue() {
         let result = HarnessChangeClassifier.classify(
             changedPaths: [],

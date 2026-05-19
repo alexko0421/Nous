@@ -2775,6 +2775,165 @@ final class UserMemoryServiceTests: XCTestCase {
         XCTAssertEqual(updatedRejectedAtom?.status, .archived)
     }
 
+    func testConfirmMemoryFactEntryAbsorbsSimilarPendingRowsIntoExistingActiveFact() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+        let now = Date(timeIntervalSince1970: 10)
+        let activeSource = UUID()
+        let selectedSource = UUID()
+        let siblingSource = UUID()
+        let unrelatedSource = UUID()
+        for sourceId in [activeSource, selectedSource, siblingSource, unrelatedSource] {
+            try store.insertNode(NousNode(
+                id: sourceId,
+                type: .conversation,
+                title: "Source \(sourceId.uuidString.prefix(4))"
+            ))
+        }
+        let active = MemoryFactEntry(
+            scope: .global,
+            kind: .boundary,
+            content: "Alex does not openly tell strangers he is a unique person or sell himself as unique to people he doesn't know well",
+            confidence: 0.84,
+            status: .active,
+            stability: .stable,
+            sourceNodeIds: [activeSource],
+            createdAt: now,
+            updatedAt: now
+        )
+        let selected = MemoryFactEntry(
+            scope: .global,
+            kind: .boundary,
+            content: "Alex will not tell strangers he is a unique/special person; he only reveals that side of himself in deep conversations with people who already know him well",
+            confidence: 0.9,
+            status: .pending,
+            stability: .stable,
+            sourceNodeIds: [selectedSource],
+            createdAt: now.addingTimeInterval(1),
+            updatedAt: now.addingTimeInterval(1)
+        )
+        let sibling = MemoryFactEntry(
+            scope: .global,
+            kind: .boundary,
+            content: "Alex will not sell himself to strangers by announcing he is a unique/independent person; he only shares that depth in genuine conversations with people who know him well",
+            confidence: 0.87,
+            status: .pending,
+            stability: .stable,
+            sourceNodeIds: [siblingSource],
+            createdAt: now.addingTimeInterval(2),
+            updatedAt: now.addingTimeInterval(2)
+        )
+        let unrelated = MemoryFactEntry(
+            scope: .global,
+            kind: .boundary,
+            content: "Alex defines loser as people who do not respect their own bodies, not people with poor academic results",
+            confidence: 0.95,
+            status: .pending,
+            stability: .stable,
+            sourceNodeIds: [unrelatedSource],
+            createdAt: now.addingTimeInterval(3),
+            updatedAt: now.addingTimeInterval(3)
+        )
+        for fact in [active, selected, sibling, unrelated] {
+            try store.insertMemoryFactEntry(fact)
+            if let atom = MemoryGraphAtomMapper.atom(fromFact: fact, now: fact.updatedAt) {
+                try store.insertMemoryAtom(atom)
+            }
+        }
+
+        XCTAssertTrue(service.confirmMemoryFactEntry(id: selected.id))
+
+        let updatedActive = try XCTUnwrap(store.fetchMemoryFactEntry(id: active.id))
+        XCTAssertEqual(updatedActive.status, .active)
+        XCTAssertEqual(updatedActive.confidence, 0.95, accuracy: 0.0001)
+        XCTAssertEqual(Set(updatedActive.sourceNodeIds), Set([activeSource, selectedSource, siblingSource]))
+        XCTAssertEqual(try store.fetchMemoryFactEntry(id: selected.id)?.status, .archived)
+        XCTAssertEqual(try store.fetchMemoryFactEntry(id: sibling.id)?.status, .archived)
+        XCTAssertEqual(try store.fetchMemoryFactEntry(id: unrelated.id)?.status, .pending)
+
+        let activeFacts = try store.fetchActiveMemoryFactEntries(
+            scope: .global,
+            scopeRefId: nil,
+            kinds: [.boundary]
+        )
+        XCTAssertEqual(activeFacts.count, 1)
+        XCTAssertEqual(activeFacts.first?.id, active.id)
+    }
+
+    func testConfirmMemoryFactEntryArchivesSimilarPendingRowsWhenNoActiveFactExists() throws {
+        let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
+            MockLLMService(capture: PromptCapture(), reply: "")
+        })
+        let now = Date(timeIntervalSince1970: 20)
+        let selectedSource = UUID()
+        let siblingSource = UUID()
+        let unrelatedSource = UUID()
+        for sourceId in [selectedSource, siblingSource, unrelatedSource] {
+            try store.insertNode(NousNode(
+                id: sourceId,
+                type: .conversation,
+                title: "Source \(sourceId.uuidString.prefix(4))"
+            ))
+        }
+        let selected = MemoryFactEntry(
+            scope: .global,
+            kind: .constraint,
+            content: "Alex cannot fully control the brain's impulse responses; self-control and first-principles analysis are the available tools, not direct brain control",
+            confidence: 0.82,
+            status: .pending,
+            stability: .stable,
+            sourceNodeIds: [selectedSource],
+            createdAt: now,
+            updatedAt: now
+        )
+        let sibling = MemoryFactEntry(
+            scope: .global,
+            kind: .constraint,
+            content: "Alex acknowledges he cannot directly control brain impulses and uses self control plus first principles analysis as his tools instead",
+            confidence: 0.86,
+            status: .pending,
+            stability: .stable,
+            sourceNodeIds: [siblingSource],
+            createdAt: now.addingTimeInterval(1),
+            updatedAt: now.addingTimeInterval(1)
+        )
+        let unrelated = MemoryFactEntry(
+            scope: .global,
+            kind: .constraint,
+            content: "Alex cannot use memory as an excuse to avoid making decisions",
+            confidence: 0.88,
+            status: .pending,
+            stability: .stable,
+            sourceNodeIds: [unrelatedSource],
+            createdAt: now.addingTimeInterval(2),
+            updatedAt: now.addingTimeInterval(2)
+        )
+        for fact in [selected, sibling, unrelated] {
+            try store.insertMemoryFactEntry(fact)
+            if let atom = MemoryGraphAtomMapper.atom(fromFact: fact, now: fact.updatedAt) {
+                try store.insertMemoryAtom(atom)
+            }
+        }
+
+        XCTAssertTrue(service.confirmMemoryFactEntry(id: selected.id))
+
+        let updatedSelected = try XCTUnwrap(store.fetchMemoryFactEntry(id: selected.id))
+        XCTAssertEqual(updatedSelected.status, .active)
+        XCTAssertEqual(updatedSelected.confidence, 0.95, accuracy: 0.0001)
+        XCTAssertEqual(Set(updatedSelected.sourceNodeIds), Set([selectedSource, siblingSource]))
+        XCTAssertEqual(try store.fetchMemoryFactEntry(id: sibling.id)?.status, .archived)
+        XCTAssertEqual(try store.fetchMemoryFactEntry(id: unrelated.id)?.status, .pending)
+
+        let activeFacts = try store.fetchActiveMemoryFactEntries(
+            scope: .global,
+            scopeRefId: nil,
+            kinds: [.constraint]
+        )
+        XCTAssertEqual(activeFacts.count, 1)
+        XCTAssertEqual(activeFacts.first?.id, selected.id)
+    }
+
     func testSourceSnippetsUseLinkedSourceNodes() throws {
         let service = UserMemoryService(nodeStore: store, llmServiceProvider: {
             MockLLMService(capture: PromptCapture(), reply: "")

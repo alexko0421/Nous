@@ -34,6 +34,7 @@ final class SourceLearningMemoryTests: XCTestCase {
         XCTAssertEqual(atom.scopeRefId, fixture.projectId)
         XCTAssertEqual(atom.sourceNodeId, fixture.sourceNode.id)
         XCTAssertEqual(atom.sourceMessageId, fixture.userMessage.id)
+        XCTAssertEqual(atom.authority, .tentative)
         XCTAssertEqual(atom.confidence, 0.86, accuracy: 0.001)
         XCTAssertEqual(atom.status, .pending)
 
@@ -43,6 +44,49 @@ final class SourceLearningMemoryTests: XCTestCase {
             conversationId: fixture.request.conversationId
         )
         XCTAssertTrue(recall.isEmpty, "Source-attached learning must not enter active recall before approval.")
+    }
+
+    func testAbsorbAutoActivatesExplicitLowRiskSourcePreference() async throws {
+        let store = try NodeStore(path: ":memory:")
+        let fixture = try makeRequestFixture(
+            store: store,
+            userText: "I prefer applying this source to my product strategy."
+        )
+        let service = SourceLearningMemoryService(
+            nodeStore: store,
+            llmServiceProvider: {
+                StaticSourceLearningLLM(output: """
+                {
+                  "candidates": [
+                    {
+                      "type": "preference",
+                      "statement": "Alex prefers applying this source to his product strategy.",
+                      "scope": "project",
+                      "confidence": 0.82,
+                      "evidence_quote": "I prefer applying this source to my product strategy."
+                    }
+                  ]
+                }
+                """)
+            },
+            now: { Date(timeIntervalSince1970: 12) }
+        )
+
+        let result = await service.absorb(fixture.request)
+
+        XCTAssertEqual(result.insertedCount, 1)
+        XCTAssertEqual(result.activeCount, 1)
+        XCTAssertEqual(result.pendingCount, 0)
+        let atom = try XCTUnwrap(try store.fetchMemoryAtoms().first)
+        XCTAssertEqual(atom.type, .preference)
+        XCTAssertEqual(atom.status, .active)
+        XCTAssertEqual(atom.authority, .tentative)
+        XCTAssertEqual(atom.scope, .project)
+        XCTAssertEqual(atom.scopeRefId, fixture.projectId)
+        XCTAssertEqual(atom.sourceNodeId, fixture.sourceNode.id)
+        XCTAssertEqual(atom.sourceMessageId, fixture.userMessage.id)
+        XCTAssertEqual(atom.evidenceQuote, "I prefer applying this source to my product strategy.")
+        XCTAssertTrue(atom.captureReason?.contains("source learning digest") == true)
     }
 
     func testAbsorbRejectsMissingEvidenceAndPureSourceFacts() async throws {
@@ -104,6 +148,105 @@ final class SourceLearningMemoryTests: XCTestCase {
                       "scope": "conversation",
                       "confidence": 0.8,
                       "evidence_quote": "Explain this"
+                    }
+                  ]
+                }
+                """)
+            }
+        )
+
+        let result = await service.absorb(fixture.request)
+
+        XCTAssertEqual(result.insertedCount, 0)
+        XCTAssertEqual(result.rejectedCount, 1)
+        XCTAssertTrue(try store.fetchMemoryAtoms().isEmpty)
+    }
+
+    func testAbsorbRejectsDelegatedGenericSourcePromptEvenWithProjectWords() async throws {
+        let store = try NodeStore(path: ":memory:")
+        let fixture = try makeRequestFixture(
+            store: store,
+            userText: "Can you explain this source for my product strategy?",
+            evidenceLevel: .transcriptBacked
+        )
+        let service = SourceLearningMemoryService(
+            nodeStore: store,
+            llmServiceProvider: {
+                StaticSourceLearningLLM(output: """
+                {
+                  "candidates": [
+                    {
+                      "type": "goal",
+                      "statement": "Alex wants this source explained for his product strategy.",
+                      "scope": "project",
+                      "confidence": 0.8,
+                      "evidence_quote": "Can you explain this source for my product strategy?"
+                    }
+                  ]
+                }
+                """)
+            }
+        )
+
+        let result = await service.absorb(fixture.request)
+
+        XCTAssertEqual(result.insertedCount, 0)
+        XCTAssertEqual(result.rejectedCount, 1)
+        XCTAssertTrue(try store.fetchMemoryAtoms().isEmpty)
+    }
+
+    func testAbsorbRejectsImperativeGenericSourcePromptEvenWithProjectWords() async throws {
+        let store = try NodeStore(path: ":memory:")
+        let fixture = try makeRequestFixture(
+            store: store,
+            userText: "Explain this source for my product strategy.",
+            evidenceLevel: .transcriptBacked
+        )
+        let service = SourceLearningMemoryService(
+            nodeStore: store,
+            llmServiceProvider: {
+                StaticSourceLearningLLM(output: """
+                {
+                  "candidates": [
+                    {
+                      "type": "goal",
+                      "statement": "Alex wants this source explained for his product strategy.",
+                      "scope": "project",
+                      "confidence": 0.8,
+                      "evidence_quote": "Explain this source for my product strategy."
+                    }
+                  ]
+                }
+                """)
+            }
+        )
+
+        let result = await service.absorb(fixture.request)
+
+        XCTAssertEqual(result.insertedCount, 0)
+        XCTAssertEqual(result.rejectedCount, 1)
+        XCTAssertTrue(try store.fetchMemoryAtoms().isEmpty)
+    }
+
+    func testAbsorbRejectsChineseGenericSourcePromptEvenWithPersonalContext() async throws {
+        let store = try NodeStore(path: ":memory:")
+        let fixture = try makeRequestFixture(
+            store: store,
+            userText: "解释这个来源对我产品策略有什么用。",
+            evidenceLevel: .transcriptBacked
+        )
+        let service = SourceLearningMemoryService(
+            nodeStore: store,
+            llmServiceProvider: {
+                StaticSourceLearningLLM(output: """
+                {
+                  "candidates": [
+                    {
+                      "type": "goal",
+                      "statement": "Alex wants this source explained for his product strategy.",
+                      "scope": "project",
+                      "confidence": 0.8,
+                      "evidence_quote": "解释这个来源对我产品策略有什么用。"
                     }
                   ]
                 }

@@ -75,6 +75,7 @@ struct TurnOutcomeFactory: Sendable {
            let userMessage,
            !sourceMaterials.isEmpty {
             sourceLearningDigest = SourceLearningDigestRequest(
+                turnId: turnId,
                 conversationId: committed.node.id,
                 projectId: committed.node.projectId,
                 userMessage: userMessage,

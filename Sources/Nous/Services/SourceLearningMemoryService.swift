@@ -33,7 +33,8 @@ final class SourceLearningMemoryService {
             }
 
             let candidates = Self.decodeCandidates(from: raw)
-            var insertedCount = 0
+            var activeCount = 0
+            var pendingCount = 0
             var rejectedCount = 0
             let lifecycleEngine = MemoryLifecycleEngine(nodeStore: nodeStore)
             for candidate in candidates {
@@ -48,18 +49,26 @@ final class SourceLearningMemoryService {
                 }
 
                 do {
-                    let staged = try lifecycleEngine.stageAtomProposal(atom, now: currentNow)
+                    let staged: MemoryAtom
+                    if atom.status == .active {
+                        staged = try lifecycleEngine.stageAutomaticAtom(atom, now: currentNow)
+                    } else {
+                        staged = try lifecycleEngine.stageAtomProposal(atom, now: currentNow)
+                    }
                     if staged.status == .archived {
                         rejectedCount += 1
+                    } else if staged.status == .active {
+                        activeCount += 1
                     } else {
-                        insertedCount += 1
+                        pendingCount += 1
                     }
                 } catch {
                     rejectedCount += 1
                 }
             }
             return SourceLearningDigestResult(
-                insertedCount: insertedCount,
+                activeCount: activeCount,
+                pendingCount: pendingCount,
                 rejectedCount: rejectedCount
             )
         } catch {
@@ -130,7 +139,8 @@ final class SourceLearningMemoryService {
         now: Date
     ) -> MemoryAtom? {
         guard allowedTypes.contains(candidate.type) else { return nil }
-        guard hasUserLearningSignal(request.userMessage.content) else { return nil }
+        guard !isGenericSourceRequestOnly(request.userMessage.content),
+              hasUserLearningSignal(request.userMessage.content) else { return nil }
 
         let statement = candidate.statement.trimmingCharacters(in: .whitespacesAndNewlines)
         guard statement.count >= 12,
@@ -157,6 +167,7 @@ final class SourceLearningMemoryService {
             conversationId: request.conversationId
         )
         let confidence = min(max(candidate.confidence, 0.55), 0.86)
+        let status = statusForSourceCandidate(type: candidate.type, confidence: confidence)
 
         return MemoryAtom(
             type: candidate.type,
@@ -164,15 +175,30 @@ final class SourceLearningMemoryService {
             normalizedKey: normalizedKey(statement),
             scope: scope.value,
             scopeRefId: scope.refId,
-            status: .pending,
+            status: status,
+            authority: .tentative,
             confidence: confidence,
             eventTime: request.userMessage.timestamp,
             createdAt: now,
             updatedAt: now,
             lastSeenAt: nil,
             sourceNodeId: sourceNodeId,
-            sourceMessageId: request.userMessage.id
+            sourceMessageId: request.userMessage.id,
+            evidenceQuote: evidenceQuote,
+            captureReason: "source learning digest matched Alex source-linked statement"
         )
+    }
+
+    private static func statusForSourceCandidate(type: MemoryAtomType, confidence: Double) -> MemoryStatus {
+        guard confidence >= 0.72 else { return .pending }
+        switch type {
+        case .preference, .decision, .goal, .belief:
+            return .active
+        case .insight, .pattern, .correction:
+            return .pending
+        default:
+            return .pending
+        }
     }
 
     private static let allowedTypes: Set<MemoryAtomType> = [
@@ -234,10 +260,7 @@ final class SourceLearningMemoryService {
             "我決定",
             "我偏好",
             "我一直",
-            "我唔想",
-            "同我",
-            "对我",
-            "對我"
+            "我唔想"
         ]
         if directCues.contains(where: { cue in
             cue.contains(" ") ? normalized.contains(cue) : compact.contains(cue)
@@ -278,6 +301,77 @@ final class SourceLearningMemoryService {
                 : compact.contains(cue)
         }
         return hasFirstPerson && hasConnectionCue
+    }
+
+    private static func isGenericSourceRequestOnly(_ text: String) -> Bool {
+        let normalized = " \(text.lowercased()) "
+        let compact = normalized
+            .components(separatedBy: .whitespacesAndNewlines)
+            .joined()
+
+        let genericCues = [
+            " explain ",
+            " explain this ",
+            " summarize ",
+            " summary ",
+            " tell me ",
+            " tell me more ",
+            " help me ",
+            " help me understand ",
+            " inspect ",
+            " look at ",
+            " what is ",
+            " what does ",
+            "解释",
+            "解釋",
+            "总结",
+            "總結",
+            "讲下",
+            "講下",
+            "睇下",
+            "看看"
+        ]
+        let hasGenericCue = genericCues.contains { cue in
+            cue.unicodeScalars.allSatisfy(\.isASCII)
+                ? normalized.contains(cue)
+                : compact.contains(cue)
+        }
+        guard hasGenericCue else { return false }
+
+        let stanceCues = [
+            " i think ",
+            " i believe ",
+            " i feel ",
+            " i see ",
+            " i realized ",
+            " i realise ",
+            " i learned ",
+            " i decide ",
+            " i decided ",
+            " i prefer ",
+            " i always ",
+            " i never ",
+            " i don't want ",
+            " connects to my ",
+            " relates to my ",
+            "我觉得",
+            "我覺得",
+            "我认为",
+            "我認為",
+            "我发现",
+            "我發現",
+            "我决定",
+            "我決定",
+            "我偏好",
+            "我一直",
+            "我唔想"
+        ]
+        let hasStanceCue = stanceCues.contains { cue in
+            cue.unicodeScalars.allSatisfy(\.isASCII)
+                ? normalized.contains(cue)
+                : compact.contains(cue)
+        }
+        return !hasStanceCue
     }
 
     private static func isPureSourceFact(_ statement: String) -> Bool {

@@ -26,6 +26,29 @@ final class BeadsAgentWorkServiceTests: XCTestCase {
         XCTAssertTrue(hint.contains("scripts/setup_beads_agent_memory.sh --install"))
     }
 
+    func testRepositoryLocatorPrefersExplicitRepoRootEnvironment() throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AgentWorkRepositoryLocatorTests-\(UUID().uuidString)", isDirectory: true)
+        let explicitRoot = tempRoot.appendingPathComponent("explicit", isDirectory: true)
+        let fallbackRoot = tempRoot.appendingPathComponent("fallback", isDirectory: true)
+        try FileManager.default.createDirectory(at: explicitRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: fallbackRoot.appendingPathComponent("Sources/Nous/Services", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try "".write(to: explicitRoot.appendingPathComponent("project.yml"), atomically: true, encoding: .utf8)
+        try "".write(to: fallbackRoot.appendingPathComponent("project.yml"), atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        let located = AgentWorkRepositoryLocator.defaultWorkingDirectoryURL(
+            environment: ["NOUS_REPO_ROOT": explicitRoot.path],
+            sourceFileURL: fallbackRoot.appendingPathComponent("Sources/Nous/Services/BeadsAgentWorkService.swift"),
+            currentDirectoryURL: fallbackRoot
+        )
+
+        XCTAssertEqual(located?.standardizedFileURL, explicitRoot.standardizedFileURL)
+    }
+
     func testBeadsIssueDetectsCompleteOutcomeContract() throws {
         let json = """
         [{
@@ -328,6 +351,38 @@ final class BeadsAgentWorkServiceTests: XCTestCase {
         XCTAssertTrue(snapshot.ready.isEmpty)
         XCTAssertTrue(snapshot.inProgress.isEmpty)
         XCTAssertTrue(snapshot.recentClosed.isEmpty)
+    }
+
+    func testHarnessOnlySnapshotCarriesBeadsConnectionErrorSeparately() {
+        let harnessRun = HarnessRunRecord(
+            mode: .quick,
+            status: .passed,
+            startedAt: Date(timeIntervalSince1970: 10),
+            endedAt: Date(timeIntervalSince1970: 12),
+            findings: [.sourceSetChanged],
+            detail: "Quick gate passed."
+        )
+        let service = BeadsAgentWorkService(
+            commandRunner: FakeBeadsCommandRunner(outputs: [:]),
+            harnessLoader: FakeHarnessHealthLoader(snapshot: HarnessHealthSnapshot(recentRuns: [harnessRun])),
+            runtimeHarnessLoader: FakeRuntimeHarnessLoader(snapshot: RuntimeHarnessSnapshot(totalTurnCount: 1))
+        )
+
+        let snapshot = service.loadHarnessOnlySnapshot(connectionError: "bd where exited with status 1.")
+
+        XCTAssertEqual(snapshot.beadsConnection.status, .failed)
+        XCTAssertEqual(snapshot.beadsConnection.message, "bd where exited with status 1.")
+        XCTAssertEqual(snapshot.harness.latestQuickRun, harnessRun)
+        XCTAssertEqual(snapshot.runtimeHarness.totalTurnCount, 1)
+    }
+
+    func testFailedBeadsConnectionDisplaysConcreteErrorInsteadOfUnavailablePath() {
+        let connection = BeadsConnectionState.failed(message: "bd where exited with status 1: missing redirect")
+
+        XCTAssertEqual(
+            connection.pathDisplayText(beadsPath: "", unavailableText: "Beads path unavailable"),
+            "bd where exited with status 1: missing redirect"
+        )
     }
 
     @MainActor

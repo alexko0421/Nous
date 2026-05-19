@@ -441,6 +441,8 @@ final class NodeStore {
                 last_seen_at      REAL,
                 source_node_id    TEXT REFERENCES nodes(id) ON DELETE SET NULL,
                 source_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+                evidence_quote    TEXT,
+                capture_reason    TEXT,
                 corrects_target   TEXT,
                 embedding         BLOB
             );
@@ -455,6 +457,16 @@ final class NodeStore {
             table: "memory_atoms",
             column: "authority",
             alterSQL: "ALTER TABLE memory_atoms ADD COLUMN authority TEXT NOT NULL DEFAULT 'durable';"
+        )
+        try ensureColumnExists(
+            table: "memory_atoms",
+            column: "evidence_quote",
+            alterSQL: "ALTER TABLE memory_atoms ADD COLUMN evidence_quote TEXT;"
+        )
+        try ensureColumnExists(
+            table: "memory_atoms",
+            column: "capture_reason",
+            alterSQL: "ALTER TABLE memory_atoms ADD COLUMN capture_reason TEXT;"
         )
 
         try db.exec("""
@@ -2645,8 +2657,8 @@ final class NodeStore {
               (id, type, statement, normalized_key, scope, scope_ref_id, status,
                authority, confidence, event_time, valid_from, valid_until, created_at,
                updated_at, last_seen_at, source_node_id, source_message_id,
-               corrects_target, embedding)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+               evidence_quote, capture_reason, corrects_target, embedding)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """)
         try stmt.bind(atom.id.uuidString, at: 1)
         try stmt.bind(atom.type.rawValue, at: 2)
@@ -2665,9 +2677,11 @@ final class NodeStore {
         try stmt.bind(atom.lastSeenAt?.timeIntervalSince1970, at: 15)
         try stmt.bind(atom.sourceNodeId?.uuidString, at: 16)
         try stmt.bind(atom.sourceMessageId?.uuidString, at: 17)
-        try stmt.bind(atom.correctsTarget, at: 18)
+        try stmt.bind(atom.evidenceQuote, at: 18)
+        try stmt.bind(atom.captureReason, at: 19)
+        try stmt.bind(atom.correctsTarget, at: 20)
         let embeddingData = atom.embedding.map { encodeFloats($0) }
-        try stmt.bind(embeddingData, at: 19)
+        try stmt.bind(embeddingData, at: 21)
         try stmt.step()
         upsertTopicContextAssignmentIfUsefulBestEffort(
             targetType: .memoryAtom,
@@ -2688,7 +2702,7 @@ final class NodeStore {
             SET type = ?, statement = ?, normalized_key = ?, scope = ?, scope_ref_id = ?,
                 status = ?, authority = ?, confidence = ?, event_time = ?, valid_from = ?,
                 valid_until = ?, updated_at = ?, last_seen_at = ?, source_node_id = ?,
-                source_message_id = ?, corrects_target = ?, embedding = ?
+                source_message_id = ?, evidence_quote = ?, capture_reason = ?, corrects_target = ?, embedding = ?
             WHERE id = ?;
         """)
         try stmt.bind(atom.type.rawValue, at: 1)
@@ -2706,10 +2720,12 @@ final class NodeStore {
         try stmt.bind(atom.lastSeenAt?.timeIntervalSince1970, at: 13)
         try stmt.bind(atom.sourceNodeId?.uuidString, at: 14)
         try stmt.bind(atom.sourceMessageId?.uuidString, at: 15)
-        try stmt.bind(atom.correctsTarget, at: 16)
+        try stmt.bind(atom.evidenceQuote, at: 16)
+        try stmt.bind(atom.captureReason, at: 17)
+        try stmt.bind(atom.correctsTarget, at: 18)
         let embeddingData = atom.embedding.map { encodeFloats($0) }
-        try stmt.bind(embeddingData, at: 17)
-        try stmt.bind(atom.id.uuidString, at: 18)
+        try stmt.bind(embeddingData, at: 19)
+        try stmt.bind(atom.id.uuidString, at: 20)
         try stmt.step()
         upsertTopicContextAssignmentIfUsefulBestEffort(
             targetType: .memoryAtom,
@@ -2724,7 +2740,7 @@ final class NodeStore {
             SELECT id, type, statement, normalized_key, scope, scope_ref_id, status,
                    authority, confidence, event_time, valid_from, valid_until, created_at,
                    updated_at, last_seen_at, source_node_id, source_message_id,
-                   corrects_target, embedding
+                   evidence_quote, capture_reason, corrects_target, embedding
             FROM memory_atoms
             WHERE id = ?
             LIMIT 1;
@@ -2739,7 +2755,7 @@ final class NodeStore {
             SELECT id, type, statement, normalized_key, scope, scope_ref_id, status,
                    authority, confidence, event_time, valid_from, valid_until, created_at,
                    updated_at, last_seen_at, source_node_id, source_message_id,
-                   corrects_target, embedding
+                   evidence_quote, capture_reason, corrects_target, embedding
             FROM memory_atoms
             ORDER BY COALESCE(event_time, created_at) DESC, created_at DESC;
         """)
@@ -2807,7 +2823,7 @@ final class NodeStore {
             SELECT id, type, statement, normalized_key, scope, scope_ref_id, status,
                    authority, confidence, event_time, valid_from, valid_until, created_at,
                    updated_at, last_seen_at, source_node_id, source_message_id,
-                   corrects_target, embedding
+                   evidence_quote, capture_reason, corrects_target, embedding
             FROM memory_atoms
             \(whereSQL)ORDER BY COALESCE(event_time, created_at) DESC, created_at DESC
             \(limitSQL);
@@ -2862,7 +2878,7 @@ final class NodeStore {
             SELECT id, type, statement, normalized_key, scope, scope_ref_id, status,
                    authority, confidence, event_time, valid_from, valid_until, created_at,
                    updated_at, last_seen_at, source_node_id, source_message_id,
-                   corrects_target, embedding
+                   evidence_quote, capture_reason, corrects_target, embedding
             FROM memory_atoms
             WHERE \(whereClauses.joined(separator: " AND "));
         """)
@@ -2913,7 +2929,7 @@ final class NodeStore {
             SELECT id, type, statement, normalized_key, scope, scope_ref_id, status,
                    authority, confidence, event_time, valid_from, valid_until, created_at,
                    updated_at, last_seen_at, source_node_id, source_message_id,
-                   corrects_target, embedding
+                   evidence_quote, capture_reason, corrects_target, embedding
             FROM memory_atoms
             WHERE source_node_id IN (\(placeholders))
             ORDER BY COALESCE(event_time, created_at) DESC, created_at DESC;
@@ -3350,8 +3366,10 @@ final class NodeStore {
         let lastSeenAt = stmt.isNull(at: 14) ? nil : Date(timeIntervalSince1970: stmt.double(at: 14))
         let sourceNodeId = stmt.text(at: 15).flatMap { UUID(uuidString: $0) }
         let sourceMessageId = stmt.text(at: 16).flatMap { UUID(uuidString: $0) }
-        let correctsTarget = stmt.text(at: 17)
-        let embedding = stmt.blob(at: 18).map { decodeFloats($0) }
+        let evidenceQuote = stmt.text(at: 17)
+        let captureReason = stmt.text(at: 18)
+        let correctsTarget = stmt.text(at: 19)
+        let embedding = stmt.blob(at: 20).map { decodeFloats($0) }
         return MemoryAtom(
             id: id,
             type: type,
@@ -3370,6 +3388,8 @@ final class NodeStore {
             lastSeenAt: lastSeenAt,
             sourceNodeId: sourceNodeId,
             sourceMessageId: sourceMessageId,
+            evidenceQuote: evidenceQuote,
+            captureReason: captureReason,
             correctsTarget: correctsTarget,
             embedding: embedding
         )
