@@ -3,6 +3,7 @@ import Foundation
 actor AutomaticMemoryPipelineScheduler {
     private let service: AutomaticMemoryPipelineService
     private var activityHandler: (@Sendable (MemoryActivityEvent) async -> Void)?
+    private var latestActivityEventsByConversation: [UUID: MemoryActivityEvent] = [:]
 
     private struct ConversationTail {
         let token: UUID
@@ -15,30 +16,31 @@ actor AutomaticMemoryPipelineScheduler {
         self.service = service
     }
 
-    func setActivityHandler(_ handler: (@Sendable (MemoryActivityEvent) async -> Void)?) {
+    func setActivityHandler(_ handler: (@Sendable (MemoryActivityEvent) async -> Void)?) async {
         activityHandler = handler
+        guard let handler else { return }
+        for event in latestActivityEventsByConversation.values {
+            await handler(event)
+        }
     }
 
     func enqueue(_ request: AutomaticMemoryDigestRequest) {
         let previous = conversationTails[request.conversationId]?.task
         let token = UUID()
-        let activityHandler = activityHandler
         let task = Task { [service, weak self] in
             if let previous {
                 await previous.value
             }
             let result = await service.process(request)
-            if let activityHandler {
-                await activityHandler(MemoryActivityEvent(
-                    source: .automatic,
-                    turnId: request.turnId,
-                    conversationId: request.conversationId,
-                    activeCount: result.activeCount,
-                    pendingCount: result.pendingCount,
-                    rejectedCount: result.rejectedCount,
-                    recordedAt: Date()
-                ))
-            }
+            await self?.recordActivity(MemoryActivityEvent(
+                source: .automatic,
+                turnId: request.turnId,
+                conversationId: request.conversationId,
+                activeCount: result.activeCount,
+                pendingCount: result.pendingCount,
+                rejectedCount: result.rejectedCount,
+                recordedAt: Date()
+            ))
             _ = try? service.synthesizeDerivedMemory(
                 projectId: request.projectId,
                 conversationId: request.conversationId
@@ -58,6 +60,13 @@ actor AutomaticMemoryPipelineScheduler {
     private func finish(conversationId: UUID, token: UUID) {
         guard conversationTails[conversationId]?.token == token else { return }
         conversationTails[conversationId] = nil
+    }
+
+    private func recordActivity(_ event: MemoryActivityEvent) async {
+        latestActivityEventsByConversation[event.conversationId] = event
+        if let activityHandler {
+            await activityHandler(event)
+        }
     }
 }
 

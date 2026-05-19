@@ -251,6 +251,60 @@ final class BeadsAgentWorkServiceTests: XCTestCase {
         ])
     }
 
+    func testLoadSnapshotUsesFirstPathLineFromMultilineBdWhereOutput() throws {
+        let runner = FakeBeadsCommandRunner(outputs: [
+            "where": """
+            /Users/alex/.local/share/nous/beads
+              (via redirect from /private/tmp/nous-v1-pr/.beads)
+              database: /Users/alex/.local/share/nous/beads/embeddeddolt
+            """,
+            "ready --json": "[]",
+            "list --status=in_progress --json": "[]",
+            "list --status=closed --json": "[]"
+        ])
+        let service = BeadsAgentWorkService(commandRunner: runner)
+
+        let snapshot = try service.loadSnapshot()
+
+        XCTAssertEqual(snapshot.beadsPath, "/Users/alex/.local/share/nous/beads")
+        XCTAssertEqual(snapshot.beadsConnection.message, "/Users/alex/.local/share/nous/beads")
+    }
+
+    func testProcessBeadsCommandRunnerTimesOutHungCommand() throws {
+        let runner = ProcessBeadsCommandRunner(
+            workingDirectoryURL: FileManager.default.temporaryDirectory,
+            timeout: 0.1,
+            executableOverride: (
+                url: URL(fileURLWithPath: "/bin/sh"),
+                argumentsPrefix: ["-c", "sleep 2"]
+            )
+        )
+
+        XCTAssertThrowsError(try runner.run([])) { error in
+            guard case BeadsAgentWorkServiceError.commandTimedOut(let arguments, let timeout) = error else {
+                XCTFail("Expected commandTimedOut, got \(error)")
+                return
+            }
+            XCTAssertEqual(arguments, [])
+            XCTAssertEqual(timeout, 0.1, accuracy: 0.001)
+        }
+    }
+
+    func testProcessBeadsCommandRunnerDrainsLargeOutputBeforeWaitingForExit() throws {
+        let runner = ProcessBeadsCommandRunner(
+            workingDirectoryURL: FileManager.default.temporaryDirectory,
+            timeout: 2,
+            executableOverride: (
+                url: URL(fileURLWithPath: "/bin/sh"),
+                argumentsPrefix: ["-c", "yes x | head -c 200000"]
+            )
+        )
+
+        let output = try runner.run([])
+
+        XCTAssertEqual(output.count, 200_000)
+    }
+
     func testLoadSnapshotTreatsBlankJsonAsEmptyLists() throws {
         let runner = FakeBeadsCommandRunner(outputs: [
             "where": "  /shared/beads  \n",

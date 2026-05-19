@@ -538,6 +538,69 @@ final class ContextContinuationServiceTests: XCTestCase {
         XCTAssertEqual(event.rejectedCount, 0)
     }
 
+    func testAutomaticMemorySchedulerReplaysLatestActivityToLateHandler() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let conversation = NousNode(type: .conversation, title: "Late automatic activity")
+        try nodeStore.insertNode(conversation)
+        let userMessage = Message(
+            nodeId: conversation.id,
+            role: .user,
+            content: "I prefer the automatic memory activity pill to be reliable.",
+            timestamp: Date(timeIntervalSince1970: 20)
+        )
+        let assistantMessage = Message(
+            nodeId: conversation.id,
+            role: .assistant,
+            content: "We should show the saved count after the turn.",
+            timestamp: Date(timeIntervalSince1970: 21)
+        )
+        try nodeStore.insertMessage(userMessage)
+        try nodeStore.insertMessage(assistantMessage)
+
+        let service = AutomaticMemoryPipelineService(
+            nodeStore: nodeStore,
+            llmServiceProvider: {
+                StaticContextAutomaticMemoryLLM(output: """
+                {
+                  "candidates": [
+                    {
+                      "type": "preference",
+                      "statement": "Alex prefers the automatic memory activity pill to be reliable.",
+                      "scope": "global",
+                      "confidence": 0.82,
+                      "evidence_quote": "I prefer the automatic memory activity pill to be reliable"
+                    }
+                  ]
+                }
+                """)
+            },
+            now: { Date(timeIntervalSince1970: 30) }
+        )
+        let scheduler = AutomaticMemoryPipelineScheduler(service: service)
+        let turnId = UUID()
+
+        await scheduler.enqueue(AutomaticMemoryDigestRequest(
+            turnId: turnId,
+            conversationId: conversation.id,
+            projectId: nil,
+            userMessage: userMessage,
+            assistantMessage: assistantMessage,
+            sourceMaterials: []
+        ))
+        await scheduler.waitUntilIdle()
+
+        let sink = RecordingMemoryActivitySink()
+        await scheduler.setActivityHandler { event in
+            await sink.record(event)
+        }
+
+        let events = await sink.recordedEvents()
+        let event = try XCTUnwrap(events.first)
+        XCTAssertEqual(event.source, .automatic)
+        XCTAssertEqual(event.turnId, turnId)
+        XCTAssertEqual(event.activeCount, 1)
+    }
+
     func testMemoryActivitySnapshotIgnoresStaleTurnEvents() {
         let currentTurnId = UUID()
         let staleTurnId = UUID()

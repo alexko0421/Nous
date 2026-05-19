@@ -75,9 +75,17 @@ enum AgentWorkRepositoryLocator {
 
 struct ProcessBeadsCommandRunner: BeadsCommandRunning {
     var workingDirectoryURL: URL?
+    var timeout: TimeInterval
+    var executableOverride: (url: URL, argumentsPrefix: [String])?
 
-    init(workingDirectoryURL: URL? = AgentWorkRepositoryLocator.defaultWorkingDirectoryURL()) {
+    init(
+        workingDirectoryURL: URL? = AgentWorkRepositoryLocator.defaultWorkingDirectoryURL(),
+        timeout: TimeInterval = 5,
+        executableOverride: (url: URL, argumentsPrefix: [String])? = nil
+    ) {
         self.workingDirectoryURL = workingDirectoryURL
+        self.timeout = timeout
+        self.executableOverride = executableOverride
     }
 
     func run(_ arguments: [String]) throws -> String {
@@ -91,17 +99,33 @@ struct ProcessBeadsCommandRunner: BeadsCommandRunning {
         let stderr = Pipe()
         process.standardOutput = stdout
         process.standardError = stderr
+        let semaphore = DispatchSemaphore(value: 0)
+        let outputCollector = PipeOutputCollector(pipe: stdout)
+        let errorCollector = PipeOutputCollector(pipe: stderr)
+        process.terminationHandler = { _ in
+            semaphore.signal()
+        }
 
         do {
             try process.run()
+            outputCollector.startReading()
+            errorCollector.startReading()
         } catch {
             throw BeadsAgentWorkServiceError.commandLaunchFailed(error.localizedDescription)
         }
 
-        process.waitUntilExit()
+        if semaphore.wait(timeout: .now() + timeout) == .timedOut {
+            process.terminate()
+            _ = semaphore.wait(timeout: .now() + 1)
+            _ = outputCollector.waitUntilFinished(timeout: .now() + 1)
+            _ = errorCollector.waitUntilFinished(timeout: .now() + 1)
+            throw BeadsAgentWorkServiceError.commandTimedOut(arguments: arguments, timeout: timeout)
+        }
 
-        let output = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        let errorOutput = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        _ = outputCollector.waitUntilFinished(timeout: .distantFuture)
+        _ = errorCollector.waitUntilFinished(timeout: .distantFuture)
+        let output = outputCollector.stringValue
+        let errorOutput = errorCollector.stringValue
 
         guard process.terminationStatus == 0 else {
             throw BeadsAgentWorkServiceError.commandFailed(
@@ -115,6 +139,10 @@ struct ProcessBeadsCommandRunner: BeadsCommandRunning {
     }
 
     private func resolvedExecutable() -> (url: URL, argumentsPrefix: [String]) {
+        if let executableOverride {
+            return executableOverride
+        }
+
         let fileManager = FileManager.default
         for path in ["/opt/homebrew/bin/bd", "/usr/local/bin/bd"] {
             if fileManager.isExecutableFile(atPath: path) {
@@ -126,8 +154,41 @@ struct ProcessBeadsCommandRunner: BeadsCommandRunning {
 
 }
 
+private final class PipeOutputCollector: @unchecked Sendable {
+    private let pipe: Pipe
+    private let group = DispatchGroup()
+    private let lock = NSLock()
+    private var data = Data()
+
+    init(pipe: Pipe) {
+        self.pipe = pipe
+    }
+
+    func startReading() {
+        group.enter()
+        DispatchQueue.global(qos: .utility).async { [pipe] in
+            let readData = pipe.fileHandleForReading.readDataToEndOfFile()
+            self.lock.lock()
+            self.data = readData
+            self.lock.unlock()
+            self.group.leave()
+        }
+    }
+
+    func waitUntilFinished(timeout: DispatchTime) -> Bool {
+        group.wait(timeout: timeout) == .success
+    }
+
+    var stringValue: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+}
+
 enum BeadsAgentWorkServiceError: LocalizedError, Equatable {
     case commandLaunchFailed(String)
+    case commandTimedOut(arguments: [String], timeout: TimeInterval)
     case commandFailed(arguments: [String], status: Int, stderr: String)
     case invalidJSON(command: String, underlying: String)
 
@@ -135,6 +196,9 @@ enum BeadsAgentWorkServiceError: LocalizedError, Equatable {
         switch self {
         case .commandLaunchFailed(let message):
             return "Could not launch bd: \(message)"
+        case .commandTimedOut(let arguments, let timeout):
+            let command = "bd " + arguments.joined(separator: " ")
+            return "\(command) timed out after \(timeout)s."
         case .commandFailed(let arguments, let status, let stderr):
             let command = "bd " + arguments.joined(separator: " ")
             if stderr.isEmpty {
@@ -166,8 +230,7 @@ final class BeadsAgentWorkService: @unchecked Sendable {
     }
 
     func loadSnapshot() throws -> BeadsAgentWorkSnapshot {
-        let beadsPath = try commandRunner.run(["where"])
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let beadsPath = parseBeadsPath(from: try commandRunner.run(["where"]))
         let ready = try decodeIssues(from: commandRunner.run(["ready", "--json"]), command: "bd ready --json")
         let inProgress = try decodeIssues(
             from: commandRunner.run(["list", "--status=in_progress", "--json"]),
@@ -209,6 +272,15 @@ final class BeadsAgentWorkService: @unchecked Sendable {
             runtimeHarness: runtimeHarnessLoader.loadSnapshot(),
             loadedAt: Date()
         )
+    }
+
+    private func parseBeadsPath(from output: String) -> String {
+        let firstPathLine = output
+            .split(whereSeparator: { $0.isNewline })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+
+        return firstPathLine ?? output.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func decodeIssues(from output: String, command: String) throws -> [BeadsIssue] {
