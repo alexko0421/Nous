@@ -320,8 +320,16 @@ final class SourceLearningMemoryService {
             " help me understand ",
             " inspect ",
             " look at ",
+            " how ",
+            " how is ",
+            " how can ",
+            " how should ",
+            " useful ",
+            " use this ",
+            " apply this ",
             " what is ",
             " what does ",
+            " what can ",
             "解释",
             "解釋",
             "总结",
@@ -329,7 +337,15 @@ final class SourceLearningMemoryService {
             "讲下",
             "講下",
             "睇下",
-            "看看"
+            "看看",
+            "有咩用",
+            "有什么用",
+            "有什麼用",
+            "點用",
+            "点用",
+            "點樣用",
+            "点样用",
+            "如何用"
         ]
         let hasGenericCue = genericCues.contains { cue in
             cue.unicodeScalars.allSatisfy(\.isASCII)

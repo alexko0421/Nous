@@ -224,6 +224,7 @@ struct MemoryActivitySnapshot: Equatable, Sendable {
         pendingCount: 0,
         rejectedCount: 0,
         skippedReason: nil,
+        recordedSources: [],
         updatedAt: nil
     )
 
@@ -237,6 +238,7 @@ struct MemoryActivitySnapshot: Equatable, Sendable {
     var pendingCount: Int
     var rejectedCount: Int
     var skippedReason: MemorySuppressionReason?
+    var recordedSources: Set<MemoryActivitySource>
     var updatedAt: Date?
 
     var isVisible: Bool {
@@ -275,6 +277,7 @@ struct MemoryActivitySnapshot: Equatable, Sendable {
                 pendingCount: 0,
                 rejectedCount: 0,
                 skippedReason: reason,
+                recordedSources: [],
                 updatedAt: now
             )
         }
@@ -295,6 +298,7 @@ struct MemoryActivitySnapshot: Equatable, Sendable {
             pendingCount: 0,
             rejectedCount: 0,
             skippedReason: nil,
+            recordedSources: [],
             updatedAt: now
         )
     }
@@ -309,6 +313,9 @@ struct MemoryActivitySnapshot: Equatable, Sendable {
         if let turnId, event.turnId != turnId {
             return self
         }
+        if recordedSources.contains(event.source) {
+            return self
+        }
 
         var copy = self
         copy.stage = .completed
@@ -317,6 +324,7 @@ struct MemoryActivitySnapshot: Equatable, Sendable {
         copy.activeCount += event.activeCount
         copy.pendingCount += event.pendingCount
         copy.rejectedCount += event.rejectedCount
+        copy.recordedSources.insert(event.source)
         copy.updatedAt = event.recordedAt
         return copy
     }

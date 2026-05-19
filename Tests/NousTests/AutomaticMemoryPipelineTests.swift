@@ -228,6 +228,40 @@ final class AutomaticMemoryPipelineTests: XCTestCase {
         XCTAssertTrue(try store.fetchMemoryAtoms().isEmpty)
     }
 
+    func testAutomaticDigestRejectsGenericUsefulnessQuestionEvenWithProductContext() async throws {
+        let now = Date(timeIntervalSince1970: 21_600)
+        let fixture = try makeAutomaticFixture(
+            userText: "How can I use this for my product strategy?",
+            assistantText: "Here are a few product strategy angles.",
+            now: now
+        )
+        let service = AutomaticMemoryPipelineService(
+            nodeStore: store,
+            llmServiceProvider: {
+                StaticAutomaticMemoryLLM(output: """
+                {
+                  "candidates": [
+                    {
+                      "type": "goal",
+                      "statement": "Alex wants to use this for his product strategy.",
+                      "scope": "project",
+                      "confidence": 0.8,
+                      "evidence_quote": "How can I use this for my product strategy?"
+                    }
+                  ]
+                }
+                """)
+            },
+            now: { now }
+        )
+
+        let result = await service.process(fixture.request)
+
+        XCTAssertEqual(result.insertedCount, 0)
+        XCTAssertEqual(result.rejectedCount, 1)
+        XCTAssertTrue(try store.fetchMemoryAtoms().isEmpty)
+    }
+
     func testAutomaticDigestRejectsGenericIWantYouRequest() async throws {
         let now = Date(timeIntervalSince1970: 21_700)
         let fixture = try makeAutomaticFixture(

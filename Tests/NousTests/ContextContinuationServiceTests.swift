@@ -601,6 +601,46 @@ final class ContextContinuationServiceTests: XCTestCase {
         XCTAssertEqual(event.activeCount, 1)
     }
 
+    func testAutomaticMemorySchedulerBoundsLateHandlerReplayEvents() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let service = AutomaticMemoryPipelineService(
+            nodeStore: nodeStore,
+            llmServiceProvider: { nil }
+        )
+        let scheduler = AutomaticMemoryPipelineScheduler(service: service)
+
+        for index in 0..<25 {
+            let conversationId = UUID()
+            await scheduler.enqueue(AutomaticMemoryDigestRequest(
+                turnId: UUID(),
+                conversationId: conversationId,
+                projectId: nil,
+                userMessage: Message(
+                    nodeId: conversationId,
+                    role: .user,
+                    content: "I prefer bounded automatic activity replay \(index).",
+                    timestamp: Date(timeIntervalSince1970: Double(index))
+                ),
+                assistantMessage: Message(
+                    nodeId: conversationId,
+                    role: .assistant,
+                    content: "Noted.",
+                    timestamp: Date(timeIntervalSince1970: Double(index) + 0.5)
+                ),
+                sourceMaterials: []
+            ))
+        }
+        await scheduler.waitUntilIdle()
+
+        let sink = RecordingMemoryActivitySink()
+        await scheduler.setActivityHandler { event in
+            await sink.record(event)
+        }
+
+        let events = await sink.recordedEvents()
+        XCTAssertEqual(events.count, 20)
+    }
+
     func testSourceLearningSchedulerReleasesCompletedTasksAfterIdle() async throws {
         let nodeStore = try NodeStore(path: ":memory:")
         let projectId = UUID()
@@ -677,6 +717,46 @@ final class ContextContinuationServiceTests: XCTestCase {
         XCTAssertEqual(retainedCounts.scheduledTasks, 0)
     }
 
+    func testSourceLearningSchedulerBoundsRetainedActivityReplayEvents() async throws {
+        let nodeStore = try NodeStore(path: ":memory:")
+        let service = SourceLearningMemoryService(
+            nodeStore: nodeStore,
+            llmServiceProvider: { nil }
+        )
+        let scheduler = SourceLearningMemoryScheduler(service: service)
+
+        for index in 0..<25 {
+            let conversationId = UUID()
+            let userMessage = Message(
+                nodeId: conversationId,
+                role: .user,
+                content: "I think source learning should avoid replay cache growth \(index).",
+                timestamp: Date(timeIntervalSince1970: Double(index))
+            )
+            let assistantMessage = Message(
+                nodeId: conversationId,
+                role: .assistant,
+                content: "Noted.",
+                timestamp: Date(timeIntervalSince1970: Double(index) + 0.5)
+            )
+            await scheduler.enqueue(SourceLearningDigestRequest(
+                turnId: UUID(),
+                conversationId: conversationId,
+                projectId: nil,
+                userMessage: userMessage,
+                assistantMessage: assistantMessage,
+                sourceMaterials: []
+            ))
+        }
+
+        await scheduler.waitUntilIdle()
+
+        let retainedCounts = await scheduler.debugRetainedTaskCounts()
+        XCTAssertEqual(retainedCounts.conversationTails, 0)
+        XCTAssertEqual(retainedCounts.scheduledTasks, 0)
+        XCTAssertLessThanOrEqual(retainedCounts.latestActivityEvents, 20)
+    }
+
     func testMemoryActivitySnapshotIgnoresStaleTurnEvents() {
         let currentTurnId = UUID()
         let staleTurnId = UUID()
@@ -718,6 +798,45 @@ final class ContextContinuationServiceTests: XCTestCase {
         ))
 
         XCTAssertEqual(updated, .empty)
+    }
+
+    func testMemoryActivitySnapshotDoesNotDoubleCountReplayedSourceEvent() {
+        let turnId = UUID()
+        let conversationId = UUID()
+        let snapshot = MemoryActivitySnapshot.queued(
+            from: ContextContinuationPlan(
+                turnId: turnId,
+                conversationId: conversationId,
+                assistantMessageId: UUID(),
+                scratchpadIngest: nil,
+                memoryRefresh: nil,
+                automaticMemoryDigest: AutomaticMemoryDigestRequest(
+                    turnId: turnId,
+                    conversationId: conversationId,
+                    projectId: nil,
+                    userMessage: Message(nodeId: conversationId, role: .user, content: "I prefer idempotent memory activity."),
+                    assistantMessage: Message(nodeId: conversationId, role: .assistant, content: "Yes."),
+                    sourceMaterials: []
+                )
+            ),
+            now: Date(timeIntervalSince1970: 100)
+        )
+        let event = MemoryActivityEvent(
+            source: .automatic,
+            turnId: turnId,
+            conversationId: conversationId,
+            activeCount: 1,
+            pendingCount: 2,
+            rejectedCount: 3,
+            recordedAt: Date(timeIntervalSince1970: 101)
+        )
+
+        let first = snapshot.recording(event)
+        let replayed = first.recording(event)
+
+        XCTAssertEqual(replayed.activeCount, 1)
+        XCTAssertEqual(replayed.pendingCount, 2)
+        XCTAssertEqual(replayed.rejectedCount, 3)
     }
 
     func testMemoryActivitySnapshotStaysIdleWhenNoMemoryWorkQueued() {

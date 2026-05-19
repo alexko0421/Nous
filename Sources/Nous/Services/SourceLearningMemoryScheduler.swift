@@ -2,8 +2,10 @@ import Foundation
 
 actor SourceLearningMemoryScheduler {
     private let service: SourceLearningMemoryService
+    private static let maxReplayedActivityEvents = 20
     private var activityHandler: (@Sendable (MemoryActivityEvent) async -> Void)?
     private var latestActivityEventsByConversation: [UUID: MemoryActivityEvent] = [:]
+    private var activityReplayOrder: [UUID] = []
     private struct ScheduledTask {
         let token: UUID
         let task: Task<Void, Never>
@@ -54,12 +56,19 @@ actor SourceLearningMemoryScheduler {
         }
     }
 
-    func debugRetainedTaskCounts() -> (conversationTails: Int, scheduledTasks: Int) {
-        (conversationTails.count, scheduledTasks.count)
+    func debugRetainedTaskCounts() -> (conversationTails: Int, scheduledTasks: Int, latestActivityEvents: Int) {
+        (conversationTails.count, scheduledTasks.count, latestActivityEventsByConversation.count)
     }
 
     private func recordActivity(_ event: MemoryActivityEvent) async {
+        if latestActivityEventsByConversation[event.conversationId] == nil {
+            activityReplayOrder.append(event.conversationId)
+        }
         latestActivityEventsByConversation[event.conversationId] = event
+        while activityReplayOrder.count > Self.maxReplayedActivityEvents {
+            let expiredConversationId = activityReplayOrder.removeFirst()
+            latestActivityEventsByConversation[expiredConversationId] = nil
+        }
         if let activityHandler {
             await activityHandler(event)
         }

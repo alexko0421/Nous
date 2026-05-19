@@ -261,6 +261,72 @@ final class SourceLearningMemoryTests: XCTestCase {
         XCTAssertTrue(try store.fetchMemoryAtoms().isEmpty)
     }
 
+    func testAbsorbRejectsEnglishGenericUsefulnessQuestionEvenWithProductContext() async throws {
+        let store = try NodeStore(path: ":memory:")
+        let fixture = try makeRequestFixture(
+            store: store,
+            userText: "How is this useful for my product strategy?",
+            evidenceLevel: .transcriptBacked
+        )
+        let service = SourceLearningMemoryService(
+            nodeStore: store,
+            llmServiceProvider: {
+                StaticSourceLearningLLM(output: """
+                {
+                  "candidates": [
+                    {
+                      "type": "goal",
+                      "statement": "Alex wants to apply this source to his product strategy.",
+                      "scope": "project",
+                      "confidence": 0.8,
+                      "evidence_quote": "How is this useful for my product strategy?"
+                    }
+                  ]
+                }
+                """)
+            }
+        )
+
+        let result = await service.absorb(fixture.request)
+
+        XCTAssertEqual(result.insertedCount, 0)
+        XCTAssertEqual(result.rejectedCount, 1)
+        XCTAssertTrue(try store.fetchMemoryAtoms().isEmpty)
+    }
+
+    func testAbsorbRejectsCantoneseGenericUsefulnessQuestionEvenWithProductContext() async throws {
+        let store = try NodeStore(path: ":memory:")
+        let fixture = try makeRequestFixture(
+            store: store,
+            userText: "呢個來源對我產品有咩用？",
+            evidenceLevel: .transcriptBacked
+        )
+        let service = SourceLearningMemoryService(
+            nodeStore: store,
+            llmServiceProvider: {
+                StaticSourceLearningLLM(output: """
+                {
+                  "candidates": [
+                    {
+                      "type": "goal",
+                      "statement": "Alex wants to apply this source to his product.",
+                      "scope": "project",
+                      "confidence": 0.8,
+                      "evidence_quote": "呢個來源對我產品有咩用？"
+                    }
+                  ]
+                }
+                """)
+            }
+        )
+
+        let result = await service.absorb(fixture.request)
+
+        XCTAssertEqual(result.insertedCount, 0)
+        XCTAssertEqual(result.rejectedCount, 1)
+        XCTAssertTrue(try store.fetchMemoryAtoms().isEmpty)
+    }
+
     func testGeminiBackedSourceCanOnlyCreateMemoryFromAlexOwnStatement() async throws {
         let store = try NodeStore(path: ":memory:")
         let fixture = try makeRequestFixture(

@@ -2,8 +2,10 @@ import Foundation
 
 actor AutomaticMemoryPipelineScheduler {
     private let service: AutomaticMemoryPipelineService
+    private static let maxReplayedActivityEvents = 20
     private var activityHandler: (@Sendable (MemoryActivityEvent) async -> Void)?
     private var latestActivityEventsByConversation: [UUID: MemoryActivityEvent] = [:]
+    private var activityReplayOrder: [UUID] = []
 
     private struct ConversationTail {
         let token: UUID
@@ -63,7 +65,14 @@ actor AutomaticMemoryPipelineScheduler {
     }
 
     private func recordActivity(_ event: MemoryActivityEvent) async {
+        if latestActivityEventsByConversation[event.conversationId] == nil {
+            activityReplayOrder.append(event.conversationId)
+        }
         latestActivityEventsByConversation[event.conversationId] = event
+        while activityReplayOrder.count > Self.maxReplayedActivityEvents {
+            let expiredConversationId = activityReplayOrder.removeFirst()
+            latestActivityEventsByConversation[expiredConversationId] = nil
+        }
         if let activityHandler {
             await activityHandler(event)
         }
@@ -377,8 +386,16 @@ final class AutomaticMemoryPipelineService {
             " continue ",
             " inspect ",
             " look at ",
+            " how ",
+            " how is ",
+            " how can ",
+            " how should ",
+            " useful ",
+            " use this ",
+            " apply this ",
             " what is ",
             " what does ",
+            " what can ",
             "解释",
             "解釋",
             "总结",
@@ -388,7 +405,15 @@ final class AutomaticMemoryPipelineService {
             "讲下",
             "講下",
             "睇下",
-            "看看"
+            "看看",
+            "有咩用",
+            "有什么用",
+            "有什麼用",
+            "點用",
+            "点用",
+            "點樣用",
+            "点样用",
+            "如何用"
         ]
         let hasGenericCue = genericCues.contains { cue in
             cue.unicodeScalars.allSatisfy(\.isASCII)
