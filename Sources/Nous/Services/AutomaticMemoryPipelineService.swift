@@ -2,6 +2,11 @@ import Foundation
 
 actor AutomaticMemoryPipelineScheduler {
     private let service: AutomaticMemoryPipelineService
+    private static let maxReplayedActivityEvents = 20
+    private var activityHandler: (@Sendable (MemoryActivityEvent) async -> Void)?
+    private var latestActivityEventsByConversation: [UUID: MemoryActivityEvent] = [:]
+    private var activityReplayOrder: [UUID] = []
+
     private struct ConversationTail {
         let token: UUID
         let task: Task<Void, Never>
@@ -13,6 +18,14 @@ actor AutomaticMemoryPipelineScheduler {
         self.service = service
     }
 
+    func setActivityHandler(_ handler: (@Sendable (MemoryActivityEvent) async -> Void)?) async {
+        activityHandler = handler
+        guard let handler else { return }
+        for event in latestActivityEventsByConversation.values {
+            await handler(event)
+        }
+    }
+
     func enqueue(_ request: AutomaticMemoryDigestRequest) {
         let previous = conversationTails[request.conversationId]?.task
         let token = UUID()
@@ -20,7 +33,16 @@ actor AutomaticMemoryPipelineScheduler {
             if let previous {
                 await previous.value
             }
-            _ = await service.process(request)
+            let result = await service.process(request)
+            await self?.recordActivity(MemoryActivityEvent(
+                source: .automatic,
+                turnId: request.turnId,
+                conversationId: request.conversationId,
+                activeCount: result.activeCount,
+                pendingCount: result.pendingCount,
+                rejectedCount: result.rejectedCount,
+                recordedAt: Date()
+            ))
             _ = try? service.synthesizeDerivedMemory(
                 projectId: request.projectId,
                 conversationId: request.conversationId
@@ -40,6 +62,20 @@ actor AutomaticMemoryPipelineScheduler {
     private func finish(conversationId: UUID, token: UUID) {
         guard conversationTails[conversationId]?.token == token else { return }
         conversationTails[conversationId] = nil
+    }
+
+    private func recordActivity(_ event: MemoryActivityEvent) async {
+        if latestActivityEventsByConversation[event.conversationId] == nil {
+            activityReplayOrder.append(event.conversationId)
+        }
+        latestActivityEventsByConversation[event.conversationId] = event
+        while activityReplayOrder.count > Self.maxReplayedActivityEvents {
+            let expiredConversationId = activityReplayOrder.removeFirst()
+            latestActivityEventsByConversation[expiredConversationId] = nil
+        }
+        if let activityHandler {
+            await activityHandler(event)
+        }
     }
 }
 
@@ -84,7 +120,8 @@ final class AutomaticMemoryPipelineService {
 
             let candidates = Self.decodeCandidates(from: raw)
             let lifecycle = MemoryLifecycleEngine(nodeStore: nodeStore)
-            var inserted = 0
+            var active = 0
+            var pending = 0
             var rejected = 0
             for candidate in candidates {
                 let currentNow = now()
@@ -96,14 +133,16 @@ final class AutomaticMemoryPipelineService {
                     let stored = try lifecycle.stageAutomaticAtom(atom, now: currentNow)
                     if stored.status == .archived {
                         rejected += 1
+                    } else if stored.status == .pending {
+                        pending += 1
                     } else {
-                        inserted += 1
+                        active += 1
                     }
                 } catch {
                     rejected += 1
                 }
             }
-            return AutomaticMemoryDigestResult(insertedCount: inserted, rejectedCount: rejected)
+            return AutomaticMemoryDigestResult(activeCount: active, pendingCount: pending, rejectedCount: rejected)
         } catch {
             return .empty
         }
@@ -238,7 +277,8 @@ final class AutomaticMemoryPipelineService {
         else { return nil }
 
         let evidence = candidate.evidenceQuote.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !evidence.isEmpty,
+        guard !isGenericPromptOnly(request.userMessage.content),
+              !evidence.isEmpty,
               normalizedContains(request.userMessage.content, evidence),
               hasAlexSpecificSignal(request.userMessage.content)
         else { return nil }
@@ -249,7 +289,8 @@ final class AutomaticMemoryPipelineService {
             projectId: request.projectId,
             conversationId: request.conversationId
         )
-        let status = statusForAutomaticCandidate(type: type, statement: statement, userText: request.userMessage.content)
+        let confidence = min(max(candidate.confidence, 0.55), 0.86)
+        let status = statusForAutomaticCandidate(type: type, confidence: confidence)
         return MemoryAtom(
             type: type,
             statement: statement,
@@ -258,12 +299,14 @@ final class AutomaticMemoryPipelineService {
             scopeRefId: scope.refId,
             status: status,
             authority: .tentative,
-            confidence: min(max(candidate.confidence, 0.55), 0.86),
+            confidence: confidence,
             eventTime: request.userMessage.timestamp,
             createdAt: now,
             updatedAt: now,
             sourceNodeId: request.conversationId,
             sourceMessageId: request.userMessage.id,
+            evidenceQuote: evidence,
+            captureReason: "automatic memory digest matched Alex evidence quote",
             correctsTarget: candidate.correctsTarget?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         )
     }
@@ -275,12 +318,26 @@ final class AutomaticMemoryPipelineService {
 
     private static func statusForAutomaticCandidate(
         type: MemoryAtomType,
-        statement: String,
-        userText: String
+        confidence: Double
     ) -> MemoryStatus {
-        guard [.identity, .rule, .boundary].contains(type) else { return .active }
-        return hasExplicitAuthoritySignal(userText, type: type) ? .active : .pending
+        if confidence < 0.70 {
+            return .pending
+        }
+        if reviewRequiredTypes.contains(type) {
+            return .pending
+        }
+        return .active
     }
+
+    private static let reviewRequiredTypes: Set<MemoryAtomType> = [
+        .identity,
+        .rule,
+        .boundary,
+        .constraint,
+        .correction,
+        .pattern,
+        .insight
+    ]
 
     private static func resolvedScope(
         _ raw: String,
@@ -311,12 +368,186 @@ final class AutomaticMemoryPipelineService {
             normalized.contains("我唔想")
     }
 
+    private static func isGenericPromptOnly(_ text: String) -> Bool {
+        let normalized = " \(text.lowercased()) "
+        let compact = normalized
+            .components(separatedBy: .whitespacesAndNewlines)
+            .joined()
+        let genericCues = [
+            " explain ",
+            " explain this ",
+            " explain to me ",
+            " summarize ",
+            " summary ",
+            " tell me ",
+            " tell me more ",
+            " help me ",
+            " help me understand ",
+            " continue ",
+            " inspect ",
+            " look at ",
+            " how ",
+            " how is ",
+            " how can ",
+            " how should ",
+            " useful ",
+            " use this ",
+            " apply this ",
+            " what is ",
+            " what does ",
+            " what can ",
+            "解释",
+            "解釋",
+            "总结",
+            "總結",
+            "继续",
+            "繼續",
+            "讲下",
+            "講下",
+            "睇下",
+            "看看",
+            "有咩用",
+            "有什么用",
+            "有什麼用",
+            "點用",
+            "点用",
+            "點樣用",
+            "点样用",
+            "如何用"
+        ]
+        let hasGenericCue = genericCues.contains { cue in
+            cue.unicodeScalars.allSatisfy(\.isASCII)
+                ? normalized.contains(cue)
+                : compact.contains(cue)
+        }
+        guard hasGenericCue else { return false }
+        if hasExplicitRememberWriteCue(normalized: normalized, compact: compact) {
+            return false
+        }
+        let delegatedRequestCues = [
+            " i want you to ",
+            " i need you to ",
+            " can you ",
+            " could you ",
+            " please ",
+            "我想你",
+            "你可以",
+            "你可唔可以",
+            "帮我",
+            "幫我"
+        ]
+        if delegatedRequestCues.contains(where: { cue in
+            cue.unicodeScalars.allSatisfy(\.isASCII)
+                ? normalized.contains(cue)
+                : compact.contains(cue)
+        }) {
+            return true
+        }
+        return !hasDurableMemoryCue(normalized: normalized, compact: compact)
+    }
+
+    private static func hasExplicitRememberWriteCue(normalized: String, compact: String) -> Bool {
+        let optOutCues = [
+            " don't remember ",
+            " do not remember ",
+            " dont remember ",
+            " never remember ",
+            "不要记住",
+            "不要記住",
+            "唔好记住",
+            "唔好記住"
+        ]
+        if optOutCues.contains(where: { cue in
+            cue.unicodeScalars.allSatisfy(\.isASCII)
+                ? normalized.contains(cue)
+                : compact.contains(cue)
+        }) {
+            return false
+        }
+
+        let recallQuestionCues = [
+            " do you remember ",
+            " did you remember ",
+            " have you remembered ",
+            " remember what ",
+            "你记住",
+            "你記住",
+            "记住了吗",
+            "記住咗"
+        ]
+        if recallQuestionCues.contains(where: { cue in
+            cue.unicodeScalars.allSatisfy(\.isASCII)
+                ? normalized.contains(cue)
+                : compact.contains(cue)
+        }) {
+            return false
+        }
+
+        let writeCues = [
+            " remember that ",
+            " remember this: ",
+            " please remember ",
+            " help me remember that ",
+            " keep in memory ",
+            " save this ",
+            "记住",
+            "記住",
+            "记低",
+            "記低"
+        ]
+        return writeCues.contains { cue in
+            cue.unicodeScalars.allSatisfy(\.isASCII)
+                ? normalized.contains(cue)
+                : compact.contains(cue)
+        }
+    }
+
+    private static func hasDurableMemoryCue(normalized: String, compact: String) -> Bool {
+        let cues = [
+            " i think ",
+            " i believe ",
+            " i realized ",
+            " i realised ",
+            " i learned ",
+            " i prefer ",
+            " i decide ",
+            " i decided ",
+            " i want ",
+            " i don't want ",
+            " my preference ",
+            " my decision ",
+            " my goal ",
+            " my rule ",
+            " my boundary ",
+            "我觉得",
+            "我覺得",
+            "我认为",
+            "我認為",
+            "我发现",
+            "我發現",
+            "我决定",
+            "我決定",
+            "我偏好",
+            "我唔想",
+            "我的目标",
+            "我的目標",
+            "我嘅目标",
+            "我嘅目標"
+        ]
+        return cues.contains { cue in
+            cue.unicodeScalars.allSatisfy(\.isASCII)
+                ? normalized.contains(cue)
+                : compact.contains(cue)
+        }
+    }
+
     private static func hasExplicitSelfSignal(_ text: String) -> Bool {
         let normalized = " \(text.lowercased()) "
         return normalized.contains(" i ") ||
             normalized.contains(" i'm ") ||
             normalized.contains(" my ") ||
-            normalized.contains(" me ") ||
+            normalized.contains(" to me ") ||
+            normalized.contains(" for me ") ||
             text.contains("我")
     }
 

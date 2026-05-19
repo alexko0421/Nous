@@ -4,11 +4,88 @@ protocol BeadsCommandRunning {
     func run(_ arguments: [String]) throws -> String
 }
 
+enum AgentWorkRepositoryLocator {
+    static let explicitRepoRootEnvironmentKey = "NOUS_REPO_ROOT"
+
+    static func defaultWorkingDirectoryURL(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default,
+        sourceFileURL: URL = URL(fileURLWithPath: #filePath),
+        currentDirectoryURL: URL? = nil
+    ) -> URL? {
+        let currentDirectoryURL = currentDirectoryURL
+            ?? URL(fileURLWithPath: fileManager.currentDirectoryPath, isDirectory: true)
+
+        if let explicitPath = normalized(environment[explicitRepoRootEnvironmentKey]) {
+            let explicitURL = URL(fileURLWithPath: explicitPath, isDirectory: true)
+            if isRepositoryRoot(explicitURL, fileManager: fileManager) {
+                return explicitURL
+            }
+        }
+
+        if let current = walkUpForRepositoryRoot(from: currentDirectoryURL, fileManager: fileManager) {
+            return current
+        }
+
+        if let source = walkUpForRepositoryRoot(from: sourceFileURL, fileManager: fileManager) {
+            return source
+        }
+
+        for fallback in defaultFallbackURLs(fileManager: fileManager) {
+            if isRepositoryRoot(fallback, fileManager: fileManager) {
+                return fallback
+            }
+        }
+
+        return currentDirectoryURL
+    }
+
+    private static func walkUpForRepositoryRoot(from url: URL, fileManager: FileManager) -> URL? {
+        var candidate = url.hasDirectoryPath ? url : url.deletingLastPathComponent()
+
+        while candidate.path != "/" {
+            if isRepositoryRoot(candidate, fileManager: fileManager) {
+                return candidate
+            }
+            candidate.deleteLastPathComponent()
+        }
+
+        return nil
+    }
+
+    private static func isRepositoryRoot(_ url: URL, fileManager: FileManager) -> Bool {
+        fileManager.fileExists(atPath: url.appendingPathComponent(".beads/redirect").path) ||
+            fileManager.fileExists(atPath: url.appendingPathComponent(".beads").path) ||
+            fileManager.fileExists(atPath: url.appendingPathComponent("project.yml").path)
+    }
+
+    private static func defaultFallbackURLs(fileManager: FileManager) -> [URL] {
+        let home = fileManager.homeDirectoryForCurrentUser
+        return [
+            home.appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs/Nous", isDirectory: true),
+            home.appendingPathComponent("conductor/workspaces/Nous/new-york", isDirectory: true)
+        ]
+    }
+
+    private static func normalized(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
 struct ProcessBeadsCommandRunner: BeadsCommandRunning {
     var workingDirectoryURL: URL?
+    var timeout: TimeInterval
+    var executableOverride: (url: URL, argumentsPrefix: [String])?
 
-    init(workingDirectoryURL: URL? = ProcessBeadsCommandRunner.defaultWorkingDirectoryURL()) {
+    init(
+        workingDirectoryURL: URL? = AgentWorkRepositoryLocator.defaultWorkingDirectoryURL(),
+        timeout: TimeInterval = 5,
+        executableOverride: (url: URL, argumentsPrefix: [String])? = nil
+    ) {
         self.workingDirectoryURL = workingDirectoryURL
+        self.timeout = timeout
+        self.executableOverride = executableOverride
     }
 
     func run(_ arguments: [String]) throws -> String {
@@ -22,17 +99,33 @@ struct ProcessBeadsCommandRunner: BeadsCommandRunning {
         let stderr = Pipe()
         process.standardOutput = stdout
         process.standardError = stderr
+        let semaphore = DispatchSemaphore(value: 0)
+        let outputCollector = PipeOutputCollector(pipe: stdout)
+        let errorCollector = PipeOutputCollector(pipe: stderr)
+        process.terminationHandler = { _ in
+            semaphore.signal()
+        }
 
         do {
             try process.run()
+            outputCollector.startReading()
+            errorCollector.startReading()
         } catch {
             throw BeadsAgentWorkServiceError.commandLaunchFailed(error.localizedDescription)
         }
 
-        process.waitUntilExit()
+        if semaphore.wait(timeout: .now() + timeout) == .timedOut {
+            process.terminate()
+            _ = semaphore.wait(timeout: .now() + 1)
+            _ = outputCollector.waitUntilFinished(timeout: .now() + 1)
+            _ = errorCollector.waitUntilFinished(timeout: .now() + 1)
+            throw BeadsAgentWorkServiceError.commandTimedOut(arguments: arguments, timeout: timeout)
+        }
 
-        let output = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        let errorOutput = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        _ = outputCollector.waitUntilFinished(timeout: .distantFuture)
+        _ = errorCollector.waitUntilFinished(timeout: .distantFuture)
+        let output = outputCollector.stringValue
+        let errorOutput = errorCollector.stringValue
 
         guard process.terminationStatus == 0 else {
             throw BeadsAgentWorkServiceError.commandFailed(
@@ -46,6 +139,10 @@ struct ProcessBeadsCommandRunner: BeadsCommandRunning {
     }
 
     private func resolvedExecutable() -> (url: URL, argumentsPrefix: [String]) {
+        if let executableOverride {
+            return executableOverride
+        }
+
         let fileManager = FileManager.default
         for path in ["/opt/homebrew/bin/bd", "/usr/local/bin/bd"] {
             if fileManager.isExecutableFile(atPath: path) {
@@ -55,25 +152,43 @@ struct ProcessBeadsCommandRunner: BeadsCommandRunning {
         return (URL(fileURLWithPath: "/usr/bin/env"), ["bd"])
     }
 
-    private static func defaultWorkingDirectoryURL() -> URL? {
-        let sourceURL = URL(fileURLWithPath: #filePath)
-        var candidate = sourceURL.deletingLastPathComponent()
-        let fileManager = FileManager.default
+}
 
-        while candidate.path != "/" {
-            if fileManager.fileExists(atPath: candidate.appendingPathComponent(".beads/redirect").path) ||
-                fileManager.fileExists(atPath: candidate.appendingPathComponent("project.yml").path) {
-                return candidate
-            }
-            candidate.deleteLastPathComponent()
+private final class PipeOutputCollector: @unchecked Sendable {
+    private let pipe: Pipe
+    private let group = DispatchGroup()
+    private let lock = NSLock()
+    private var data = Data()
+
+    init(pipe: Pipe) {
+        self.pipe = pipe
+    }
+
+    func startReading() {
+        group.enter()
+        DispatchQueue.global(qos: .utility).async { [pipe] in
+            let readData = pipe.fileHandleForReading.readDataToEndOfFile()
+            self.lock.lock()
+            self.data = readData
+            self.lock.unlock()
+            self.group.leave()
         }
+    }
 
-        return URL(fileURLWithPath: fileManager.currentDirectoryPath)
+    func waitUntilFinished(timeout: DispatchTime) -> Bool {
+        group.wait(timeout: timeout) == .success
+    }
+
+    var stringValue: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return String(data: data, encoding: .utf8) ?? ""
     }
 }
 
 enum BeadsAgentWorkServiceError: LocalizedError, Equatable {
     case commandLaunchFailed(String)
+    case commandTimedOut(arguments: [String], timeout: TimeInterval)
     case commandFailed(arguments: [String], status: Int, stderr: String)
     case invalidJSON(command: String, underlying: String)
 
@@ -81,6 +196,9 @@ enum BeadsAgentWorkServiceError: LocalizedError, Equatable {
         switch self {
         case .commandLaunchFailed(let message):
             return "Could not launch bd: \(message)"
+        case .commandTimedOut(let arguments, let timeout):
+            let command = "bd " + arguments.joined(separator: " ")
+            return "\(command) timed out after \(timeout)s."
         case .commandFailed(let arguments, let status, let stderr):
             let command = "bd " + arguments.joined(separator: " ")
             if stderr.isEmpty {
@@ -112,20 +230,23 @@ final class BeadsAgentWorkService: @unchecked Sendable {
     }
 
     func loadSnapshot() throws -> BeadsAgentWorkSnapshot {
-        let beadsPath = try commandRunner.run(["where"])
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let beadsPath = parseBeadsPath(from: try commandRunner.run(["where"]))
         let ready = try decodeIssues(from: commandRunner.run(["ready", "--json"]), command: "bd ready --json")
         let inProgress = try decodeIssues(
             from: commandRunner.run(["list", "--status=in_progress", "--json"]),
             command: "bd list --status=in_progress --json"
         )
         let closed = try decodeIssues(
-            from: commandRunner.run(["list", "--status=closed", "--json"]),
-            command: "bd list --status=closed --json"
+            from: commandRunner.run([
+                "list",
+                "--status=closed",
+                "--sort=closed",
+                "--reverse",
+                "--limit=\(recentClosedLimit)",
+                "--json"
+            ]),
+            command: "bd list --status=closed --sort=closed --reverse --limit=\(recentClosedLimit) --json"
         )
-        .sorted { left, right in
-            (left.closedAt ?? left.updatedAt ?? "") > (right.closedAt ?? right.updatedAt ?? "")
-        }
         var runtimeHarness = runtimeHarnessLoader.loadSnapshot()
         runtimeHarness.outcomeContracts = AgentOutcomeContractHealthSummary.summarize(
             (ready + inProgress).map(\.outcomeContract)
@@ -133,6 +254,7 @@ final class BeadsAgentWorkService: @unchecked Sendable {
 
         return BeadsAgentWorkSnapshot(
             beadsPath: beadsPath,
+            beadsConnection: .connected(path: beadsPath),
             ready: ready,
             inProgress: inProgress,
             recentClosed: Array(closed.prefix(recentClosedLimit)),
@@ -142,9 +264,11 @@ final class BeadsAgentWorkService: @unchecked Sendable {
         )
     }
 
-    func loadHarnessOnlySnapshot() -> BeadsAgentWorkSnapshot {
-        BeadsAgentWorkSnapshot(
+    func loadHarnessOnlySnapshot(connectionError: String? = nil) -> BeadsAgentWorkSnapshot {
+        let trimmedError = connectionError?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return BeadsAgentWorkSnapshot(
             beadsPath: "",
+            beadsConnection: trimmedError.isEmpty ? .unavailable : .failed(message: trimmedError),
             ready: [],
             inProgress: [],
             recentClosed: [],
@@ -152,6 +276,15 @@ final class BeadsAgentWorkService: @unchecked Sendable {
             runtimeHarness: runtimeHarnessLoader.loadSnapshot(),
             loadedAt: Date()
         )
+    }
+
+    private func parseBeadsPath(from output: String) -> String {
+        let firstPathLine = output
+            .split(whereSeparator: { $0.isNewline })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+
+        return firstPathLine ?? output.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func decodeIssues(from output: String, command: String) throws -> [BeadsIssue] {

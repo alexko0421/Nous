@@ -19,9 +19,26 @@ final class MemoryGraphInspectorInboxTests: XCTestCase {
         XCTAssertTrue(source.contains("MemoryReflectionProposalService("))
         XCTAssertTrue(source.contains("llmServiceProvider: llmServiceProvider"))
         XCTAssertTrue(source.contains(".approveAndPropose(atom.id)"))
+        XCTAssertTrue(source.contains(".approveAndPropose(id)"))
         XCTAssertTrue(source.contains("atomActionButton(title: \"Reject\""))
         XCTAssertTrue(source.contains("MemoryLifecycleEngine(nodeStore: nodeStore).reject(atom.id)"))
         XCTAssertTrue(source.contains("atomActionButton(title: \"Forget\""))
         XCTAssertTrue(source.contains("MemoryLifecycleEngine(nodeStore: nodeStore).forget(atom.id)"))
+        XCTAssertTrue(source.contains("reload()\n                    loadError = \"Failed to approve visible memory atoms"))
+        XCTAssertTrue(source.contains("reload()\n            loadError = \"Failed to reject visible memory atoms"))
+    }
+
+    func testMemoryGraphInspectorSourceQuoteUsesMessageIdAndEvidenceFallback() throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repoRoot.appendingPathComponent("Sources/Nous/Views/MemoryGraphInspector.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("nodeStore.fetchMessage(id: sourceMessageId)"))
+        XCTAssertTrue(source.contains("atom.evidenceQuote"))
     }
 }

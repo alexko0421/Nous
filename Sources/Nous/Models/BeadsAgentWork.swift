@@ -1,7 +1,43 @@
 import Foundation
 
+enum BeadsConnectionStatus: Equatable {
+    case connected
+    case failed
+    case unavailable
+}
+
+struct BeadsConnectionState: Equatable {
+    var status: BeadsConnectionStatus
+    var message: String
+
+    static let unavailable = BeadsConnectionState(
+        status: .unavailable,
+        message: "Beads has not been loaded yet."
+    )
+
+    static func connected(path: String) -> BeadsConnectionState {
+        BeadsConnectionState(status: .connected, message: path)
+    }
+
+    static func failed(message: String) -> BeadsConnectionState {
+        BeadsConnectionState(status: .failed, message: message)
+    }
+
+    func pathDisplayText(beadsPath: String, unavailableText: String) -> String {
+        switch status {
+        case .connected:
+            return message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? beadsPath : message
+        case .failed:
+            return message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? unavailableText : message
+        case .unavailable:
+            return beadsPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? unavailableText : beadsPath
+        }
+    }
+}
+
 struct BeadsAgentWorkSnapshot: Equatable {
     var beadsPath: String
+    var beadsConnection: BeadsConnectionState
     var ready: [BeadsIssue]
     var inProgress: [BeadsIssue]
     var recentClosed: [BeadsIssue]
@@ -11,6 +47,7 @@ struct BeadsAgentWorkSnapshot: Equatable {
 
     static let empty = BeadsAgentWorkSnapshot(
         beadsPath: "",
+        beadsConnection: .unavailable,
         ready: [],
         inProgress: [],
         recentClosed: [],

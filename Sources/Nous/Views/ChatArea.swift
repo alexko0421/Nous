@@ -305,6 +305,14 @@ struct ChatArea: View {
                                     .blur(radius: branchBackgroundBlurRadius)
                                     .opacity(branchBackgroundOpacity)
                                 }
+                                if vm.memoryActivity.isVisible {
+                                    HStack {
+                                        MemoryActivityPill(snapshot: vm.memoryActivity)
+                                        Spacer(minLength: 0)
+                                    }
+                                    .blur(radius: branchBackgroundBlurRadius)
+                                    .opacity(branchBackgroundOpacity)
+                                }
                                 Color.clear
                                     .frame(height: floatingComposerHeight + bottomVisibleSpacing)
                                     .id(bottomScrollAnchor)
@@ -1950,6 +1958,57 @@ struct DownvoteFeedbackPopover: View {
         .overlay(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .stroke(AppColor.panelStroke, lineWidth: 1)
+        )
+    }
+}
+
+private struct MemoryActivityPill: View {
+    let snapshot: MemoryActivitySnapshot
+
+    private var iconName: String {
+        switch snapshot.stage {
+        case .idle:
+            return "brain"
+        case .queued:
+            return "clock"
+        case .completed:
+            return snapshot.pendingCount > 0 ? "brain.head.profile" : "checkmark.circle"
+        case .skipped:
+            return "minus.circle"
+        }
+    }
+
+    private var accent: Color {
+        switch snapshot.stage {
+        case .completed where snapshot.pendingCount == 0 && snapshot.rejectedCount == 0:
+            return Color(red: 0.16, green: 0.54, blue: 0.36)
+        case .skipped:
+            return AppColor.secondaryText
+        default:
+            return AppColor.colaOrange
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: iconName)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(accent)
+
+            Text(snapshot.summaryText)
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .foregroundStyle(AppColor.secondaryText)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            Capsule(style: .continuous)
+                .fill(AppColor.surfaceSecondary.opacity(0.82))
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .stroke(AppColor.panelStroke.opacity(0.45), lineWidth: 1)
         )
     }
 }

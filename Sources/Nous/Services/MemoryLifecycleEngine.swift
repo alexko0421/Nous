@@ -177,6 +177,8 @@ final class MemoryLifecycleEngine {
             : existing.lastSeenAt
         merged.sourceNodeId = existing.sourceNodeId ?? proposal.sourceNodeId
         merged.sourceMessageId = existing.sourceMessageId ?? proposal.sourceMessageId
+        merged.evidenceQuote = existing.evidenceQuote ?? proposal.evidenceQuote
+        merged.captureReason = existing.captureReason ?? proposal.captureReason
         merged.correctsTarget = proposal.correctsTarget ?? existing.correctsTarget
         merged.embedding = existing.embedding ?? proposal.embedding
         try nodeStore.updateMemoryAtom(merged)
@@ -285,6 +287,8 @@ final class MemoryLifecycleEngine {
                 existing.lastSeenAt = Self.maxDate(existing.lastSeenAt, now)
                 existing.sourceNodeId = existing.sourceNodeId ?? automatic.sourceNodeId
                 existing.sourceMessageId = existing.sourceMessageId ?? automatic.sourceMessageId
+                existing.evidenceQuote = existing.evidenceQuote ?? automatic.evidenceQuote
+                existing.captureReason = existing.captureReason ?? automatic.captureReason
                 existing.correctsTarget = automatic.correctsTarget ?? existing.correctsTarget
                 existing.embedding = existing.embedding ?? automatic.embedding
                 existing.authority = try promotedAuthorityIfEligible(for: existing, now: now)

@@ -1,11 +1,28 @@
 import Foundation
 
 struct SourceLearningDigestRequest {
+    let turnId: UUID?
     let conversationId: UUID
     let projectId: UUID?
     let userMessage: Message
     let assistantMessage: Message
     let sourceMaterials: [SourceMaterialContext]
+
+    init(
+        turnId: UUID? = nil,
+        conversationId: UUID,
+        projectId: UUID?,
+        userMessage: Message,
+        assistantMessage: Message,
+        sourceMaterials: [SourceMaterialContext]
+    ) {
+        self.turnId = turnId
+        self.conversationId = conversationId
+        self.projectId = projectId
+        self.userMessage = userMessage
+        self.assistantMessage = assistantMessage
+        self.sourceMaterials = sourceMaterials
+    }
 }
 
 struct SourceLearningMemoryCandidate {
@@ -34,8 +51,23 @@ struct SourceLearningMemoryCandidate {
 }
 
 struct SourceLearningDigestResult: Equatable {
-    let insertedCount: Int
+    let activeCount: Int
+    let pendingCount: Int
     let rejectedCount: Int
 
-    static let empty = SourceLearningDigestResult(insertedCount: 0, rejectedCount: 0)
+    var insertedCount: Int {
+        activeCount + pendingCount
+    }
+
+    static let empty = SourceLearningDigestResult(activeCount: 0, pendingCount: 0, rejectedCount: 0)
+
+    init(activeCount: Int, pendingCount: Int, rejectedCount: Int) {
+        self.activeCount = activeCount
+        self.pendingCount = pendingCount
+        self.rejectedCount = rejectedCount
+    }
+
+    init(insertedCount: Int, rejectedCount: Int) {
+        self.init(activeCount: insertedCount, pendingCount: 0, rejectedCount: rejectedCount)
+    }
 }

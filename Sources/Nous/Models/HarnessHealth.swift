@@ -84,19 +84,22 @@ enum HarnessFinding: String, Codable, CaseIterable, Equatable {
 struct HarnessChangeClassification: Codable, Equatable {
     var findings: [HarnessFinding]
     var rootSwiftFiles: [String]
+    var changedPaths: [String]
     var changeSignature: String?
     var hasCurrentChanges: Bool
 
     init(
         findings: [HarnessFinding] = [],
         rootSwiftFiles: [String] = [],
+        changedPaths: [String] = [],
         changeSignature: String? = nil,
         hasCurrentChanges: Bool? = nil
     ) {
         self.findings = Array(Set(findings)).sorted { $0.rawValue < $1.rawValue }
         self.rootSwiftFiles = rootSwiftFiles.sorted()
+        self.changedPaths = Array(Set(changedPaths)).sorted()
         self.changeSignature = changeSignature
-        self.hasCurrentChanges = hasCurrentChanges ?? (!findings.isEmpty || !rootSwiftFiles.isEmpty)
+        self.hasCurrentChanges = hasCurrentChanges ?? (!changedPaths.isEmpty || !findings.isEmpty || !rootSwiftFiles.isEmpty)
     }
 
     var requiresFullGate: Bool {
@@ -154,6 +157,7 @@ enum HarnessChangeClassifier {
         return HarnessChangeClassification(
             findings: findings,
             rootSwiftFiles: rootSwiftFiles.map(normalize),
+            changedPaths: normalizedPaths,
             changeSignature: changeSignature,
             hasCurrentChanges: !normalizedPaths.isEmpty || !rootSwiftFiles.isEmpty
         )
@@ -376,6 +380,39 @@ struct HarnessHealthSnapshot: Equatable {
         let local = changeClassification.findings.map(\.displayTitle)
         let latest = latestRun?.findings.map(\.displayTitle) ?? []
         return Array(Set(local + latest)).sorted()
+    }
+
+    var diagnosticDetailText: String {
+        var details: [String] = []
+
+        if changeClassification.findings.contains(.protectedAnchorChanged) {
+            details.append("anchor.md changed: Sources/Nous/Resources/anchor.md")
+        }
+
+        if !changeClassification.rootSwiftFiles.isEmpty {
+            details.append("Root Swift orphan: \(changeClassification.rootSwiftFiles.joined(separator: ", "))")
+        }
+
+        let alreadyDetailed: Set<HarnessFinding> = [.protectedAnchorChanged, .rootSwiftOrphan]
+        details += changeClassification.findings
+            .filter { !alreadyDetailed.contains($0) }
+            .map(\.displayTitle)
+
+        if details.isEmpty {
+            details = latestRun?.findings.map(\.displayTitle) ?? []
+        }
+
+        if details.isEmpty,
+           let latestRun,
+           !latestRun.detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return latestRun.detail
+        }
+
+        if details.isEmpty {
+            return "No local harness findings."
+        }
+
+        return details.joined(separator: " · ")
     }
 
     private var latestPassedRunCoversCurrentChanges: Bool {

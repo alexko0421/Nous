@@ -169,10 +169,180 @@ struct AutomaticMemoryDigestRequest {
 }
 
 struct AutomaticMemoryDigestResult: Equatable {
-    static let empty = AutomaticMemoryDigestResult(insertedCount: 0, rejectedCount: 0)
+    static let empty = AutomaticMemoryDigestResult(activeCount: 0, pendingCount: 0, rejectedCount: 0)
 
-    let insertedCount: Int
+    let activeCount: Int
+    let pendingCount: Int
     let rejectedCount: Int
+
+    var insertedCount: Int {
+        activeCount + pendingCount
+    }
+
+    init(activeCount: Int, pendingCount: Int, rejectedCount: Int) {
+        self.activeCount = activeCount
+        self.pendingCount = pendingCount
+        self.rejectedCount = rejectedCount
+    }
+
+    init(insertedCount: Int, rejectedCount: Int) {
+        self.init(activeCount: insertedCount, pendingCount: 0, rejectedCount: rejectedCount)
+    }
+}
+
+enum MemoryActivitySource: String, Equatable, Sendable {
+    case automatic
+    case sourceLearning
+}
+
+enum MemoryActivityStage: String, Equatable, Sendable {
+    case idle
+    case queued
+    case completed
+    case skipped
+}
+
+struct MemoryActivityEvent: Equatable, Sendable {
+    let source: MemoryActivitySource
+    let turnId: UUID?
+    let conversationId: UUID
+    let activeCount: Int
+    let pendingCount: Int
+    let rejectedCount: Int
+    let recordedAt: Date
+}
+
+struct MemoryActivitySnapshot: Equatable, Sendable {
+    static let empty = MemoryActivitySnapshot(
+        stage: .idle,
+        turnId: nil,
+        conversationId: nil,
+        automaticQueued: false,
+        sourceLearningQueued: false,
+        conversationRefreshQueued: false,
+        activeCount: 0,
+        pendingCount: 0,
+        rejectedCount: 0,
+        skippedReason: nil,
+        recordedSources: [],
+        updatedAt: nil
+    )
+
+    var stage: MemoryActivityStage
+    var turnId: UUID?
+    var conversationId: UUID?
+    var automaticQueued: Bool
+    var sourceLearningQueued: Bool
+    var conversationRefreshQueued: Bool
+    var activeCount: Int
+    var pendingCount: Int
+    var rejectedCount: Int
+    var skippedReason: MemorySuppressionReason?
+    var recordedSources: Set<MemoryActivitySource>
+    var updatedAt: Date?
+
+    var isVisible: Bool {
+        stage != .idle
+    }
+
+    var summaryText: String {
+        switch stage {
+        case .idle:
+            return ""
+        case .queued:
+            if automaticQueued || sourceLearningQueued {
+                return "Memory check queued"
+            }
+            return conversationRefreshQueued ? "Conversation memory refresh queued" : "Memory check queued"
+        case .completed:
+            let savedText = activeCount == 1 ? "1 saved" : "\(activeCount) saved"
+            let reviewText = pendingCount == 1 ? "1 for review" : "\(pendingCount) for review"
+            let skippedText = rejectedCount > 0 ? " · \(rejectedCount) skipped" : ""
+            return "Memory updated: \(savedText) · \(reviewText)\(skippedText)"
+        case .skipped:
+            return "Memory skipped: \(skippedReason?.displayText ?? "not persisted")"
+        }
+    }
+
+    static func queued(from plan: ContextContinuationPlan, now: Date = Date()) -> MemoryActivitySnapshot {
+        if let reason = plan.memorySuppressionReason {
+            return MemoryActivitySnapshot(
+                stage: .skipped,
+                turnId: plan.turnId,
+                conversationId: plan.conversationId,
+                automaticQueued: false,
+                sourceLearningQueued: false,
+                conversationRefreshQueued: false,
+                activeCount: 0,
+                pendingCount: 0,
+                rejectedCount: 0,
+                skippedReason: reason,
+                recordedSources: [],
+                updatedAt: now
+            )
+        }
+
+        let hasQueuedWork = plan.automaticMemoryDigest != nil ||
+            plan.sourceLearningDigest != nil ||
+            plan.memoryRefresh != nil
+        guard hasQueuedWork else { return .empty }
+
+        return MemoryActivitySnapshot(
+            stage: .queued,
+            turnId: plan.turnId,
+            conversationId: plan.conversationId,
+            automaticQueued: plan.automaticMemoryDigest != nil,
+            sourceLearningQueued: plan.sourceLearningDigest != nil,
+            conversationRefreshQueued: plan.memoryRefresh != nil,
+            activeCount: 0,
+            pendingCount: 0,
+            rejectedCount: 0,
+            skippedReason: nil,
+            recordedSources: [],
+            updatedAt: now
+        )
+    }
+
+    func recording(_ event: MemoryActivityEvent) -> MemoryActivitySnapshot {
+        guard stage == .queued || stage == .completed else {
+            return self
+        }
+        if let conversationId, conversationId != event.conversationId {
+            return self
+        }
+        if let turnId, event.turnId != turnId {
+            return self
+        }
+        if recordedSources.contains(event.source) {
+            return self
+        }
+
+        var copy = self
+        copy.stage = .completed
+        copy.turnId = turnId ?? event.turnId
+        copy.conversationId = conversationId ?? event.conversationId
+        copy.activeCount += event.activeCount
+        copy.pendingCount += event.pendingCount
+        copy.rejectedCount += event.rejectedCount
+        copy.recordedSources.insert(event.source)
+        copy.updatedAt = event.recordedAt
+        return copy
+    }
+}
+
+private extension MemorySuppressionReason {
+    var displayText: String {
+        switch self {
+        case .hardOptOut:
+            return "opted out"
+        case .sensitiveConsentRequired:
+            return "needs consent"
+        case .fastLatencyTier:
+            return "fast mode"
+        case .unspecified:
+            return "not persisted"
+        }
+    }
 }
 
 struct AutomaticDerivedMemoryResult: Equatable {

@@ -52,6 +52,8 @@ final class AutomaticMemoryPipelineTests: XCTestCase {
         XCTAssertEqual(atom.scope, .global)
         XCTAssertEqual(atom.sourceNodeId, fixture.conversation.id)
         XCTAssertEqual(atom.sourceMessageId, fixture.userMessage.id)
+        XCTAssertEqual(atom.evidenceQuote, "I prefer automatic memory if it keeps source evidence visible.")
+        XCTAssertTrue(atom.captureReason?.contains("automatic memory digest") == true)
 
         let recall = try MemoryLifecycleEngine(nodeStore: store).hybridRecall(
             currentMessage: "automatic memory source evidence",
@@ -104,6 +106,52 @@ final class AutomaticMemoryPipelineTests: XCTestCase {
         XCTAssertEqual(atom.sourceMessageId, fixture.userMessage.id)
     }
 
+    func testAutomaticDigestKeepsLowConfidenceAndReflectiveCandidatesPending() async throws {
+        let now = Date(timeIntervalSince1970: 20_700)
+        let fixture = try makeAutomaticFixture(
+            userText: "I prefer automatic memory, and I think this pattern may matter for my project.",
+            assistantText: "We can keep low-confidence or reflective claims reviewable.",
+            now: now
+        )
+        let service = AutomaticMemoryPipelineService(
+            nodeStore: store,
+            llmServiceProvider: {
+                StaticAutomaticMemoryLLM(output: """
+                {
+                  "candidates": [
+                    {
+                      "type": "preference",
+                      "statement": "Alex prefers automatic memory.",
+                      "scope": "global",
+                      "confidence": 0.64,
+                      "evidence_quote": "I prefer automatic memory"
+                    },
+                    {
+                      "type": "insight",
+                      "statement": "Alex may have a recurring project pattern around automatic memory.",
+                      "scope": "conversation",
+                      "confidence": 0.84,
+                      "evidence_quote": "I think this pattern may matter for my project"
+                    }
+                  ]
+                }
+                """)
+            },
+            now: { now }
+        )
+
+        let result = await service.process(fixture.request)
+
+        XCTAssertEqual(result.insertedCount, 2)
+        XCTAssertEqual(result.activeCount, 0)
+        XCTAssertEqual(result.pendingCount, 2)
+        XCTAssertEqual(result.rejectedCount, 0)
+        let atoms = try store.fetchMemoryAtoms().sorted { $0.statement < $1.statement }
+        XCTAssertEqual(atoms.map(\.status), [.pending, .pending])
+        XCTAssertTrue(atoms.allSatisfy { $0.authority == .tentative })
+        XCTAssertTrue(atoms.allSatisfy { $0.sourceMessageId == fixture.userMessage.id })
+    }
+
     func testAutomaticDigestRejectsAssistantOnlySourceFactAndHardOptOut() async throws {
         let now = Date(timeIntervalSince1970: 21_000)
         let sourceFactFixture = try makeAutomaticFixture(
@@ -144,6 +192,144 @@ final class AutomaticMemoryPipelineTests: XCTestCase {
         XCTAssertEqual(optOutResult.insertedCount, 0)
         XCTAssertEqual(optOutResult.rejectedCount, 0)
         XCTAssertTrue(try store.fetchMemoryAtoms().isEmpty)
+    }
+
+    func testAutomaticDigestRejectsGenericHelpRequestEvenWithMatchingEvidence() async throws {
+        let now = Date(timeIntervalSince1970: 21_500)
+        let fixture = try makeAutomaticFixture(
+            userText: "Tell me more about this source.",
+            assistantText: "Here is more context from the source.",
+            now: now
+        )
+        let service = AutomaticMemoryPipelineService(
+            nodeStore: store,
+            llmServiceProvider: {
+                StaticAutomaticMemoryLLM(output: """
+                {
+                  "candidates": [
+                    {
+                      "type": "preference",
+                      "statement": "Alex wants more explanation about this source.",
+                      "scope": "conversation",
+                      "confidence": 0.8,
+                      "evidence_quote": "Tell me more about this source."
+                    }
+                  ]
+                }
+                """)
+            },
+            now: { now }
+        )
+
+        let result = await service.process(fixture.request)
+
+        XCTAssertEqual(result.insertedCount, 0)
+        XCTAssertEqual(result.rejectedCount, 1)
+        XCTAssertTrue(try store.fetchMemoryAtoms().isEmpty)
+    }
+
+    func testAutomaticDigestRejectsGenericUsefulnessQuestionEvenWithProductContext() async throws {
+        let now = Date(timeIntervalSince1970: 21_600)
+        let fixture = try makeAutomaticFixture(
+            userText: "How can I use this for my product strategy?",
+            assistantText: "Here are a few product strategy angles.",
+            now: now
+        )
+        let service = AutomaticMemoryPipelineService(
+            nodeStore: store,
+            llmServiceProvider: {
+                StaticAutomaticMemoryLLM(output: """
+                {
+                  "candidates": [
+                    {
+                      "type": "goal",
+                      "statement": "Alex wants to use this for his product strategy.",
+                      "scope": "project",
+                      "confidence": 0.8,
+                      "evidence_quote": "How can I use this for my product strategy?"
+                    }
+                  ]
+                }
+                """)
+            },
+            now: { now }
+        )
+
+        let result = await service.process(fixture.request)
+
+        XCTAssertEqual(result.insertedCount, 0)
+        XCTAssertEqual(result.rejectedCount, 1)
+        XCTAssertTrue(try store.fetchMemoryAtoms().isEmpty)
+    }
+
+    func testAutomaticDigestRejectsGenericIWantYouRequest() async throws {
+        let now = Date(timeIntervalSince1970: 21_700)
+        let fixture = try makeAutomaticFixture(
+            userText: "I want you to explain this PDF in more detail.",
+            assistantText: "Here is a deeper explanation.",
+            now: now
+        )
+        let service = AutomaticMemoryPipelineService(
+            nodeStore: store,
+            llmServiceProvider: {
+                StaticAutomaticMemoryLLM(output: """
+                {
+                  "candidates": [
+                    {
+                      "type": "goal",
+                      "statement": "Alex wants detailed explanations of this PDF.",
+                      "scope": "conversation",
+                      "confidence": 0.8,
+                      "evidence_quote": "I want you to explain this PDF in more detail."
+                    }
+                  ]
+                }
+                """)
+            },
+            now: { now }
+        )
+
+        let result = await service.process(fixture.request)
+
+        XCTAssertEqual(result.insertedCount, 0)
+        XCTAssertEqual(result.rejectedCount, 1)
+        XCTAssertTrue(try store.fetchMemoryAtoms().isEmpty)
+    }
+
+    func testAutomaticDigestAcceptsExplicitRememberRequestWithGenericCue() async throws {
+        let now = Date(timeIntervalSince1970: 21_800)
+        let fixture = try makeAutomaticFixture(
+            userText: "I want you to help me remember that I prefer batch memory review.",
+            assistantText: "Got it, I will keep that preference reviewable.",
+            now: now
+        )
+        let service = AutomaticMemoryPipelineService(
+            nodeStore: store,
+            llmServiceProvider: {
+                StaticAutomaticMemoryLLM(output: """
+                {
+                  "candidates": [
+                    {
+                      "type": "preference",
+                      "statement": "Alex prefers batch memory review.",
+                      "scope": "global",
+                      "confidence": 0.82,
+                      "evidence_quote": "I want you to help me remember that I prefer batch memory review."
+                    }
+                  ]
+                }
+                """)
+            },
+            now: { now }
+        )
+
+        let result = await service.process(fixture.request)
+
+        XCTAssertEqual(result.insertedCount, 1)
+        XCTAssertEqual(result.rejectedCount, 0)
+        let atom = try XCTUnwrap(try store.fetchMemoryAtoms().first)
+        XCTAssertEqual(atom.status, .active)
+        XCTAssertEqual(atom.statement, "Alex prefers batch memory review.")
     }
 
     func testAutomaticAtomPromotesAfterRepeatedIndependentEvidence() throws {

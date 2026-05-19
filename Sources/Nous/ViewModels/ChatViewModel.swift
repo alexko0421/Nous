@@ -52,6 +52,7 @@ final class ChatViewModel {
     var activeQuickActionMode: QuickActionMode?
     var activeChatMode: ChatMode? = nil
     var activeSourceDiscussionContext: SourceDiscussionContext?
+    var memoryActivity: MemoryActivitySnapshot = .empty
     var defaultProjectId: UUID?
     var lastPromptGovernanceTrace: PromptGovernanceTrace?
     private var judgeFeedbackVersion: Int = 0
@@ -375,6 +376,33 @@ final class ChatViewModel {
         cachedSourceIngestionService = service
         return service
     }
+
+    private func installMemoryActivityHandlers(
+        automaticMemoryScheduler: AutomaticMemoryPipelineScheduler?,
+        sourceLearningMemoryScheduler: SourceLearningMemoryScheduler?
+    ) {
+        Task { [weak self, automaticMemoryScheduler, sourceLearningMemoryScheduler] in
+            await automaticMemoryScheduler?.setActivityHandler { [weak self] event in
+                await MainActor.run {
+                    self?.recordMemoryActivity(event)
+                }
+            }
+            await sourceLearningMemoryScheduler?.setActivityHandler { [weak self] event in
+                await MainActor.run {
+                    self?.recordMemoryActivity(event)
+                }
+            }
+        }
+    }
+
+    private func recordQueuedMemoryActivity(from plan: ContextContinuationPlan) {
+        memoryActivity = MemoryActivitySnapshot.queued(from: plan)
+    }
+
+    private func recordMemoryActivity(_ event: MemoryActivityEvent) {
+        memoryActivity = memoryActivity.recording(event)
+    }
+
     private var turnHousekeepingService: TurnHousekeepingService {
         if let explicitTurnHousekeepingService {
             return explicitTurnHousekeepingService
@@ -483,6 +511,10 @@ final class ChatViewModel {
         self.explicitTurnHousekeepingService = turnHousekeepingService
         self.explicitSourceIngestionService = sourceIngestionService
         self.sourceBriefingService = sourceBriefingService
+        installMemoryActivityHandlers(
+            automaticMemoryScheduler: automaticMemoryScheduler,
+            sourceLearningMemoryScheduler: sourceLearningMemoryScheduler
+        )
     }
 
     // MARK: - Conversation Management
@@ -508,6 +540,7 @@ final class ChatViewModel {
         inputText = ""
         activeQuickActionMode = nil
         activeChatMode = nil
+        memoryActivity = .empty
         lastPromptGovernanceTrace = nil
         pendingSourceMaterialsByTurnId.removeAll()
         pendingSourceDiscussionContextByTurnId.removeAll()
@@ -1438,6 +1471,7 @@ final class ChatViewModel {
             bindStreamingSession(for: completion.node)
             messages = completion.messagesAfterAssistantAppend
             activeQuickActionMode = completion.nextQuickActionMode
+            recordQueuedMemoryActivity(from: completion.continuationPlan)
             emitCitationTrace(for: completion)
             currentResponse = ""
             currentThinking = ""

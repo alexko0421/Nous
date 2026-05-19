@@ -224,11 +224,44 @@ final class UserMemoryCore {
                       fact.status != .archived else {
                     return
                 }
+                let wasPending = fact.status == .pending
+                let relatedFacts = wasPending ? try nearDuplicateFacts(for: fact) : []
+                let pendingDuplicates = relatedFacts.filter { $0.status == .pending }
+                let confirmationConfidenceFloor = fact.stability == .stable ? 0.95 : 0.9
+                if wasPending,
+                   var activeDuplicate = relatedFacts.first(where: { $0.status == .active }) {
+                    for duplicate in [fact] + pendingDuplicates {
+                        activeDuplicate.confidence = max(activeDuplicate.confidence, duplicate.confidence)
+                        activeDuplicate.sourceNodeIds = Self.mergedSourceNodeIds(
+                            activeDuplicate.sourceNodeIds,
+                            duplicate.sourceNodeIds
+                        )
+                    }
+                    activeDuplicate.confidence = max(activeDuplicate.confidence, confirmationConfidenceFloor)
+                    activeDuplicate.updatedAt = now
+                    try nodeStore.updateMemoryFactEntry(activeDuplicate)
+                    try syncFactAtomLifecycle(for: activeDuplicate, status: .active, now: now)
+
+                    try archiveFactAndMirror(fact, now: now)
+                    for duplicate in pendingDuplicates {
+                        try archiveFactAndMirror(duplicate, now: now)
+                    }
+                    didUpdate = true
+                    return
+                }
+
+                for duplicate in pendingDuplicates {
+                    fact.confidence = max(fact.confidence, duplicate.confidence)
+                    fact.sourceNodeIds = Self.mergedSourceNodeIds(fact.sourceNodeIds, duplicate.sourceNodeIds)
+                }
                 fact.status = .active
                 fact.updatedAt = now
-                fact.confidence = max(fact.confidence, fact.stability == .stable ? 0.95 : 0.9)
+                fact.confidence = max(fact.confidence, confirmationConfidenceFloor)
                 try nodeStore.updateMemoryFactEntry(fact)
                 try syncFactAtomLifecycle(for: fact, status: .active, now: now)
+                for duplicate in pendingDuplicates {
+                    try archiveFactAndMirror(duplicate, now: now)
+                }
                 didUpdate = true
             }
             return didUpdate
@@ -2248,6 +2281,99 @@ final class UserMemoryCore {
         return order.compactMap { merged[$0] }
     }
 
+    private func nearDuplicateFacts(for fact: MemoryFactEntry) throws -> [MemoryFactEntry] {
+        try nodeStore.fetchMemoryFactEntries()
+            .filter { other in
+                other.id != fact.id &&
+                    (other.status == .active || other.status == .pending) &&
+                    Self.isNearDuplicateFact(fact, other)
+            }
+            .sorted { lhs, rhs in
+                if lhs.status != rhs.status {
+                    return lhs.status == .active
+                }
+                if lhs.confidence != rhs.confidence {
+                    return lhs.confidence > rhs.confidence
+                }
+                return lhs.updatedAt > rhs.updatedAt
+            }
+    }
+
+    private static func isNearDuplicateFact(_ lhs: MemoryFactEntry, _ rhs: MemoryFactEntry) -> Bool {
+        guard lhs.kind == rhs.kind,
+              lhs.scope == rhs.scope,
+              lhs.scopeRefId == rhs.scopeRefId else {
+            return false
+        }
+
+        if factKey(kind: lhs.kind, content: lhs.content) == factKey(kind: rhs.kind, content: rhs.content) {
+            return true
+        }
+
+        return likelySameFactContent(lhs.content, rhs.content)
+    }
+
+    private static func likelySameFactContent(_ lhs: String, _ rhs: String) -> Bool {
+        guard containsNegationCue(lhs) == containsNegationCue(rhs) else { return false }
+
+        let left = factSimilarityTokens(lhs)
+        let right = factSimilarityTokens(rhs)
+        guard left.count >= 4, right.count >= 4 else { return false }
+
+        let common = left.intersection(right).count
+        let union = left.union(right).count
+        guard common > 0, union > 0 else { return false }
+
+        let jaccard = Double(common) / Double(union)
+        let containment = Double(common) / Double(min(left.count, right.count))
+        return (common >= 5 && containment >= 0.50) ||
+            (common >= 4 && jaccard >= 0.48)
+    }
+
+    private static func factSimilarityTokens(_ content: String) -> Set<String> {
+        let folded = content
+            .folding(options: [.diacriticInsensitive, .widthInsensitive], locale: nil)
+            .lowercased()
+        return Set(folded
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { token in
+                token.count > 1 && !factSimilarityStopWords.contains(token)
+            })
+    }
+
+    private static func containsNegationCue(_ content: String) -> Bool {
+        let normalized = " \(MemoryGraphAtomMapper.normalizedLine(content)) "
+        return factNegationCues.contains { cue in normalized.contains(cue) }
+    }
+
+    private static let factSimilarityStopWords: Set<String> = [
+        "alex", "he", "his", "him", "himself", "she", "her", "they", "their",
+        "is", "are", "was", "were", "be", "being", "been", "a", "an", "the",
+        "of", "to", "in", "with", "who", "or", "and", "but", "as", "by", "for",
+        "from", "that", "this", "it", "its", "only", "will", "would", "should",
+        "could", "can", "do", "does", "did", "doing", "doesn", "don", "won",
+        "own", "people", "person", "thing", "things", "someone", "something"
+    ]
+
+    private static let factNegationCues: [String] = [
+        " not ",
+        " never ",
+        " cannot ",
+        " can't ",
+        " doesnt ",
+        " doesn't ",
+        " dont ",
+        " don't ",
+        " wont ",
+        " won't ",
+        " without ",
+        " 唔",
+        " 不",
+        " 冇",
+        " 没",
+        " 無"
+    ]
+
     private static func dedupedFactEntries(_ entries: [MemoryFactEntry]) -> [MemoryFactEntry] {
         var merged: [String: MemoryFactEntry] = [:]
         var order: [String] = []
@@ -2287,6 +2413,15 @@ final class UserMemoryCore {
             atom.lastSeenAt = nil
         }
         return atom
+    }
+
+    private func archiveFactAndMirror(_ fact: MemoryFactEntry, now: Date) throws {
+        guard fact.status != .archived else { return }
+        var archived = fact
+        archived.status = .archived
+        archived.updatedAt = now
+        try nodeStore.updateMemoryFactEntry(archived)
+        try syncFactAtomLifecycle(for: archived, status: .archived, now: now)
     }
 
     private func syncFactAtomLifecycle(

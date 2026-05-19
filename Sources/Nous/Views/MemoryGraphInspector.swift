@@ -169,6 +169,33 @@ struct MemoryGraphInspector: View {
                     )
                 }
             }
+
+            if selectedFocus == .inbox, !filteredAtoms.isEmpty {
+                HStack(spacing: 8) {
+                    Button("Approve visible") {
+                        batchApproveVisiblePendingAtoms()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 7)
+                    .background(AppColor.colaOrange)
+                    .clipShape(Capsule())
+
+                    Button("Reject visible") {
+                        batchRejectVisiblePendingAtoms()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundColor(AppColor.colaDarkText.opacity(0.78))
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 7)
+                    .background(AppColor.surfacePrimary)
+                    .clipShape(Capsule())
+                    .overlay(Capsule().stroke(AppColor.panelStroke, lineWidth: 1))
+                }
+            }
         }
     }
 
@@ -328,6 +355,16 @@ struct MemoryGraphInspector: View {
             if let correctsTarget = atom.correctsTarget,
                !correctsTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 chainField("Corrects", correctsTarget)
+            }
+
+            if let evidenceQuote = atom.evidenceQuote,
+               !evidenceQuote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                chainField("Evidence", evidenceQuote)
+            }
+
+            if let captureReason = atom.captureReason,
+               !captureReason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                chainField("Reason", captureReason)
             }
 
             if let item = atomReviewItem(for: atom) {
@@ -920,6 +957,52 @@ struct MemoryGraphInspector: View {
         }
     }
 
+    private func batchApproveVisiblePendingAtoms() {
+        let ids = filteredAtoms.filter { $0.status == .pending }.map(\.id)
+        guard !ids.isEmpty else { return }
+        actingAtomId = ids.first
+        Task {
+            do {
+                let service = MemoryReflectionProposalService(
+                    nodeStore: nodeStore,
+                    llmServiceProvider: llmServiceProvider
+                )
+                for id in ids {
+                    _ = try await service.approveAndPropose(id)
+                }
+                await MainActor.run {
+                    loadError = nil
+                    reload()
+                    actingAtomId = nil
+                }
+            } catch {
+                await MainActor.run {
+                    reload()
+                    loadError = "Failed to approve visible memory atoms: \(error.localizedDescription)"
+                    actingAtomId = nil
+                }
+            }
+        }
+    }
+
+    private func batchRejectVisiblePendingAtoms() {
+        let ids = filteredAtoms.filter { $0.status == .pending }.map(\.id)
+        guard !ids.isEmpty else { return }
+        actingAtomId = ids.first
+        do {
+            let engine = MemoryLifecycleEngine(nodeStore: nodeStore)
+            for id in ids {
+                _ = try engine.reject(id)
+            }
+            loadError = nil
+            reload()
+        } catch {
+            reload()
+            loadError = "Failed to reject visible memory atoms: \(error.localizedDescription)"
+        }
+        actingAtomId = nil
+    }
+
     private func syncSelectedAtom() {
         guard !filteredAtoms.isEmpty else {
             selectedAtomId = nil
@@ -933,14 +1016,17 @@ struct MemoryGraphInspector: View {
     }
 
     private func sourceQuote(for atom: MemoryAtom) -> String? {
-        guard let sourceNodeId = atom.sourceNodeId,
-              let sourceMessageId = atom.sourceMessageId,
-              let messages = try? nodeStore.fetchMessages(nodeId: sourceNodeId),
-              let message = messages.first(where: { $0.id == sourceMessageId })
-        else {
-            return nil
+        if let sourceMessageId = atom.sourceMessageId,
+           let message = try? nodeStore.fetchMessage(id: sourceMessageId) {
+            return preview(message.content, maxChars: 220)
         }
-        return preview(message.content, maxChars: 220)
+
+        if let evidenceQuote = atom.evidenceQuote?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !evidenceQuote.isEmpty {
+            return evidenceQuote
+        }
+
+        return nil
     }
 
     private func tensionAtomLabel(_ atomId: UUID?) -> String {
