@@ -147,7 +147,7 @@ fi
 
 print_section "Agentic workflow"
 echo "Default: one lead agent. Use explorers for noisy read-heavy work."
-echo "Use the Context Boundary Card with ownership paths, forbidden actions, output schema, stop condition, failure behavior, and acceptance rubric before delegating."
+echo "Use the Context Boundary Card with worker profile, sandbox policy, ownership paths, forbidden actions, output schema, stop condition, failure behavior, and acceptance rubric before delegating."
 echo "Do not split planner / implementer / tester roles when context overlaps."
 echo "Workers need explicit ownership and disjoint write sets."
 echo "Agent teams remain deferred unless explicitly requested."
@@ -280,11 +280,13 @@ normalized = unicodedata.normalize("NFKD", text.lower())
 normalized = normalized.replace("_", " ").replace("-", " ")
 
 fields = [
+    ("profile", ["worker profile: explorer", "profile: explorer", "worker profile: worker", "profile: worker", "worker profile: reviewer", "profile: reviewer", "worker profile: verifier", "profile: verifier", "worker profile: memory steward", "profile: memory steward"]),
     ("objective", ["task objective", "objective:", "goal:"]),
     ("context-in", ["context included", "context needed", "context in"]),
     ("context-out", ["context excluded", "context out", "ignore:", "ignore these", "do not inspect"]),
     ("ownership", ["ownership paths", "owned paths", "write set", "responsible files", "responsible only for"]),
     ("forbidden", ["forbidden actions", "do not edit", "do not modify", "must not", "never"]),
+    ("sandbox", ["sandbox policy", "permission boundary", "permission boundaries", "permissions:"]),
     ("output", ["output schema", "expected output", "return format"]),
     ("stop", ["stop condition", "stop after", "stop when", "done when"]),
     ("failure", ["failure behavior", "if blocked", "when blocked"]),

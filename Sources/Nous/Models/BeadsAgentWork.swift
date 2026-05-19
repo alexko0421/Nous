@@ -200,11 +200,13 @@ struct BeadsIssue: Identifiable, Decodable, Equatable {
 }
 
 struct AgentOutcomeContractSummary: Equatable {
+    let workerProfile: AgentWorkerProfile?
     let hasObjective: Bool
     let hasContextIncluded: Bool
     let hasContextExcluded: Bool
     let hasOwnershipPaths: Bool
     let hasForbiddenActions: Bool
+    let hasSandboxPolicy: Bool
     let hasOutputSchema: Bool
     let hasStopCondition: Bool
     let hasFailureBehavior: Bool
@@ -212,11 +214,13 @@ struct AgentOutcomeContractSummary: Equatable {
     let hasVerificationEvidence: Bool
 
     var isComplete: Bool {
-        hasObjective &&
+        workerProfile != nil &&
+            hasObjective &&
             hasContextIncluded &&
             hasContextExcluded &&
             hasOwnershipPaths &&
             hasForbiddenActions &&
+            hasSandboxPolicy &&
             hasOutputSchema &&
             hasStopCondition &&
             hasFailureBehavior &&
@@ -226,11 +230,13 @@ struct AgentOutcomeContractSummary: Equatable {
 
     var missingLabels: [String] {
         var labels: [String] = []
+        if workerProfile == nil { labels.append("profile") }
         if !hasObjective { labels.append("objective") }
         if !hasContextIncluded { labels.append("context-in") }
         if !hasContextExcluded { labels.append("context-out") }
         if !hasOwnershipPaths { labels.append("ownership") }
         if !hasForbiddenActions { labels.append("forbidden") }
+        if !hasSandboxPolicy { labels.append("sandbox") }
         if !hasOutputSchema { labels.append("output") }
         if !hasStopCondition { labels.append("stop") }
         if !hasFailureBehavior { labels.append("failure") }
@@ -238,6 +244,14 @@ struct AgentOutcomeContractSummary: Equatable {
         if !hasVerificationEvidence { labels.append("verification") }
         return labels
     }
+}
+
+enum AgentWorkerProfile: String, Equatable {
+    case explorer
+    case worker
+    case reviewer
+    case verifier
+    case memorySteward = "memory_steward"
 }
 
 enum AgentOutcomeContractParser {
@@ -248,11 +262,13 @@ enum AgentOutcomeContractParser {
             .replacingOccurrences(of: "-", with: " ")
 
         return AgentOutcomeContractSummary(
+            workerProfile: workerProfile(in: normalized),
             hasObjective: containsAny(normalized, ["task objective", "objective:", "goal:"]),
             hasContextIncluded: containsAny(normalized, ["context included", "context needed", "context in"]),
             hasContextExcluded: containsAny(normalized, ["context excluded", "context out", "ignore:", "ignore these", "do not inspect"]),
             hasOwnershipPaths: containsAny(normalized, ["ownership paths", "owned paths", "write set", "responsible files", "responsible only for"]),
             hasForbiddenActions: containsAny(normalized, ["forbidden actions", "do not edit", "do not modify", "must not", "never"]),
+            hasSandboxPolicy: containsAny(normalized, ["sandbox policy", "permission boundary", "permission boundaries", "permissions:"]),
             hasOutputSchema: containsAny(normalized, ["output schema", "expected output", "return format"]),
             hasStopCondition: containsAny(normalized, ["stop condition", "stop after", "stop when", "done when"]),
             hasFailureBehavior: containsAny(normalized, ["failure behavior", "if blocked", "when blocked"]),
@@ -263,6 +279,25 @@ enum AgentOutcomeContractParser {
 
     private static func containsAny(_ text: String, _ needles: [String]) -> Bool {
         needles.contains { text.contains($0) }
+    }
+
+    private static func workerProfile(in text: String) -> AgentWorkerProfile? {
+        if containsAny(text, ["worker profile: explorer", "profile: explorer"]) {
+            return .explorer
+        }
+        if containsAny(text, ["worker profile: worker", "profile: worker"]) {
+            return .worker
+        }
+        if containsAny(text, ["worker profile: reviewer", "profile: reviewer"]) {
+            return .reviewer
+        }
+        if containsAny(text, ["worker profile: verifier", "profile: verifier"]) {
+            return .verifier
+        }
+        if containsAny(text, ["worker profile: memory steward", "profile: memory steward"]) {
+            return .memorySteward
+        }
+        return nil
     }
 }
 

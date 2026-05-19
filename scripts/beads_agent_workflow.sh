@@ -31,7 +31,7 @@ print_agentic_workflow_gate() {
 
 Agentic workflow:
 - Default to one lead agent; use read-only explorers for noisy investigation.
-- Use the Context Boundary Card with output schema, failure behavior, and acceptance rubric before delegating.
+- Use the Context Boundary Card with worker profile, sandbox policy, ownership paths, forbidden actions, output schema, failure behavior, and acceptance rubric before delegating.
 - Do not split planner / implementer / tester roles when context overlaps.
 - Worker agents require explicit ownership and disjoint write sets.
 - Agent teams remain deferred unless explicitly requested.
